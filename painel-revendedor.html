@@ -1,0 +1,1095 @@
+﻿<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Painel do Revendedor — DESPACHANTES CONSULTAS</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { --primary:#1e40af; --accent:#f97316; }
+    .btn-primary  { background:var(--accent);color:white;padding:.5rem 1.25rem;border-radius:.5rem;font-weight:600;font-size:.875rem;transition:all .2s;display:inline-flex;align-items:center;gap:.4rem; }
+    .btn-primary:hover  { background:#ea580c; }
+    .btn-secondary{ background:var(--primary);color:white;padding:.5rem 1.25rem;border-radius:.5rem;font-weight:600;font-size:.875rem;transition:all .2s;display:inline-flex;align-items:center;gap:.4rem; }
+    .btn-secondary:hover{ background:#1e3a8a; }
+    .btn-ghost    { color:#6b7280;padding:.5rem 1rem;border-radius:.5rem;font-size:.875rem;transition:all .2s;display:inline-flex;align-items:center;gap:.4rem; }
+    .btn-ghost:hover    { background:#f3f4f6;color:#111827; }
+    .nav-item { display:flex;align-items:center;gap:.75rem;padding:.7rem 1.25rem;border-radius:.5rem;cursor:pointer;transition:all .2s;color:rgba(255,255,255,.75);font-size:.9rem; }
+    .nav-item:hover { background:rgba(255,255,255,.1);color:white; }
+    .nav-item.active { background:rgba(255,255,255,.15);color:white;border-left:3px solid var(--accent);padding-left:calc(1.25rem - 3px); }
+    .card { background:white;border-radius:.75rem;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:1.5rem; }
+    .stat-card { background:white;border-radius:.75rem;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:1.25rem;border-left:4px solid transparent; }
+    .badge-green  { display:inline-flex;align-items:center;padding:.2rem .6rem;border-radius:9999px;font-size:.75rem;font-weight:600;background:#dcfce7;color:#166534; }
+    .badge-red    { display:inline-flex;align-items:center;padding:.2rem .6rem;border-radius:9999px;font-size:.75rem;font-weight:600;background:#fee2e2;color:#991b1b; }
+    .toast { position:fixed;bottom:1.5rem;right:1.5rem;z-index:9999;background:#1f2937;color:white;padding:.8rem 1.25rem;border-radius:.6rem;font-size:.875rem;box-shadow:0 4px 16px rgba(0,0,0,.2);transform:translateY(0);opacity:1;transition:all .3s; }
+    .toast.hide { transform:translateY(8px);opacity:0; }
+    #sidebar { transition:transform .25s ease; }
+    @media(max-width:768px) { #sidebar { transform:translateX(-100%); } #sidebar.open { transform:translateX(0); } }
+    .table-row:hover td { background:#f9fafb; }
+    .skeleton { background:linear-gradient(90deg,#f0f0f0 25%,#e0e0e0 50%,#f0f0f0 75%);background-size:200% 100%;animation:shimmer 1.4s infinite;border-radius:.375rem; }
+    @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+
+<!-- ── SIDEBAR ─────────────────────────────────────────────────────────── -->
+<aside id="sidebar"
+  class="fixed left-0 top-0 h-full w-64 bg-blue-900 z-40 flex flex-col select-none shadow-xl">
+
+  <!-- Logo -->
+  <div class="flex items-center gap-3 px-5 py-5 border-b border-blue-800">
+    <div class="w-9 h-9 bg-orange-500 rounded-lg flex items-center justify-center flex-shrink-0">
+      <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+      </svg>
+    </div>
+    <div>
+      <div class="text-white font-bold text-sm leading-tight">DESPACHANTES CONSULTAS</div>
+      <div class="text-blue-300 text-xs">Painel do Revendedor</div>
+    </div>
+  </div>
+
+  <!-- User info -->
+  <div class="flex items-center gap-3 px-5 py-4 border-b border-blue-800">
+    <div id="user-avatar"
+      class="w-9 h-9 bg-orange-500 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
+      ?
+    </div>
+    <div class="min-w-0">
+      <div id="user-name" class="text-white text-sm font-semibold truncate">Carregando...</div>
+      <div id="user-email" class="text-blue-300 text-xs truncate"></div>
+    </div>
+  </div>
+
+  <!-- Navigation -->
+  <nav class="flex-1 p-3 space-y-1 overflow-y-auto">
+    <div class="nav-item active" data-section="overview" onclick="showSection('overview')">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
+      </svg>
+      Visão Geral
+    </div>
+    <div class="nav-item" data-section="clients" onclick="showSection('clients')">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/>
+      </svg>
+      Meus Clientes
+    </div>
+    <div class="nav-item" data-section="commissions" onclick="showSection('commissions')">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      Comissões
+    </div>
+    <div class="nav-item" data-section="affiliate" onclick="showSection('affiliate')">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+      </svg>
+      Link de Afiliado
+    </div>
+    <div class="nav-item" data-section="profile" onclick="showSection('profile')">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+      </svg>
+      Perfil
+    </div>
+  </nav>
+
+  <!-- Logout -->
+  <div class="p-3 border-t border-blue-800">
+    <button onclick="logout()"
+      class="nav-item w-full text-left text-red-300 hover:text-red-200 hover:bg-red-900/30">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+      </svg>
+      Sair da Conta
+    </button>
+  </div>
+</aside>
+
+<!-- ── OVERLAY MOBILE ──────────────────────────────────────────────────── -->
+<div id="overlay" class="fixed inset-0 bg-black/50 z-30 hidden"
+  onclick="toggleSidebar()"></div>
+
+<!-- ── MAIN ───────────────────────────────────────────────────────────── -->
+<div class="md:ml-64 min-h-screen flex flex-col">
+
+  <!-- Top bar -->
+  <header class="bg-white shadow-sm sticky top-0 z-20 flex items-center justify-between px-4 py-3">
+    <div class="flex items-center gap-3">
+      <button onclick="toggleSidebar()" class="md:hidden text-gray-500 hover:text-gray-700 p-1">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+      <h1 id="page-title" class="font-bold text-gray-800 text-lg">Visão Geral</h1>
+    </div>
+    <div class="flex items-center gap-3">
+      <a href="/" class="btn-ghost text-xs hidden sm:inline-flex">← Site</a>
+      <div class="flex items-center gap-2">
+        <div id="topbar-avatar"
+          class="w-8 h-8 bg-orange-500 rounded-full flex items-center justify-center text-white font-bold text-xs">
+          ?
+        </div>
+        <span id="topbar-name" class="text-sm font-medium text-gray-700 hidden sm:block"></span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Content area -->
+  <main class="flex-1 p-4 sm:p-6">
+
+    <!-- ── VISÃO GERAL ──────────────────────────────────────────────── -->
+    <section id="section-overview" class="dash-section space-y-6">
+
+      <!-- Stats cards -->
+      <div class="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        <div class="stat-card border-l-orange-500">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-medium text-gray-500 uppercase tracking-wide">Saldo</span>
+            <span class="text-orange-500 text-lg">💳</span>
+          </div>
+          <div id="stat-credits" class="text-2xl font-bold text-gray-800">R$ 0,00</div>
+          <div class="text-xs text-gray-400 mt-1">Créditos disponíveis</div>
+        </div>
+        <div class="stat-card border-l-blue-500">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-medium text-gray-500 uppercase tracking-wide">Clientes</span>
+            <span class="text-blue-500 text-lg">👥</span>
+          </div>
+          <div id="stat-clients" class="text-2xl font-bold text-gray-800">0</div>
+          <div class="text-xs text-gray-400 mt-1"><span id="stat-active">0</span> ativos</div>
+        </div>
+        <div class="stat-card border-l-green-500">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-medium text-gray-500 uppercase tracking-wide">Comissões / Mês</span>
+            <span class="text-green-500 text-lg">📈</span>
+          </div>
+          <div id="stat-month" class="text-2xl font-bold text-gray-800">R$ 0,00</div>
+          <div class="text-xs text-gray-400 mt-1">Mês atual</div>
+        </div>
+        <div class="stat-card border-l-purple-500">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-medium text-gray-500 uppercase tracking-wide">Total Ganho</span>
+            <span class="text-purple-500 text-lg">🏆</span>
+          </div>
+          <div id="stat-total" class="text-2xl font-bold text-gray-800">R$ 0,00</div>
+          <div class="text-xs text-gray-400 mt-1">Todas as comissões</div>
+        </div>
+      </div>
+
+      <!-- Recent clients & recent commissions -->
+      <div class="grid lg:grid-cols-2 gap-6">
+
+        <!-- Clientes recentes -->
+        <div class="card">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="font-semibold text-gray-800">Clientes Recentes</h2>
+            <button onclick="showSection('clients')" class="text-xs text-blue-600 hover:text-orange-500 font-medium">
+              Ver todos →
+            </button>
+          </div>
+          <div id="recent-clients">
+            <div class="space-y-3">
+              <div class="skeleton h-12 w-full"></div>
+              <div class="skeleton h-12 w-full"></div>
+              <div class="skeleton h-12 w-full"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Comissões recentes -->
+        <div class="card">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="font-semibold text-gray-800">Comissões Recentes</h2>
+            <button onclick="showSection('commissions')" class="text-xs text-blue-600 hover:text-orange-500 font-medium">
+              Ver todas →
+            </button>
+          </div>
+          <div id="recent-commissions">
+            <div class="space-y-3">
+              <div class="skeleton h-12 w-full"></div>
+              <div class="skeleton h-12 w-full"></div>
+              <div class="skeleton h-12 w-full"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── MEUS CLIENTES ────────────────────────────────────────────── -->
+    <section id="section-clients" class="dash-section hidden space-y-5">
+
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h2 class="text-xl font-bold text-gray-800">Meus Clientes</h2>
+          <p class="text-sm text-gray-500">Clientes cadastrados pelo seu link de afiliado</p>
+        </div>
+        <button onclick="openModal()" class="btn-primary">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+          </svg>
+          Novo Cliente
+        </button>
+      </div>
+
+      <!-- Filtros -->
+      <div class="card flex flex-col sm:flex-row gap-3">
+        <input id="client-search" type="text" placeholder="Buscar por nome, e-mail ou CPF/CNPJ..."
+          class="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          oninput="filterClients()">
+        <select id="client-filter" onchange="filterClients()"
+          class="px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+          <option value="all">Todos</option>
+          <option value="active">Apenas Ativos</option>
+          <option value="inactive">Apenas Bloqueados</option>
+        </select>
+      </div>
+
+      <!-- Tabela -->
+      <div class="card p-0 overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th class="px-5 py-3 text-left font-semibold text-gray-600">Nome</th>
+                <th class="px-5 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">E-mail</th>
+                <th class="px-5 py-3 text-right font-semibold text-gray-600">Créditos</th>
+                <th class="px-5 py-3 text-center font-semibold text-gray-600">Status</th>
+                <th class="px-5 py-3 text-left font-semibold text-gray-600 hidden lg:table-cell">Cadastro</th>
+                <th class="px-5 py-3 text-center font-semibold text-gray-600">Ações</th>
+              </tr>
+            </thead>
+            <tbody id="clients-table-body" class="divide-y divide-gray-50">
+              <tr>
+                <td colspan="6" class="text-center py-12 text-gray-400">
+                  <div class="skeleton h-8 w-full mb-2"></div>
+                  <div class="skeleton h-8 w-full mb-2"></div>
+                  <div class="skeleton h-8 w-full"></div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="clients-count" class="px-5 py-3 text-xs text-gray-400 border-t border-gray-100"></div>
+      </div>
+    </section>
+
+    <!-- ── COMISSÕES ────────────────────────────────────────────────── -->
+    <section id="section-commissions" class="dash-section hidden space-y-5">
+
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Comissões</h2>
+        <p class="text-sm text-gray-500">Histórico de comissões recebidas por depósitos de clientes</p>
+      </div>
+
+      <!-- Summary cards -->
+      <div class="grid sm:grid-cols-2 gap-4">
+        <div class="card bg-gradient-to-br from-green-50 to-white border border-green-100">
+          <div class="text-sm text-green-700 font-medium mb-1">Mês Atual</div>
+          <div id="comm-month" class="text-3xl font-bold text-green-700">R$ 0,00</div>
+        </div>
+        <div class="card bg-gradient-to-br from-blue-50 to-white border border-blue-100">
+          <div class="text-sm text-blue-700 font-medium mb-1">Total Acumulado</div>
+          <div id="comm-total" class="text-3xl font-bold text-blue-700">R$ 0,00</div>
+        </div>
+      </div>
+
+      <!-- Info box -->
+      <div class="card bg-amber-50 border border-amber-200 flex gap-3">
+        <span class="text-amber-600 text-xl flex-shrink-0 mt-0.5">💡</span>
+        <p class="text-sm text-amber-800">
+          Você ganha uma <strong>comissão percentual</strong> sobre cada depósito PIX aprovado realizado pelos clientes cadastrados pelo seu link de afiliado. Os créditos são automaticamente creditados em sua conta.
+        </p>
+      </div>
+
+      <!-- Tabela -->
+      <div class="card p-0 overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th class="px-5 py-3 text-left font-semibold text-gray-600">Data</th>
+                <th class="px-5 py-3 text-left font-semibold text-gray-600">Cliente</th>
+                <th class="px-5 py-3 text-right font-semibold text-gray-600 hidden sm:table-cell">Depósito</th>
+                <th class="px-5 py-3 text-center font-semibold text-gray-600 hidden sm:table-cell">Taxa</th>
+                <th class="px-5 py-3 text-right font-semibold text-gray-600">Comissão</th>
+              </tr>
+            </thead>
+            <tbody id="commissions-table-body" class="divide-y divide-gray-50"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── LINK DE AFILIADO ─────────────────────────────────────────── -->
+    <section id="section-affiliate" class="dash-section hidden space-y-5 max-w-2xl">
+
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Link de Afiliado</h2>
+        <p class="text-sm text-gray-500">Compartilhe seu link e ganhe comissão sobre cada depósito aprovado</p>
+      </div>
+
+      <!-- Código -->
+      <div class="card">
+        <div class="text-sm font-semibold text-gray-700 mb-2">Seu Código de Afiliado</div>
+        <div class="flex items-center gap-3">
+          <div id="aff-code-display"
+            class="text-3xl font-mono font-bold text-blue-900 tracking-widest bg-blue-50 rounded-lg px-6 py-4 flex-1 text-center">
+            ————
+          </div>
+        </div>
+      </div>
+
+      <!-- Link completo -->
+      <div class="card">
+        <div class="text-sm font-semibold text-gray-700 mb-3">Link de Indicação Completo</div>
+        <div class="flex gap-2">
+          <input id="aff-link-input" type="text" readonly
+            class="flex-1 px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-600 cursor-pointer"
+            onclick="this.select()">
+          <button onclick="copyLink()" class="btn-primary flex-shrink-0">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/>
+            </svg>
+            Copiar
+          </button>
+        </div>
+      </div>
+
+      <!-- Regras -->
+      <div class="card space-y-4">
+        <h3 class="font-semibold text-gray-800">Como funciona?</h3>
+        <div class="space-y-3">
+          <div class="flex gap-3">
+            <div class="w-7 h-7 bg-orange-100 rounded-full flex items-center justify-center flex-shrink-0 text-orange-600 font-bold text-sm">1</div>
+            <div>
+              <div class="font-medium text-gray-700 text-sm">Compartilhe seu link</div>
+              <div class="text-xs text-gray-500">Envie para despachantes, lojistas ou escritórios jurídicos</div>
+            </div>
+          </div>
+          <div class="flex gap-3">
+            <div class="w-7 h-7 bg-orange-100 rounded-full flex items-center justify-center flex-shrink-0 text-orange-600 font-bold text-sm">2</div>
+            <div>
+              <div class="font-medium text-gray-700 text-sm">Cliente se cadastra pelo seu link</div>
+              <div class="text-xs text-gray-500">O código de afiliado é vinculado automaticamente ao cadastro</div>
+            </div>
+          </div>
+          <div class="flex gap-3">
+            <div class="w-7 h-7 bg-orange-100 rounded-full flex items-center justify-center flex-shrink-0 text-orange-600 font-bold text-sm">3</div>
+            <div>
+              <div class="font-medium text-gray-700 text-sm">Cliente faz depósito via PIX</div>
+              <div class="text-xs text-gray-500">A cada depósito aprovado do cliente, você ganha sua comissão</div>
+            </div>
+          </div>
+          <div class="flex gap-3">
+            <div class="w-7 h-7 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0 text-green-600 font-bold text-sm">✓</div>
+            <div>
+              <div class="font-medium text-gray-700 text-sm">Você recebe a comissão em créditos</div>
+              <div class="text-xs text-gray-500">Créditos creditados automaticamente no seu saldo</div>
+            </div>
+          </div>
+        </div>
+        <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700">
+          <strong>⚠️ Regra Antifraude:</strong> Cadastros realizados pelo mesmo IP do afiliado não geram comissão.
+        </div>
+      </div>
+    </section>
+
+    <!-- ── PERFIL ────────────────────────────────────────────────────── -->
+    <section id="section-profile" class="dash-section hidden space-y-5 max-w-2xl">
+
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Meu Perfil</h2>
+        <p class="text-sm text-gray-500">Atualize seus dados cadastrais</p>
+      </div>
+
+      <!-- Dados pessoais -->
+      <div class="card">
+        <h3 class="font-semibold text-gray-800 mb-4">Informações Pessoais</h3>
+        <div id="profile-alert-error" class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 mb-4 text-sm"></div>
+        <div id="profile-alert-success" class="hidden bg-green-50 border border-green-200 text-green-700 rounded-lg px-4 py-3 mb-4 text-sm"></div>
+        <form id="profile-form" class="space-y-4" onsubmit="saveProfile(event)">
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1">Nome Completo</label>
+            <input id="profile-name" type="text"
+              class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              required>
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1">E-mail</label>
+            <input id="profile-email" type="email" disabled
+              class="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm bg-gray-50 text-gray-500 cursor-not-allowed">
+            <p class="text-xs text-gray-400 mt-1">E-mail não pode ser alterado</p>
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1">Telefone / WhatsApp</label>
+            <input id="profile-phone" type="tel"
+              class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="(00) 00000-0000">
+          </div>
+          <div class="flex gap-3 pt-2">
+            <button type="submit" class="btn-primary">Salvar Alterações</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Alterar senha -->
+      <div class="card">
+        <h3 class="font-semibold text-gray-800 mb-4">Alterar Senha</h3>
+        <div id="pwd-alert-error" class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 mb-4 text-sm"></div>
+        <div id="pwd-alert-success" class="hidden bg-green-50 border border-green-200 text-green-700 rounded-lg px-4 py-3 mb-4 text-sm"></div>
+        <form id="password-form" class="space-y-4" onsubmit="changePassword(event)">
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1">Senha Atual</label>
+            <input id="current-password" type="password"
+              class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              required>
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1">Nova Senha</label>
+            <input id="new-password" type="password" minlength="8"
+              class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Mínimo 8 caracteres" required>
+          </div>
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1">Confirmar Nova Senha</label>
+            <input id="confirm-new-password" type="password"
+              class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              required>
+          </div>
+          <div class="flex gap-3 pt-2">
+            <button type="submit" class="btn-primary">Alterar Senha</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ── TOAST ──────────────────────────────────────────────────────────── -->
+<div id="toast" class="toast hide"></div>
+
+<!-- ── MODAL: CRIAR CLIENTE ───────────────────────────────────────────── -->
+<div id="modal-create-client"
+  class="fixed inset-0 z-50 flex items-center justify-center p-4 hidden"
+  onclick="if(event.target===this) closeModal()">
+  <div class="absolute inset-0 bg-black/50"></div>
+  <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between px-6 py-5 border-b border-gray-100">
+      <div>
+        <h3 class="text-lg font-bold text-gray-800">Criar Novo Cliente</h3>
+        <p class="text-sm text-gray-500 mt-0.5">O cliente ficará vinculado à sua conta de revendedor</p>
+      </div>
+      <button onclick="closeModal()"
+        class="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100 transition">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Form -->
+    <form id="create-client-form" onsubmit="submitCreateClient(event)" class="px-6 py-5 space-y-4">
+
+      <!-- Alerta de erro -->
+      <div id="modal-error"
+        class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm flex gap-2">
+        <span class="flex-shrink-0">⚠️</span>
+        <span id="modal-error-msg"></span>
+      </div>
+
+      <div class="grid grid-cols-2 gap-4">
+        <!-- Nome -->
+        <div class="col-span-2">
+          <label class="block text-sm font-semibold text-gray-700 mb-1.5">
+            Nome Completo <span class="text-red-500">*</span>
+          </label>
+          <input id="mc-name" type="text" autocomplete="off" required
+            placeholder="Nome completo do cliente"
+            class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition">
+        </div>
+
+        <!-- CPF/CNPJ -->
+        <div>
+          <label class="block text-sm font-semibold text-gray-700 mb-1.5">
+            CPF ou CNPJ <span class="text-red-500">*</span>
+          </label>
+          <input id="mc-cpf-cnpj" type="text" inputmode="numeric" maxlength="18" required
+            placeholder="000.000.000-00"
+            class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition">
+        </div>
+
+        <!-- Telefone -->
+        <div>
+          <label class="block text-sm font-semibold text-gray-700 mb-1.5">Telefone</label>
+          <input id="mc-phone" type="tel" inputmode="numeric" maxlength="15"
+            placeholder="(00) 00000-0000"
+            class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition">
+        </div>
+
+        <!-- E-mail -->
+        <div class="col-span-2">
+          <label class="block text-sm font-semibold text-gray-700 mb-1.5">
+            E-mail <span class="text-red-500">*</span>
+          </label>
+          <input id="mc-email" type="email" autocomplete="off" required
+            placeholder="email@exemplo.com"
+            class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition">
+        </div>
+
+        <!-- Senha -->
+        <div>
+          <label class="block text-sm font-semibold text-gray-700 mb-1.5">
+            Senha <span class="text-red-500">*</span>
+          </label>
+          <div class="relative">
+            <input id="mc-password" type="password" minlength="8" required
+              placeholder="Mínimo 8 caracteres"
+              class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition pr-10">
+            <button type="button" tabindex="-1" onclick="toggleModalPwd('mc-password')"
+              class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Confirmar senha -->
+        <div>
+          <label class="block text-sm font-semibold text-gray-700 mb-1.5">
+            Confirmar Senha <span class="text-red-500">*</span>
+          </label>
+          <div class="relative">
+            <input id="mc-password-confirm" type="password" required
+              placeholder="Repita a senha"
+              class="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition pr-10">
+            <button type="button" tabindex="-1" onclick="toggleModalPwd('mc-password-confirm')"
+              class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+              </svg>
+            </button>
+          </div>
+          <p id="mc-pwd-match" class="text-xs mt-1 h-4"></p>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="flex gap-3 pt-2">
+        <button type="button" onclick="closeModal()"
+          class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition">
+          Cancelar
+        </button>
+        <button id="mc-submit" type="submit"
+          class="flex-1 btn-primary justify-center">
+          <span id="mc-submit-text">Criar Cliente</span>
+          <svg id="mc-spinner" class="hidden w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+          </svg>
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+// ── Estado global ──────────────────────────────────────────────────────────
+let currentUser  = null;
+let allClients   = [];
+let allComms     = [];
+
+const sectionTitles = {
+  overview:    'Visão Geral',
+  clients:     'Meus Clientes',
+  commissions: 'Comissões',
+  affiliate:   'Link de Afiliado',
+  profile:     'Perfil',
+};
+
+// ── Formatação ─────────────────────────────────────────────────────────────
+const fmt = (v) =>
+  'R$ ' + parseFloat(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+
+const fmtDate = (s) => {
+  const d = new Date(s);
+  return d.toLocaleDateString('pt-BR');
+};
+
+const maskDoc = (v) => {
+  const d = (v || '').replace(/\D/g, '');
+  if (d.length <= 11) return d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+  return d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5');
+};
+
+// ── Toast ──────────────────────────────────────────────────────────────────
+function toast(msg, type = 'success') {
+  const el = document.getElementById('toast');
+  el.textContent = (type === 'success' ? '✅ ' : '❌ ') + msg;
+  el.classList.remove('hide');
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => el.classList.add('hide'), 3000);
+}
+
+// ── Sidebar ────────────────────────────────────────────────────────────────
+function toggleSidebar() {
+  const sb = document.getElementById('sidebar');
+  const ov = document.getElementById('overlay');
+  sb.classList.toggle('open');
+  ov.classList.toggle('hidden');
+}
+
+// ── Navegação ──────────────────────────────────────────────────────────────
+function showSection(id) {
+  document.querySelectorAll('.dash-section').forEach(s => s.classList.add('hidden'));
+  document.getElementById('section-' + id).classList.remove('hidden');
+  document.querySelectorAll('.nav-item[data-section]').forEach(n => n.classList.remove('active'));
+  const nav = document.querySelector(`.nav-item[data-section="${id}"]`);
+  if (nav) nav.classList.add('active');
+  document.getElementById('page-title').textContent = sectionTitles[id] || '';
+  // Fechar sidebar no mobile ao navegar
+  if (window.innerWidth < 768) {
+    document.getElementById('sidebar').classList.remove('open');
+    document.getElementById('overlay').classList.add('hidden');
+  }
+  if (id === 'clients') renderClientsTable();
+  if (id === 'commissions') renderCommissionsTable();
+}
+
+// ── Inicialização ──────────────────────────────────────────────────────────
+async function init() {
+  try {
+    const res = await fetch('/api/auth/me');
+    if (!res.ok) { window.location.href = '/entrar'; return; }
+    currentUser = await res.json();
+
+    // Atualizar UI com dados do usuário
+    const initial = currentUser.name ? currentUser.name.charAt(0).toUpperCase() : '?';
+    document.getElementById('user-avatar').textContent   = initial;
+    document.getElementById('topbar-avatar').textContent = initial;
+    document.getElementById('user-name').textContent     = currentUser.name;
+    document.getElementById('user-email').textContent    = currentUser.email;
+    document.getElementById('topbar-name').textContent   = currentUser.name.split(' ')[0];
+
+    // Preencher perfil
+    document.getElementById('profile-name').value  = currentUser.name  || '';
+    document.getElementById('profile-email').value = currentUser.email || '';
+    document.getElementById('profile-phone').value = currentUser.phone || '';
+
+    await loadDashboard();
+  } catch {
+    window.location.href = '/entrar';
+  }
+}
+
+async function loadDashboard() {
+  await Promise.all([loadStats(), loadClients(), loadCommissions()]);
+}
+
+// ── Stats ──────────────────────────────────────────────────────────────────
+async function loadStats() {
+  try {
+    const r = await fetch('/api/reseller/stats');
+    if (!r.ok) return;
+    const d = await r.json();
+    document.getElementById('stat-credits').textContent = fmt(d.credits);
+    document.getElementById('stat-clients').textContent = d.total_clients;
+    document.getElementById('stat-active').textContent  = d.active_clients;
+    document.getElementById('stat-month').textContent   = fmt(d.month_commissions);
+    document.getElementById('stat-total').textContent   = fmt(d.total_commissions);
+    document.getElementById('comm-month').textContent   = fmt(d.month_commissions);
+    document.getElementById('comm-total').textContent   = fmt(d.total_commissions);
+
+    // Affiliate link
+    if (d.affiliate_code) {
+      document.getElementById('aff-code-display').textContent = d.affiliate_code;
+      const link = `${location.origin}/cadastrar?ref=${d.affiliate_code}`;
+      document.getElementById('aff-link-input').value = link;
+    }
+
+  } catch { /* silencioso */ }
+}
+
+// ── Clientes ───────────────────────────────────────────────────────────────
+async function loadClients() {
+  try {
+    const r = await fetch('/api/reseller/clients');
+    if (!r.ok) return;
+    const d = await r.json();
+    allClients = d.clients || [];
+    renderRecentClients();
+  } catch { /* silencioso */ }
+}
+
+function renderRecentClients() {
+  const el = document.getElementById('recent-clients');
+  if (!allClients.length) {
+    el.innerHTML = `
+      <div class="text-center py-8 text-gray-400">
+        <div class="text-4xl mb-2">👥</div>
+        <p class="text-sm">Nenhum cliente ainda.</p>
+        <p class="text-xs mt-1">Compartilhe seu link de afiliado para começar.</p>
+      </div>`;
+    return;
+  }
+  const rows = allClients.slice(0, 5).map(c => `
+    <div class="flex items-center justify-between py-2.5 border-b border-gray-50 last:border-0">
+      <div class="flex items-center gap-3 min-w-0">
+        <div class="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-blue-700 font-bold text-xs flex-shrink-0">
+          ${c.name.charAt(0).toUpperCase()}
+        </div>
+        <div class="min-w-0">
+          <div class="text-sm font-medium text-gray-800 truncate">${c.name}</div>
+          <div class="text-xs text-gray-400 truncate">${c.email}</div>
+        </div>
+      </div>
+      <div class="text-right flex-shrink-0 ml-3">
+        <div class="text-sm font-semibold text-gray-700">${fmt(c.credits)}</div>
+        <span class="${c.active ? 'badge-green' : 'badge-red'}">${c.active ? 'Ativo' : 'Bloq.'}</span>
+      </div>
+    </div>`).join('');
+  el.innerHTML = rows;
+}
+
+function renderClientsTable() {
+  const search = (document.getElementById('client-search')?.value || '').toLowerCase();
+  const filter = document.getElementById('client-filter')?.value || 'all';
+
+  const filtered = allClients.filter(c => {
+    const matchSearch = !search ||
+      c.name.toLowerCase().includes(search) ||
+      c.email.toLowerCase().includes(search) ||
+      (c.cpf_cnpj || '').includes(search);
+    const matchFilter =
+      filter === 'all' ||
+      (filter === 'active' && c.active) ||
+      (filter === 'inactive' && !c.active);
+    return matchSearch && matchFilter;
+  });
+
+  const tbody = document.getElementById('clients-table-body');
+  document.getElementById('clients-count').textContent =
+    `Exibindo ${filtered.length} de ${allClients.length} cliente(s)`;
+
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="text-center py-12 text-gray-400">
+      <div class="text-4xl mb-3">🔍</div>
+      <p>${allClients.length ? 'Nenhum cliente encontrado com esse filtro.' : 'Nenhum cliente cadastrado ainda.'}</p>
+      ${!allClients.length ? '<p class="text-xs mt-1">Compartilhe seu link de afiliado para começar.</p>' : ''}
+    </td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(c => `
+    <tr class="table-row">
+      <td class="px-5 py-3">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-blue-700 font-bold text-xs flex-shrink-0">
+            ${c.name.charAt(0).toUpperCase()}
+          </div>
+          <div>
+            <div class="font-medium text-gray-800">${c.name}</div>
+            <div class="text-xs text-gray-400">${maskDoc(c.cpf_cnpj)}</div>
+          </div>
+        </div>
+      </td>
+      <td class="px-5 py-3 text-gray-600 hidden md:table-cell">${c.email}</td>
+      <td class="px-5 py-3 text-right font-semibold text-gray-700">${fmt(c.credits)}</td>
+      <td class="px-5 py-3 text-center">
+        <span class="${c.active ? 'badge-green' : 'badge-red'}">${c.active ? 'Ativo' : 'Bloqueado'}</span>
+      </td>
+      <td class="px-5 py-3 text-gray-500 text-xs hidden lg:table-cell">${fmtDate(c.created_at)}</td>
+      <td class="px-5 py-3 text-center">
+        <button onclick="toggleClient(${c.id})"
+          class="text-xs px-3 py-1 rounded-full border font-medium transition
+                 ${c.active
+                   ? 'border-red-200 text-red-600 hover:bg-red-50'
+                   : 'border-green-200 text-green-600 hover:bg-green-50'}">
+          ${c.active ? 'Bloquear' : 'Ativar'}
+        </button>
+      </td>
+    </tr>`).join('');
+}
+
+function filterClients() { renderClientsTable(); }
+
+async function toggleClient(id) {
+  if (!confirm('Deseja alterar o status deste cliente?')) return;
+  try {
+    const r = await fetch(`/api/reseller/clients/${id}/toggle`, { method: 'PUT' });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error, 'error'); return; }
+    const c = allClients.find(x => x.id === id);
+    if (c) c.active = d.active;
+    renderClientsTable();
+    renderRecentClients();
+    toast(d.active ? 'Cliente ativado.' : 'Cliente bloqueado.');
+  } catch { toast('Erro ao alterar status.', 'error'); }
+}
+
+// ── Comissões ──────────────────────────────────────────────────────────────
+async function loadCommissions() {
+  try {
+    const r = await fetch('/api/reseller/commissions');
+    if (!r.ok) return;
+    const d = await r.json();
+    allComms = d.commissions || [];
+    renderRecentCommissions();
+  } catch { /* silencioso */ }
+}
+
+function renderRecentCommissions() {
+  const el = document.getElementById('recent-commissions');
+  if (!allComms.length) {
+    el.innerHTML = `
+      <div class="text-center py-8 text-gray-400">
+        <div class="text-4xl mb-2">💰</div>
+        <p class="text-sm">Nenhuma comissão ainda.</p>
+        <p class="text-xs mt-1">Comissões aparecem após depósitos de clientes.</p>
+      </div>`;
+    return;
+  }
+  el.innerHTML = allComms.slice(0, 5).map(c => `
+    <div class="flex items-center justify-between py-2.5 border-b border-gray-50 last:border-0">
+      <div class="min-w-0">
+        <div class="text-sm font-medium text-gray-800 truncate">${c.client_name}</div>
+        <div class="text-xs text-gray-400">${fmtDate(c.created_at)}</div>
+      </div>
+      <div class="text-right flex-shrink-0 ml-3">
+        <div class="text-sm font-bold text-green-600">+${fmt(c.amount)}</div>
+        <div class="text-xs text-gray-400">${parseFloat(c.rate)}% sobre ${fmt(c.deposit_amount)}</div>
+      </div>
+    </div>`).join('');
+}
+
+function renderCommissionsTable() {
+  const tbody = document.getElementById('commissions-table-body');
+  if (!allComms.length) {
+    tbody.innerHTML = `<tr><td colspan="5" class="text-center py-16 text-gray-400">
+      <div class="text-5xl mb-3">💰</div>
+      <p class="font-medium">Nenhuma comissão ainda</p>
+      <p class="text-sm mt-1">Comissões são geradas quando seus clientes fazem depósitos aprovados.</p>
+    </td></tr>`;
+    return;
+  }
+  tbody.innerHTML = allComms.map(c => `
+    <tr class="table-row">
+      <td class="px-5 py-3 text-gray-500 text-sm">${fmtDate(c.created_at)}</td>
+      <td class="px-5 py-3">
+        <div class="font-medium text-gray-800 text-sm">${c.client_name}</div>
+      </td>
+      <td class="px-5 py-3 text-right text-gray-600 text-sm hidden sm:table-cell">${fmt(c.deposit_amount)}</td>
+      <td class="px-5 py-3 text-center hidden sm:table-cell">
+        <span class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full text-xs font-medium">
+          ${parseFloat(c.rate)}%
+        </span>
+      </td>
+      <td class="px-5 py-3 text-right font-bold text-green-600 text-sm">+${fmt(c.amount)}</td>
+    </tr>`).join('');
+}
+
+// ── Affiliate copy ─────────────────────────────────────────────────────────
+function copyLink() {
+  const val = document.getElementById('aff-link-input').value;
+  if (!val) return;
+  navigator.clipboard.writeText(val)
+    .then(() => toast('Link copiado!'))
+    .catch(() => {
+      document.getElementById('aff-link-input').select();
+      document.execCommand('copy');
+      toast('Link copiado!');
+    });
+}
+
+// ── Perfil ─────────────────────────────────────────────────────────────────
+async function saveProfile(e) {
+  e.preventDefault();
+  const name  = document.getElementById('profile-name').value.trim();
+  const phone = document.getElementById('profile-phone').value.trim();
+  document.getElementById('profile-alert-error').classList.add('hidden');
+  document.getElementById('profile-alert-success').classList.add('hidden');
+
+  try {
+    const r = await fetch('/api/profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, phone }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      document.getElementById('profile-alert-error').textContent = d.error;
+      document.getElementById('profile-alert-error').classList.remove('hidden');
+      return;
+    }
+    document.getElementById('profile-alert-success').textContent = 'Perfil atualizado com sucesso!';
+    document.getElementById('profile-alert-success').classList.remove('hidden');
+    document.getElementById('user-name').textContent     = name;
+    document.getElementById('topbar-name').textContent   = name.split(' ')[0];
+    document.getElementById('user-avatar').textContent   = name.charAt(0).toUpperCase();
+    document.getElementById('topbar-avatar').textContent = name.charAt(0).toUpperCase();
+    toast('Perfil atualizado!');
+  } catch {
+    document.getElementById('profile-alert-error').textContent = 'Erro de conexão.';
+    document.getElementById('profile-alert-error').classList.remove('hidden');
+  }
+}
+
+async function changePassword(e) {
+  e.preventDefault();
+  const cp = document.getElementById('current-password').value;
+  const np = document.getElementById('new-password').value;
+  const cn = document.getElementById('confirm-new-password').value;
+  document.getElementById('pwd-alert-error').classList.add('hidden');
+  document.getElementById('pwd-alert-success').classList.add('hidden');
+
+  if (np !== cn) {
+    document.getElementById('pwd-alert-error').textContent = 'As novas senhas não coincidem.';
+    document.getElementById('pwd-alert-error').classList.remove('hidden');
+    return;
+  }
+  try {
+    const r = await fetch('/api/profile/password', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: cp, new_password: np }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      document.getElementById('pwd-alert-error').textContent = d.error;
+      document.getElementById('pwd-alert-error').classList.remove('hidden');
+      return;
+    }
+    document.getElementById('pwd-alert-success').textContent = 'Senha alterada com sucesso!';
+    document.getElementById('pwd-alert-success').classList.remove('hidden');
+    document.getElementById('password-form').reset();
+    toast('Senha alterada!');
+  } catch {
+    document.getElementById('pwd-alert-error').textContent = 'Erro de conexão.';
+    document.getElementById('pwd-alert-error').classList.remove('hidden');
+  }
+}
+
+// ── Logout ─────────────────────────────────────────────────────────────────
+async function logout() {
+  await fetch('/api/auth/logout', { method: 'POST' });
+  window.location.href = '/entrar';
+}
+
+// ── Modal: Criar Cliente ───────────────────────────────────────────────────
+function openModal() {
+  document.getElementById('modal-create-client').classList.remove('hidden');
+  document.getElementById('create-client-form').reset();
+  document.getElementById('modal-error').classList.add('hidden');
+  document.getElementById('mc-pwd-match').textContent = '';
+  setTimeout(() => document.getElementById('mc-name').focus(), 50);
+}
+
+function closeModal() {
+  document.getElementById('modal-create-client').classList.add('hidden');
+}
+
+function toggleModalPwd(id) {
+  const el = document.getElementById(id);
+  el.type = el.type === 'password' ? 'text' : 'password';
+}
+
+// Máscaras do modal
+document.getElementById('mc-cpf-cnpj').addEventListener('input', function () {
+  const d = this.value.replace(/\D/g, '').slice(0, 14);
+  this.value = d.length <= 11
+    ? d.replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d{1,2})$/, '$1-$2')
+    : d.replace(/^(\d{2})(\d)/, '$1.$2').replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3')
+        .replace(/\.(\d{3})(\d)/, '.$1/$2').replace(/(\d{4})(\d{1,2})$/, '$1-$2');
+});
+
+document.getElementById('mc-phone').addEventListener('input', function () {
+  const d = this.value.replace(/\D/g, '').slice(0, 11);
+  this.value = d.length <= 10
+    ? d.replace(/(\d{2})(\d{4})(\d{0,4})/, '($1) $2-$3').replace(/-$/, '')
+    : d.replace(/(\d{2})(\d{5})(\d{0,4})/, '($1) $2-$3');
+});
+
+document.getElementById('mc-password-confirm').addEventListener('input', function () {
+  const p1 = document.getElementById('mc-password').value;
+  const el = document.getElementById('mc-pwd-match');
+  if (!this.value) { el.textContent = ''; return; }
+  if (p1 === this.value) {
+    el.textContent = '✓ Senhas coincidem';
+    el.className = 'text-xs mt-1 h-4 text-green-600';
+  } else {
+    el.textContent = '✗ Senhas não coincidem';
+    el.className = 'text-xs mt-1 h-4 text-red-500';
+  }
+});
+
+async function submitCreateClient(e) {
+  e.preventDefault();
+  const name     = document.getElementById('mc-name').value.trim();
+  const cpf_cnpj = document.getElementById('mc-cpf-cnpj').value.trim();
+  const email    = document.getElementById('mc-email').value.trim();
+  const phone    = document.getElementById('mc-phone').value.trim();
+  const password = document.getElementById('mc-password').value;
+  const confirm  = document.getElementById('mc-password-confirm').value;
+
+  document.getElementById('modal-error').classList.add('hidden');
+
+  if (password !== confirm) { showModalError('As senhas não coincidem.'); return; }
+
+  setModalLoading(true);
+  try {
+    const res  = await fetch('/api/reseller/clients', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, cpf_cnpj, email, phone, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showModalError(data.error); return; }
+
+    allClients.unshift(data.client);
+    renderClientsTable();
+    renderRecentClients();
+    loadStats();
+    closeModal();
+    toast(`Cliente "${data.client.name}" criado com sucesso!`);
+  } catch {
+    showModalError('Erro de conexão. Tente novamente.');
+  } finally {
+    setModalLoading(false);
+  }
+}
+
+function showModalError(msg) {
+  document.getElementById('modal-error-msg').textContent = msg;
+  document.getElementById('modal-error').classList.remove('hidden');
+}
+
+function setModalLoading(on) {
+  document.getElementById('mc-submit').disabled = on;
+  document.getElementById('mc-submit-text').textContent = on ? 'Criando...' : 'Criar Cliente';
+  document.getElementById('mc-spinner').classList.toggle('hidden', !on);
+}
+
+// ── Start ──────────────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>

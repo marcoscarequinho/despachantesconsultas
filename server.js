@@ -1,0 +1,655 @@
+require('dotenv').config();
+const express = require('express');
+const { Pool } = require('pg');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
+const path = require('path');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-inseguro';
+const CHAVE_ACESSO = process.env.CHAVE_ACESSO || '';
+const BASE_API_URL = 'https://portaldespachantes.online';
+const MARKUP = 1.30;
+
+const SERVICES = [
+  // ── Consultas Básicas ──
+  { id:'base-estadual',          name:'Base Estadual',              group:'Consultas Básicas', basePrice:8.00,  inputType:'placa',       icon:'🚗' },
+  { id:'base-nacional',          name:'Base Nacional',              group:'Consultas Básicas', basePrice:10.00, inputType:'placa',       icon:'🗺️' },
+  { id:'consulta-cautelar',      name:'Consulta Cautelar VIP GOLD', group:'Consultas Básicas', basePrice:15.00, inputType:'placa',       icon:'🔍' },
+  { id:'consultar-autovistoria', name:'Auto Quilometragem',         group:'Consultas Básicas', basePrice:8.00,  inputType:'placa',       icon:'⚡' },
+  { id:'consultar-motor',        name:'Consulta Motor',             group:'Consultas Básicas', basePrice:8.00,  inputType:'motor',       icon:'🔧' },
+  { id:'consultar-placa-v2',     name:'Proprietário Atual (v2)',    group:'Consultas Básicas', basePrice:8.00,  inputType:'placa',       icon:'🔍' },
+  { id:'consultar-placa-v3',     name:'Consulta Placa v3',          group:'Consultas Básicas', basePrice:8.00,  inputType:'placa_uf',    icon:'🔍' },
+  { id:'consultar-placa-fipe',   name:'Consulta FIPE',              group:'Consultas Básicas', basePrice:5.00,  inputType:'placa',       icon:'💰' },
+  { id:'consultar-foto-leilao',  name:'Foto Leilão',                group:'Consultas Básicas', basePrice:5.00,  inputType:'placa',       icon:'📸' },
+  { id:'consultar-chassi-v2',    name:'Consulta Chassi',            group:'Consultas Básicas', basePrice:10.00, inputType:'chassi',      icon:'🔑' },
+  // ── Débitos e Documentação ──
+  { id:'consultar-debito',                name:'Consulta Débito (PDF)',        group:'Débitos e Documentação', basePrice:8.00,  inputType:'placa',        icon:'💳' },
+  { id:'consultar-debito-api',            name:'Débitos (JSON)',               group:'Débitos e Documentação', basePrice:8.00,  inputType:'placa',        icon:'💳' },
+  { id:'consultar-licenciamento',         name:'Licenciamento + BIN',          group:'Débitos e Documentação', basePrice:8.00,  inputType:'placa',        icon:'📋' },
+  { id:'consultar-gravame',               name:'Consulta Gravame',             group:'Débitos e Documentação', basePrice:8.00,  inputType:'placa',        icon:'🏦' },
+  { id:'consultar-historico-proprietario',name:'Histórico de Proprietários',   group:'Débitos e Documentação', basePrice:10.00, inputType:'placa',        icon:'👥' },
+  { id:'renajud',                         name:'RENAJUD',                      group:'Débitos e Documentação', basePrice:12.00, inputType:'placa',        icon:'⚖️' },
+  { id:'consultar-atpve',                 name:'Reemissão ATPV-e',             group:'Débitos e Documentação', basePrice:12.00, inputType:'placa_renavam',icon:'📄' },
+  { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:8.00,  inputType:'placa',        icon:'🔢' },
+  { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:8.00,  inputType:'placa_renavam',icon:'📝' },
+  // ── CRLV-e Digital (instantâneo) ──
+  { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-ba', name:'CRLV-e Bahia (BA)',              group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-go', name:'CRLV-e Goiás (GO)',              group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-ma', name:'CRLV-e Maranhão (MA)',           group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-mg', name:'CRLV-e Minas Gerais (MG)',       group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-ms', name:'CRLV-e Mato Grosso do Sul (MS)',group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-mt', name:'CRLV-e Mato Grosso (MT)',        group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-pa', name:'CRLV-e Pará (PA)',               group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-pi', name:'CRLV-e Piauí (PI)',              group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-pr', name:'CRLV-e Paraná (PR)',             group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-ro', name:'CRLV-e Rondônia (RO)',           group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-rr', name:'CRLV-e Roraima (RR)',            group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-se', name:'CRLV-e Sergipe (SE)',            group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-sp', name:'CRLV-e São Paulo (SP)',          group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-to', name:'CRLV-e Tocantins (TO)',          group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  // ── CRLV-e Agendado (assíncrono) ──
+  { id:'crlv-agendado-al', name:'CRLV-e Agendado Alagoas (AL)',            group:'CRLV-e Agendado', basePrice:15.00, inputType:'crlv_agendado_placa', icon:'⏳', uf:'al' },
+  { id:'crlv-agendado-ce', name:'CRLV-e Agendado Ceará (CE)',              group:'CRLV-e Agendado', basePrice:15.00, inputType:'crlv_agendado_placa', icon:'⏳', uf:'ce' },
+  { id:'crlv-agendado-df', name:'CRLV-e Agendado Distrito Federal (DF)',   group:'CRLV-e Agendado', basePrice:15.00, inputType:'crlv_agendado_placa', icon:'⏳', uf:'df' },
+  { id:'crlv-agendado-es', name:'CRLV-e Agendado Espírito Santo (ES)',     group:'CRLV-e Agendado', basePrice:15.00, inputType:'crlv_agendado_placa', icon:'⏳', uf:'es' },
+  { id:'crlv-agendado-pb', name:'CRLV-e Agendado Paraíba (PB)',            group:'CRLV-e Agendado', basePrice:15.00, inputType:'crlv_agendado_cpf',   icon:'⏳', uf:'pb' },
+  { id:'crlv-agendado-pe', name:'CRLV-e Agendado Pernambuco (PE)',         group:'CRLV-e Agendado', basePrice:15.00, inputType:'crlv_agendado_placa', icon:'⏳', uf:'pe' },
+  { id:'crlv-agendado-pi', name:'CRLV-e Agendado Piauí (PI)',              group:'CRLV-e Agendado', basePrice:15.00, inputType:'crlv_agendado_cpf',   icon:'⏳', uf:'pi' },
+  { id:'crlv-agendado-rj', name:'CRLV-e Agendado Rio de Janeiro (RJ)',     group:'CRLV-e Agendado', basePrice:15.00, inputType:'crlv_agendado_placa', icon:'⏳', uf:'rj' },
+  { id:'crlv-agendado-rn', name:'CRLV-e Agendado Rio Grande do Norte (RN)',group:'CRLV-e Agendado', basePrice:15.00, inputType:'crlv_agendado_cpf',   icon:'⏳', uf:'rn' },
+  { id:'crlv-agendado-sc', name:'CRLV-e Agendado Santa Catarina (SC)',     group:'CRLV-e Agendado', basePrice:15.00, inputType:'crlv_agendado_placa', icon:'⏳', uf:'sc' },
+  { id:'crlv-agendado-status', name:'CRLV Agendado — Ver Status',          group:'CRLV-e Agendado', basePrice:0.00,  inputType:'pedido_id_get',       icon:'🔄' },
+  // ── CRV ──
+  { id:'consultar-crv',      name:'Consulta CRV',       group:'CRV', basePrice:10.00, inputType:'crv_full', icon:'🔐' },
+  { id:'consultar-crv-pi',   name:'Consulta CRV Piauí', group:'CRV', basePrice:10.00, inputType:'placa',    icon:'🔐' },
+  { id:'consultar-crv-v2',   name:'Código Segurança CRV v2', group:'CRV', basePrice:10.00, inputType:'placa',icon:'🔐' },
+  { id:'consultar-placa-crv',name:'Placa + CRV (JSON+PDF)',  group:'CRV', basePrice:12.00, inputType:'placa',icon:'🔐' },
+  { id:'valida-crv',         name:'Valida CRV',         group:'CRV', basePrice:8.00,  inputType:'valida_crv',icon:'✅' },
+  // ── Análise de Crédito ──
+  { id:'consultar-spc', name:'Consulta SPC/Crédito', group:'Análise de Crédito', basePrice:15.00, inputType:'cpfcnpj', icon:'📊' },
+  // ── Comunicação de Venda ──
+  { id:'inserir-comunicacao-venda',   name:'Inserir Comunicação Venda',     group:'Comunicação Venda', basePrice:12.00, inputType:'venda',          icon:'📝' },
+  { id:'cancelar-comunicacao-venda',  name:'Cancelar Comunicação Venda',    group:'Comunicação Venda', basePrice:8.00,  inputType:'cancelar_venda', icon:'❌' },
+  { id:'venda-transmitir',            name:'Transmitir Comunicação Venda',  group:'Comunicação Venda', basePrice:5.00,  inputType:'id_only',        icon:'📤' },
+  { id:'com-venda-desbloquear',       name:'Desbloquear Comunicação Venda', group:'Comunicação Venda', basePrice:5.00,  inputType:'placa',          icon:'🔓' },
+  { id:'com-venda-por-id',            name:'Consultar Comunicação por ID',  group:'Comunicação Venda', basePrice:3.00,  inputType:'id_get',         icon:'🔍' },
+  { id:'motivos-cancelamento',        name:'Motivos de Cancelamento',       group:'Comunicação Venda', basePrice:3.00,  inputType:'protocolo_get',  icon:'📋' },
+];
+
+// Conexão com o banco Neon
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
+
+// ── Inicializar tabelas ──────────────────────────────────────────────────────
+async function initDB() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id            SERIAL PRIMARY KEY,
+      name          VARCHAR(255) NOT NULL,
+      cpf_cnpj      VARCHAR(20)  UNIQUE NOT NULL,
+      email         VARCHAR(255) UNIQUE NOT NULL,
+      phone         VARCHAR(20),
+      password_hash VARCHAR(255) NOT NULL,
+      role          VARCHAR(20)  DEFAULT 'user' CHECK (role IN ('user','reseller','admin')),
+      credits       NUMERIC(10,2) DEFAULT 0.00,
+      affiliate_code VARCHAR(12) UNIQUE,
+      referred_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at    TIMESTAMPTZ DEFAULT NOW(),
+      active        BOOLEAN DEFAULT true
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS transactions (
+      id          SERIAL PRIMARY KEY,
+      user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      type        VARCHAR(20) NOT NULL CHECK (type IN ('deposit','debit','commission','refund')),
+      amount      NUMERIC(10,2) NOT NULL,
+      description TEXT,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS commissions (
+      id             SERIAL PRIMARY KEY,
+      reseller_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      client_id      INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      transaction_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL,
+      amount         NUMERIC(10,2) NOT NULL,
+      rate           NUMERIC(5,2)  DEFAULT 10.00,
+      created_at     TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS queries (
+      id             SERIAL PRIMARY KEY,
+      user_id        INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      service_id     VARCHAR(100) NOT NULL,
+      service_name   VARCHAR(255) NOT NULL,
+      params         TEXT,
+      status         VARCHAR(20)  DEFAULT 'success',
+      amount         NUMERIC(10,2),
+      transaction_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL,
+      result_type    VARCHAR(10)  DEFAULT 'json',
+      created_at     TIMESTAMPTZ  DEFAULT NOW()
+    );
+  `);
+  console.log('✅ Tabelas prontas');
+}
+
+// ── Middlewares ──────────────────────────────────────────────────────────────
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
+app.use(express.static(path.join(__dirname)));
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const cleanDoc = (v) => v.replace(/[\.\-\/]/g, '').trim();
+
+function generateAffiliateCode(name) {
+  const base = name.split(' ')[0].toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5);
+  const rand = Math.random().toString(36).substring(2, 6).toUpperCase();
+  return `${base}${rand}`;
+}
+
+// ── Auth Middleware ───────────────────────────────────────────────────────────
+function requireAuth(req, res, next) {
+  const token =
+    req.cookies.auth_token ||
+    (req.headers.authorization || '').replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Não autenticado' });
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ error: 'Token inválido ou expirado' });
+  }
+}
+
+function requireReseller(req, res, next) {
+  if (req.user.role !== 'reseller' && req.user.role !== 'admin')
+    return res.status(403).json({ error: 'Acesso restrito a revendedores.' });
+  next();
+}
+
+// ── POST /api/auth/register ───────────────────────────────────────────────────
+app.post('/api/auth/register', async (req, res) => {
+  const { name, cpf_cnpj, email, phone, password, role, referral_code } = req.body;
+
+  if (!name || !cpf_cnpj || !email || !password)
+    return res.status(400).json({ error: 'Preencha todos os campos obrigatórios.' });
+
+  if (password.length < 8)
+    return res.status(400).json({ error: 'A senha deve ter ao menos 8 caracteres.' });
+
+  const doc = cleanDoc(cpf_cnpj);
+  const mail = email.toLowerCase().trim();
+
+  try {
+    const dup = await pool.query(
+      'SELECT id FROM users WHERE email=$1 OR cpf_cnpj=$2',
+      [mail, doc]
+    );
+    if (dup.rows.length > 0)
+      return res.status(409).json({ error: 'E-mail ou CPF/CNPJ já cadastrado.' });
+
+    // Resolver código de afiliado
+    let referredBy = null;
+    if (referral_code) {
+      const ref = await pool.query(
+        'SELECT id FROM users WHERE affiliate_code=$1',
+        [referral_code.toUpperCase()]
+      );
+      if (ref.rows.length > 0) referredBy = ref.rows[0].id;
+    }
+
+    const hash = await bcrypt.hash(password, 12);
+    const affCode = generateAffiliateCode(name);
+    const userRole = role === 'reseller' ? 'reseller' : 'user';
+
+    const r = await pool.query(
+      `INSERT INTO users (name, cpf_cnpj, email, phone, password_hash, role, affiliate_code, referred_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       RETURNING id, name, email, role`,
+      [name.trim(), doc, mail, phone?.trim() || null, hash, userRole, affCode, referredBy]
+    );
+
+    const user = r.rows[0];
+    const token = jwt.sign(
+      { id: user.id, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+    res.cookie('auth_token', token, {
+      httpOnly: true,
+      maxAge: 7 * 24 * 3600 * 1000,
+      sameSite: 'lax',
+    });
+    res.json({ success: true, user });
+  } catch (err) {
+    console.error('Erro no cadastro:', err.message);
+    res.status(500).json({ error: 'Erro interno. Tente novamente.' });
+  }
+});
+
+// ── POST /api/auth/login ──────────────────────────────────────────────────────
+app.post('/api/auth/login', async (req, res) => {
+  const { identifier, password } = req.body;
+  if (!identifier || !password)
+    return res.status(400).json({ error: 'Preencha e-mail/CPF/CNPJ e senha.' });
+
+  const id = identifier.trim();
+  const isEmail = id.includes('@');
+  const lookup = isEmail ? id.toLowerCase() : cleanDoc(id);
+  const field = isEmail ? 'email' : 'cpf_cnpj';
+
+  try {
+    const r = await pool.query(
+      `SELECT * FROM users WHERE ${field}=$1`,
+      [lookup]
+    );
+    if (r.rows.length === 0)
+      return res.status(401).json({ error: 'Credenciais inválidas.' });
+
+    const user = r.rows[0];
+    if (!user.active)
+      return res.status(403).json({ error: 'Conta bloqueada. Contate o suporte.' });
+
+    const match = await bcrypt.compare(password, user.password_hash);
+    if (!match)
+      return res.status(401).json({ error: 'Credenciais inválidas.' });
+
+    const token = jwt.sign(
+      { id: user.id, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+    res.cookie('auth_token', token, {
+      httpOnly: true,
+      maxAge: 7 * 24 * 3600 * 1000,
+      sameSite: 'lax',
+    });
+    res.json({
+      success: true,
+      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+    });
+  } catch (err) {
+    console.error('Erro no login:', err.message);
+    res.status(500).json({ error: 'Erro interno. Tente novamente.' });
+  }
+});
+
+// ── POST /api/auth/logout ─────────────────────────────────────────────────────
+app.post('/api/auth/logout', (req, res) => {
+  res.clearCookie('auth_token');
+  res.json({ success: true });
+});
+
+// ── GET /api/auth/me ──────────────────────────────────────────────────────────
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      'SELECT id, name, email, role, credits FROM users WHERE id=$1',
+      [req.user.id]
+    );
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Usuário não encontrado.' });
+    res.json(r.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── GET /api/reseller/stats ───────────────────────────────────────────────────
+app.get('/api/reseller/stats', requireAuth, requireReseller, async (req, res) => {
+  try {
+    const rid = req.user.id;
+    const [userRow, totalRow, activeRow, monthRow, allTimeRow] = await Promise.all([
+      pool.query('SELECT credits, affiliate_code FROM users WHERE id=$1', [rid]),
+      pool.query('SELECT COUNT(*) FROM users WHERE referred_by=$1', [rid]),
+      pool.query('SELECT COUNT(*) FROM users WHERE referred_by=$1 AND active=true', [rid]),
+      pool.query(`SELECT COALESCE(SUM(amount),0) AS total FROM commissions
+                  WHERE reseller_id=$1 AND created_at >= date_trunc('month', NOW())`, [rid]),
+      pool.query('SELECT COALESCE(SUM(amount),0) AS total FROM commissions WHERE reseller_id=$1', [rid]),
+    ]);
+    res.json({
+      credits:           parseFloat(userRow.rows[0].credits),
+      affiliate_code:    userRow.rows[0].affiliate_code,
+      total_clients:     parseInt(totalRow.rows[0].count),
+      active_clients:    parseInt(activeRow.rows[0].count),
+      month_commissions: parseFloat(monthRow.rows[0].total),
+      total_commissions: parseFloat(allTimeRow.rows[0].total),
+    });
+  } catch (err) {
+    console.error('Erro em stats:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── GET /api/reseller/clients ─────────────────────────────────────────────────
+app.get('/api/reseller/clients', requireAuth, requireReseller, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, name, email, cpf_cnpj, phone, credits, active, created_at
+       FROM users WHERE referred_by=$1 ORDER BY created_at DESC`,
+      [req.user.id]
+    );
+    res.json({ clients: r.rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── POST /api/reseller/clients — revendedor cria cliente diretamente ─────────
+app.post('/api/reseller/clients', requireAuth, requireReseller, async (req, res) => {
+  const { name, cpf_cnpj, email, phone, password } = req.body;
+
+  if (!name || !cpf_cnpj || !email || !password)
+    return res.status(400).json({ error: 'Preencha todos os campos obrigatórios.' });
+  if (password.length < 8)
+    return res.status(400).json({ error: 'A senha deve ter ao menos 8 caracteres.' });
+
+  const doc  = cleanDoc(cpf_cnpj);
+  const mail = email.toLowerCase().trim();
+
+  try {
+    const dup = await pool.query(
+      'SELECT id FROM users WHERE email=$1 OR cpf_cnpj=$2',
+      [mail, doc]
+    );
+    if (dup.rows.length > 0)
+      return res.status(409).json({ error: 'E-mail ou CPF/CNPJ já cadastrado.' });
+
+    const hash    = await bcrypt.hash(password, 12);
+    const affCode = generateAffiliateCode(name);
+
+    const r = await pool.query(
+      `INSERT INTO users (name, cpf_cnpj, email, phone, password_hash, role, affiliate_code, referred_by)
+       VALUES ($1,$2,$3,$4,$5,'user',$6,$7)
+       RETURNING id, name, email, phone, cpf_cnpj, credits, active, created_at`,
+      [name.trim(), doc, mail, phone?.trim() || null, hash, affCode, req.user.id]
+    );
+    res.json({ success: true, client: r.rows[0] });
+  } catch (err) {
+    console.error('Erro ao criar cliente:', err.message);
+    res.status(500).json({ error: 'Erro interno. Tente novamente.' });
+  }
+});
+
+// ── PUT /api/reseller/clients/:id/toggle ──────────────────────────────────────
+app.put('/api/reseller/clients/:id/toggle', requireAuth, requireReseller, async (req, res) => {
+  try {
+    const c = await pool.query(
+      'SELECT id, active FROM users WHERE id=$1 AND referred_by=$2',
+      [req.params.id, req.user.id]
+    );
+    if (!c.rows.length) return res.status(404).json({ error: 'Cliente não encontrado.' });
+    const newActive = !c.rows[0].active;
+    await pool.query('UPDATE users SET active=$1 WHERE id=$2', [newActive, req.params.id]);
+    res.json({ success: true, active: newActive });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── GET /api/reseller/commissions ─────────────────────────────────────────────
+app.get('/api/reseller/commissions', requireAuth, requireReseller, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT c.id, c.amount, c.rate, c.created_at,
+              u.name AS client_name,
+              COALESCE(t.amount, 0) AS deposit_amount
+       FROM commissions c
+       JOIN users u ON u.id = c.client_id
+       LEFT JOIN transactions t ON t.id = c.transaction_id
+       WHERE c.reseller_id=$1
+       ORDER BY c.created_at DESC LIMIT 200`,
+      [req.user.id]
+    );
+    res.json({ commissions: r.rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── GET /api/auth/me (extended) ───────────────────────────────────────────────
+// ── PUT /api/profile ──────────────────────────────────────────────────────────
+app.put('/api/profile', requireAuth, async (req, res) => {
+  const { name, phone } = req.body;
+  if (!name) return res.status(400).json({ error: 'Nome é obrigatório.' });
+  try {
+    const r = await pool.query(
+      'UPDATE users SET name=$1, phone=$2 WHERE id=$3 RETURNING id, name, email, phone, role',
+      [name.trim(), phone?.trim() || null, req.user.id]
+    );
+    res.json({ success: true, user: r.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── GET /api/services ─────────────────────────────────────────────────────────
+app.get('/api/services', requireAuth, (req, res) => {
+  res.json({
+    services: SERVICES.map(s => ({
+      ...s,
+      price: parseFloat((s.basePrice * MARKUP).toFixed(2)),
+    })),
+  });
+});
+
+// ── GET /api/user/stats ───────────────────────────────────────────────────────
+app.get('/api/user/stats', requireAuth, async (req, res) => {
+  try {
+    const [userRow, monthRow, totalRow, countRow] = await Promise.all([
+      pool.query('SELECT credits FROM users WHERE id=$1', [req.user.id]),
+      pool.query(
+        `SELECT COALESCE(SUM(amount),0) AS total FROM queries
+         WHERE user_id=$1 AND created_at >= date_trunc('month', NOW())`,
+        [req.user.id]
+      ),
+      pool.query(
+        `SELECT COALESCE(SUM(amount),0) AS total FROM queries WHERE user_id=$1`,
+        [req.user.id]
+      ),
+      pool.query(
+        `SELECT COUNT(*) AS total FROM queries WHERE user_id=$1`,
+        [req.user.id]
+      ),
+    ]);
+    res.json({
+      credits:       parseFloat(userRow.rows[0].credits),
+      month_spent:   parseFloat(monthRow.rows[0].total),
+      total_spent:   parseFloat(totalRow.rows[0].total),
+      total_queries: parseInt(countRow.rows[0].total),
+    });
+  } catch (err) {
+    console.error('Erro em user/stats:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── GET /api/queries ──────────────────────────────────────────────────────────
+app.get('/api/queries', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, service_id, service_name, params, status, amount, result_type, created_at
+       FROM queries WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100`,
+      [req.user.id]
+    );
+    res.json({ queries: r.rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── POST /api/query ───────────────────────────────────────────────────────────
+app.post('/api/query', requireAuth, async (req, res) => {
+  const { serviceId, params } = req.body;
+  if (!serviceId) return res.status(400).json({ error: 'Serviço não informado.' });
+
+  const service = SERVICES.find(s => s.id === serviceId);
+  if (!service) return res.status(400).json({ error: 'Serviço inválido.' });
+
+  const price = parseFloat((service.basePrice * MARKUP).toFixed(2));
+
+  try {
+    const ur = await pool.query(
+      'SELECT credits, active FROM users WHERE id=$1', [req.user.id]
+    );
+    const user = ur.rows[0];
+    if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+    if (parseFloat(user.credits) < price)
+      return res.status(400).json({
+        error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}`,
+      });
+
+    // Build URL and method
+    let apiUrl = `${BASE_API_URL}/${serviceId}`;
+    let method = 'POST';
+    let body = params || {};
+
+    // CRLV Agendado: solicitar
+    if (serviceId.startsWith('crlv-agendado-') && serviceId !== 'crlv-agendado-status') {
+      const svcDef = SERVICES.find(s => s.id === serviceId);
+      apiUrl = `${BASE_API_URL}/api/crlv-agendado/solicitar`;
+      body = { ...params, uf: svcDef?.uf || params.uf };
+    }
+    // CRLV Agendado: verificar status
+    if (serviceId === 'crlv-agendado-status' && params?.pedido_id) {
+      apiUrl = `${BASE_API_URL}/api/crlv-agendado/${params.pedido_id}`;
+      method = 'GET'; body = null;
+    }
+    // Comunicado venda por ID (GET)
+    if (serviceId === 'com-venda-por-id' && params?.id) {
+      apiUrl = `${BASE_API_URL}/api/comunicado-venda/${params.id}`;
+      method = 'GET'; body = null;
+    }
+    // Comunicado venda desbloquear
+    if (serviceId === 'com-venda-desbloquear') {
+      apiUrl = `${BASE_API_URL}/api/comunicado-venda/desbloquear`;
+    }
+    // Transmitir comunicação de venda
+    if (serviceId === 'venda-transmitir' && params?.id) {
+      apiUrl = `${BASE_API_URL}/comunicacao-venda/transmitir/${params.id}`;
+      body = {};
+    }
+    // Motivos cancelamento
+    if (serviceId === 'motivos-cancelamento' && params?.protocolo) {
+      apiUrl = `${BASE_API_URL}/motivos-cancelamento/${params.protocolo}`;
+      method = 'GET'; body = null;
+    }
+
+    const fetchOpts = {
+      method,
+      headers: { 'Content-Type': 'application/json', chaveAcesso: CHAVE_ACESSO },
+    };
+    if (body !== null) fetchOpts.body = JSON.stringify(body);
+
+    const apiRes = await fetch(apiUrl, fetchOpts);
+    const ct = apiRes.headers.get('content-type') || '';
+    const isPdf = ct.includes('application/pdf');
+
+    if (apiRes.ok) {
+      await pool.query(
+        'UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]
+      );
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [req.user.id, price, `Consulta: ${service.name}`]
+      );
+      await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,$7)`,
+        [req.user.id, serviceId, service.name, JSON.stringify(params || {}),
+         price, txRow.rows[0].id, isPdf ? 'pdf' : 'json']
+      );
+
+      if (isPdf) {
+        const buf = Buffer.from(await apiRes.arrayBuffer());
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition',
+          `attachment; filename="${serviceId}-${Date.now()}.pdf"`);
+        return res.send(buf);
+      }
+      const data = await apiRes.json();
+      return res.json({ success: true, result: data, charged: price });
+    }
+
+    const errData = isPdf
+      ? { error: 'Erro ao processar consulta.' }
+      : await apiRes.json().catch(() => ({ error: 'Erro na API.' }));
+    return res.status(apiRes.status).json(errData);
+  } catch (err) {
+    console.error('Erro em /api/query:', err.message);
+    res.status(500).json({ error: 'Erro interno. Tente novamente.' });
+  }
+});
+
+// ── PUT /api/profile/password ─────────────────────────────────────────────────
+app.put('/api/profile/password', requireAuth, async (req, res) => {
+  const { current_password, new_password } = req.body;
+  if (!current_password || !new_password)
+    return res.status(400).json({ error: 'Preencha todos os campos.' });
+  if (new_password.length < 8)
+    return res.status(400).json({ error: 'Nova senha deve ter ao menos 8 caracteres.' });
+  try {
+    const r = await pool.query('SELECT password_hash FROM users WHERE id=$1', [req.user.id]);
+    const ok = await bcrypt.compare(current_password, r.rows[0].password_hash);
+    if (!ok) return res.status(401).json({ error: 'Senha atual incorreta.' });
+    const hash = await bcrypt.hash(new_password, 12);
+    await pool.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, req.user.id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── Rotas HTML ────────────────────────────────────────────────────────────────
+app.get('/', (req, res) =>
+  res.sendFile(path.join(__dirname, 'index.html'))
+);
+app.get('/entrar', (req, res) =>
+  res.sendFile(path.join(__dirname, 'entrar.html'))
+);
+app.get('/cadastrar', (req, res) =>
+  res.sendFile(path.join(__dirname, 'cadastrar.html'))
+);
+app.get('/cadastrar/revendedor', (req, res) =>
+  res.sendFile(path.join(__dirname, 'cadastrar.html'))
+);
+app.get('/painel', requireAuth, (req, res) => {
+  if (req.user.role === 'reseller' || req.user.role === 'admin')
+    return res.redirect('/painel/revendedor');
+  res.redirect('/painel/usuario');
+});
+app.get('/painel/usuario', requireAuth, (req, res) => {
+  res.sendFile(path.join(__dirname, 'painel-usuario.html'));
+});
+app.get('/painel/revendedor', requireAuth, (req, res) => {
+  res.sendFile(path.join(__dirname, 'painel-revendedor.html'));
+});
+
+// ── Iniciar ───────────────────────────────────────────────────────────────────
+// require.main === module → true quando rodado diretamente (node server.js)
+//                         → false quando importado pelo Vercel
+if (require.main === module) {
+  initDB()
+    .then(() => app.listen(PORT, () =>
+      console.log(`🚀 Servidor rodando em http://localhost:${PORT}`)
+    ))
+    .catch((err) => {
+      console.error('❌ Falha ao inicializar banco:', err.message);
+      process.exit(1);
+    });
+} else {
+  // Vercel serverless: inicializa o banco no cold start e exporta o app
+  initDB().catch((err) => console.error('Erro DB:', err.message));
+}
+
+module.exports = app;

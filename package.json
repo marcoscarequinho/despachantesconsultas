@@ -1,0 +1,44 @@
+﻿{
+  "name": "despachantes-consultas",
+  "version": "1.0.0",
+  "description": "Landing page profissional para plataforma B2B de consultas veiculares",
+  "main": "script.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "lint": "eslint script.js",
+    "format": "prettier --write \"*.{html,css,js,json}\""
+  },
+  "keywords": [
+    "landing-page",
+    "consultas-veiculares",
+    "crlv-e",
+    "despachante",
+    "b2b",
+    "javascript",
+    "tailwind"
+  ],
+  "author": "DESPACHANTES CONSULTAS LTDA",
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "cookie-parser": "^1.4.6",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.11.3"
+  },
+  "devDependencies": {
+    "eslint": "^8.50.0",
+    "prettier": "^3.0.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mcdespachadoria/landing-page.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mcdespachadoria/landing-page/issues"
+  },
+  "homepage": "https://despachantesconsultas.com.br"
+}

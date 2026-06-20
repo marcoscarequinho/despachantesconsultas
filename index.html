@@ -1,0 +1,527 @@
+﻿<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Plataforma profissional de consultas veiculares e emissão de CRLV-e digital para despachantes, lojistas e escritórios jurídicos. Sistema pré-pago sem mensalidade.">
+    <meta name="keywords" content="consulta veicular, CRLV-e, ATPV-e, despachante, documento digital veículo, consulta placa, débitos veiculares">
+    <meta name="robots" content="index, follow">
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="DESPACHANTES CONSULTAS - Consultas Veiculares e CRLV-e Digital para Profissionais">
+    <meta property="og:description" content="Plataforma B2B de consultas veiculares e emissão de documentos digitais. Sem mensalidade, crédito pré-pago via PIX.">
+    <meta property="og:type" content="website">
+
+    <title>DESPACHANTES CONSULTAS - Consultas Veiculares e CRLV-e Digital para Profissionais</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- CSS Customizado -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="bg-gray-50">
+
+    <!-- Topbar -->
+    <div class="topbar text-sm py-2 px-4">
+        <div class="container mx-auto flex flex-wrap justify-between items-center">
+            <div class="font-semibold">Consultas veiculares rápidas e seguras</div>
+            <div class="flex gap-4 items-center text-xs md:text-sm">
+                <a href="tel:(22) 99995-1574" class="hover:text-orange-400">📞 (22) 99995-1574</a>
+                <a href="https://wa.me/5522999951574" class="hover:text-orange-400">💬 WhatsApp</a>
+                <a href="mailto:contato@despachantesconsultas.com.br" class="hover:text-orange-400">✉️ contato@despachantesconsultas.com.br</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Header/Nav -->
+    <header class="bg-white shadow-md sticky top-0 z-50">
+        <div class="container mx-auto px-4 py-4">
+            <nav class="flex justify-between items-center flex-wrap">
+                <div class="text-2xl font-bold text-blue-900">
+                    <a href="/">DESPACHANTES CONSULTAS</a>
+                </div>
+
+                <button id="menu-toggle" class="md:hidden text-gray-700">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+                    </svg>
+                </button>
+
+                <ul id="menu" class="hidden md:flex gap-6 text-sm font-medium w-full md:w-auto mt-4 md:mt-0">
+                    <li><a href="#vantagens" class="hover:text-orange-500">Vantagens</a></li>
+                    <li><a href="#revenda" class="hover:text-orange-500">Seja Revendedor</a></li>
+                    <li><a href="#sobre" class="hover:text-orange-500">Sobre</a></li>
+                    <li><a href="#recursos" class="hover:text-orange-500">Recursos</a></li>
+                    <li><a href="#precos" class="hover:text-orange-500">Preços</a></li>
+                    <li><a href="#como-funciona" class="hover:text-orange-500">Como Funciona</a></li>
+                    <li><a href="#faq" class="hover:text-orange-500">FAQ</a></li>
+                    <li><a href="#contato" class="hover:text-orange-500">Contato</a></li>
+                    <!-- Mobile: crédito + botões auth -->
+                    <li class="md:hidden border-t border-gray-200 mt-3 pt-3 space-y-2">
+                        <a id="nav-credits-mobile" href="/painel" class="hidden items-center justify-center gap-2 w-full bg-orange-50 border border-orange-200 rounded-full px-4 py-2 hover:bg-orange-100 transition">
+                            <svg class="w-4 h-4 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
+                            </svg>
+                            <span id="nav-credits-value-mobile" class="font-bold text-orange-600 text-sm">R$ 0,00</span>
+                            <span class="text-orange-500 text-xs">Crédito</span>
+                        </a>
+                        <div class="flex gap-3">
+                            <a id="nav-entrar-mobile" href="/entrar" class="text-sm font-semibold text-blue-900 hover:text-orange-500 py-2">Entrar</a>
+                            <a id="nav-cadastrar-mobile" href="/cadastrar" class="btn-primary text-sm">Criar Conta</a>
+                            <a id="nav-painel-mobile" href="/painel" class="hidden btn-primary text-sm">Meu Painel</a>
+                        </div>
+                    </li>
+                </ul>
+
+                <!-- Desktop: crédito + botões auth -->
+                <div class="hidden md:flex items-center gap-3">
+                    <!-- Badge de crédito (visível quando logado) -->
+                    <a id="nav-credits" href="/painel"
+                       class="hidden items-center gap-1.5 bg-orange-50 border border-orange-200 rounded-full px-4 py-1.5 hover:bg-orange-100 transition">
+                        <svg class="w-4 h-4 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
+                        </svg>
+                        <span id="nav-credits-value" class="font-bold text-orange-600 text-sm">R$ 0,00</span>
+                        <span class="text-orange-500 text-xs font-medium">Crédito</span>
+                    </a>
+                    <!-- Não logado -->
+                    <a id="nav-entrar" href="/entrar" class="text-sm font-semibold text-blue-900 hover:text-orange-500">Entrar</a>
+                    <a id="nav-cadastrar" href="/cadastrar" class="btn-primary text-sm">Criar Conta</a>
+                    <!-- Logado -->
+                    <a id="nav-painel" href="/painel" class="hidden btn-primary text-sm">Meu Painel</a>
+                </div>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Hero -->
+    <section id="hero" class="bg-gradient-to-r from-blue-900 to-blue-700 text-white py-20">
+        <div class="container mx-auto px-4">
+            <div class="grid md:grid-cols-2 gap-12 items-center">
+                <div>
+                    <h1 class="text-4xl md:text-5xl font-bold mb-6">
+                        Consultas Veiculares e CRLV-e Digital para Profissionais
+                    </h1>
+                    <p class="text-xl mb-8 text-gray-200">
+                        Plataforma completa para despachantes, lojistas de veículos e escritórios jurídicos.
+                        Sistema pré-pago sem mensalidade, com créditos via PIX.
+                    </p>
+                    <div class="flex gap-4 flex-wrap">
+                        <a href="/cadastrar" class="btn-primary">Começar Agora - Grátis</a>
+                        <a href="#como-funciona" class="btn-secondary">Como Funciona</a>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="stat-card">
+                        <div class="text-3xl font-bold text-orange-500">27</div>
+                        <div class="text-gray-600 mt-2">UFs com CRLV-e</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="text-3xl font-bold text-orange-500">30+</div>
+                        <div class="text-gray-600 mt-2">Tipos de Consulta</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="text-3xl font-bold text-orange-500">25s</div>
+                        <div class="text-gray-600 mt-2">Resposta Turbo</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="text-3xl font-bold text-orange-500">PIX</div>
+                        <div class="text-gray-600 mt-2">Instantâneo</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Vantagens (Afiliados) -->
+    <section id="vantagens" class="py-16 bg-white">
+        <div class="container mx-auto px-4">
+            <div class="max-w-4xl mx-auto">
+                <h2 class="text-3xl md:text-4xl font-bold text-center mb-4 text-blue-900">Programa de Afiliados</h2>
+                <p class="text-center text-gray-600 mb-12">Indique clientes e ganhe comissão sobre cada depósito aprovado</p>
+
+                <div class="grid md:grid-cols-2 gap-8">
+                    <div class="feature-card">
+                        <div class="text-4xl mb-4">🔗</div>
+                        <h3 class="text-xl font-bold mb-3 text-blue-900">Link de Indicação</h3>
+                        <p class="text-gray-600">
+                            Acesse seu painel e gere seu link exclusivo de afiliado. Compartilhe com seus contatos e
+                            acompanhe todas as indicações em tempo real.
+                        </p>
+                    </div>
+
+                    <div class="feature-card">
+                        <div class="text-4xl mb-4">💰</div>
+                        <h3 class="text-xl font-bold mb-3 text-blue-900">Comissão Recorrente</h3>
+                        <p class="text-gray-600">
+                            Ganhe um percentual sobre cada depósito aprovado que seus indicados realizarem na plataforma.
+                            Quanto mais indicar, mais você ganha.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="mt-8 p-6 bg-orange-50 border-l-4 border-orange-500 rounded">
+                    <p class="text-gray-700">
+                        <strong>Regra Antifraude:</strong> Cadastros realizados pelo mesmo IP do afiliado não geram comissão.
+                        Mantenha sempre práticas éticas de indicação.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Revenda -->
+    <section id="revenda" class="py-16 bg-gray-100">
+        <div class="container mx-auto px-4">
+            <div class="max-w-4xl mx-auto">
+                <h2 class="text-3xl md:text-4xl font-bold text-center mb-4 text-blue-900">Programa de Revenda</h2>
+                <p class="text-center text-gray-600 mb-12">Seja um revendedor e opere seu próprio negócio de consultas veiculares</p>
+
+                <div class="grid md:grid-cols-3 gap-6 mb-10">
+                    <div class="feature-card text-center">
+                        <div class="text-4xl mb-4">👥</div>
+                        <h3 class="text-lg font-bold mb-3 text-blue-900">Cadastre Clientes</h3>
+                        <p class="text-gray-600">
+                            Crie e gerencie contas de seus próprios clientes direto do seu painel de revendedor.
+                        </p>
+                    </div>
+
+                    <div class="feature-card text-center">
+                        <div class="text-4xl mb-4">📈</div>
+                        <h3 class="text-lg font-bold mb-3 text-blue-900">Defina Seu Markup</h3>
+                        <p class="text-gray-600">
+                            Aplique sua margem de lucro sobre a tabela base e repasse para seus clientes.
+                        </p>
+                    </div>
+
+                    <div class="feature-card text-center">
+                        <div class="text-4xl mb-4">💵</div>
+                        <h3 class="text-lg font-bold mb-3 text-blue-900">Comissão Maior</h3>
+                        <p class="text-gray-600">
+                            Revendedores ganham comissões diferenciadas sobre depósitos dos clientes cadastrados.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="bg-white p-8 rounded-lg shadow-md text-center">
+                    <h3 class="text-2xl font-bold mb-4 text-blue-900">Painel Exclusivo de Revendedor</h3>
+                    <p class="text-gray-600 mb-6">
+                        Gerencie toda sua operação, clientes, comissões e relatórios em um painel completo e intuitivo.
+                        Acompanhe o desempenho de cada cliente e otimize seus resultados.
+                    </p>
+                    <a href="/cadastrar/revendedor" class="btn-primary inline-block">Quero Ser Revendedor</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Parcerias Despachantes -->
+    <section id="parcerias" class="py-16 bg-blue-900 text-white">
+        <div class="container mx-auto px-4">
+            <div class="max-w-3xl mx-auto text-center">
+                <h2 class="text-3xl md:text-4xl font-bold mb-6">Parceria para Despachantes</h2>
+                <p class="text-xl mb-8 text-gray-200">
+                    Você é despachante e possui serviços próprios (transferências, licenciamentos, regularizações)?
+                    Ofereça seus serviços através da nossa plataforma e alcance novos clientes!
+                </p>
+                <p class="text-lg mb-8">
+                    Entre em contato via WhatsApp para conhecer as condições da parceria e começar a expandir seu negócio.
+                </p>
+                <a href="https://wa.me/5522999951574?text=Olá, gostaria de saber mais sobre parcerias para despachantes"
+                   class="btn-primary inline-block text-lg">
+                    💬 Falar com Parceiro Comercial
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Recursos/Funcionalidades -->
+    <section id="recursos" class="py-16 bg-white">
+        <div class="container mx-auto px-4">
+            <h2 class="text-3xl md:text-4xl font-bold text-center mb-4 text-blue-900">Recursos e Funcionalidades</h2>
+            <p class="text-center text-gray-600 mb-12">Tudo que você precisa para trabalhar com eficiência</p>
+
+            <div class="grid md:grid-cols-3 gap-6" id="recursos-grid">
+                <!-- Recursos serão carregados via JavaScript -->
+            </div>
+        </div>
+    </section>
+
+    <!-- Preços -->
+    <section id="precos" class="py-16 bg-gray-100">
+        <div class="container mx-auto px-4">
+            <div class="max-w-3xl mx-auto">
+                <h2 class="text-3xl md:text-4xl font-bold text-center mb-4 text-blue-900">Preços Transparentes</h2>
+                <p class="text-center text-gray-600 mb-12">Sem mensalidade. Pague apenas pelo que usar.</p>
+
+                <div class="bg-white p-8 rounded-lg shadow-md">
+                    <div class="text-center mb-8">
+                        <div class="text-5xl font-bold text-orange-500 mb-2">R$ 0</div>
+                        <div class="text-xl text-gray-600">Crédito</div>
+                    </div>
+
+                    <div class="border-t border-gray-200 pt-6">
+                        <h3 class="text-xl font-bold mb-4 text-blue-900">Como Funciona?</h3>
+                        <ul class="space-y-3 text-gray-700">
+                            <li class="flex items-start">
+                                <span class="text-orange-500 mr-2">✓</span>
+                                <span>Cadastro 100% gratuito sem compromisso</span>
+                            </li>
+                            <li class="flex items-start">
+                                <span class="text-orange-500 mr-2">✓</span>
+                                <span>Tabela completa de preços disponível no painel após cadastro</span>
+                            </li>
+                            <li class="flex items-start">
+                                <span class="text-orange-500 mr-2">✓</span>
+                                <span>Créditos pré-pagos via PIX com compensação instantânea</span>
+                            </li>
+                            <li class="flex items-start">
+                                <span class="text-orange-500 mr-2">✓</span>
+                                <span>Pague somente pelas consultas e emissões que efetivamente usar</span>
+                            </li>
+                            <li class="flex items-start">
+                                <span class="text-orange-500 mr-2">✓</span>
+                                <span>Sem taxas escondidas ou valores surpresa</span>
+                            </li>
+                        </ul>
+                    </div>
+
+                    <div class="mt-8 p-6 bg-blue-50 border-l-4 border-blue-500 rounded">
+                        <p class="font-semibold text-blue-900 mb-2">⚠️ Cadastro com Dados Reais Obrigatório</p>
+                        <p class="text-gray-700 text-sm">
+                            Por questões de segurança e conformidade legal, exigimos cadastro com informações reais e verificáveis.
+                            Cadastros com dados falsos, temporários ou duplicados serão recusados ou bloqueados sem aviso prévio.
+                        </p>
+                    </div>
+
+                    <div class="text-center mt-8">
+                        <a href="/cadastrar" class="btn-primary inline-block">Criar Conta e Ver Preços</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Como Funciona -->
+    <section id="como-funciona" class="py-16 bg-gradient-to-b from-blue-50 to-white">
+        <div class="container mx-auto px-4">
+            <h2 class="text-3xl md:text-4xl font-bold text-center mb-4 text-blue-900">Como Funciona?</h2>
+            <p class="text-center text-gray-600 mb-12">Comece a usar em 4 passos simples</p>
+
+            <div class="max-w-4xl mx-auto grid md:grid-cols-4 gap-8" id="passos-grid">
+                <!-- Passos serão carregados via JavaScript -->
+            </div>
+
+            <div class="text-center mt-12">
+                <a href="/cadastrar" class="btn-primary inline-block text-lg">Criar Minha Conta Grátis</a>
+            </div>
+        </div>
+    </section>
+
+    <!-- FAQ -->
+    <section id="faq" class="py-16 bg-white">
+        <div class="container mx-auto px-4">
+            <h2 class="text-3xl md:text-4xl font-bold text-center mb-4 text-blue-900">Perguntas Frequentes</h2>
+            <p class="text-center text-gray-600 mb-12">Tire suas dúvidas sobre a plataforma</p>
+
+            <div class="max-w-3xl mx-auto" id="faq-container">
+                <!-- FAQ será carregado via JavaScript -->
+            </div>
+        </div>
+    </section>
+
+    <!-- Contato -->
+    <section id="contato" class="py-16 bg-white">
+        <div class="container mx-auto px-4">
+            <h2 class="text-3xl md:text-4xl font-bold text-center mb-4 text-blue-900">Entre em Contato</h2>
+            <p class="text-center text-gray-600 mb-12">Estamos prontos para atender você</p>
+
+            <div class="max-w-4xl mx-auto grid md:grid-cols-2 gap-8">
+                <div>
+                    <form id="contact-form" class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-semibold mb-2 text-gray-700">Nome Completo</label>
+                            <input type="text" name="nome" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-orange-500" required>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-semibold mb-2 text-gray-700">E-mail</label>
+                            <input type="email" name="email" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-orange-500" required>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-semibold mb-2 text-gray-700">Telefone/WhatsApp</label>
+                            <input type="tel" name="telefone" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-orange-500">
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-semibold mb-2 text-gray-700">Mensagem</label>
+                            <textarea name="mensagem" rows="5" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:border-orange-500" required></textarea>
+                        </div>
+
+                        <button type="submit" class="btn-primary w-full">Enviar Mensagem</button>
+                    </form>
+                </div>
+
+                <div>
+                    <div class="feature-card h-full">
+                        <h3 class="text-xl font-bold mb-6 text-blue-900">Informações de Contato</h3>
+
+                        <div class="space-y-4">
+                            <div class="flex items-start gap-3">
+                                <div class="text-2xl">📞</div>
+                                <div>
+                                    <div class="font-semibold text-gray-700">Telefone</div>
+                                    <a href="tel:(22) 99995-1574" class="text-orange-500 hover:underline">(22) 99995-1574</a>
+                                </div>
+                            </div>
+
+                            <div class="flex items-start gap-3">
+                                <div class="text-2xl">💬</div>
+                                <div>
+                                    <div class="font-semibold text-gray-700">WhatsApp</div>
+                                    <a href="https://wa.me/5522999951574" class="text-orange-500 hover:underline">(22) 99995-1574</a>
+                                </div>
+                            </div>
+
+                            <div class="flex items-start gap-3">
+                                <div class="text-2xl">✉️</div>
+                                <div>
+                                    <div class="font-semibold text-gray-700">E-mail</div>
+                                    <a href="mailto:contato@despachantesconsultas.com.br" class="text-orange-500 hover:underline">contato@despachantesconsultas.com.br</a>
+                                </div>
+                            </div>
+
+                            <div class="flex items-start gap-3">
+                                <div class="text-2xl">🕒</div>
+                                <div>
+                                    <div class="font-semibold text-gray-700">Horário de Atendimento</div>
+                                    <div class="text-gray-600">
+                                        Segunda a Sexta: 8h às 18h<br>
+                                        Sábado: 8h às 12h
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA Final -->
+    <section class="py-16 bg-gradient-to-r from-orange-500 to-orange-600 text-white">
+        <div class="container mx-auto px-4 text-center">
+            <h2 class="text-3xl md:text-4xl font-bold mb-6">Pronto para Começar?</h2>
+            <p class="text-xl mb-8 max-w-2xl mx-auto">
+                Cadastro 100% gratuito. Sem mensalidade. Pague apenas pelo que usar.
+            </p>
+            <div class="flex gap-4 justify-center flex-wrap">
+                <a href="/cadastrar" class="bg-white text-orange-600 px-8 py-4 rounded-lg font-bold text-lg hover:bg-gray-100 transition">
+                    Criar Conta Grátis
+                </a>
+                <a href="#como-funciona" class="border-2 border-white text-white px-8 py-4 rounded-lg font-bold text-lg hover:bg-white hover:text-orange-600 transition">
+                    Saiba Mais
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="bg-gray-900 text-gray-300 py-12">
+        <div class="container mx-auto px-4">
+            <div class="grid md:grid-cols-4 gap-8 mb-8">
+                <div>
+                    <div class="text-2xl font-bold text-white mb-4">DESPACHANTES CONSULTAS</div>
+                    <p class="text-sm mb-4">
+                        Plataforma profissional de consultas veiculares e emissão de documentos digitais.
+                    </p>
+                    <p class="text-sm">
+                        <strong>CNPJ:</strong> 57.138.895/0001-42
+                    </p>
+                </div>
+
+                <div>
+                    <h4 class="font-bold text-white mb-4">Plataforma</h4>
+                    <ul class="space-y-2 text-sm">
+                        <li><a href="#recursos" class="hover:text-orange-400">Recursos</a></li>
+                        <li><a href="#precos" class="hover:text-orange-400">Preços</a></li>
+                        <li><a href="#revenda" class="hover:text-orange-400">Seja Revendedor</a></li>
+                        <li><a href="#vantagens" class="hover:text-orange-400">Programa de Afiliados</a></li>
+                    </ul>
+                </div>
+
+                <div>
+                    <h4 class="font-bold text-white mb-4">Acesso</h4>
+                    <ul class="space-y-2 text-sm">
+                        <li><a href="/entrar" class="hover:text-orange-400">Entrar</a></li>
+                        <li><a href="/cadastrar" class="hover:text-orange-400">Criar Conta</a></li>
+                        <li><a href="/painel" class="hover:text-orange-400">Painel</a></li>
+                        <li><a href="/recuperar-senha" class="hover:text-orange-400">Recuperar Senha</a></li>
+                    </ul>
+                </div>
+
+                <div>
+                    <h4 class="font-bold text-white mb-4">Suporte</h4>
+                    <ul class="space-y-2 text-sm">
+                        <li><a href="#faq" class="hover:text-orange-400">FAQ</a></li>
+                        <li><a href="#contato" class="hover:text-orange-400">Contato</a></li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="border-t border-gray-700 pt-8 text-center text-sm">
+                <p class="mb-2">
+                    © 2026 DESPACHANTES CONSULTAS LTDA. Todos os direitos reservados.
+                </p>
+                <p class="text-xs text-gray-400">
+                    🔒 Uso responsável de dados conforme LGPD (Lei 13.709/2018)
+                </p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- WhatsApp Flutuante -->
+    <a href="https://wa.me/5522999951574?text=Olá, gostaria de saber mais sobre a DESPACHANTES CONSULTAS"
+       class="whatsapp-float"
+       target="_blank"
+       aria-label="WhatsApp">
+        <svg class="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.890-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+        </svg>
+    </a>
+
+    <!-- JavaScript -->
+    <script src="script.js"></script>
+
+    <script>
+        // Verifica se o usuário está logado e exibe o saldo de crédito no nav
+        (async function checkNavAuth() {
+            try {
+                const res = await fetch('/api/auth/me');
+                if (!res.ok) return; // não logado — exibe estado padrão
+                const user = await res.json();
+
+                const credits = parseFloat(user.credits || 0);
+                const fmt = 'R$ ' + credits.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+
+                // ── Desktop ──
+                document.getElementById('nav-credits-value').textContent = fmt;
+                document.getElementById('nav-credits').classList.replace('hidden', 'flex');
+                document.getElementById('nav-entrar').classList.add('hidden');
+                document.getElementById('nav-cadastrar').classList.add('hidden');
+                document.getElementById('nav-painel').classList.replace('hidden', 'flex');
+
+                // ── Mobile ──
+                document.getElementById('nav-credits-value-mobile').textContent = fmt;
+                document.getElementById('nav-credits-mobile').classList.replace('hidden', 'flex');
+                document.getElementById('nav-entrar-mobile').classList.add('hidden');
+                document.getElementById('nav-cadastrar-mobile').classList.add('hidden');
+                document.getElementById('nav-painel-mobile').classList.replace('hidden', 'inline-flex');
+            } catch { /* sem servidor ou não logado */ }
+        })();
+    </script>
+</body>
+</html>

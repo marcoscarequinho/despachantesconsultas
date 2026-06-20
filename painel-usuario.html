@@ -1,0 +1,1193 @@
+﻿<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Painel do Usuário — DESPACHANTES CONSULTAS</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { --primary:#1e40af; --accent:#f97316; }
+    .btn-primary  { background:var(--accent);color:white;padding:.5rem 1.25rem;border-radius:.5rem;font-weight:600;font-size:.875rem;transition:all .2s;display:inline-flex;align-items:center;gap:.4rem; }
+    .btn-primary:hover  { background:#ea580c; }
+    .btn-secondary{ background:var(--primary);color:white;padding:.5rem 1.25rem;border-radius:.5rem;font-weight:600;font-size:.875rem;transition:all .2s;display:inline-flex;align-items:center;gap:.4rem; }
+    .btn-secondary:hover{ background:#1e3a8a; }
+    .btn-ghost    { color:#6b7280;padding:.5rem 1rem;border-radius:.5rem;font-size:.875rem;transition:all .2s;display:inline-flex;align-items:center;gap:.4rem; }
+    .btn-ghost:hover    { background:#f3f4f6;color:#111827; }
+    .nav-item { display:flex;align-items:center;gap:.75rem;padding:.7rem 1.25rem;border-radius:.5rem;cursor:pointer;transition:all .2s;color:rgba(255,255,255,.75);font-size:.9rem; }
+    .nav-item:hover { background:rgba(255,255,255,.1);color:white; }
+    .nav-item.active { background:rgba(255,255,255,.15);color:white;border-left:3px solid var(--accent);padding-left:calc(1.25rem - 3px); }
+    .card { background:white;border-radius:.75rem;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:1.5rem; }
+    .stat-card { background:white;border-radius:.75rem;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:1.25rem;border-left:4px solid transparent; }
+    .badge-green { display:inline-flex;align-items:center;padding:.2rem .6rem;border-radius:9999px;font-size:.75rem;font-weight:600;background:#dcfce7;color:#166534; }
+    .badge-red   { display:inline-flex;align-items:center;padding:.2rem .6rem;border-radius:9999px;font-size:.75rem;font-weight:600;background:#fee2e2;color:#991b1b; }
+    .badge-blue  { display:inline-flex;align-items:center;padding:.2rem .6rem;border-radius:9999px;font-size:.75rem;font-weight:600;background:#dbeafe;color:#1e40af; }
+    .toast { position:fixed;bottom:1.5rem;right:1.5rem;z-index:9999;background:#1f2937;color:white;padding:.8rem 1.25rem;border-radius:.6rem;font-size:.875rem;box-shadow:0 4px 16px rgba(0,0,0,.2);transform:translateY(0);opacity:1;transition:all .3s; }
+    .toast.hide { transform:translateY(8px);opacity:0; }
+    #sidebar { transition:transform .25s ease; }
+    @media(max-width:768px) { #sidebar { transform:translateX(-100%); } #sidebar.open { transform:translateX(0); } }
+    .table-row:hover td { background:#f9fafb; }
+    .skeleton { background:linear-gradient(90deg,#f0f0f0 25%,#e0e0e0 50%,#f0f0f0 75%);background-size:200% 100%;animation:shimmer 1.4s infinite;border-radius:.375rem; }
+    @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+    .service-cat { cursor:pointer;border:2px solid #e5e7eb;border-radius:.75rem;padding:1rem;text-align:center;transition:all .2s; }
+    .service-cat:hover { border-color:var(--accent);background:#fff7ed; }
+    .service-cat.selected { border-color:var(--accent);background:#fff7ed; }
+    .result-card { border-radius:.75rem;background:#f0fdf4;border:1px solid #86efac; }
+    .result-field { display:flex;flex-direction:column;gap:.2rem; }
+    .result-label { font-size:.7rem;font-weight:600;text-transform:uppercase;color:#6b7280;letter-spacing:.05em; }
+    .result-value { font-size:.9rem;font-weight:600;color:#111827;word-break:break-all; }
+    .spin { animation:spin 1s linear infinite; }
+    @keyframes spin { 0%{transform:rotate(0deg)} 100%{transform:rotate(360deg)} }
+    .price-tag { font-size:1.1rem;font-weight:700;color:var(--accent); }
+    .input-field { width:100%;padding:.625rem 1rem;border:1px solid #d1d5db;border-radius:.5rem;font-size:.875rem;transition:.15s; }
+    .input-field:focus { outline:none;border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.15); }
+    .label { display:block;font-size:.875rem;font-weight:600;color:#374151;margin-bottom:.35rem; }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+
+<!-- SIDEBAR -->
+<aside id="sidebar"
+  class="fixed left-0 top-0 h-full w-64 bg-blue-900 z-40 flex flex-col select-none shadow-xl">
+
+  <div class="flex items-center gap-3 px-5 py-5 border-b border-blue-800">
+    <div class="w-9 h-9 bg-orange-500 rounded-lg flex items-center justify-center flex-shrink-0">
+      <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+      </svg>
+    </div>
+    <div>
+      <div class="text-white font-bold text-sm leading-tight">DESPACHANTES CONSULTAS</div>
+      <div class="text-blue-300 text-xs">Painel do Usuário</div>
+    </div>
+  </div>
+
+  <div class="flex items-center gap-3 px-5 py-4 border-b border-blue-800">
+    <div id="user-avatar"
+      class="w-9 h-9 bg-orange-500 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0">?</div>
+    <div class="min-w-0">
+      <div id="user-name"  class="text-white text-sm font-semibold truncate">Carregando...</div>
+      <div id="user-email" class="text-blue-300 text-xs truncate"></div>
+    </div>
+  </div>
+
+  <nav class="flex-1 p-3 space-y-1 overflow-y-auto">
+    <div class="nav-item active" data-section="overview"  onclick="showSection('overview')">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
+      </svg>
+      Visão Geral
+    </div>
+    <div class="nav-item" data-section="query" onclick="showSection('query')">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+      </svg>
+      Nova Consulta
+    </div>
+    <div class="nav-item" data-section="history" onclick="showSection('history')">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      Histórico
+    </div>
+    <div class="nav-item" data-section="prices" onclick="showSection('prices')">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z"/>
+      </svg>
+      Tabela de Preços
+    </div>
+    <div class="nav-item" data-section="profile" onclick="showSection('profile')">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+      </svg>
+      Perfil
+    </div>
+  </nav>
+
+  <div class="p-3 border-t border-blue-800">
+    <button onclick="logout()"
+      class="nav-item w-full text-left text-red-300 hover:text-red-200 hover:bg-red-900/30">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+      </svg>
+      Sair da Conta
+    </button>
+  </div>
+</aside>
+
+<!-- OVERLAY MOBILE -->
+<div id="overlay" class="fixed inset-0 bg-black/50 z-30 hidden" onclick="toggleSidebar()"></div>
+
+<!-- MAIN -->
+<div class="md:ml-64 min-h-screen flex flex-col">
+
+  <!-- Top bar -->
+  <header class="bg-white shadow-sm sticky top-0 z-20 flex items-center justify-between px-4 py-3">
+    <div class="flex items-center gap-3">
+      <button onclick="toggleSidebar()" class="md:hidden text-gray-500 hover:text-gray-700 p-1">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+      <h1 id="page-title" class="font-bold text-gray-800 text-lg">Visão Geral</h1>
+    </div>
+    <div class="flex items-center gap-3">
+      <a href="/" class="btn-ghost text-xs hidden sm:inline-flex">← Site</a>
+      <div class="flex items-center gap-2">
+        <div id="topbar-avatar"
+          class="w-8 h-8 bg-orange-500 rounded-full flex items-center justify-center text-white font-bold text-xs">?</div>
+        <span id="topbar-name" class="text-sm font-medium text-gray-700 hidden sm:block"></span>
+      </div>
+      <div class="flex items-center gap-1 bg-green-50 border border-green-200 rounded-lg px-3 py-1">
+        <span class="text-xs text-green-700 font-semibold">Saldo:</span>
+        <span id="header-credits" class="text-xs font-bold text-green-700">R$ 0,00</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="flex-1 p-4 sm:p-6">
+
+    <!-- ── VISÃO GERAL ─────────────────────────────────────────────────── -->
+    <section id="section-overview" class="dash-section space-y-6">
+
+      <div class="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        <div class="stat-card border-l-orange-500">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-medium text-gray-500 uppercase tracking-wide">Saldo</span>
+            <span class="text-orange-500 text-lg">💳</span>
+          </div>
+          <div id="stat-credits" class="text-2xl font-bold text-gray-800">R$ 0,00</div>
+          <div class="text-xs text-gray-400 mt-1">Créditos disponíveis</div>
+        </div>
+        <div class="stat-card border-l-blue-500">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-medium text-gray-500 uppercase tracking-wide">Total Consultas</span>
+            <span class="text-blue-500 text-lg">🔍</span>
+          </div>
+          <div id="stat-total-queries" class="text-2xl font-bold text-gray-800">0</div>
+          <div class="text-xs text-gray-400 mt-1">Consultas realizadas</div>
+        </div>
+        <div class="stat-card border-l-green-500">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-medium text-gray-500 uppercase tracking-wide">Gasto / Mês</span>
+            <span class="text-green-500 text-lg">📈</span>
+          </div>
+          <div id="stat-month" class="text-2xl font-bold text-gray-800">R$ 0,00</div>
+          <div class="text-xs text-gray-400 mt-1">Mês atual</div>
+        </div>
+        <div class="stat-card border-l-purple-500">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-medium text-gray-500 uppercase tracking-wide">Total Gasto</span>
+            <span class="text-purple-500 text-lg">🏆</span>
+          </div>
+          <div id="stat-total-spent" class="text-2xl font-bold text-gray-800">R$ 0,00</div>
+          <div class="text-xs text-gray-400 mt-1">Todas as consultas</div>
+        </div>
+      </div>
+
+      <!-- Quick actions -->
+      <div class="grid sm:grid-cols-3 gap-4">
+        <button onclick="showSection('query')"
+          class="card flex flex-col items-center gap-3 hover:shadow-md transition-shadow cursor-pointer border-2 border-transparent hover:border-orange-200">
+          <div class="w-12 h-12 bg-orange-100 rounded-xl flex items-center justify-center text-2xl">🔍</div>
+          <div class="text-center">
+            <div class="font-semibold text-gray-800">Nova Consulta</div>
+            <div class="text-xs text-gray-500 mt-0.5">Realize uma consulta veicular</div>
+          </div>
+        </button>
+        <button onclick="showSection('history')"
+          class="card flex flex-col items-center gap-3 hover:shadow-md transition-shadow cursor-pointer border-2 border-transparent hover:border-blue-200">
+          <div class="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center text-2xl">📋</div>
+          <div class="text-center">
+            <div class="font-semibold text-gray-800">Histórico</div>
+            <div class="text-xs text-gray-500 mt-0.5">Veja suas consultas anteriores</div>
+          </div>
+        </button>
+        <button onclick="showSection('prices')"
+          class="card flex flex-col items-center gap-3 hover:shadow-md transition-shadow cursor-pointer border-2 border-transparent hover:border-green-200">
+          <div class="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center text-2xl">💰</div>
+          <div class="text-center">
+            <div class="font-semibold text-gray-800">Tabela de Preços</div>
+            <div class="text-xs text-gray-500 mt-0.5">Veja todos os serviços</div>
+          </div>
+        </button>
+      </div>
+
+      <!-- Últimas consultas -->
+      <div class="card">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="font-semibold text-gray-800">Últimas Consultas</h2>
+          <button onclick="showSection('history')" class="text-xs text-blue-600 hover:text-orange-500 font-medium">
+            Ver todas →
+          </button>
+        </div>
+        <div id="recent-queries">
+          <div class="space-y-2">
+            <div class="skeleton h-12 w-full"></div>
+            <div class="skeleton h-12 w-full"></div>
+            <div class="skeleton h-12 w-full"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── NOVA CONSULTA ───────────────────────────────────────────────── -->
+    <section id="section-query" class="dash-section hidden space-y-5">
+
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Nova Consulta</h2>
+        <p class="text-sm text-gray-500">Selecione o tipo de serviço e preencha os dados</p>
+      </div>
+
+      <!-- Saldo disponível -->
+      <div class="card bg-gradient-to-br from-orange-50 to-white border border-orange-200 flex items-center gap-4">
+        <div class="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center text-xl flex-shrink-0">💳</div>
+        <div>
+          <div class="text-sm text-gray-600">Saldo disponível</div>
+          <div id="query-credits" class="text-2xl font-bold text-orange-600">R$ 0,00</div>
+        </div>
+        <div class="ml-auto text-xs text-gray-400">Créditos pré-pagos via PIX</div>
+      </div>
+
+      <!-- Seleção de categoria -->
+      <div class="card">
+        <h3 class="font-semibold text-gray-800 mb-4">Categoria do Serviço</h3>
+        <div id="category-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3"></div>
+      </div>
+
+      <!-- Seleção de serviço -->
+      <div id="service-selector-wrap" class="card hidden">
+        <h3 class="font-semibold text-gray-800 mb-3">Selecione o Serviço</h3>
+        <div class="grid sm:grid-cols-2 gap-2" id="service-list"></div>
+      </div>
+
+      <!-- Formulário dinâmico -->
+      <div id="query-form-wrap" class="card hidden">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h3 id="form-service-name" class="font-semibold text-gray-800"></h3>
+            <div class="flex items-center gap-2 mt-1">
+              <span class="text-xs text-gray-500">Custo:</span>
+              <span id="form-service-price" class="price-tag"></span>
+            </div>
+          </div>
+          <button onclick="resetForm()" class="text-xs text-gray-500 hover:text-gray-700">✕ Cancelar</button>
+        </div>
+
+        <form id="query-form" onsubmit="submitQuery(event)" class="space-y-4">
+          <div id="form-fields" class="space-y-4"></div>
+
+          <div id="form-error"
+            class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm flex gap-2">
+            <span class="flex-shrink-0">⚠️</span>
+            <span id="form-error-msg"></span>
+          </div>
+
+          <button id="query-submit" type="submit" class="btn-primary w-full justify-center py-3">
+            <span id="query-submit-text">Realizar Consulta</span>
+            <svg id="query-spinner" class="hidden w-4 h-4 spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+            </svg>
+          </button>
+        </form>
+      </div>
+
+      <!-- Resultado -->
+      <div id="query-result-wrap" class="hidden space-y-4">
+        <div class="result-card p-5">
+          <div class="flex items-center gap-3 mb-4">
+            <div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-xl">✅</div>
+            <div>
+              <div class="font-bold text-green-800">Consulta Concluída</div>
+              <div id="result-service-name" class="text-sm text-green-700"></div>
+            </div>
+            <div class="ml-auto text-right">
+              <div class="text-xs text-gray-500">Debitado</div>
+              <div id="result-charged" class="font-bold text-red-500 text-sm"></div>
+            </div>
+          </div>
+
+          <!-- JSON result -->
+          <div id="result-json-wrap">
+            <div id="result-fields" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4"></div>
+            <details class="mt-2">
+              <summary class="text-xs text-gray-500 cursor-pointer hover:text-gray-700">Ver JSON completo</summary>
+              <pre id="result-json-raw"
+                class="mt-2 bg-gray-900 text-green-400 text-xs p-4 rounded-lg overflow-x-auto max-h-80 overflow-y-auto"></pre>
+            </details>
+          </div>
+
+          <!-- PDF result -->
+          <div id="result-pdf-wrap" class="hidden text-center py-4">
+            <div class="text-4xl mb-3">📄</div>
+            <p class="text-green-700 font-medium mb-4">PDF gerado com sucesso! O download foi iniciado automaticamente.</p>
+            <button id="result-pdf-btn" class="btn-primary">
+              📥 Baixar PDF Novamente
+            </button>
+          </div>
+        </div>
+
+        <button onclick="resetForm()" class="btn-secondary w-full justify-center">
+          🔄 Nova Consulta
+        </button>
+      </div>
+    </section>
+
+    <!-- ── HISTÓRICO ───────────────────────────────────────────────────── -->
+    <section id="section-history" class="dash-section hidden space-y-5">
+
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-xl font-bold text-gray-800">Histórico de Consultas</h2>
+          <p class="text-sm text-gray-500">Todas as consultas realizadas na plataforma</p>
+        </div>
+      </div>
+
+      <!-- Busca -->
+      <div class="card">
+        <input id="history-search" type="text" placeholder="Buscar por serviço ou data..."
+          class="input-field" oninput="filterHistory()">
+      </div>
+
+      <div class="card p-0 overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th class="px-5 py-3 text-left font-semibold text-gray-600">Data</th>
+                <th class="px-5 py-3 text-left font-semibold text-gray-600">Serviço</th>
+                <th class="px-5 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">Parâmetros</th>
+                <th class="px-5 py-3 text-center font-semibold text-gray-600">Tipo</th>
+                <th class="px-5 py-3 text-right font-semibold text-gray-600">Valor</th>
+              </tr>
+            </thead>
+            <tbody id="history-table-body" class="divide-y divide-gray-50">
+              <tr>
+                <td colspan="5" class="text-center py-10">
+                  <div class="space-y-2">
+                    <div class="skeleton h-8 w-full"></div>
+                    <div class="skeleton h-8 w-full"></div>
+                    <div class="skeleton h-8 w-full"></div>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="history-count" class="px-5 py-3 text-xs text-gray-400 border-t border-gray-100"></div>
+      </div>
+    </section>
+
+    <!-- ── TABELA DE PREÇOS ────────────────────────────────────────────── -->
+    <section id="section-prices" class="dash-section hidden space-y-5">
+
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Tabela de Preços</h2>
+        <p class="text-sm text-gray-500">Todos os serviços disponíveis com seus respectivos valores</p>
+      </div>
+
+      <div class="card bg-amber-50 border border-amber-200 flex gap-3">
+        <span class="text-amber-600 text-xl flex-shrink-0 mt-0.5">💡</span>
+        <p class="text-sm text-amber-800">
+          Consultas são processadas em <strong>tempo real</strong>. Créditos são debitados apenas
+          quando a consulta é concluída com sucesso (resposta 200 da API).
+        </p>
+      </div>
+
+      <div id="prices-content" class="space-y-6"></div>
+    </section>
+
+    <!-- ── PERFIL ──────────────────────────────────────────────────────── -->
+    <section id="section-profile" class="dash-section hidden space-y-5 max-w-2xl">
+
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Meu Perfil</h2>
+        <p class="text-sm text-gray-500">Atualize seus dados cadastrais</p>
+      </div>
+
+      <div class="card">
+        <h3 class="font-semibold text-gray-800 mb-4">Informações Pessoais</h3>
+        <div id="profile-alert-error"   class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 mb-4 text-sm"></div>
+        <div id="profile-alert-success" class="hidden bg-green-50 border border-green-200 text-green-700 rounded-lg px-4 py-3 mb-4 text-sm"></div>
+        <form id="profile-form" class="space-y-4" onsubmit="saveProfile(event)">
+          <div>
+            <label class="label">Nome Completo</label>
+            <input id="profile-name" type="text" class="input-field" required>
+          </div>
+          <div>
+            <label class="label">E-mail</label>
+            <input id="profile-email" type="email" disabled
+              class="input-field bg-gray-50 text-gray-500 cursor-not-allowed">
+            <p class="text-xs text-gray-400 mt-1">E-mail não pode ser alterado</p>
+          </div>
+          <div>
+            <label class="label">Telefone / WhatsApp</label>
+            <input id="profile-phone" type="tel" class="input-field" placeholder="(00) 00000-0000">
+          </div>
+          <button type="submit" class="btn-primary">Salvar Alterações</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h3 class="font-semibold text-gray-800 mb-4">Alterar Senha</h3>
+        <div id="pwd-alert-error"   class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 mb-4 text-sm"></div>
+        <div id="pwd-alert-success" class="hidden bg-green-50 border border-green-200 text-green-700 rounded-lg px-4 py-3 mb-4 text-sm"></div>
+        <form id="password-form" class="space-y-4" onsubmit="changePassword(event)">
+          <div>
+            <label class="label">Senha Atual</label>
+            <input id="current-password" type="password" class="input-field" required>
+          </div>
+          <div>
+            <label class="label">Nova Senha</label>
+            <input id="new-password" type="password" minlength="8" class="input-field"
+              placeholder="Mínimo 8 caracteres" required>
+          </div>
+          <div>
+            <label class="label">Confirmar Nova Senha</label>
+            <input id="confirm-new-password" type="password" class="input-field" required>
+          </div>
+          <button type="submit" class="btn-primary">Alterar Senha</button>
+        </form>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- TOAST -->
+<div id="toast" class="toast hide"></div>
+
+<script>
+// ── Estado global ──────────────────────────────────────────────────────────────
+let currentUser = null;
+let allServices = [];
+let allQueries  = [];
+let selectedCat = null;
+let selectedSvc = null;
+let lastPdfBlob = null;
+
+const sectionTitles = {
+  overview: 'Visão Geral',
+  query:    'Nova Consulta',
+  history:  'Histórico',
+  prices:   'Tabela de Preços',
+  profile:  'Perfil',
+};
+
+// ── Formatação ─────────────────────────────────────────────────────────────────
+const fmt = v =>
+  'R$ ' + parseFloat(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+
+const fmtDate = s => {
+  const d = new Date(s);
+  return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' });
+};
+
+// ── Toast ──────────────────────────────────────────────────────────────────────
+function toast(msg, type = 'success') {
+  const el = document.getElementById('toast');
+  el.textContent = (type === 'success' ? '✅ ' : '❌ ') + msg;
+  el.classList.remove('hide');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.add('hide'), 3500);
+}
+
+// ── Sidebar ────────────────────────────────────────────────────────────────────
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('overlay').classList.toggle('hidden');
+}
+
+// ── Navegação ──────────────────────────────────────────────────────────────────
+function showSection(id) {
+  document.querySelectorAll('.dash-section').forEach(s => s.classList.add('hidden'));
+  document.getElementById('section-' + id).classList.remove('hidden');
+  document.querySelectorAll('.nav-item[data-section]').forEach(n => n.classList.remove('active'));
+  const nav = document.querySelector(`.nav-item[data-section="${id}"]`);
+  if (nav) nav.classList.add('active');
+  document.getElementById('page-title').textContent = sectionTitles[id] || '';
+  if (window.innerWidth < 768) {
+    document.getElementById('sidebar').classList.remove('open');
+    document.getElementById('overlay').classList.add('hidden');
+  }
+  if (id === 'history') renderHistoryTable();
+  if (id === 'prices')  renderPrices();
+}
+
+// ── Inicialização ──────────────────────────────────────────────────────────────
+async function init() {
+  try {
+    const [meRes, svcRes] = await Promise.all([
+      fetch('/api/auth/me'),
+      fetch('/api/services'),
+    ]);
+    if (!meRes.ok) { window.location.href = '/entrar'; return; }
+    currentUser = await meRes.json();
+    allServices = (await svcRes.json()).services || [];
+
+    const initial = currentUser.name ? currentUser.name.charAt(0).toUpperCase() : '?';
+    document.getElementById('user-avatar').textContent   = initial;
+    document.getElementById('topbar-avatar').textContent = initial;
+    document.getElementById('user-name').textContent     = currentUser.name;
+    document.getElementById('user-email').textContent    = currentUser.email;
+    document.getElementById('topbar-name').textContent   = currentUser.name.split(' ')[0];
+    document.getElementById('profile-name').value        = currentUser.name  || '';
+    document.getElementById('profile-email').value       = currentUser.email || '';
+    document.getElementById('profile-phone').value       = currentUser.phone || '';
+
+    buildCategoryGrid();
+    await Promise.all([loadStats(), loadQueries()]);
+  } catch {
+    window.location.href = '/entrar';
+  }
+}
+
+// ── Stats ──────────────────────────────────────────────────────────────────────
+async function loadStats() {
+  try {
+    const r = await fetch('/api/user/stats');
+    if (!r.ok) return;
+    const d = await r.json();
+    document.getElementById('stat-credits').textContent       = fmt(d.credits);
+    document.getElementById('stat-total-queries').textContent = d.total_queries;
+    document.getElementById('stat-month').textContent         = fmt(d.month_spent);
+    document.getElementById('stat-total-spent').textContent   = fmt(d.total_spent);
+    document.getElementById('query-credits').textContent      = fmt(d.credits);
+    document.getElementById('header-credits').textContent     = fmt(d.credits);
+  } catch {}
+}
+
+// ── Consultas ──────────────────────────────────────────────────────────────────
+async function loadQueries() {
+  try {
+    const r = await fetch('/api/queries');
+    if (!r.ok) return;
+    const d = await r.json();
+    allQueries = d.queries || [];
+    renderRecentQueries();
+  } catch {}
+}
+
+function renderRecentQueries() {
+  const el = document.getElementById('recent-queries');
+  if (!allQueries.length) {
+    el.innerHTML = `
+      <div class="text-center py-8 text-gray-400">
+        <div class="text-4xl mb-2">🔍</div>
+        <p class="text-sm">Nenhuma consulta realizada ainda.</p>
+        <p class="text-xs mt-1">Clique em "Nova Consulta" para começar.</p>
+      </div>`;
+    return;
+  }
+  el.innerHTML = allQueries.slice(0, 5).map(q => `
+    <div class="flex items-center justify-between py-3 border-b border-gray-50 last:border-0">
+      <div class="flex items-center gap-3 min-w-0">
+        <div class="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center text-sm flex-shrink-0">
+          ${q.result_type === 'pdf' ? '📄' : '🔍'}
+        </div>
+        <div class="min-w-0">
+          <div class="text-sm font-medium text-gray-800 truncate">${q.service_name}</div>
+          <div class="text-xs text-gray-400">${fmtDate(q.created_at)}</div>
+        </div>
+      </div>
+      <div class="text-right flex-shrink-0 ml-3">
+        <div class="text-sm font-semibold text-red-500">-${fmt(q.amount)}</div>
+        <span class="badge-${q.result_type === 'pdf' ? 'blue' : 'green'}">${q.result_type.toUpperCase()}</span>
+      </div>
+    </div>`).join('');
+}
+
+function renderHistoryTable() {
+  const search  = (document.getElementById('history-search')?.value || '').toLowerCase();
+  const filtered = allQueries.filter(q =>
+    !search ||
+    q.service_name.toLowerCase().includes(search) ||
+    fmtDate(q.created_at).includes(search)
+  );
+  document.getElementById('history-count').textContent =
+    `Exibindo ${filtered.length} de ${allQueries.length} consulta(s)`;
+
+  const tbody = document.getElementById('history-table-body');
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="5" class="text-center py-12 text-gray-400">
+      <div class="text-4xl mb-3">🔍</div>
+      <p>${allQueries.length ? 'Nenhuma consulta com esse filtro.' : 'Nenhuma consulta realizada ainda.'}</p>
+    </td></tr>`;
+    return;
+  }
+  tbody.innerHTML = filtered.map(q => {
+    let paramsDisplay = '';
+    try {
+      const p = JSON.parse(q.params || '{}');
+      paramsDisplay = Object.entries(p).map(([k, v]) =>
+        typeof v === 'string' ? `<span class="text-xs bg-gray-100 px-1.5 py-0.5 rounded">${k}: ${v}</span>` : ''
+      ).filter(Boolean).join(' ');
+    } catch {}
+    return `
+      <tr class="table-row">
+        <td class="px-5 py-3 text-gray-500 text-xs whitespace-nowrap">${fmtDate(q.created_at)}</td>
+        <td class="px-5 py-3">
+          <div class="font-medium text-gray-800 text-sm">${q.service_name}</div>
+        </td>
+        <td class="px-5 py-3 hidden md:table-cell">
+          <div class="flex flex-wrap gap-1">${paramsDisplay || '<span class="text-xs text-gray-400">—</span>'}</div>
+        </td>
+        <td class="px-5 py-3 text-center">
+          <span class="badge-${q.result_type === 'pdf' ? 'blue' : 'green'}">${q.result_type.toUpperCase()}</span>
+        </td>
+        <td class="px-5 py-3 text-right font-semibold text-red-500 text-sm">-${fmt(q.amount)}</td>
+      </tr>`;
+  }).join('');
+}
+
+function filterHistory() { renderHistoryTable(); }
+
+// ── Preços ─────────────────────────────────────────────────────────────────────
+function renderPrices() {
+  const groups = {};
+  allServices.forEach(s => {
+    if (!groups[s.group]) groups[s.group] = [];
+    groups[s.group].push(s);
+  });
+
+  const groupIcons = {
+    'Consultas Básicas':       '🔍',
+    'Débitos e Documentação':  '📋',
+    'CRLV-e Digital':          '📄',
+    'CRLV-e Agendado':         '⏳',
+    'CRV':                     '🔐',
+    'Análise de Crédito':      '📊',
+    'Comunicação Venda':       '📝',
+  };
+
+  document.getElementById('prices-content').innerHTML = Object.entries(groups).map(([group, svcs]) => `
+    <div class="card p-0 overflow-hidden">
+      <div class="bg-gray-50 border-b border-gray-100 px-5 py-3 flex items-center gap-2">
+        <span class="text-lg">${groupIcons[group] || '📌'}</span>
+        <h3 class="font-semibold text-gray-800">${group}</h3>
+        <span class="ml-auto text-xs text-gray-400">${svcs.length} serviço(s)</span>
+      </div>
+      <div class="divide-y divide-gray-50">
+        ${svcs.map(s => `
+          <div class="flex items-center justify-between px-5 py-3 hover:bg-gray-50">
+            <div class="flex items-center gap-3">
+              <span class="text-lg">${s.icon}</span>
+              <div>
+                <div class="font-medium text-gray-800 text-sm">${s.name}</div>
+                <div class="text-xs text-gray-400">${inputTypeLabel(s.inputType)}</div>
+              </div>
+            </div>
+            <div class="text-right flex-shrink-0 ml-4">
+              <div class="price-tag">${fmt(s.price)}</div>
+              <button onclick="quickSelect('${s.id}')"
+                class="text-xs text-blue-600 hover:text-orange-500 font-medium mt-0.5 block">
+                Consultar →
+              </button>
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>`).join('');
+}
+
+function inputTypeLabel(t) {
+  const map = {
+    placa:               'Entrada: Placa',
+    placa_uf:            'Entrada: Placa + UF',
+    placa_renavam:       'Entrada: Placa + Renavam',
+    placa_renavam_cpf:   'Entrada: Placa + Renavam + CPF',
+    motor:               'Entrada: Número do Motor',
+    chassi:              'Entrada: Chassi',
+    cpfcnpj:             'Entrada: CPF/CNPJ',
+    crv_full:            'Entrada: Placa + Renavam + Dados CRV',
+    valida_crv:          'Entrada: Placa + Renavam + UF + CRV',
+    crlv_agendado_placa: 'Entrada: Placa (assíncrono)',
+    crlv_agendado_cpf:   'Entrada: Placa + Renavam + CPF (assíncrono)',
+    pedido_id_get:       'Entrada: ID do Pedido',
+    venda:               'Entrada: Dados completos da venda',
+    cancelar_venda:      'Entrada: ID + Protocolo + Motivo',
+    protocolo:           'Entrada: Protocolo',
+    protocolo_get:       'Entrada: Protocolo (GET)',
+    id_only:             'Entrada: ID da Comunicação',
+    id_get:              'Entrada: ID da Comunicação (GET)',
+  };
+  return map[t] || t;
+}
+
+function quickSelect(serviceId) {
+  showSection('query');
+  const svc = allServices.find(s => s.id === serviceId);
+  if (!svc) return;
+  // Select the category first, then the service
+  selectedCat = svc.group;
+  renderServiceList(svc.group);
+  selectService(svc);
+}
+
+// ── Nova Consulta ──────────────────────────────────────────────────────────────
+function buildCategoryGrid() {
+  const cats = [...new Set(allServices.map(s => s.group))];
+  const catIcons = {
+    'Consultas Básicas':       { icon:'🔍', color:'bg-blue-50 border-blue-200' },
+    'Débitos e Documentação':  { icon:'💳', color:'bg-red-50 border-red-200' },
+    'CRLV-e Digital':          { icon:'📄', color:'bg-green-50 border-green-200' },
+    'CRLV-e Agendado':         { icon:'⏳', color:'bg-amber-50 border-amber-200' },
+    'CRV':                     { icon:'🔐', color:'bg-purple-50 border-purple-200' },
+    'Análise de Crédito':      { icon:'📊', color:'bg-yellow-50 border-yellow-200' },
+    'Comunicação Venda':       { icon:'📝', color:'bg-pink-50 border-pink-200' },
+  };
+
+  document.getElementById('category-grid').innerHTML = cats.map(cat => {
+    const ci = catIcons[cat] || { icon:'📌', color:'bg-gray-50 border-gray-200' };
+    const count = allServices.filter(s => s.group === cat).length;
+    return `
+      <div class="service-cat ${ci.color}" onclick="selectCategory('${cat}')">
+        <div class="text-2xl mb-1">${ci.icon}</div>
+        <div class="font-semibold text-gray-800 text-xs leading-tight">${cat}</div>
+        <div class="text-xs text-gray-400 mt-0.5">${count} serviço(s)</div>
+      </div>`;
+  }).join('');
+}
+
+function selectCategory(cat) {
+  selectedCat = cat;
+  document.querySelectorAll('.service-cat').forEach(el => el.classList.remove('selected'));
+  document.querySelectorAll('.service-cat').forEach(el => {
+    if (el.textContent.includes(cat.slice(0, 8))) el.classList.add('selected');
+  });
+  resetForm(false);
+  renderServiceList(cat);
+  document.getElementById('service-selector-wrap').classList.remove('hidden');
+  document.getElementById('query-form-wrap').classList.add('hidden');
+  document.getElementById('query-result-wrap').classList.add('hidden');
+}
+
+function renderServiceList(cat) {
+  const svcs = allServices.filter(s => s.group === cat);
+  document.getElementById('service-list').innerHTML = svcs.map(s => `
+    <button type="button"
+      onclick="selectService(${JSON.stringify(s).replace(/"/g,"&quot;")})"
+      class="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-orange-300 hover:bg-orange-50 text-left transition-all">
+      <span class="text-xl flex-shrink-0">${s.icon}</span>
+      <div class="min-w-0 flex-1">
+        <div class="font-medium text-gray-800 text-sm">${s.name}</div>
+        <div class="text-xs text-gray-400 mt-0.5">${inputTypeLabel(s.inputType)}</div>
+      </div>
+      <div class="price-tag text-sm flex-shrink-0">${fmt(s.price)}</div>
+    </button>`).join('');
+}
+
+function selectService(svc) {
+  if (typeof svc === 'string') svc = JSON.parse(svc);
+  selectedSvc = svc;
+  document.getElementById('form-service-name').textContent = svc.icon + ' ' + svc.name;
+  document.getElementById('form-service-price').textContent = fmt(svc.price);
+  renderFormFields(svc.inputType);
+  document.getElementById('query-form-wrap').classList.remove('hidden');
+  document.getElementById('query-result-wrap').classList.add('hidden');
+  document.getElementById('form-error').classList.add('hidden');
+  document.getElementById('query-form-wrap').scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
+
+function renderFormFields(inputType) {
+  const wrap = document.getElementById('form-fields');
+  const field = (id, label, type = 'text', placeholder = '', required = true, extra = '') =>
+    `<div>
+      <label class="label">${label}${required ? ' <span class="text-red-500">*</span>' : ''}</label>
+      <input id="f-${id}" type="${type}" placeholder="${placeholder}"
+        class="input-field" ${required ? 'required' : ''} ${extra}>
+    </div>`;
+
+  const placaField = field('placa', 'Placa', 'text', 'ABC1234 ou ABC-1234');
+  const renavamField = field('renavam', 'Renavam', 'text', '12345678901');
+  const cpfField = field('cpf', 'CPF do Proprietário', 'text', '000.000.000-00');
+
+  const vendaBody = `
+    <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-800 mb-2">
+      Preencha os dados da comunicação de venda do veículo
+    </div>
+    <div class="font-semibold text-gray-700 text-sm mb-2">Vendedor</div>
+    <div class="grid grid-cols-2 gap-3">
+      ${field('v_cpf','CPF Vendedor','text','12345678900')}
+      ${field('v_nome','Nome Vendedor','text','NOME COMPLETO')}
+    </div>
+    <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Comprador</div>
+    <div class="grid grid-cols-2 gap-3">
+      ${field('c_cpf','CPF Comprador','text','12345678900')}
+      ${field('c_nome','Nome Comprador','text','NOME COMPLETO')}
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      ${field('c_cep','CEP','text','01001000')}
+      ${field('c_cidade','Código IBGE Cidade','text','3550308')}
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      ${field('c_logradouro','Logradouro','text','RUA EXEMPLO')}
+      ${field('c_numero','Número','text','123')}
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      ${field('c_bairro','Bairro','text','CENTRO')}
+      ${field('c_uf','UF','text','SP')}
+    </div>
+    <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Venda</div>
+    <div class="grid grid-cols-2 gap-3">
+      ${field('venda_data','Data da Venda','text','01/01/2025')}
+      ${field('venda_valor','Valor (R$)','text','10000.00')}
+      ${field('venda_estado','Estado UF','text','SP')}
+      ${field('venda_cidade','Código IBGE Cidade','text','3550308')}
+    </div>
+    <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Veículo</div>
+    ${placaField + renavamField}
+    <div class="grid grid-cols-2 gap-3">
+      ${field('crv_numero','Número CRV','text','123456789012')}
+      ${field('crv_codigo','Código Segurança','text','12345678901')}
+      ${field('crv_via','Nº Via','text','1')}
+      ${field('crv_data','Data Emissão','text','01/01/2020')}
+      ${field('crv_uf','UF Emissão','text','SP')}
+    </div>`;
+
+  const templates = {
+    placa: placaField,
+
+    placa_renavam: placaField + renavamField,
+
+    placa_renavam_cpf: placaField + renavamField + cpfField,
+
+    placa_uf: placaField + field('uf', 'UF (Estado)', 'text', 'SP'),
+
+    motor: field('motor', 'Número do Motor', 'text', 'MOTOR123456'),
+
+    chassi: field('chassi', 'Chassi', 'text', '9BWZZZ377VT004251'),
+
+    cpfcnpj: field('cpfcnpj', 'CPF ou CNPJ', 'text', '000.000.000-00'),
+
+    crv_full: placaField + renavamField + `
+      <div class="grid grid-cols-2 gap-3">
+        ${field('crv_numero','Número CRV','text','123456789012')}
+        ${field('crv_codigo','Código de Segurança','text','12345678901')}
+      </div>
+      <div class="grid grid-cols-3 gap-3">
+        ${field('crv_via','Número Via','text','1')}
+        ${field('crv_data','Data Emissão','text','01/01/2020')}
+        ${field('crv_uf','UF Emissão','text','SP')}
+      </div>`,
+
+    valida_crv: placaField + renavamField +
+      field('uf','UF','text','SP') +
+      field('crv','Número CRV (código segurança)','text','12345678901'),
+
+    crlv_agendado_placa: `
+      <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 mb-2">
+        ⏳ <strong>Serviço Assíncrono:</strong> Após solicitar, você receberá um pedido_id. Use "CRLV Agendado — Ver Status" para acompanhar e baixar o PDF quando concluído.
+      </div>` + placaField,
+
+    crlv_agendado_cpf: `
+      <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 mb-2">
+        ⏳ <strong>Serviço Assíncrono:</strong> Após solicitar, você receberá um pedido_id. Use "CRLV Agendado — Ver Status" para acompanhar e baixar o PDF quando concluído.
+      </div>` + placaField + renavamField + cpfField,
+
+    pedido_id_get: field('pedido_id', 'ID do Pedido', 'text', '123', true, 'inputmode="numeric"'),
+
+    protocolo: field('protocolo', 'Protocolo', 'text', 'Número do protocolo'),
+
+    protocolo_get: field('protocolo', 'Protocolo', 'text', 'Número do protocolo'),
+
+    id_only: field('id', 'ID da Comunicação', 'text', '123', true, 'inputmode="numeric"'),
+
+    id_get: field('id', 'ID da Comunicação', 'text', '123', true, 'inputmode="numeric"'),
+
+    cancelar_venda: `
+      <div class="grid grid-cols-2 gap-3">
+        ${field('id','ID da Comunicação','text','123',true,'inputmode="numeric"')}
+        ${field('protocolo','Protocolo','text','0000000000')}
+      </div>
+      ${field('id_motivo','Motivo Cancelamento (ID)','text','1',true,'inputmode="numeric"')}`,
+
+    venda: vendaBody,
+  };
+
+  wrap.innerHTML = templates[inputType] || placaField;
+
+  // Máscara de placa
+  const placaEl = document.getElementById('f-placa');
+  if (placaEl) {
+    placaEl.addEventListener('input', function() {
+      this.value = this.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 7);
+    });
+  }
+  // Máscara renavam (só números)
+  const renavamEl = document.getElementById('f-renavam');
+  if (renavamEl) {
+    renavamEl.addEventListener('input', function() {
+      this.value = this.value.replace(/\D/g, '').slice(0, 11);
+    });
+  }
+  // Máscara CPF
+  const cpfEl = document.getElementById('f-cpf');
+  if (cpfEl) {
+    cpfEl.addEventListener('input', function() {
+      const d = this.value.replace(/\D/g, '').slice(0, 11);
+      this.value = d.replace(/(\d{3})(\d{3})(\d{3})(\d{1,2})/, '$1.$2.$3-$4');
+    });
+  }
+}
+
+function resetForm(showCats = true) {
+  selectedSvc = null;
+  document.getElementById('query-form-wrap').classList.add('hidden');
+  document.getElementById('query-result-wrap').classList.add('hidden');
+  document.getElementById('service-selector-wrap').classList.add('hidden');
+  document.getElementById('form-error').classList.add('hidden');
+  document.getElementById('query-form').reset();
+  if (showCats) {
+    document.querySelectorAll('.service-cat').forEach(el => el.classList.remove('selected'));
+  }
+}
+
+// ── Submeter consulta ──────────────────────────────────────────────────────────
+async function submitQuery(e) {
+  e.preventDefault();
+  if (!selectedSvc) return;
+
+  document.getElementById('form-error').classList.add('hidden');
+  setQueryLoading(true);
+
+  const params = buildParams(selectedSvc.inputType);
+
+  try {
+    const res = await fetch('/api/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serviceId: selectedSvc.id, params }),
+    });
+
+    const ct = res.headers.get('content-type') || '';
+
+    if (ct.includes('application/pdf')) {
+      const blob = await res.blob();
+      lastPdfBlob = blob;
+      triggerPdfDownload(blob, selectedSvc.id);
+      showPdfResult(selectedSvc);
+      await Promise.all([loadStats(), loadQueries()]);
+    } else {
+      const data = await res.json();
+      if (!res.ok) {
+        showFormError(data.error || 'Erro ao realizar consulta.');
+        return;
+      }
+      showJsonResult(data, selectedSvc);
+      await Promise.all([loadStats(), loadQueries()]);
+    }
+  } catch {
+    showFormError('Erro de conexão. Verifique sua internet e tente novamente.');
+  } finally {
+    setQueryLoading(false);
+  }
+}
+
+function buildParams(inputType) {
+  const g = id => (document.getElementById('f-' + id)?.value || '').trim();
+  const cd = v => v.replace(/[\.\-\/]/g, '');
+
+  if (inputType === 'placa')             return { placa: g('placa') };
+  if (inputType === 'placa_uf')          return { placa: g('placa'), uf: g('uf') };
+  if (inputType === 'motor')             return { motor: g('motor') };
+  if (inputType === 'chassi')            return { chassi: g('chassi') };
+  if (inputType === 'cpfcnpj')          return { cpfCnpj: cd(g('cpfcnpj')) };
+  if (inputType === 'protocolo' || inputType === 'protocolo_get')
+                                         return { protocolo: g('protocolo') };
+  if (inputType === 'id_only' || inputType === 'id_get')
+                                         return { id: g('id') };
+  if (inputType === 'pedido_id_get')     return { pedido_id: g('pedido_id') };
+
+  if (inputType === 'placa_renavam')
+    return { placa: g('placa'), renavam: g('renavam') };
+
+  if (inputType === 'placa_renavam_cpf')
+    return { placa: g('placa'), renavam: g('renavam'), cpf: cd(g('cpf')) };
+
+  if (inputType === 'crlv_agendado_placa')
+    return { placa: g('placa') };
+
+  if (inputType === 'crlv_agendado_cpf')
+    return { placa: g('placa'), renavam: g('renavam'), cpf: cd(g('cpf')) };
+
+  if (inputType === 'crv_full')
+    return {
+      placa: g('placa'), renavam: g('renavam'),
+      crv: { numero: g('crv_numero'), codigo_seguranca: g('crv_codigo'),
+             numero_via: g('crv_via'), data_emissao: g('crv_data'), uf_emissao: g('crv_uf') },
+    };
+
+  if (inputType === 'valida_crv')
+    return { placa: g('placa'), renavam: g('renavam'), uf: g('uf'), crv: g('crv') };
+
+  if (inputType === 'cancelar_venda')
+    return { id: g('id'), protocolo: g('protocolo'), id_motivo_cancelamento: g('id_motivo') };
+
+  if (inputType === 'venda')
+    return {
+      vendedor: { tipo_pessoa:'F', cpf: cd(g('v_cpf')), cnpj:'', nome: g('v_nome') },
+      comprador: {
+        tipo_pessoa:'F', cpf: cd(g('c_cpf')), cnpj:'', nome: g('c_nome'),
+        endereco: { cep: cd(g('c_cep')), logradouro: g('c_logradouro'), numero: g('c_numero'),
+                    bairro: g('c_bairro'), complemento:'', cidade: g('c_cidade'), uf: g('c_uf') },
+      },
+      venda: { cidade: g('venda_cidade'), data: g('venda_data'),
+               valor: g('venda_valor'), comprador_solicitante:'S', estado: g('venda_estado') },
+      veiculo: {
+        placa: g('placa'), renavam: g('renavam'),
+        crv: { numero: g('crv_numero'), codigo_seguranca: g('crv_codigo'),
+               numero_via: g('crv_via'), data_emissao: g('crv_data'), uf_emissao: g('crv_uf') },
+      },
+    };
+
+  return {};
+}
+
+function setQueryLoading(on) {
+  document.getElementById('query-submit').disabled = on;
+  document.getElementById('query-submit-text').textContent = on ? 'Processando...' : 'Realizar Consulta';
+  document.getElementById('query-spinner').classList.toggle('hidden', !on);
+}
+
+function showFormError(msg) {
+  document.getElementById('form-error-msg').textContent = msg;
+  document.getElementById('form-error').classList.remove('hidden');
+}
+
+function triggerPdfDownload(blob, serviceId) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${serviceId}-${Date.now()}.pdf`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function showPdfResult(svc) {
+  document.getElementById('query-form-wrap').classList.add('hidden');
+  document.getElementById('query-result-wrap').classList.remove('hidden');
+  document.getElementById('result-service-name').textContent = svc.name;
+  document.getElementById('result-json-wrap').classList.add('hidden');
+  document.getElementById('result-pdf-wrap').classList.remove('hidden');
+  document.getElementById('result-pdf-btn').onclick = () => {
+    if (lastPdfBlob) triggerPdfDownload(lastPdfBlob, svc.id);
+  };
+  document.getElementById('query-result-wrap').scrollIntoView({ behavior:'smooth' });
+  toast('Consulta concluída! PDF sendo baixado.');
+}
+
+function showJsonResult(data, svc) {
+  document.getElementById('query-form-wrap').classList.add('hidden');
+  document.getElementById('query-result-wrap').classList.remove('hidden');
+  document.getElementById('result-service-name').textContent = svc.name;
+  document.getElementById('result-charged').textContent = '-' + fmt(data.charged);
+  document.getElementById('result-json-wrap').classList.remove('hidden');
+  document.getElementById('result-pdf-wrap').classList.add('hidden');
+
+  const result = data.result || {};
+  const fields = flattenObj(result, '', 3);
+  document.getElementById('result-fields').innerHTML = fields.slice(0, 30).map(([k, v]) => `
+    <div class="result-field bg-white rounded-lg p-3 border border-gray-100">
+      <span class="result-label">${k}</span>
+      <span class="result-value">${v}</span>
+    </div>`).join('');
+
+  document.getElementById('result-json-raw').textContent = JSON.stringify(result, null, 2);
+  document.getElementById('query-result-wrap').scrollIntoView({ behavior:'smooth' });
+  toast('Consulta concluída com sucesso!');
+}
+
+function flattenObj(obj, prefix, depth) {
+  if (depth === 0 || typeof obj !== 'object' || obj === null) return [[prefix, String(obj)]];
+  return Object.entries(obj).flatMap(([k, v]) => {
+    const key = prefix ? `${prefix}.${k}` : k;
+    if (typeof v === 'object' && v !== null && depth > 1) return flattenObj(v, key, depth - 1);
+    return [[key, String(v ?? '')]];
+  });
+}
+
+// ── Perfil ─────────────────────────────────────────────────────────────────────
+async function saveProfile(e) {
+  e.preventDefault();
+  const name  = document.getElementById('profile-name').value.trim();
+  const phone = document.getElementById('profile-phone').value.trim();
+  document.getElementById('profile-alert-error').classList.add('hidden');
+  document.getElementById('profile-alert-success').classList.add('hidden');
+  try {
+    const r = await fetch('/api/profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, phone }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      document.getElementById('profile-alert-error').textContent = d.error;
+      document.getElementById('profile-alert-error').classList.remove('hidden');
+      return;
+    }
+    document.getElementById('profile-alert-success').textContent = 'Perfil atualizado!';
+    document.getElementById('profile-alert-success').classList.remove('hidden');
+    document.getElementById('user-name').textContent     = name;
+    document.getElementById('topbar-name').textContent   = name.split(' ')[0];
+    document.getElementById('user-avatar').textContent   = name.charAt(0).toUpperCase();
+    document.getElementById('topbar-avatar').textContent = name.charAt(0).toUpperCase();
+    toast('Perfil atualizado!');
+  } catch {
+    document.getElementById('profile-alert-error').textContent = 'Erro de conexão.';
+    document.getElementById('profile-alert-error').classList.remove('hidden');
+  }
+}
+
+async function changePassword(e) {
+  e.preventDefault();
+  const cp = document.getElementById('current-password').value;
+  const np = document.getElementById('new-password').value;
+  const cn = document.getElementById('confirm-new-password').value;
+  document.getElementById('pwd-alert-error').classList.add('hidden');
+  document.getElementById('pwd-alert-success').classList.add('hidden');
+  if (np !== cn) {
+    document.getElementById('pwd-alert-error').textContent = 'As novas senhas não coincidem.';
+    document.getElementById('pwd-alert-error').classList.remove('hidden');
+    return;
+  }
+  try {
+    const r = await fetch('/api/profile/password', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: cp, new_password: np }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      document.getElementById('pwd-alert-error').textContent = d.error;
+      document.getElementById('pwd-alert-error').classList.remove('hidden');
+      return;
+    }
+    document.getElementById('pwd-alert-success').textContent = 'Senha alterada!';
+    document.getElementById('pwd-alert-success').classList.remove('hidden');
+    document.getElementById('password-form').reset();
+    toast('Senha alterada!');
+  } catch {
+    document.getElementById('pwd-alert-error').textContent = 'Erro de conexão.';
+    document.getElementById('pwd-alert-error').classList.remove('hidden');
+  }
+}
+
+// ── Logout ─────────────────────────────────────────────────────────────────────
+async function logout() {
+  await fetch('/api/auth/logout', { method: 'POST' });
+  window.location.href = '/entrar';
+}
+
+// ── Start ──────────────────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
