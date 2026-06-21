@@ -15,6 +15,8 @@ const MARKUP = 1.30;
 const ASAAS_API_KEY = (process.env.ASAAS_API_KEY || '')
   .split('').filter(c => c.charCodeAt(0) <= 127).join('').trim();
 const ASAAS_BASE = 'https://api.asaas.com/v3';
+const AUTOCRLV_URL = process.env.AUTOCRLV_URL || '';
+const AUTOCRLV_KEY = process.env.AUTOCRLV_KEY || '';
 
 async function asaasReq(method, endpoint, body = null) {
   const opts = {
@@ -650,10 +652,17 @@ app.post('/api/query', requireAuth, async (req, res) => {
       apiUrl = `${BASE_API_URL}/motivos-cancelamento/${params.protocolo}`;
       method = 'GET'; body = null;
     }
+    // Código Segurança CRV v2 — endpoint autocrlv.com.br
+    if (serviceId === 'consultar-crv-v2') {
+      apiUrl = AUTOCRLV_URL;
+      body = { placa: params?.placa || '' };
+    }
 
     const fetchOpts = {
       method,
-      headers: { 'Content-Type': 'application/json', chaveAcesso: CHAVE_ACESSO },
+      headers: serviceId === 'consultar-crv-v2'
+        ? { 'Content-Type': 'application/json', [AUTOCRLV_KEY]: '1' }
+        : { 'Content-Type': 'application/json', chaveAcesso: CHAVE_ACESSO },
     };
     if (body !== null) fetchOpts.body = JSON.stringify(body);
 
