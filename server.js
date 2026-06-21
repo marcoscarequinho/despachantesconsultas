@@ -661,7 +661,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
     const fetchOpts = {
       method,
       headers: serviceId === 'consultar-crv-v2'
-        ? { 'Content-Type': 'application/json', [AUTOCRLV_KEY]: '1' }
+        ? { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AUTOCRLV_KEY}` }
         : { 'Content-Type': 'application/json', chaveAcesso: CHAVE_ACESSO },
     };
     if (body !== null) fetchOpts.body = JSON.stringify(body);
