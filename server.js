@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -163,6 +164,17 @@ async function initDB() {
   `);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS asaas_customer_id VARCHAR(100);`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ip_address VARCHAR(45);`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pdf_cache (
+      id         SERIAL PRIMARY KEY,
+      query_id   INTEGER REFERENCES queries(id) ON DELETE CASCADE,
+      user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      token      VARCHAR(64) UNIQUE NOT NULL,
+      pdf_data   TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pix_payments (
       id         SERIAL PRIMARY KEY,
@@ -587,11 +599,38 @@ app.get('/api/user/stats', requireAuth, async (req, res) => {
 app.get('/api/queries', requireAuth, async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT id, service_id, service_name, params, status, amount, result_type, created_at
-       FROM queries WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100`,
+      `SELECT q.id, q.service_id, q.service_name, q.params, q.status, q.amount,
+              q.result_type, q.created_at,
+              pc.token      AS pdf_token,
+              pc.expires_at AS pdf_expires
+       FROM queries q
+       LEFT JOIN pdf_cache pc
+         ON pc.query_id = q.id
+        AND pc.user_id  = q.user_id
+        AND pc.expires_at > NOW()
+       WHERE q.user_id=$1
+       ORDER BY q.created_at DESC LIMIT 100`,
       [req.user.id]
     );
     res.json({ queries: r.rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── GET /api/pdf/:token ───────────────────────────────────────────────────────
+app.get('/api/pdf/:token', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT pdf_data FROM pdf_cache
+       WHERE token=$1 AND user_id=$2 AND expires_at > NOW()`,
+      [req.params.token, req.user.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'PDF não encontrado ou expirado.' });
+    const buf = Buffer.from(r.rows[0].pdf_data, 'base64');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="consulta-${req.params.token.slice(0,8)}.pdf"`);
+    return res.send(buf);
   } catch (err) {
     res.status(500).json({ error: 'Erro interno.' });
   }
@@ -747,16 +786,19 @@ app.post('/api/query', requireAuth, async (req, res) => {
        price, txRow.rows[0].id, (isRealPdf || base64PdfBuf) ? 'pdf' : 'json']
     );
 
-    // ── Envia PDF ─────────────────────────────────────────────────────────────
-    if (base64PdfBuf) {
+    // ── Envia PDF + salva no cache por 7 dias ────────────────────────────────
+    const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null);
+    if (pdfToSend) {
+      const token     = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [txRow.rows[0].id, req.user.id, token, pdfToSend.toString('base64'), expiresAt]
+      ).catch(() => {}); // não bloqueia se falhar
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${serviceId}-${Date.now()}.pdf"`);
-      return res.send(base64PdfBuf);
-    }
-    if (isRealPdf) {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${serviceId}-${Date.now()}.pdf"`);
-      return res.send(bodyBuffer);
+      return res.send(pdfToSend);
     }
 
     try {
