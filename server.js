@@ -325,11 +325,32 @@ app.post('/api/auth/logout', (req, res) => {
 app.get('/api/auth/me', requireAuth, async (req, res) => {
   try {
     const r = await pool.query(
-      'SELECT id, name, email, role, credits FROM users WHERE id=$1',
+      'SELECT id, name, email, role, credits, affiliate_code FROM users WHERE id=$1',
       [req.user.id]
     );
     if (r.rows.length === 0) return res.status(404).json({ error: 'Usuário não encontrado.' });
     res.json(r.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── GET /api/affiliate/stats ──────────────────────────────────────────────────
+app.get('/api/affiliate/stats', requireAuth, async (req, res) => {
+  try {
+    const uid = req.user.id;
+    const [codeRow, totalRow, activeRow, commRow] = await Promise.all([
+      pool.query('SELECT affiliate_code FROM users WHERE id=$1', [uid]),
+      pool.query('SELECT COUNT(*) FROM users WHERE referred_by=$1', [uid]),
+      pool.query('SELECT COUNT(*) FROM users WHERE referred_by=$1 AND active=true', [uid]),
+      pool.query('SELECT COALESCE(SUM(amount),0) AS total FROM commissions WHERE reseller_id=$1', [uid]),
+    ]);
+    res.json({
+      affiliate_code:   codeRow.rows[0].affiliate_code,
+      total_referrals:  parseInt(totalRow.rows[0].count),
+      active_referrals: parseInt(activeRow.rows[0].count),
+      total_commissions: parseFloat(commRow.rows[0].total),
+    });
   } catch (err) {
     res.status(500).json({ error: 'Erro interno.' });
   }
