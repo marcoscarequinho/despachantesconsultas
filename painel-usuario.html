@@ -1357,6 +1357,68 @@ function compartilharCopiar() {
 }
 
 // ── Importar PDF ATPV-e / CRV ─────────────────────────────────────────────────
+// ── Carrega Tesseract.js sob demanda ──────────────────────────────────────────
+async function carregarTesseract() {
+  if (window.Tesseract) return;
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://unpkg.com/tesseract.js@5/dist/tesseract.min.js';
+    s.onload  = resolve;
+    s.onerror = () => reject(new Error('Tesseract não carregou.'));
+    document.head.appendChild(s);
+  });
+}
+
+// ── Renderiza página PDF em canvas e retorna ImageData ─────────────────────────
+async function paginaParaCanvas(page, scale = 2.5) {
+  const vp     = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width  = vp.width;
+  canvas.height = vp.height;
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+  return canvas;
+}
+
+// ── Envia texto ao servidor e preenche campos ──────────────────────────────────
+async function processarTextoAtpv(texto, setStatus) {
+  setStatus('⏳ Identificando campos…', 'text-blue-600');
+  const r    = await fetch('/api/pdf/extrair-atpv', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ texto }),
+  });
+  const data = await r.json();
+  if (!r.ok) { setStatus('⚠️ ' + (data.error || 'Sem dados encontrados.'), 'text-amber-600'); return; }
+
+  const preenchidos = [];
+  const set = (id, val, label) => {
+    const el = document.getElementById('f-' + id);
+    if (el && val) { el.value = val; preenchidos.push(label); }
+  };
+  set('placa',        data.placa,        'Placa');
+  set('renavam',      data.renavam,       'Renavam');
+  set('chassi',       data.chassi,        'Chassi');
+  set('crv_numero',   data.crv_numero,    'Nº CRV');
+  set('crv_codigo',   data.crv_codigo,    'Cód. Segurança');
+  set('crv_via',      data.crv_via,       'Via');
+  set('crv_data',     data.crv_data,      'Data CRV');
+  set('crv_uf',       data.crv_uf,        'UF CRV');
+  set('v_cpf',        data.v_cpf,         'CPF Vendedor');
+  set('v_nome',       data.v_nome,        'Nome Vendedor');
+  set('c_cpf',        data.c_cpf,         'CPF Comprador');
+  set('c_nome',       data.c_nome,        'Nome Comprador');
+  set('c_cep',        data.c_cep,         'CEP');
+  set('c_uf',         data.c_uf,          'UF Comprador');
+  set('venda_valor',  data.venda_valor,   'Valor');
+  set('venda_data',   data.venda_data,    'Data Venda');
+  set('venda_estado', data.venda_estado,  'Estado');
+
+  if (preenchidos.length)
+    setStatus('✅ Preenchido: ' + preenchidos.join(', ') + '. Verifique antes de enviar.', 'text-green-600');
+  else
+    setStatus('⚠️ Não encontrei campos reconhecíveis. Preencha manualmente.', 'text-amber-600');
+}
+
 async function importarAtpvPdf() {
   const input  = document.getElementById('atpv-pdf-input');
   const status = document.getElementById('atpv-import-status');
@@ -1368,82 +1430,66 @@ async function importarAtpvPdf() {
     status.classList.remove('hidden');
   };
 
-  if (!input || !input.files[0]) {
-    setStatus('⚠️ Nenhum arquivo selecionado.', 'text-amber-600');
-    return;
-  }
+  if (!input?.files[0]) { setStatus('⚠️ Nenhum arquivo selecionado.', 'text-amber-600'); return; }
 
-  setStatus('⏳ Lendo PDF…', 'text-blue-600');
+  setStatus('⏳ Carregando PDF…', 'text-blue-600');
 
   try {
-    // Verifica se PDF.js carregou
     if (typeof pdfjsLib === 'undefined') {
-      setStatus('⚠️ Biblioteca PDF não carregada. Tente recarregar a página.', 'text-red-600');
-      return;
+      setStatus('⚠️ PDF.js não carregado. Recarregue a página.', 'text-red-600'); return;
     }
-
     pdfjsLib.GlobalWorkerOptions.workerSrc =
       'https://unpkg.com/pdfjs-dist@3.4.120/build/pdf.worker.min.js';
 
     const arrayBuf = await input.files[0].arrayBuffer();
     const pdf      = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuf) }).promise;
 
+    // ── Tentativa 1: extração de texto nativo ────────────────────────────────
     let texto = '';
     for (let i = 1; i <= pdf.numPages; i++) {
-      const page    = await pdf.getPage(i);
-      const content = await page.getTextContent();
+      const pg      = await pdf.getPage(i);
+      const content = await pg.getTextContent();
       texto += content.items.map(it => it.str).join(' ') + ' ';
     }
 
-    if (!texto.trim()) {
-      setStatus('⚠️ PDF sem texto selecionável (escaneado). Preencha manualmente.', 'text-amber-600');
+    if (texto.replace(/\s/g,'').length > 80) {
+      await processarTextoAtpv(texto, setStatus);
       return;
     }
 
-    setStatus('⏳ Extraindo dados…', 'text-blue-600');
+    // ── Tentativa 2: OCR com Tesseract.js ───────────────────────────────────
+    setStatus('⏳ PDF sem texto — carregando OCR (pode demorar ~30s)…', 'text-blue-600');
+    await carregarTesseract();
 
-    const r = await fetch('/api/pdf/extrair-atpv', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ texto }),
+    const worker = await Tesseract.createWorker('por', 1, {
+      workerPath: 'https://unpkg.com/tesseract.js@5/dist/worker.min.js',
+      langPath:   'https://tessdata.projectnaptha.com/4.0.0',
+      corePath:   'https://unpkg.com/tesseract.js-core@5/tesseract-core-simd-lstm.wasm.js',
+      logger: m => {
+        if (m.status === 'recognizing text')
+          setStatus(`⏳ OCR: ${Math.round(m.progress * 100)}%…`, 'text-blue-600');
+      },
     });
-    const data = await r.json();
 
-    if (!r.ok) {
-      setStatus('⚠️ ' + (data.error || 'Não foi possível extrair dados.'), 'text-amber-600');
+    let textoOcr = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      setStatus(`⏳ OCR página ${i}/${pdf.numPages}…`, 'text-blue-600');
+      const pg     = await pdf.getPage(i);
+      const canvas = await paginaParaCanvas(pg, 2.5);
+      const { data: { text } } = await worker.recognize(canvas);
+      textoOcr += text + ' ';
+    }
+    await worker.terminate();
+
+    if (!textoOcr.replace(/\s/g,'')) {
+      setStatus('⚠️ OCR não extraiu texto. PDF pode ser de qualidade muito baixa.', 'text-amber-600');
       return;
     }
 
-    const preenchidos = [];
-    const set = (id, val, label) => {
-      const el = document.getElementById('f-' + id);
-      if (el && val) { el.value = val; preenchidos.push(label); }
-    };
-    set('placa',        data.placa,        'Placa');
-    set('renavam',      data.renavam,       'Renavam');
-    set('chassi',       data.chassi,        'Chassi');
-    set('crv_numero',   data.crv_numero,    'Nº CRV');
-    set('crv_codigo',   data.crv_codigo,    'Cód. Segurança');
-    set('crv_via',      data.crv_via,       'Via');
-    set('crv_data',     data.crv_data,      'Data CRV');
-    set('crv_uf',       data.crv_uf,        'UF CRV');
-    set('v_cpf',        data.v_cpf,         'CPF Vendedor');
-    set('v_nome',       data.v_nome,        'Nome Vendedor');
-    set('c_cpf',        data.c_cpf,         'CPF Comprador');
-    set('c_nome',       data.c_nome,        'Nome Comprador');
-    set('c_cep',        data.c_cep,         'CEP');
-    set('c_uf',         data.c_uf,          'UF Comprador');
-    set('venda_valor',  data.venda_valor,   'Valor');
-    set('venda_data',   data.venda_data,    'Data Venda');
-    set('venda_estado', data.venda_estado,  'Estado');
-
-    if (preenchidos.length)
-      setStatus('✅ Preenchido: ' + preenchidos.join(', ') + '. Verifique antes de enviar.', 'text-green-600');
-    else
-      setStatus('⚠️ Dados não encontrados no PDF. Preencha manualmente.', 'text-amber-600');
+    await processarTextoAtpv(textoOcr, setStatus);
 
   } catch (err) {
-    console.error('importarAtpvPdf erro:', err);
+    console.error('importarAtpvPdf:', err);
     setStatus('⚠️ Erro: ' + err.message, 'text-red-600');
   }
 }
