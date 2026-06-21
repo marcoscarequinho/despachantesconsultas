@@ -54,7 +54,7 @@ const SERVICES = [
   { id:'consultar-historico-proprietario',name:'Histórico de Proprietários',   group:'Débitos e Documentação', basePrice:10.00, inputType:'placa',        icon:'👥' },
   { id:'renajud',                         name:'RENAJUD',                      group:'Débitos e Documentação', basePrice:12.00, inputType:'placa',        icon:'⚖️' },
   { id:'consultar-atpve',                 name:'Reemissão ATPV-e',             group:'Débitos e Documentação', basePrice:30.00, inputType:'chassi',       icon:'📄' },
-  { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:8.00,  inputType:'placa',        icon:'🔢' },
+  { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:120.00, inputType:'placa',       icon:'🔢' },
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:8.00,  inputType:'placa_renavam',icon:'📝' },
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
