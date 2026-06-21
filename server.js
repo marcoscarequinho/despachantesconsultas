@@ -1023,39 +1023,57 @@ app.post('/api/pdf/extrair-atpv', requireAuth, (req, res) => {
   if (!texto) return res.status(400).json({ error: 'Texto não enviado.' });
 
   const txt = texto.replace(/\s+/g, ' ').toUpperCase();
+  const m   = (r) => (txt.match(r) || [])[1] || '';
 
-  // Chassi: 17 chars alfanuméricos
-  let chassi = (txt.match(/CHASSI[^A-Z0-9]*([A-Z0-9]{17})/) || [])[1] || '';
-  if (!chassi) chassi = (txt.match(/\b([A-Z0-9]{17})\b/) || [])[1] || '';
-
-  // Placa: ABC1D23 ou ABC-1234
-  let placa = (txt.match(/PLACA[^A-Z0-9]*([A-Z]{3}[\s-]?[0-9A-Z][0-9A-Z]{2}[0-9]{2})/) || [])[1] || '';
-  if (!placa) placa = (txt.match(/\b([A-Z]{3}[\s-]?[0-9][A-Z0-9][0-9]{2})\b/) || [])[1] || '';
+  // ── Veículo ──
+  let placa  = m(/PLACA[^A-Z0-9]*([A-Z]{3}[\s-]?[0-9A-Z][0-9A-Z]{2}[0-9]{2})/);
+  if (!placa) placa = m(/\b([A-Z]{3}[\s-]?[0-9][A-Z0-9][0-9]{2})\b/);
   placa = placa.replace(/[\s-]/g, '');
 
-  // Renavam: 9–11 dígitos
-  let renavam = (txt.match(/RENAVAM[^0-9]*(\d{9,11})/) || [])[1] || '';
-  if (!renavam) renavam = (txt.match(/\b(\d{9,11})\b/) || [])[1] || '';
+  let renavam = m(/RENAVAM[^0-9]*(\d{9,11})/);
+  if (!renavam) renavam = m(/\b(\d{9,11})\b/);
 
-  // Número CRV (12 dígitos)
-  let crv_numero = (txt.match(/N[ÚU]MERO.*?CRV[^0-9]*(\d{9,12})/) || txt.match(/CRV[^0-9]*(\d{9,12})/) || [])[1] || '';
+  let chassi = m(/CHASSI[^A-Z0-9]*([A-Z0-9]{17})/);
+  if (!chassi) chassi = m(/\b([A-Z0-9]{17})\b/);
 
-  // Código de segurança CRV (8–11 dígitos, diferente do renavam)
-  let crv_codigo = (txt.match(/C[ÓO]DIGO.*?SEGURAN[CÇ]A[^0-9]*(\d{8,11})/) || [])[1] || '';
+  // ── CRV ──
+  const crv_numero = m(/(?:N[ÚU]MERO\s+(?:DO\s+)?CRV|CRV\s+N[ÚU]MERO)[^0-9]*(\d{9,12})/);
+  const crv_codigo = m(/C[ÓO]DIGO\s+(?:DE\s+)?SEGURAN[CÇ]A[^0-9]*(\d{6,11})/);
+  const crv_via    = m(/(?:N[ÚU]MERO\s+)?VIA[^0-9]*(\d)\b/);
+  const crv_uf     = m(/(?:UF|ESTADO)\s+(?:DE\s+)?EMISS[ÃA]O[^A-Z]*([A-Z]{2})\b/);
+  const datas      = txt.match(/\d{2}\/\d{2}\/\d{4}/g) || [];
+  const crv_data   = datas[0] || '';
 
-  // Número da via (1 dígito)
-  let crv_via = (txt.match(/\bVIA\b[^0-9]*(\d)\b/) || [])[1] || '';
+  // ── Vendedor ──
+  const v_cpf  = m(/(?:VENDEDOR|ALIENANTE|TRANSMITENTE)[^0-9]*(\d{3}[\.\s]?\d{3}[\.\s]?\d{3}[\.\s\-]?\d{2})/);
+  const v_nome = m(/(?:VENDEDOR|ALIENANTE|TRANSMITENTE)[^A-Z]*([A-ZÁÀÃÂÉÊÍÓÔÕÚÇ][A-ZÁÀÃÂÉÊÍÓÔÕÚÇ\s]{4,60}?)(?:\s{2,}|CPF|CNPJ)/);
 
-  // Data de emissão dd/mm/aaaa
-  let crv_data = (txt.match(/EMISS[ÃA]O[^0-9]*(\d{2}\/\d{2}\/\d{4})/) || txt.match(/(\d{2}\/\d{2}\/\d{4})/) || [])[1] || '';
+  // ── Comprador ──
+  const c_cpf  = m(/(?:COMPRADOR|ADQUIRENTE)[^0-9]*(\d{3}[\.\s]?\d{3}[\.\s]?\d{3}[\.\s\-]?\d{2})/);
+  const c_nome = m(/(?:COMPRADOR|ADQUIRENTE)[^A-Z]*([A-ZÁÀÃÂÉÊÍÓÔÕÚÇ][A-ZÁÀÃÂÉÊÍÓÔÕÚÇ\s]{4,60}?)(?:\s{2,}|CPF|CNPJ)/);
+  const c_cep  = m(/CEP[^0-9]*(\d{5}[\-]?\d{3})/);
+  const c_uf   = m(/(?:ESTADO|UF)[^A-Z]*(?:DO\s+COMPRADOR)?[^A-Z]*([A-Z]{2})\b/);
 
-  // UF emissão (2 letras)
-  let crv_uf = (txt.match(/UF[^A-Z]*([A-Z]{2})\b/) || [])[1] || '';
+  // ── Venda ──
+  const venda_valor  = m(/VALOR[^0-9]*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)/);
+  const venda_data   = datas[1] || datas[0] || '';
+  const venda_estado = m(/(?:MUNIC[ÍI]PIO|CIDADE)\s+(?:DA\s+)?VENDA[^A-Z]*[A-ZÁÀÃÂÉÊÍÓÔÕÚÇ\s]+[\s,]+([A-Z]{2})\b/);
 
-  if (!chassi && !placa && !renavam)
+  if (!placa && !renavam && !chassi)
     return res.status(422).json({ error: 'Não foi possível extrair dados do PDF. Preencha manualmente.' });
 
-  res.json({ chassi, placa, renavam, crv_numero, crv_codigo, crv_via, crv_data, crv_uf });
+  res.json({
+    placa, renavam, chassi, crv_numero, crv_codigo, crv_via, crv_data, crv_uf,
+    v_cpf: v_cpf.replace(/[\.\-\s]/g,''),
+    v_nome: v_nome.trim(),
+    c_cpf: c_cpf.replace(/[\.\-\s]/g,''),
+    c_nome: c_nome.trim(),
+    c_cep: c_cep.replace(/[\.\-\s]/g,''),
+    c_uf,
+    venda_valor: venda_valor.replace(/\./g,'').replace(',','.'),
+    venda_data,
+    venda_estado,
+  });
 });
 
 // ── Rotas HTML ────────────────────────────────────────────────────────────────

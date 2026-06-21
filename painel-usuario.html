@@ -1423,14 +1423,28 @@ async function importarAtpvPdf() {
       const el = document.getElementById('f-' + id);
       if (el && val) { el.value = val; preenchidos.push(label); }
     };
-    set('chassi',    data.chassi,    'Chassi');
-    set('placa',     data.placa,     'Placa');
-    set('renavam',   data.renavam,   'Renavam');
-    set('crv_numero',data.crv_numero,'Nº CRV');
-    set('crv_codigo',data.crv_codigo,'Cód. Segurança');
-    set('crv_via',   data.crv_via,   'Via');
-    set('crv_data',  data.crv_data,  'Data Emissão');
-    set('crv_uf',    data.crv_uf,    'UF Emissão');
+    // Veículo
+    set('placa',      data.placa,        'Placa');
+    set('renavam',    data.renavam,       'Renavam');
+    set('chassi',     data.chassi,        'Chassi');
+    // CRV
+    set('crv_numero', data.crv_numero,    'Nº CRV');
+    set('crv_codigo', data.crv_codigo,    'Cód. Segurança');
+    set('crv_via',    data.crv_via,       'Via');
+    set('crv_data',   data.crv_data,      'Data Emissão CRV');
+    set('crv_uf',     data.crv_uf,        'UF Emissão CRV');
+    // Vendedor
+    set('v_cpf',      data.v_cpf,         'CPF Vendedor');
+    set('v_nome',     data.v_nome,        'Nome Vendedor');
+    // Comprador
+    set('c_cpf',      data.c_cpf,         'CPF Comprador');
+    set('c_nome',     data.c_nome,        'Nome Comprador');
+    set('c_cep',      data.c_cep,         'CEP');
+    set('c_uf',       data.c_uf,          'UF Comprador');
+    // Venda
+    set('venda_valor',  data.venda_valor,   'Valor Venda');
+    set('venda_data',   data.venda_data,    'Data Venda');
+    set('venda_estado', data.venda_estado,  'Estado Venda');
 
     if (preenchidos.length) {
       if (status) { status.className = 'text-xs mt-1.5 text-green-600'; status.textContent = '✅ Preenchido: ' + preenchidos.join(', ') + '. Verifique antes de enviar.'; }
