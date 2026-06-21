@@ -675,38 +675,62 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
     const apiRes = await fetch(apiUrl, fetchOpts);
     const ct = apiRes.headers.get('content-type') || '';
-    const isPdf = ct.includes('application/pdf');
 
-    if (apiRes.ok) {
-      await pool.query(
-        'UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]
-      );
-      const txRow = await pool.query(
-        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
-        [req.user.id, price, `Consulta: ${service.name}`]
-      );
-      await pool.query(
-        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
-         VALUES ($1,$2,$3,$4,'success',$5,$6,$7)`,
-        [req.user.id, serviceId, service.name, JSON.stringify(params || {}),
-         price, txRow.rows[0].id, isPdf ? 'pdf' : 'json']
-      );
+    // Detecta PDF por Content-Type ou por serviços que sempre retornam PDF
+    const pdfContentTypes = ['application/pdf', 'application/octet-stream', 'application/x-pdf'];
+    const isPdf = pdfContentTypes.some(t => ct.includes(t)) ||
+                  (autocrlvServices.includes(serviceId) && !ct.includes('application/json') && !ct.includes('text/'));
 
-      if (isPdf) {
-        const buf = Buffer.from(await apiRes.arrayBuffer());
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition',
-          `attachment; filename="${serviceId}-${Date.now()}.pdf"`);
-        return res.send(buf);
-      }
-      const data = await apiRes.json();
-      return res.json({ success: true, result: data, charged: price });
+    if (!apiRes.ok) {
+      let errMsg = 'Erro na API.';
+      try {
+        if (ct.includes('application/json') || ct.includes('text/')) {
+          const errData = await apiRes.json().catch(() => null)
+            || { error: await apiRes.text().catch(() => 'Sem resposta') };
+          errMsg = errData?.error || errData?.message || JSON.stringify(errData);
+        } else {
+          errMsg = `HTTP ${apiRes.status}`;
+        }
+      } catch {}
+      console.error(`Erro API [${serviceId}] HTTP ${apiRes.status}: ${errMsg}`);
+      return res.status(apiRes.status).json({ error: errMsg });
     }
 
-    const errData = isPdf
-      ? { error: 'Erro ao processar consulta.' }
-      : await apiRes.json().catch(() => ({ error: 'Erro na API.' }));
-    return res.status(apiRes.status).json(errData);
+    // Lê o corpo uma única vez
+    const bodyBuffer = Buffer.from(await apiRes.arrayBuffer());
+
+    // Tenta detectar PDF pelo magic bytes (%PDF)
+    const isPdfByContent = bodyBuffer.slice(0, 4).toString() === '%PDF';
+    const treatAsPdf = isPdf || isPdfByContent;
+
+    await pool.query(
+      'UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]
+    );
+    const txRow = await pool.query(
+      `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+      [req.user.id, price, `Consulta: ${service.name}`]
+    );
+    await pool.query(
+      `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+       VALUES ($1,$2,$3,$4,'success',$5,$6,$7)`,
+      [req.user.id, serviceId, service.name, JSON.stringify(params || {}),
+       price, txRow.rows[0].id, treatAsPdf ? 'pdf' : 'json']
+    );
+
+    if (treatAsPdf) {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition',
+        `attachment; filename="${serviceId}-${Date.now()}.pdf"`);
+      return res.send(bodyBuffer);
+    }
+
+    try {
+      const data = JSON.parse(bodyBuffer.toString('utf8'));
+      return res.json({ success: true, result: data, charged: price });
+    } catch {
+      // Resposta não é JSON nem PDF reconhecido — retorna como texto
+      return res.json({ success: true, result: { resposta: bodyBuffer.toString('utf8') }, charged: price });
+    }
   } catch (err) {
     console.error('Erro em /api/query:', err.message);
     res.status(500).json({ error: 'Erro interno. Tente novamente.' });
