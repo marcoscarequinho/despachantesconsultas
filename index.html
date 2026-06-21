@@ -210,56 +210,125 @@
     <!-- Preços -->
     <section id="precos" class="py-16 bg-gray-100">
         <div class="container mx-auto px-4">
-            <div class="max-w-3xl mx-auto">
+            <div class="max-w-4xl mx-auto">
                 <h2 class="text-3xl md:text-4xl font-bold text-center mb-4 text-blue-900">Preços Transparentes</h2>
-                <p class="text-center text-gray-600 mb-12">Sem mensalidade. Pague apenas pelo que usar.</p>
+                <p class="text-center text-gray-600 mb-10">Sem mensalidade. Pague apenas pelo que usar.</p>
 
-                <div class="bg-white p-8 rounded-lg shadow-md">
-                    <div class="text-center mb-8">
-                        <div class="text-5xl font-bold text-orange-500 mb-2">R$ 0</div>
-                        <div class="text-xl text-gray-600">Crédito</div>
+                <!-- Cards resumo -->
+                <div class="grid grid-cols-3 gap-4 mb-8 text-center">
+                    <div class="bg-white rounded-xl shadow-sm p-5">
+                        <div class="text-3xl font-bold text-orange-500">R$ 0</div>
+                        <div class="text-sm text-gray-500 mt-1">Mensalidade</div>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-sm p-5">
+                        <div class="text-3xl font-bold text-orange-500">PIX</div>
+                        <div class="text-sm text-gray-500 mt-1">Forma de recarga</div>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-sm p-5">
+                        <div class="text-3xl font-bold text-orange-500">30+</div>
+                        <div class="text-sm text-gray-500 mt-1">Serviços disponíveis</div>
+                    </div>
+                </div>
+
+                <!-- Tabela de preços em frame -->
+                <div class="bg-white rounded-xl shadow-md overflow-hidden">
+
+                    <!-- Barra de busca -->
+                    <div class="flex items-center gap-3 px-5 py-4 border-b border-gray-100 bg-gray-50">
+                        <svg class="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                        </svg>
+                        <input id="price-search" type="text" placeholder="Buscar serviço… ex: CRLV, placa, débito"
+                            class="flex-1 text-sm outline-none bg-transparent text-gray-700 placeholder-gray-400"
+                            oninput="filtrarPrecos()">
+                        <span id="price-count" class="text-xs text-gray-400 flex-shrink-0"></span>
                     </div>
 
-                    <div class="border-t border-gray-200 pt-6">
-                        <h3 class="text-xl font-bold mb-4 text-blue-900">Como Funciona?</h3>
-                        <ul class="space-y-3 text-gray-700">
-                            <li class="flex items-start">
-                                <span class="text-orange-500 mr-2">✓</span>
-                                <span>Cadastro 100% gratuito sem compromisso</span>
-                            </li>
-                            <li class="flex items-start">
-                                <span class="text-orange-500 mr-2">✓</span>
-                                <span>Tabela completa de preços disponível no painel após cadastro</span>
-                            </li>
-                            <li class="flex items-start">
-                                <span class="text-orange-500 mr-2">✓</span>
-                                <span>Créditos pré-pagos via PIX com compensação instantânea</span>
-                            </li>
-                            <li class="flex items-start">
-                                <span class="text-orange-500 mr-2">✓</span>
-                                <span>Pague somente pelas consultas e emissões que efetivamente usar</span>
-                            </li>
-                            <li class="flex items-start">
-                                <span class="text-orange-500 mr-2">✓</span>
-                                <span>Sem taxas escondidas ou valores surpresa</span>
-                            </li>
-                        </ul>
+                    <!-- Frame com scroll -->
+                    <div id="price-frame" class="overflow-y-auto divide-y divide-gray-50" style="max-height:460px">
+                        <!-- skeleton enquanto carrega -->
+                        <div id="price-skeleton" class="p-5 space-y-3">
+                            <div class="h-4 bg-gray-100 rounded w-1/3 animate-pulse"></div>
+                            <div class="h-8 bg-gray-50 rounded animate-pulse"></div>
+                            <div class="h-8 bg-gray-50 rounded animate-pulse"></div>
+                            <div class="h-8 bg-gray-50 rounded animate-pulse"></div>
+                        </div>
                     </div>
 
-                    <div class="mt-8 p-6 bg-blue-50 border-l-4 border-blue-500 rounded">
-                        <p class="font-semibold text-blue-900 mb-2">⚠️ Cadastro com Dados Reais Obrigatório</p>
-                        <p class="text-gray-700 text-sm">
-                            Por questões de segurança e conformidade legal, exigimos cadastro com informações reais e verificáveis.
-                            Cadastros com dados falsos, temporários ou duplicados serão recusados ou bloqueados sem aviso prévio.
+                    <!-- Rodapé -->
+                    <div class="px-5 py-4 bg-orange-50 border-t border-orange-100 flex flex-col sm:flex-row items-center justify-between gap-3">
+                        <p class="text-xs text-orange-700">
+                            ⚠️ Cadastro com dados reais obrigatório. Créditos não expiram.
                         </p>
-                    </div>
-
-                    <div class="text-center mt-8">
-                        <a href="/cadastrar" class="btn-primary inline-block">Criar Conta e Ver Preços</a>
+                        <a href="/cadastrar" class="btn-primary text-sm whitespace-nowrap">Criar Conta Grátis</a>
                     </div>
                 </div>
             </div>
         </div>
+
+        <style>
+            #price-frame::-webkit-scrollbar { width: 6px; }
+            #price-frame::-webkit-scrollbar-track { background: #f9fafb; }
+            #price-frame::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+            .price-group-header { position: sticky; top: 0; z-index: 1; }
+        </style>
+
+        <script>
+        (async function loadPrecos() {
+            let allServices = [];
+            try {
+                const r = await fetch('/api/services/public');
+                allServices = (await r.json()).services || [];
+            } catch { return; }
+
+            const groupIcons = {
+                'Consultas Básicas':       '🔍',
+                'Débitos e Documentação':  '💳',
+                'CRLV-e Digital':          '📄',
+                'CRLV-e Agendado':         '⏳',
+                'CRV':                     '🔐',
+                'Análise de Crédito':      '📊',
+                'Comunicação Venda':       '📝',
+            };
+
+            const fmt = v => 'R$ ' + parseFloat(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+
+            function render(svcs) {
+                const groups = {};
+                svcs.forEach(s => { if (!groups[s.group]) groups[s.group] = []; groups[s.group].push(s); });
+                document.getElementById('price-count').textContent = svcs.length + ' serviço(s)';
+
+                if (!svcs.length) {
+                    document.getElementById('price-frame').innerHTML =
+                        '<div class="p-8 text-center text-gray-400 text-sm">Nenhum serviço encontrado.</div>';
+                    return;
+                }
+
+                document.getElementById('price-frame').innerHTML = Object.entries(groups).map(([grp, items]) => `
+                    <div>
+                        <div class="price-group-header bg-gray-50 border-b border-gray-100 px-5 py-2.5 flex items-center gap-2">
+                            <span>${groupIcons[grp] || '📌'}</span>
+                            <span class="font-semibold text-gray-700 text-sm">${grp}</span>
+                            <span class="ml-auto text-xs text-gray-400">${items.length} serviço(s)</span>
+                        </div>
+                        ${items.map(s => `
+                        <div class="flex items-center gap-3 px-5 py-3 hover:bg-orange-50 transition-colors">
+                            <span class="text-lg flex-shrink-0">${s.icon}</span>
+                            <span class="text-sm text-gray-700 flex-1">${s.name}</span>
+                            <span class="font-bold text-orange-500 text-sm flex-shrink-0">${fmt(s.price)}</span>
+                        </div>`).join('')}
+                    </div>
+                `).join('');
+            }
+
+            render(allServices);
+
+            window.filtrarPrecos = function() {
+                const q = document.getElementById('price-search').value.toLowerCase().trim();
+                render(q ? allServices.filter(s => s.name.toLowerCase().includes(q) || s.group.toLowerCase().includes(q)) : allServices);
+            };
+        })();
+        </script>
     </section>
 
     <!-- Como Funciona -->

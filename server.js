@@ -472,6 +472,19 @@ app.get('/api/services', requireAuth, (req, res) => {
   });
 });
 
+// ── GET /api/services/public (sem auth — homepage) ────────────────────────────
+app.get('/api/services/public', (req, res) => {
+  res.json({
+    services: SERVICES.map(s => ({
+      id:    s.id,
+      name:  s.name,
+      group: s.group,
+      icon:  s.icon,
+      price: parseFloat((s.basePrice * MARKUP).toFixed(2)),
+    })),
+  });
+});
+
 // ── GET /api/user/stats ───────────────────────────────────────────────────────
 app.get('/api/user/stats', requireAuth, async (req, res) => {
   try {
