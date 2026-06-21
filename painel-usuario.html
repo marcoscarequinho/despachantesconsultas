@@ -967,7 +967,8 @@ function renderFormFields(inputType) {
   const templates = {
     placa: placaField,
 
-    placa_renavam: placaField + renavamField,
+    placa_renavam: placaField + renavamField +
+      `<p class="text-xs text-amber-600 mt-1">⚠️ Renavam deve ser o número <strong>exato</strong> do documento do veículo (9 a 11 dígitos, sem traços).</p>`,
 
     placa_renavam_cpf: placaField + renavamField + cpfField,
 
@@ -975,7 +976,8 @@ function renderFormFields(inputType) {
 
     motor: field('motor', 'Número do Motor', 'text', 'MOTOR123456'),
 
-    chassi: field('chassi', 'Chassi', 'text', '9BWZZZ377VT004251'),
+    chassi: field('chassi', 'Chassi (17 caracteres — conforme CRV/documento)', 'text', '9BWZZZ377VT004251') +
+      `<p class="text-xs text-amber-600 mt-1">⚠️ Informe o chassi <strong>exatamente</strong> como consta no CRV ou documento do veículo (17 caracteres, sem espaços).</p>`,
 
     cpfcnpj: field('cpfcnpj', 'CPF ou CNPJ', 'text', '000.000.000-00'),
 

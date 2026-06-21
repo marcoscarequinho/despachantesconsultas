@@ -701,13 +701,22 @@ app.post('/api/query', requireAuth, async (req, res) => {
     }
     // Reemissão ATPV-e v2 — por chassi
     if (serviceId === 'consultar-atpve') {
+      const chassi = (params?.chassi || '').toUpperCase().replace(/\s/g, '');
+      if (chassi.length !== 17)
+        return res.status(400).json({ error: 'Chassi deve ter exatamente 17 caracteres.' });
       apiUrl = AUTOCRLV_ATPV_URL;
-      body = { chassi: params?.chassi || '', api_key: AUTOCRLV_KEY };
+      body = { chassi, api_key: AUTOCRLV_KEY };
     }
     // Reemissão ATPV-e v1 — por placa + renavam
     if (serviceId === 'consultar-atpve-v1') {
+      const placa   = (params?.placa   || '').toUpperCase().replace(/\s|-/g, '');
+      const renavam = (params?.renavam || '').replace(/\D/g, '');
+      if (placa.length < 7)
+        return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      if (renavam.length < 9 || renavam.length > 11)
+        return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
       apiUrl = AUTOCRLV_ATPV_V1_URL;
-      body = { placa: params?.placa || '', renavam: params?.renavam || '', api_key: AUTOCRLV_KEY };
+      body = { placa, renavam, api_key: AUTOCRLV_KEY };
     }
 
     // Todos retornam JSON com campo "pdf" em base64
