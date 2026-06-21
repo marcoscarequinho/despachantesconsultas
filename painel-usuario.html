@@ -1311,14 +1311,21 @@ function copiarLink() {
 function compartilharWhatsApp() {
   const link = document.getElementById('aff-link-display').value;
   const msg = encodeURIComponent(
-    `Olá! Estou usando a plataforma DESPACHANTES CONSULTAS para consultas veiculares e CRLV-e digital. Crie sua conta gratuitamente pelo meu link e comece a usar: ${link}`
+    `Olá! Quero te indicar a plataforma DESPACHANTES CONSULTAS — consultas veiculares e CRLV-e digital para profissionais.\n\n` +
+    `🎁 *Cadastre-se pelo meu link e ganhe R$ 10,00 de crédito grátis* para usar na plataforma!\n\n` +
+    `👉 ${link}\n\n` +
+    `✅ Sem mensalidade. Pague só pelo que usar.`
   );
   window.open(`https://wa.me/?text=${msg}`, '_blank');
 }
 
 function compartilharCopiar() {
   const link = document.getElementById('aff-link-display').value;
-  const msg = `Olá! Estou usando a plataforma DESPACHANTES CONSULTAS para consultas veiculares e CRLV-e digital. Crie sua conta gratuitamente pelo meu link e comece a usar: ${link}`;
+  const msg =
+    `Olá! Quero te indicar a plataforma DESPACHANTES CONSULTAS — consultas veiculares e CRLV-e digital para profissionais.\n\n` +
+    `🎁 Cadastre-se pelo meu link e ganhe R$ 10,00 de crédito grátis para usar na plataforma!\n\n` +
+    `👉 ${link}\n\n` +
+    `✅ Sem mensalidade. Pague só pelo que usar.`;
   navigator.clipboard.writeText(msg).then(() => showToast('Mensagem copiada! Cole no WhatsApp ou onde quiser.'));
 }
 
