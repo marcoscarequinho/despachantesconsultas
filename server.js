@@ -12,6 +12,23 @@ const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-inseguro';
 const CHAVE_ACESSO = process.env.CHAVE_ACESSO || '';
 const BASE_API_URL = 'https://portaldespachantes.online';
 const MARKUP = 1.30;
+const ASAAS_API_KEY = process.env.ASAAS_API_KEY || '';
+const ASAAS_BASE = 'https://api.asaas.com/v3';
+
+async function asaasReq(method, endpoint, body = null) {
+  const opts = {
+    method,
+    headers: { 'access_token': ASAAS_API_KEY, 'Content-Type': 'application/json' },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(`${ASAAS_BASE}${endpoint}`, opts);
+  const data = await r.json();
+  if (!r.ok) {
+    const msg = data.errors?.[0]?.description || data.error || 'Erro Asaas';
+    throw new Error(msg);
+  }
+  return data;
+}
 
 const SERVICES = [
   // ── Consultas Básicas ──
@@ -138,6 +155,18 @@ async function initDB() {
       transaction_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL,
       result_type    VARCHAR(10)  DEFAULT 'json',
       created_at     TIMESTAMPTZ  DEFAULT NOW()
+    );
+  `);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS asaas_customer_id VARCHAR(100);`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pix_payments (
+      id         SERIAL PRIMARY KEY,
+      user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      asaas_id   VARCHAR(100) UNIQUE NOT NULL,
+      value      NUMERIC(10,2) NOT NULL,
+      status     VARCHAR(20) DEFAULT 'PENDING',
+      credited   BOOLEAN DEFAULT false,
+      created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
   console.log('✅ Tabelas prontas');
@@ -610,6 +639,140 @@ app.put('/api/profile/password', requireAuth, async (req, res) => {
   }
 });
 
+// ── POST /api/pix/criar ───────────────────────────────────────────────────────
+app.post('/api/pix/criar', requireAuth, async (req, res) => {
+  const value = parseFloat(req.body.value);
+  if (!value || value < 5 || value > 10000)
+    return res.status(400).json({ error: 'Valor inválido. Mínimo R$ 5,00, máximo R$ 10.000,00.' });
+
+  try {
+    const ur = await pool.query(
+      'SELECT id, name, email, phone, cpf_cnpj, asaas_customer_id FROM users WHERE id=$1',
+      [req.user.id]
+    );
+    const user = ur.rows[0];
+
+    let customerId = user.asaas_customer_id;
+    if (!customerId) {
+      const customer = await asaasReq('POST', '/customers', {
+        name: user.name,
+        cpfCnpj: user.cpf_cnpj,
+        email: user.email,
+        ...(user.phone ? { phone: user.phone } : {}),
+      });
+      customerId = customer.id;
+      await pool.query('UPDATE users SET asaas_customer_id=$1 WHERE id=$2', [customerId, user.id]);
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+    const payment = await asaasReq('POST', '/payments', {
+      customer: customerId,
+      billingType: 'PIX',
+      value,
+      dueDate: today,
+      description: `Recarga de créditos — ${user.name}`,
+    });
+
+    const qr = await asaasReq('GET', `/payments/${payment.id}/pixQrCode`);
+
+    await pool.query(
+      `INSERT INTO pix_payments (user_id, asaas_id, value, status)
+       VALUES ($1,$2,$3,'PENDING') ON CONFLICT (asaas_id) DO NOTHING`,
+      [req.user.id, payment.id, value]
+    );
+
+    res.json({
+      paymentId: payment.id,
+      qrCode: qr.encodedImage,
+      pixCopiaECola: qr.payload,
+      expirationDate: qr.expirationDate,
+      value,
+    });
+  } catch (err) {
+    console.error('Erro PIX criar:', err.message);
+    res.status(500).json({ error: err.message || 'Erro ao criar cobrança PIX.' });
+  }
+});
+
+// ── GET /api/pix/status/:paymentId ────────────────────────────────────────────
+app.get('/api/pix/status/:paymentId', requireAuth, async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+    const pr = await pool.query(
+      'SELECT * FROM pix_payments WHERE asaas_id=$1 AND user_id=$2',
+      [paymentId, req.user.id]
+    );
+    if (!pr.rows.length) return res.status(404).json({ error: 'Pagamento não encontrado.' });
+    const p = pr.rows[0];
+
+    if (p.credited) return res.json({ status: 'RECEIVED', credited: true, value: parseFloat(p.value) });
+
+    const ap = await asaasReq('GET', `/payments/${paymentId}`);
+
+    if (ap.status === 'RECEIVED' || ap.status === 'CONFIRMED') {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('UPDATE users SET credits = credits + $1 WHERE id=$2', [p.value, p.user_id]);
+        await client.query(
+          `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'deposit',$2,$3)`,
+          [p.user_id, p.value, `Recarga PIX — R$ ${parseFloat(p.value).toFixed(2).replace('.', ',')}`]
+        );
+        await client.query('UPDATE pix_payments SET status=$1, credited=true WHERE id=$2', [ap.status, p.id]);
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
+      return res.json({ status: ap.status, credited: true, value: parseFloat(p.value) });
+    }
+
+    await pool.query('UPDATE pix_payments SET status=$1 WHERE id=$2', [ap.status, p.id]);
+    res.json({ status: ap.status, credited: false });
+  } catch (err) {
+    console.error('Erro PIX status:', err.message);
+    res.status(500).json({ error: 'Erro ao verificar pagamento.' });
+  }
+});
+
+// ── POST /api/pix/webhook ─────────────────────────────────────────────────────
+app.post('/api/pix/webhook', async (req, res) => {
+  res.sendStatus(200);
+  const { event, payment } = req.body || {};
+  if (!payment?.id) return;
+  if (event !== 'PAYMENT_RECEIVED' && event !== 'PAYMENT_CONFIRMED') return;
+
+  try {
+    const pr = await pool.query(
+      'SELECT * FROM pix_payments WHERE asaas_id=$1 AND credited=false',
+      [payment.id]
+    );
+    if (!pr.rows.length) return;
+    const p = pr.rows[0];
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('UPDATE users SET credits = credits + $1 WHERE id=$2', [p.value, p.user_id]);
+      await client.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'deposit',$2,$3)`,
+        [p.user_id, p.value, `Recarga PIX — R$ ${parseFloat(p.value).toFixed(2).replace('.', ',')}`]
+      );
+      await client.query('UPDATE pix_payments SET status=$1, credited=true WHERE id=$2', [event.replace('PAYMENT_', ''), p.id]);
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      console.error('Webhook PIX rollback:', e.message);
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error('Webhook PIX erro:', err.message);
+  }
+});
+
 // ── Rotas HTML ────────────────────────────────────────────────────────────────
 app.get('/', (req, res) =>
   res.sendFile(path.join(__dirname, 'index.html'))
@@ -630,6 +793,9 @@ app.get('/painel', requireAuth, (req, res) => {
 });
 app.get('/painel/usuario', requireAuth, (req, res) => {
   res.sendFile(path.join(__dirname, 'painel-usuario.html'));
+});
+app.get('/recarga-pix', requireAuth, (req, res) => {
+  res.sendFile(path.join(__dirname, 'recarga-pix.html'));
 });
 app.get('/painel/revendedor', requireAuth, (req, res) => {
   res.sendFile(path.join(__dirname, 'painel-revendedor.html'));

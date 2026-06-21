@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Recarregar via PIX — DESPACHANTES CONSULTAS</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { --accent: #f97316; --primary: #1e40af; }
+    .btn-primary { background: var(--accent); color: white; padding: .7rem 1.75rem; border-radius: .5rem; font-weight: 700; font-size: .95rem; transition: all .2s; }
+    .btn-primary:hover { background: #ea580c; transform: translateY(-1px); }
+    .btn-outline { border: 2px solid #d1d5db; color: #374151; padding: .65rem 1.5rem; border-radius: .5rem; font-weight: 600; font-size: .9rem; transition: all .2s; }
+    .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+    .card { background: white; border-radius: 1rem; box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+    .input-field { width: 100%; padding: .75rem 1rem; border: 1.5px solid #d1d5db; border-radius: .5rem; font-size: 1rem; transition: .15s; }
+    .input-field:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+    .toast { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 9999; background: #1f2937; color: white; padding: .85rem 1.25rem; border-radius: .6rem; font-size: .875rem; box-shadow: 0 4px 16px rgba(0,0,0,.2); animation: slideIn .25s ease; }
+    @keyframes slideIn { from { transform: translateY(12px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    .pix-qr { image-rendering: pixelated; }
+    .spin { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .dot-pending { background: #f59e0b; animation: pulse 1.5s infinite; }
+    .dot-ok { background: #22c55e; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+  <!-- Header -->
+  <header class="bg-white shadow-sm sticky top-0 z-30">
+    <div class="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between">
+      <a href="/" class="text-xl font-bold text-blue-900">DESPACHANTES CONSULTAS</a>
+      <div class="flex items-center gap-3">
+        <a href="/painel" class="text-sm text-gray-500 hover:text-blue-700">← Painel</a>
+        <div class="flex items-center gap-1.5 bg-green-50 border border-green-200 rounded-lg px-3 py-1">
+          <span class="text-xs text-green-700 font-semibold">Saldo:</span>
+          <span id="saldo-display" class="text-xs font-bold text-green-700">R$ 0,00</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-2xl mx-auto px-4 py-10 space-y-6">
+
+    <!-- Título -->
+    <div class="text-center">
+      <div class="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-2xl text-4xl mb-4">💸</div>
+      <h1 class="text-2xl font-bold text-gray-900">Recarregar via PIX</h1>
+      <p class="text-gray-500 mt-1">Compensação instantânea. Créditos liberados automaticamente.</p>
+    </div>
+
+    <!-- STEP 1: Formulário de valor -->
+    <div id="step-form" class="card p-8 space-y-6">
+      <h2 class="font-semibold text-gray-700 text-lg">Quanto deseja recarregar?</h2>
+
+      <!-- Valores rápidos -->
+      <div class="grid grid-cols-4 gap-2">
+        <button class="quick-val btn-outline text-sm py-2" data-val="20">R$ 20</button>
+        <button class="quick-val btn-outline text-sm py-2" data-val="50">R$ 50</button>
+        <button class="quick-val btn-outline text-sm py-2" data-val="100">R$ 100</button>
+        <button class="quick-val btn-outline text-sm py-2" data-val="200">R$ 200</button>
+      </div>
+
+      <div>
+        <label class="block text-sm font-semibold text-gray-600 mb-2">Outro valor (R$)</label>
+        <input id="valor-input" type="number" min="5" max="10000" step="0.01" placeholder="Ex: 75,00"
+          class="input-field text-lg font-bold">
+        <p class="text-xs text-gray-400 mt-1">Mínimo R$ 5,00 · Máximo R$ 10.000,00</p>
+      </div>
+
+      <button id="btn-gerar" onclick="gerarPix()"
+        class="btn-primary w-full flex items-center justify-center gap-2">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/>
+        </svg>
+        <span id="btn-gerar-text">Gerar QR Code PIX</span>
+      </button>
+    </div>
+
+    <!-- STEP 2: QR Code -->
+    <div id="step-qr" class="hidden">
+      <div class="card p-8 space-y-6">
+
+        <div class="flex items-center justify-between">
+          <h2 class="font-semibold text-gray-700 text-lg">Escaneie o QR Code</h2>
+          <div class="flex items-center gap-2 text-sm">
+            <span class="status-dot dot-pending" id="status-dot"></span>
+            <span id="status-text" class="text-amber-600 font-medium">Aguardando pagamento…</span>
+          </div>
+        </div>
+
+        <div class="flex flex-col items-center gap-4">
+          <div class="p-3 bg-white border-2 border-gray-200 rounded-xl shadow-sm">
+            <img id="qr-img" class="pix-qr w-52 h-52" src="" alt="QR Code PIX">
+          </div>
+          <div class="text-center">
+            <p class="text-sm text-gray-500 mb-1">Valor a pagar</p>
+            <p id="qr-valor" class="text-3xl font-bold text-orange-500">R$ 0,00</p>
+          </div>
+        </div>
+
+        <!-- Copia e Cola -->
+        <div>
+          <label class="block text-sm font-semibold text-gray-600 mb-2">PIX Copia e Cola</label>
+          <div class="flex gap-2">
+            <input id="pix-copia" type="text" readonly
+              class="input-field text-xs bg-gray-50 font-mono" value="">
+            <button onclick="copiarPix()"
+              class="btn-primary whitespace-nowrap px-4 py-2 text-sm flex-shrink-0">
+              📋 Copiar
+            </button>
+          </div>
+        </div>
+
+        <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800">
+          ⏱️ <strong>Expira em:</strong> <span id="expiracao">—</span><br>
+          ✅ Após o pagamento, seus créditos serão liberados automaticamente em segundos.
+        </div>
+
+        <button onclick="voltarForm()" class="btn-outline w-full text-sm">← Gerar novo PIX</button>
+      </div>
+    </div>
+
+    <!-- STEP 3: Sucesso -->
+    <div id="step-ok" class="hidden">
+      <div class="card p-10 text-center space-y-4">
+        <div class="text-6xl">🎉</div>
+        <h2 class="text-2xl font-bold text-green-600">Pagamento Confirmado!</h2>
+        <p class="text-gray-600">Seus créditos foram adicionados com sucesso.</p>
+        <p id="ok-valor" class="text-4xl font-bold text-orange-500">R$ 0,00</p>
+        <p class="text-gray-500 text-sm">Novo saldo disponível em seu painel.</p>
+        <div class="flex gap-3 justify-center pt-2">
+          <a href="/painel" class="btn-primary">Ir para o Painel</a>
+          <button onclick="novaRecarga()" class="btn-outline">Nova Recarga</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Info rápida -->
+    <div class="grid sm:grid-cols-3 gap-4 text-center text-sm text-gray-600">
+      <div class="card p-4">
+        <div class="text-2xl mb-1">⚡</div>
+        <div class="font-semibold text-gray-800">Instantâneo</div>
+        <div>Créditos liberados em segundos</div>
+      </div>
+      <div class="card p-4">
+        <div class="text-2xl mb-1">🔒</div>
+        <div class="font-semibold text-gray-800">Seguro</div>
+        <div>Gateway Asaas homologado</div>
+      </div>
+      <div class="card p-4">
+        <div class="text-2xl mb-1">📱</div>
+        <div class="font-semibold text-gray-800">Qualquer banco</div>
+        <div>Funciona com todos os bancos</div>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    let currentPaymentId = null;
+    let pollInterval = null;
+
+    // Carregar saldo
+    (async () => {
+      try {
+        const r = await fetch('/api/auth/me');
+        if (!r.ok) { window.location.href = '/entrar'; return; }
+        const u = await r.json();
+        const c = parseFloat(u.credits || 0);
+        document.getElementById('saldo-display').textContent =
+          'R$ ' + c.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+      } catch { window.location.href = '/entrar'; }
+    })();
+
+    // Botões de valor rápido
+    document.querySelectorAll('.quick-val').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.getElementById('valor-input').value = btn.dataset.val;
+        document.querySelectorAll('.quick-val').forEach(b => b.classList.remove('bg-orange-50', 'border-orange-400', 'text-orange-600'));
+        btn.classList.add('bg-orange-50', 'border-orange-400', 'text-orange-600');
+      });
+    });
+
+    async function gerarPix() {
+      const val = parseFloat(document.getElementById('valor-input').value);
+      if (!val || val < 5 || val > 10000) {
+        showToast('Informe um valor entre R$ 5,00 e R$ 10.000,00', 'error');
+        return;
+      }
+
+      const btn = document.getElementById('btn-gerar');
+      const txt = document.getElementById('btn-gerar-text');
+      btn.disabled = true;
+      txt.textContent = 'Gerando…';
+      btn.innerHTML = `<svg class="spin w-5 h-5" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> Gerando…`;
+
+      try {
+        const r = await fetch('/api/pix/criar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value: val }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Erro ao gerar PIX');
+
+        currentPaymentId = data.paymentId;
+
+        document.getElementById('qr-img').src = 'data:image/png;base64,' + data.qrCode;
+        document.getElementById('pix-copia').value = data.pixCopiaECola;
+        document.getElementById('qr-valor').textContent =
+          'R$ ' + parseFloat(data.value).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+
+        if (data.expirationDate) {
+          const exp = new Date(data.expirationDate);
+          document.getElementById('expiracao').textContent = exp.toLocaleString('pt-BR');
+        }
+
+        document.getElementById('step-form').classList.add('hidden');
+        document.getElementById('step-qr').classList.remove('hidden');
+
+        iniciarPolling();
+      } catch (err) {
+        showToast(err.message, 'error');
+        btn.disabled = false;
+        btn.innerHTML = `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/>
+        </svg> Gerar QR Code PIX`;
+      }
+    }
+
+    function iniciarPolling() {
+      if (pollInterval) clearInterval(pollInterval);
+      pollInterval = setInterval(verificarStatus, 5000);
+    }
+
+    async function verificarStatus() {
+      if (!currentPaymentId) return;
+      try {
+        const r = await fetch(`/api/pix/status/${currentPaymentId}`);
+        const data = await r.json();
+        if (data.credited || data.status === 'RECEIVED' || data.status === 'CONFIRMED') {
+          clearInterval(pollInterval);
+          const valor = data.value || parseFloat(document.getElementById('qr-valor').textContent.replace('R$ ', '').replace('.', '').replace(',', '.'));
+          mostrarSucesso(valor);
+        }
+      } catch { /* silencioso */ }
+    }
+
+    function mostrarSucesso(valor) {
+      document.getElementById('step-qr').classList.add('hidden');
+      document.getElementById('step-ok').classList.remove('hidden');
+      document.getElementById('ok-valor').textContent =
+        '+ R$ ' + parseFloat(valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+    }
+
+    function copiarPix() {
+      const txt = document.getElementById('pix-copia').value;
+      navigator.clipboard.writeText(txt).then(() => showToast('Código copiado!', 'ok'));
+    }
+
+    function voltarForm() {
+      if (pollInterval) clearInterval(pollInterval);
+      currentPaymentId = null;
+      document.getElementById('step-qr').classList.add('hidden');
+      document.getElementById('step-form').classList.remove('hidden');
+      const btn = document.getElementById('btn-gerar');
+      btn.disabled = false;
+      btn.innerHTML = `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/>
+      </svg> Gerar QR Code PIX`;
+    }
+
+    function novaRecarga() {
+      document.getElementById('step-ok').classList.add('hidden');
+      document.getElementById('step-form').classList.remove('hidden');
+      document.getElementById('valor-input').value = '';
+      document.querySelectorAll('.quick-val').forEach(b =>
+        b.classList.remove('bg-orange-50', 'border-orange-400', 'text-orange-600'));
+      voltarForm();
+    }
+
+    function showToast(msg, type = 'ok') {
+      const t = document.createElement('div');
+      t.className = 'toast';
+      t.style.background = type === 'error' ? '#dc2626' : '#1f2937';
+      t.textContent = msg;
+      document.body.appendChild(t);
+      setTimeout(() => t.remove(), 3500);
+    }
+  </script>
+</body>
+</html>

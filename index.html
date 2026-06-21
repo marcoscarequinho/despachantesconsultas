@@ -56,6 +56,9 @@
                     <li><a href="#como-funciona" class="hover:text-orange-500">Como Funciona</a></li>
                     <li><a href="#faq" class="hover:text-orange-500">FAQ</a></li>
                     <li><a href="#contato" class="hover:text-orange-500">Contato</a></li>
+                    <li id="nav-pix-menu" class="hidden">
+                        <a href="/recarga-pix" class="font-semibold text-green-600 hover:text-orange-500">💸 Recarregar PIX</a>
+                    </li>
                     <!-- Mobile: crédito + botões auth -->
                     <li class="md:hidden border-t border-gray-200 mt-3 pt-3 space-y-2">
                         <a id="nav-credits-mobile" href="/painel" class="hidden items-center justify-center gap-2 w-full bg-orange-50 border border-orange-200 rounded-full px-4 py-2 hover:bg-orange-100 transition">
@@ -466,6 +469,9 @@
                 document.getElementById('nav-entrar').classList.add('hidden');
                 document.getElementById('nav-cadastrar').classList.add('hidden');
                 document.getElementById('nav-painel').classList.replace('hidden', 'flex');
+
+                // ── PIX menu ──
+                document.getElementById('nav-pix-menu').classList.remove('hidden');
 
                 // ── Mobile ──
                 document.getElementById('nav-credits-value-mobile').textContent = fmt;
