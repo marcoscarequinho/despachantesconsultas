@@ -72,6 +72,7 @@
                             <a id="nav-entrar-mobile" href="/entrar" class="text-sm font-semibold text-blue-900 hover:text-orange-500 py-2">Entrar</a>
                             <a id="nav-cadastrar-mobile" href="/cadastrar" class="btn-primary text-sm">Criar Conta</a>
                             <a id="nav-painel-mobile" href="/painel" class="hidden btn-primary text-sm">Meu Painel</a>
+                            <button id="nav-sair-mobile" onclick="fazerLogout()" class="hidden text-sm font-semibold text-red-500 hover:text-red-700 py-2">Sair</button>
                         </div>
                     </li>
                 </ul>
@@ -92,6 +93,7 @@
                     <a id="nav-cadastrar" href="/cadastrar" class="btn-primary text-sm">Criar Conta</a>
                     <!-- Logado -->
                     <a id="nav-painel" href="/painel" class="hidden btn-primary text-sm">Meu Painel</a>
+                    <button id="nav-sair" onclick="fazerLogout()" class="hidden text-sm font-semibold text-red-500 hover:text-red-700">Sair</button>
                 </div>
             </nav>
         </div>
@@ -558,8 +560,17 @@
                 // ── Esconder botões de visitante, mostrar botões de logado ──
                 document.querySelectorAll('.guests-only').forEach(el => el.classList.add('hidden'));
                 document.querySelectorAll('.logged-only').forEach(el => el.classList.remove('hidden'));
+
+                // ── Sair ──
+                document.getElementById('nav-sair').classList.remove('hidden');
+                document.getElementById('nav-sair-mobile').classList.remove('hidden');
             } catch { /* sem servidor ou não logado */ }
         })();
+
+        async function fazerLogout() {
+            await fetch('/api/auth/logout', { method: 'POST' });
+            window.location.reload();
+        }
     </script>
 </body>
 </html>
