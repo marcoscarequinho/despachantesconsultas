@@ -15,8 +15,9 @@ const MARKUP = 1.30;
 const ASAAS_API_KEY = (process.env.ASAAS_API_KEY || '')
   .split('').filter(c => c.charCodeAt(0) <= 127).join('').trim();
 const ASAAS_BASE = 'https://api.asaas.com/v3';
-const AUTOCRLV_URL = process.env.AUTOCRLV_URL || '';
-const AUTOCRLV_KEY = process.env.AUTOCRLV_KEY || '';
+const AUTOCRLV_URL      = process.env.AUTOCRLV_URL      || '';
+const AUTOCRLV_ATPV_URL = process.env.AUTOCRLV_ATPV_URL || '';
+const AUTOCRLV_KEY      = process.env.AUTOCRLV_KEY      || '';
 
 async function asaasReq(method, endpoint, body = null) {
   const opts = {
@@ -52,7 +53,7 @@ const SERVICES = [
   { id:'consultar-gravame',               name:'Consulta Gravame',             group:'Débitos e Documentação', basePrice:8.00,  inputType:'placa',        icon:'🏦' },
   { id:'consultar-historico-proprietario',name:'Histórico de Proprietários',   group:'Débitos e Documentação', basePrice:10.00, inputType:'placa',        icon:'👥' },
   { id:'renajud',                         name:'RENAJUD',                      group:'Débitos e Documentação', basePrice:12.00, inputType:'placa',        icon:'⚖️' },
-  { id:'consultar-atpve',                 name:'Reemissão ATPV-e',             group:'Débitos e Documentação', basePrice:12.00, inputType:'placa_renavam',icon:'📄' },
+  { id:'consultar-atpve',                 name:'Reemissão ATPV-e',             group:'Débitos e Documentação', basePrice:12.00, inputType:'chassi',       icon:'📄' },
   { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:8.00,  inputType:'placa',        icon:'🔢' },
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:8.00,  inputType:'placa_renavam',icon:'📝' },
   // ── CRLV-e Digital (instantâneo) ──
@@ -657,10 +658,16 @@ app.post('/api/query', requireAuth, async (req, res) => {
       apiUrl = AUTOCRLV_URL;
       body = { placa: params?.placa || '' };
     }
+    // Reemissão ATPV-e — endpoint autocrlv.com.br
+    if (serviceId === 'consultar-atpve') {
+      apiUrl = AUTOCRLV_ATPV_URL;
+      body = { chassi: params?.chassi || '', api_key: AUTOCRLV_KEY };
+    }
 
+    const autocrlvServices = ['consultar-crv-v2', 'consultar-atpve'];
     const fetchOpts = {
       method,
-      headers: serviceId === 'consultar-crv-v2'
+      headers: autocrlvServices.includes(serviceId)
         ? { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AUTOCRLV_KEY}` }
         : { 'Content-Type': 'application/json', chaveAcesso: CHAVE_ACESSO },
     };
