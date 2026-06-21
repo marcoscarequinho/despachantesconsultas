@@ -703,12 +703,26 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
     // Lê o corpo uma única vez
     const bodyBuffer = Buffer.from(await apiRes.arrayBuffer());
+    const bodyStr    = bodyBuffer.toString('utf8');
 
-    // Nunca trata como PDF serviços que retornam JSON (ex: consultar-crv-v2)
-    const neverPdf = ['consultar-crv-v2'];
-    const isPdfByContent = !neverPdf.includes(serviceId) && bodyBuffer.slice(0, 4).toString() === '%PDF';
-    const treatAsPdf = !neverPdf.includes(serviceId) && (isPdf || isPdfByContent);
+    // Verifica se é realmente um PDF pelos magic bytes — independe do Content-Type
+    const neverPdf  = ['consultar-crv-v2'];
+    const isRealPdf = !neverPdf.includes(serviceId) && bodyBuffer.slice(0, 4).toString() === '%PDF';
 
+    // Se esperávamos PDF mas recebemos JSON/texto de erro → não debita e devolve o erro
+    if (autocrlvPdfServices.includes(serviceId) && !isRealPdf) {
+      let errMsg = 'Resposta inválida da API de emissão.';
+      try {
+        const parsed = JSON.parse(bodyStr);
+        errMsg = parsed.error || parsed.message || parsed.msg || JSON.stringify(parsed);
+      } catch {
+        errMsg = bodyStr.slice(0, 300) || errMsg;
+      }
+      console.error(`[${serviceId}] API retornou não-PDF: ${errMsg}`);
+      return res.status(422).json({ error: errMsg });
+    }
+
+    // Só debita créditos após confirmar resposta válida
     await pool.query(
       'UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]
     );
@@ -720,10 +734,10 @@ app.post('/api/query', requireAuth, async (req, res) => {
       `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
        VALUES ($1,$2,$3,$4,'success',$5,$6,$7)`,
       [req.user.id, serviceId, service.name, JSON.stringify(params || {}),
-       price, txRow.rows[0].id, treatAsPdf ? 'pdf' : 'json']
+       price, txRow.rows[0].id, isRealPdf ? 'pdf' : 'json']
     );
 
-    if (treatAsPdf) {
+    if (isRealPdf) {
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition',
         `attachment; filename="${serviceId}-${Date.now()}.pdf"`);
@@ -731,11 +745,10 @@ app.post('/api/query', requireAuth, async (req, res) => {
     }
 
     try {
-      const data = JSON.parse(bodyBuffer.toString('utf8'));
+      const data = JSON.parse(bodyStr);
       return res.json({ success: true, result: data, charged: price });
     } catch {
-      // Resposta não é JSON nem PDF reconhecido — retorna como texto
-      return res.json({ success: true, result: { resposta: bodyBuffer.toString('utf8') }, charged: price });
+      return res.json({ success: true, result: { resposta: bodyStr }, charged: price });
     }
   } catch (err) {
     console.error('Erro em /api/query:', err.message);
