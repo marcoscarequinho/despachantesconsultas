@@ -785,9 +785,9 @@ app.post('/api/query', requireAuth, async (req, res) => {
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
       [req.user.id, price, `Consulta: ${service.name}`]
     );
-    await pool.query(
+    const qRow = await pool.query(
       `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
-       VALUES ($1,$2,$3,$4,'success',$5,$6,$7)`,
+       VALUES ($1,$2,$3,$4,'success',$5,$6,$7) RETURNING id`,
       [req.user.id, serviceId, service.name, JSON.stringify(params || {}),
        price, txRow.rows[0].id, (isRealPdf || base64PdfBuf) ? 'pdf' : 'json']
     );
@@ -800,8 +800,8 @@ app.post('/api/query', requireAuth, async (req, res) => {
       await pool.query(
         `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at)
          VALUES ($1,$2,$3,$4,$5)`,
-        [txRow.rows[0].id, req.user.id, token, pdfToSend.toString('base64'), expiresAt]
-      ).catch(() => {}); // não bloqueia se falhar
+        [qRow.rows[0].id, req.user.id, token, pdfToSend.toString('base64'), expiresAt]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${serviceId}-${Date.now()}.pdf"`);
       return res.send(pdfToSend);
