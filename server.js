@@ -664,10 +664,11 @@ app.post('/api/query', requireAuth, async (req, res) => {
       body = { chassi: params?.chassi || '', api_key: AUTOCRLV_KEY };
     }
 
-    // consultar-crv-v2 → PDF (documento código de segurança)
-    // consultar-atpve  → PDF (documento ATPV-e)
+    // consultar-crv-v2 → JSON com campo pdf em base64
+    // consultar-atpve  → PDF binário direto
     const autocrlvAllServices  = ['consultar-crv-v2', 'consultar-atpve'];
-    const autocrlvPdfServices  = ['consultar-crv-v2', 'consultar-atpve'];
+    const autocrlvPdfServices  = ['consultar-atpve'];
+    const autocrlvBase64Pdf    = ['consultar-crv-v2'];
 
     const fetchOpts = {
       method,
@@ -704,24 +705,34 @@ app.post('/api/query', requireAuth, async (req, res) => {
     // Lê o corpo uma única vez
     const bodyBuffer = Buffer.from(await apiRes.arrayBuffer());
     const bodyStr    = bodyBuffer.toString('utf8');
+    const isRealPdf  = bodyBuffer.slice(0, 4).toString() === '%PDF';
 
-    // Verifica se é realmente um PDF pelos magic bytes — independe do Content-Type
-    const isRealPdf = bodyBuffer.slice(0, 4).toString() === '%PDF';
-
-    // Se esperávamos PDF mas recebemos JSON/texto de erro → não debita e devolve o erro
+    // ── Pré-validação: não debita se a resposta não for válida ────────────────
+    // 1) PDF binário direto (atpve) mas corpo não começa com %PDF
     if (autocrlvPdfServices.includes(serviceId) && !isRealPdf) {
       let errMsg = 'Resposta inválida da API de emissão.';
       try {
-        const parsed = JSON.parse(bodyStr);
-        errMsg = parsed.error || parsed.message || parsed.msg || JSON.stringify(parsed);
-      } catch {
-        errMsg = bodyStr.slice(0, 300) || errMsg;
-      }
-      console.error(`[${serviceId}] API retornou não-PDF: ${errMsg}`);
+        const p = JSON.parse(bodyStr);
+        errMsg = p.error || p.message || p.msg || JSON.stringify(p);
+      } catch { errMsg = bodyStr.slice(0, 300) || errMsg; }
+      console.error(`[${serviceId}] esperava PDF binário, recebeu: ${errMsg}`);
       return res.status(422).json({ error: errMsg });
     }
+    // 2) JSON com campo pdf (crv-v2): valida antes de debitar
+    let base64PdfBuf = null;
+    if (autocrlvBase64Pdf.includes(serviceId)) {
+      let parsed;
+      try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
+      if (parsed?.pdf) {
+        base64PdfBuf = Buffer.from(parsed.pdf, 'base64');
+      } else {
+        const errMsg = parsed?.message || parsed?.error || 'PDF não retornado pela API.';
+        console.error(`[${serviceId}] JSON sem campo pdf: ${errMsg}`);
+        return res.status(422).json({ error: errMsg });
+      }
+    }
 
-    // Só debita créditos após confirmar resposta válida
+    // ── Debita créditos somente após validar resposta ─────────────────────────
     await pool.query(
       'UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]
     );
@@ -733,13 +744,18 @@ app.post('/api/query', requireAuth, async (req, res) => {
       `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
        VALUES ($1,$2,$3,$4,'success',$5,$6,$7)`,
       [req.user.id, serviceId, service.name, JSON.stringify(params || {}),
-       price, txRow.rows[0].id, isRealPdf ? 'pdf' : 'json']
+       price, txRow.rows[0].id, (isRealPdf || base64PdfBuf) ? 'pdf' : 'json']
     );
 
+    // ── Envia PDF ─────────────────────────────────────────────────────────────
+    if (base64PdfBuf) {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${serviceId}-${Date.now()}.pdf"`);
+      return res.send(base64PdfBuf);
+    }
     if (isRealPdf) {
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition',
-        `attachment; filename="${serviceId}-${Date.now()}.pdf"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${serviceId}-${Date.now()}.pdf"`);
       return res.send(bodyBuffer);
     }
 
