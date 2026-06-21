@@ -12,7 +12,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-inseguro';
 const CHAVE_ACESSO = process.env.CHAVE_ACESSO || '';
 const BASE_API_URL = 'https://portaldespachantes.online';
 const MARKUP = 1.30;
-const ASAAS_API_KEY = process.env.ASAAS_API_KEY || '';
+const ASAAS_API_KEY = (process.env.ASAAS_API_KEY || '')
+  .split('').filter(c => c.charCodeAt(0) <= 127).join('').trim();
 const ASAAS_BASE = 'https://api.asaas.com/v3';
 
 async function asaasReq(method, endpoint, body = null) {
@@ -667,9 +668,12 @@ app.get('/api/pix/diagnostico', requireAuth, async (req, res) => {
   } catch (e) {
     asaasErro = e.message;
   }
+  const raw = (process.env.ASAAS_API_KEY || '');
   res.json({
     keyCarregada: keyOk,
     keyTamanho: ASAAS_API_KEY.length,
+    keyTamanhoRaw: raw.length,
+    charsCorrompidos: raw.split('').filter(c => c.charCodeAt(0) > 127).length,
     keyInicio: ASAAS_API_KEY.slice(0, 12) + '...',
     asaasConectado: asaasOk,
     asaasErro,
