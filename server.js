@@ -763,7 +763,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       console.error(`[${serviceId}] esperava PDF binário, recebeu: ${errMsg}`);
       return res.status(422).json({ error: errMsg });
     }
-    // 2) JSON com campo pdf (crv-v2): valida antes de debitar
+    // 2) JSON com campo pdf: valida antes de debitar
     let base64PdfBuf = null;
     if (autocrlvBase64Pdf.includes(serviceId)) {
       let parsed;
@@ -772,8 +772,9 @@ app.post('/api/query', requireAuth, async (req, res) => {
         base64PdfBuf = Buffer.from(parsed.pdf, 'base64');
       } else {
         const errMsg = parsed?.message || parsed?.error || 'PDF não retornado pela API.';
-        console.error(`[${serviceId}] JSON sem campo pdf: ${errMsg}`);
-        return res.status(422).json({ error: errMsg });
+        const code   = parsed?.code ? ` (código: ${parsed.code})` : '';
+        console.error(`[${serviceId}] sem pdf: ${errMsg}${code}`);
+        return res.status(422).json({ error: `${errMsg}${code}` });
       }
     }
 
