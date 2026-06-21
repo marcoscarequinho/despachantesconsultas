@@ -664,10 +664,10 @@ app.post('/api/query', requireAuth, async (req, res) => {
       body = { chassi: params?.chassi || '', api_key: AUTOCRLV_KEY };
     }
 
-    // consultar-crv-v2 → JSON (código de segurança)
+    // consultar-crv-v2 → PDF (documento código de segurança)
     // consultar-atpve  → PDF (documento ATPV-e)
     const autocrlvAllServices  = ['consultar-crv-v2', 'consultar-atpve'];
-    const autocrlvPdfServices  = ['consultar-atpve'];
+    const autocrlvPdfServices  = ['consultar-crv-v2', 'consultar-atpve'];
 
     const fetchOpts = {
       method,
@@ -706,8 +706,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
     const bodyStr    = bodyBuffer.toString('utf8');
 
     // Verifica se é realmente um PDF pelos magic bytes — independe do Content-Type
-    const neverPdf  = ['consultar-crv-v2'];
-    const isRealPdf = !neverPdf.includes(serviceId) && bodyBuffer.slice(0, 4).toString() === '%PDF';
+    const isRealPdf = bodyBuffer.slice(0, 4).toString() === '%PDF';
 
     // Se esperávamos PDF mas recebemos JSON/texto de erro → não debita e devolve o erro
     if (autocrlvPdfServices.includes(serviceId) && !isRealPdf) {
