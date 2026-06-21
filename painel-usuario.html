@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Painel do Usuário — DESPACHANTES CONSULTAS</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
   <style>
     :root { --primary:#1e40af; --accent:#f97316; }
     .btn-primary  { background:var(--accent);color:white;padding:.5rem 1.25rem;border-radius:.5rem;font-weight:600;font-size:.875rem;transition:all .2s;display:inline-flex;align-items:center;gap:.4rem; }
@@ -1406,52 +1408,50 @@ async function importarAtpvPdf() {
 
   btn.textContent = '⏳ Lendo PDF…';
   btn.disabled = true;
-  if (status) { status.className = 'text-xs mt-1.5 text-blue-600'; status.textContent = 'Processando PDF…'; status.classList.remove('hidden'); }
+  if (status) { status.className = 'text-xs mt-1.5 text-blue-600'; status.textContent = 'Extraindo texto do PDF…'; status.classList.remove('hidden'); }
 
   try {
-    const reader = new FileReader();
-    reader.readAsDataURL(input.files[0]);
-    reader.onload = async () => {
-      const base64 = reader.result.split(',')[1];
-      const r = await fetch('/api/pdf/extrair-atpv', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pdf_base64: base64 }),
-      });
-      const data = await r.json();
-      btn.textContent = '⚡ Importar e Preencher';
-      btn.disabled = false;
-      btn.classList.remove('opacity-50');
+    // Lê o PDF como ArrayBuffer e extrai texto com PDF.js (no browser)
+    const arrayBuf = await input.files[0].arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuf }).promise;
+    let texto = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      texto += content.items.map(item => item.str).join(' ') + ' ';
+    }
 
-      if (!r.ok) {
-        if (status) { status.className = 'text-xs mt-1.5 text-red-600'; status.textContent = '⚠️ ' + (data.error || 'Erro ao ler PDF.'); }
-        return;
-      }
+    // Envia o texto extraído ao servidor para aplicar regex
+    const r = await fetch('/api/pdf/extrair-atpv', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texto }),
+    });
+    const data = await r.json();
 
-      let preenchidos = [];
-      if (data.chassi && document.getElementById('f-chassi')) {
-        document.getElementById('f-chassi').value = data.chassi;
-        preenchidos.push('Chassi');
-      }
-      if (data.placa && document.getElementById('f-placa')) {
-        document.getElementById('f-placa').value = data.placa;
-        preenchidos.push('Placa');
-      }
-      if (data.renavam && document.getElementById('f-renavam')) {
-        document.getElementById('f-renavam').value = data.renavam;
-        preenchidos.push('Renavam');
-      }
-
-      if (preenchidos.length) {
-        if (status) { status.className = 'text-xs mt-1.5 text-green-600'; status.textContent = '✅ Preenchido: ' + preenchidos.join(', ') + '. Verifique antes de enviar.'; }
-      } else {
-        if (status) { status.className = 'text-xs mt-1.5 text-amber-600'; status.textContent = '⚠️ Não encontrei dados no PDF. Preencha manualmente.'; }
-      }
-    };
-  } catch {
     btn.textContent = '⚡ Importar e Preencher';
     btn.disabled = false;
-    if (status) { status.className = 'text-xs mt-1.5 text-red-600'; status.textContent = '⚠️ Erro ao ler o arquivo.'; }
+    btn.classList.remove('opacity-50');
+
+    if (!r.ok) {
+      if (status) { status.className = 'text-xs mt-1.5 text-red-600'; status.textContent = '⚠️ ' + (data.error || 'Erro ao processar PDF.'); }
+      return;
+    }
+
+    const preenchidos = [];
+    if (data.chassi  && document.getElementById('f-chassi'))  { document.getElementById('f-chassi').value  = data.chassi;  preenchidos.push('Chassi'); }
+    if (data.placa   && document.getElementById('f-placa'))   { document.getElementById('f-placa').value   = data.placa;   preenchidos.push('Placa'); }
+    if (data.renavam && document.getElementById('f-renavam')) { document.getElementById('f-renavam').value = data.renavam; preenchidos.push('Renavam'); }
+
+    if (preenchidos.length) {
+      if (status) { status.className = 'text-xs mt-1.5 text-green-600'; status.textContent = '✅ Preenchido: ' + preenchidos.join(', ') + '. Verifique antes de enviar.'; }
+    } else {
+      if (status) { status.className = 'text-xs mt-1.5 text-amber-600'; status.textContent = '⚠️ Não encontrei os dados no PDF. Preencha manualmente.'; }
+    }
+  } catch (err) {
+    btn.textContent = '⚡ Importar e Preencher';
+    btn.disabled = false;
+    if (status) { status.className = 'text-xs mt-1.5 text-red-600'; status.textContent = '⚠️ Erro ao ler o arquivo: ' + err.message; }
   }
 }
 

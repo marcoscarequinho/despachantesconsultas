@@ -6,7 +6,6 @@ const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const path = require('path');
 const crypto = require('crypto');
-const pdfParse = require('pdf-parse');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1018,48 +1017,30 @@ app.post('/api/pix/webhook', async (req, res) => {
 });
 
 // ── POST /api/pdf/extrair-atpv ────────────────────────────────────────────────
-app.post('/api/pdf/extrair-atpv', requireAuth, async (req, res) => {
-  const { pdf_base64 } = req.body;
-  if (!pdf_base64) return res.status(400).json({ error: 'PDF não enviado.' });
+// Recebe texto extraído pelo PDF.js no browser e retorna campos via regex
+app.post('/api/pdf/extrair-atpv', requireAuth, (req, res) => {
+  const { texto } = req.body;
+  if (!texto) return res.status(400).json({ error: 'Texto não enviado.' });
 
-  try {
-    const buf = Buffer.from(pdf_base64, 'base64');
-    const data = await pdfParse(buf);
-    const txt = data.text.replace(/\s+/g, ' ').toUpperCase();
+  const txt = texto.replace(/\s+/g, ' ').toUpperCase();
 
-    // Extrai CHASSI (17 caracteres alfanuméricos)
-    const chassiMatch = txt.match(/\bCHASSI\b[^A-Z0-9]*([A-Z0-9]{17})\b/)
-      || txt.match(/\b([A-Z0-9]{17})\b/g)?.map(m => ({ match: m }));
-    let chassi = chassiMatch?.[1] || (Array.isArray(chassiMatch) ? chassiMatch.find(m => m.match)?.[0] : null) || '';
+  // Chassi: label + 17 chars, ou qualquer token de 17 alfanuméricos
+  let chassi = (txt.match(/CHASSI[^A-Z0-9]*([A-Z0-9]{17})/) || [])[1] || '';
+  if (!chassi) chassi = (txt.match(/\b([A-Z0-9]{17})\b/) || [])[1] || '';
 
-    // Extrai PLACA (formato ABC1D23 ou ABC-1234)
-    const placaMatch = txt.match(/\bPLACA\b[^A-Z0-9]*([A-Z]{3}[\s-]?[\dA-Z][\dA-Z]{2}\d{2})/);
-    let placa = (placaMatch?.[1] || '').replace(/[\s-]/g, '');
+  // Placa: ABC1D23 ou ABC-1234
+  let placa = (txt.match(/PLACA[^A-Z0-9]*([A-Z]{3}[\s-]?[0-9A-Z][0-9A-Z]{2}[0-9]{2})/) || [])[1] || '';
+  if (!placa) placa = (txt.match(/\b([A-Z]{3}[\s-]?[0-9][A-Z0-9][0-9]{2})\b/) || [])[1] || '';
+  placa = placa.replace(/[\s-]/g, '');
 
-    // Extrai RENAVAM (9–11 dígitos)
-    const renavamMatch = txt.match(/\bRENAVAM\b[^0-9]*(\d{9,11})/);
-    let renavam = renavamMatch?.[1] || '';
+  // Renavam: 9–11 dígitos após label ou isolado
+  let renavam = (txt.match(/RENAVAM[^0-9]*(\d{9,11})/) || [])[1] || '';
+  if (!renavam) renavam = (txt.match(/\b(\d{9,11})\b/) || [])[1] || '';
 
-    // Fallback: busca a placa mais comum no texto (7 chars)
-    if (!placa) {
-      const placaGen = txt.match(/\b([A-Z]{3}\d[A-Z0-9]\d{2})\b/);
-      placa = placaGen?.[1] || '';
-    }
+  if (!chassi && !placa && !renavam)
+    return res.status(422).json({ error: 'Não foi possível extrair dados do PDF. Preencha manualmente.' });
 
-    // Fallback chassi: primeiro token de 17 chars alfanumérico no texto
-    if (!chassi) {
-      const candidates = txt.match(/\b[A-Z0-9]{17}\b/g) || [];
-      chassi = candidates[0] || '';
-    }
-
-    if (!chassi && !placa && !renavam)
-      return res.status(422).json({ error: 'Não foi possível extrair dados do PDF. Preencha manualmente.' });
-
-    res.json({ chassi, placa, renavam, texto_total: txt.length });
-  } catch (err) {
-    console.error('Erro extrair-atpv:', err.message);
-    res.status(500).json({ error: 'Erro ao processar PDF. Verifique se o arquivo é válido.' });
-  }
+  res.json({ chassi, placa, renavam });
 });
 
 // ── Rotas HTML ────────────────────────────────────────────────────────────────
