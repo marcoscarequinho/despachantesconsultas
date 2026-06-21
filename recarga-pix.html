@@ -69,6 +69,9 @@
         <p class="text-xs text-gray-400 mt-1">Mínimo R$ 5,00 · Máximo R$ 10.000,00</p>
       </div>
 
+      <!-- Erro persistente -->
+      <div id="erro-box" class="hidden bg-red-50 border border-red-300 rounded-lg p-4 text-sm text-red-800 break-words"></div>
+
       <button id="btn-gerar" onclick="gerarPix()"
         class="btn-primary w-full flex items-center justify-center gap-2">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -163,7 +166,17 @@
     let currentPaymentId = null;
     let pollInterval = null;
 
-    // Carregar saldo
+    function mostrarErro(msg) {
+      const box = document.getElementById('erro-box');
+      box.textContent = '⚠️ ' + msg;
+      box.classList.remove('hidden');
+    }
+
+    function limparErro() {
+      document.getElementById('erro-box').classList.add('hidden');
+    }
+
+    // Carregar saldo + diagnóstico
     (async () => {
       try {
         const r = await fetch('/api/auth/me');
@@ -172,7 +185,18 @@
         const c = parseFloat(u.credits || 0);
         document.getElementById('saldo-display').textContent =
           'R$ ' + c.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
-      } catch { window.location.href = '/entrar'; }
+      } catch { window.location.href = '/entrar'; return; }
+
+      // Diagnóstico Asaas
+      try {
+        const d = await fetch('/api/pix/diagnostico').then(r => r.json());
+        if (!d.asaasConectado) {
+          mostrarErro(
+            'Gateway PIX indisponível: ' + (d.asaasErro || 'chave API não configurada no servidor.') +
+            ' | Key carregada: ' + d.keyCarregada + ' (' + d.keyTamanho + ' chars) | Node: ' + d.nodeVersion
+          );
+        }
+      } catch { /* ignora erro de diagnóstico */ }
     })();
 
     // Botões de valor rápido
@@ -199,6 +223,7 @@
         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg> Gerando…`;
 
+      limparErro();
       try {
         const r = await fetch('/api/pix/criar', {
           method: 'POST',
@@ -206,7 +231,7 @@
           body: JSON.stringify({ value: val }),
         });
         const data = await r.json();
-        if (!r.ok) throw new Error(data.error || 'Erro ao gerar PIX');
+        if (!r.ok) throw new Error(data.error || 'Erro ao gerar PIX (HTTP ' + r.status + ')');
 
         currentPaymentId = data.paymentId;
 
@@ -225,12 +250,12 @@
 
         iniciarPolling();
       } catch (err) {
-        showToast(err.message, 'error');
+        mostrarErro(err.message);
         btn.disabled = false;
         btn.innerHTML = `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
             d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/>
-        </svg> Gerar QR Code PIX`;
+        </svg> Tentar Novamente`;
       }
     }
 

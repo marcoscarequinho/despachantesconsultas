@@ -652,6 +652,31 @@ app.put('/api/profile/password', requireAuth, async (req, res) => {
   }
 });
 
+// ── GET /api/pix/diagnostico (temporário — remove após debug) ─────────────────
+app.get('/api/pix/diagnostico', requireAuth, async (req, res) => {
+  const keyOk = ASAAS_API_KEY.length > 20;
+  let asaasOk = false;
+  let asaasErro = null;
+  try {
+    const r = await fetch(`${ASAAS_BASE}/customers?limit=1`, {
+      headers: { 'access_token': ASAAS_API_KEY },
+    });
+    const d = await r.json();
+    asaasOk = r.ok;
+    if (!r.ok) asaasErro = JSON.stringify(d);
+  } catch (e) {
+    asaasErro = e.message;
+  }
+  res.json({
+    keyCarregada: keyOk,
+    keyTamanho: ASAAS_API_KEY.length,
+    keyInicio: ASAAS_API_KEY.slice(0, 12) + '...',
+    asaasConectado: asaasOk,
+    asaasErro,
+    nodeVersion: process.version,
+  });
+});
+
 // ── POST /api/pix/criar ───────────────────────────────────────────────────────
 app.post('/api/pix/criar', requireAuth, async (req, res) => {
   const value = parseFloat(req.body.value);
