@@ -16,9 +16,10 @@ const MARKUP = 1.30;
 const ASAAS_API_KEY = (process.env.ASAAS_API_KEY || '')
   .split('').filter(c => c.charCodeAt(0) <= 127).join('').trim();
 const ASAAS_BASE = 'https://api.asaas.com/v3';
-const AUTOCRLV_URL      = process.env.AUTOCRLV_URL      || '';
-const AUTOCRLV_ATPV_URL = process.env.AUTOCRLV_ATPV_URL || '';
-const AUTOCRLV_KEY      = process.env.AUTOCRLV_KEY      || '';
+const AUTOCRLV_URL         = process.env.AUTOCRLV_URL         || '';
+const AUTOCRLV_ATPV_URL    = process.env.AUTOCRLV_ATPV_URL    || '';
+const AUTOCRLV_ATPV_V1_URL = process.env.AUTOCRLV_ATPV_V1_URL || '';
+const AUTOCRLV_KEY         = process.env.AUTOCRLV_KEY         || '';
 
 async function asaasReq(method, endpoint, body = null) {
   const opts = {
@@ -54,7 +55,8 @@ const SERVICES = [
   { id:'consultar-gravame',               name:'Consulta Gravame',             group:'Débitos e Documentação', basePrice:8.00,  inputType:'placa',        icon:'🏦' },
   { id:'consultar-historico-proprietario',name:'Histórico de Proprietários',   group:'Débitos e Documentação', basePrice:10.00, inputType:'placa',        icon:'👥' },
   { id:'renajud',                         name:'RENAJUD',                      group:'Débitos e Documentação', basePrice:12.00, inputType:'placa',        icon:'⚖️' },
-  { id:'consultar-atpve',                 name:'Reemissão ATPV-e',             group:'Débitos e Documentação', basePrice:30.00, inputType:'chassi',       icon:'📄' },
+  { id:'consultar-atpve',                 name:'Reemissão ATPV-e (Chassi)',    group:'Débitos e Documentação', basePrice:30.00, inputType:'chassi',       icon:'📄' },
+  { id:'consultar-atpve-v1',             name:'Reemissão ATPV-e (Placa)',     group:'Débitos e Documentação', basePrice:30.00, inputType:'placa_renavam', icon:'📄' },
   { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:120.00, inputType:'placa',       icon:'🔢' },
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:8.00,  inputType:'placa_renavam',icon:'📝' },
   // ── CRLV-e Digital (instantâneo) ──
@@ -697,16 +699,22 @@ app.post('/api/query', requireAuth, async (req, res) => {
       apiUrl = AUTOCRLV_URL;
       body = { placa: params?.placa || '' };
     }
-    // Reemissão ATPV-e — endpoint autocrlv.com.br
+    // Reemissão ATPV-e v2 — por chassi
     if (serviceId === 'consultar-atpve') {
       apiUrl = AUTOCRLV_ATPV_URL;
       body = { chassi: params?.chassi || '', api_key: AUTOCRLV_KEY };
     }
+    // Reemissão ATPV-e v1 — por placa + renavam
+    if (serviceId === 'consultar-atpve-v1') {
+      apiUrl = AUTOCRLV_ATPV_V1_URL;
+      body = { placa: params?.placa || '', renavam: params?.renavam || '', api_key: AUTOCRLV_KEY };
+    }
 
-    // consultar-crv-v2 → JSON com campo pdf em base64
-    // consultar-atpve  → PDF binário direto
-    const autocrlvAllServices  = ['consultar-crv-v2', 'consultar-atpve'];
-    const autocrlvPdfServices  = ['consultar-atpve'];
+    // consultar-crv-v2    → JSON com campo pdf em base64
+    // consultar-atpve     → PDF binário direto (por chassi)
+    // consultar-atpve-v1  → PDF binário direto (por placa/renavam)
+    const autocrlvAllServices  = ['consultar-crv-v2', 'consultar-atpve', 'consultar-atpve-v1'];
+    const autocrlvPdfServices  = ['consultar-atpve', 'consultar-atpve-v1'];
     const autocrlvBase64Pdf    = ['consultar-crv-v2'];
 
     const fetchOpts = {
