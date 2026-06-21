@@ -710,12 +710,10 @@ app.post('/api/query', requireAuth, async (req, res) => {
       body = { placa: params?.placa || '', renavam: params?.renavam || '', api_key: AUTOCRLV_KEY };
     }
 
-    // consultar-crv-v2    → JSON com campo pdf em base64
-    // consultar-atpve     → PDF binário direto (por chassi)
-    // consultar-atpve-v1  → PDF binário direto (por placa/renavam)
+    // Todos retornam JSON com campo "pdf" em base64
     const autocrlvAllServices  = ['consultar-crv-v2', 'consultar-atpve', 'consultar-atpve-v1'];
-    const autocrlvPdfServices  = ['consultar-atpve', 'consultar-atpve-v1'];
-    const autocrlvBase64Pdf    = ['consultar-crv-v2'];
+    const autocrlvPdfServices  = []; // nenhum retorna PDF binário direto
+    const autocrlvBase64Pdf    = ['consultar-crv-v2', 'consultar-atpve', 'consultar-atpve-v1'];
 
     const fetchOpts = {
       method,
