@@ -159,6 +159,7 @@ async function initDB() {
     );
   `);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS asaas_customer_id VARCHAR(100);`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ip_address VARCHAR(45);`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pix_payments (
       id         SERIAL PRIMARY KEY,
@@ -187,6 +188,14 @@ function generateAffiliateCode(name) {
   const rand = Math.random().toString(36).substring(2, 6).toUpperCase();
   return `${base}${rand}`;
 }
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function getClientIP(req) {
+  const fwd = req.headers['x-forwarded-for'];
+  return (fwd ? fwd.split(',')[0] : req.socket?.remoteAddress || '').trim();
+}
+
+const BONUS_INDICACAO = 10.00;
 
 // ── Auth Middleware ───────────────────────────────────────────────────────────
 function requireAuth(req, res, next) {
@@ -229,14 +238,20 @@ app.post('/api/auth/register', async (req, res) => {
     if (dup.rows.length > 0)
       return res.status(409).json({ error: 'E-mail ou CPF/CNPJ já cadastrado.' });
 
-    // Resolver código de afiliado
+    const newIP = getClientIP(req);
+
+    // Resolver código de afiliado + verificar IP
     let referredBy = null;
+    let referrerIP = null;
     if (referral_code) {
       const ref = await pool.query(
-        'SELECT id FROM users WHERE affiliate_code=$1',
+        'SELECT id, ip_address FROM users WHERE affiliate_code=$1',
         [referral_code.toUpperCase()]
       );
-      if (ref.rows.length > 0) referredBy = ref.rows[0].id;
+      if (ref.rows.length > 0) {
+        referredBy = ref.rows[0].id;
+        referrerIP = ref.rows[0].ip_address;
+      }
     }
 
     const hash = await bcrypt.hash(password, 12);
@@ -244,13 +259,45 @@ app.post('/api/auth/register', async (req, res) => {
     const userRole = role === 'reseller' ? 'reseller' : 'user';
 
     const r = await pool.query(
-      `INSERT INTO users (name, cpf_cnpj, email, phone, password_hash, role, affiliate_code, referred_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `INSERT INTO users (name, cpf_cnpj, email, phone, password_hash, role, affiliate_code, referred_by, ip_address)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        RETURNING id, name, email, role`,
-      [name.trim(), doc, mail, phone?.trim() || null, hash, userRole, affCode, referredBy]
+      [name.trim(), doc, mail, phone?.trim() || null, hash, userRole, affCode, referredBy, newIP || null]
     );
 
     const user = r.rows[0];
+
+    // Creditar R$ 10,00 ao indicante se IPs forem diferentes
+    if (referredBy && newIP && referrerIP !== newIP) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          'UPDATE users SET credits = credits + $1 WHERE id=$2',
+          [BONUS_INDICACAO, referredBy]
+        );
+        const tx = await client.query(
+          `INSERT INTO transactions (user_id, type, amount, description)
+           VALUES ($1,'commission',$2,$3) RETURNING id`,
+          [referredBy, BONUS_INDICACAO, `Bônus de indicação — ${name.trim()}`]
+        );
+        await client.query(
+          `INSERT INTO commissions (reseller_id, client_id, transaction_id, amount, rate)
+           VALUES ($1,$2,$3,$4,0)`,
+          [referredBy, user.id, tx.rows[0].id, BONUS_INDICACAO]
+        );
+        await client.query('COMMIT');
+        console.log(`✅ Bônus R$${BONUS_INDICACAO} creditado ao usuário ${referredBy} pela indicação de ${user.id}`);
+      } catch (e) {
+        await client.query('ROLLBACK');
+        console.error('Erro ao creditar bônus indicação:', e.message);
+      } finally {
+        client.release();
+      }
+    } else if (referredBy && newIP && referrerIP === newIP) {
+      console.log(`⚠️ Bônus bloqueado: mesmo IP (${newIP}) do indicante ${referredBy}`);
+    }
+
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role },
       JWT_SECRET,
