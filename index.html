@@ -111,7 +111,8 @@
                         Sistema pré-pago sem mensalidade, com créditos via PIX.
                     </p>
                     <div class="flex gap-4 flex-wrap">
-                        <a href="/cadastrar" class="btn-primary">Começar Agora - Grátis</a>
+                        <a href="/cadastrar" class="btn-primary guests-only">Começar Agora - Grátis</a>
+                        <a href="/painel" class="btn-primary hidden logged-only">Acessar Meu Painel</a>
                         <a href="#como-funciona" class="btn-secondary">Como Funciona</a>
                     </div>
                 </div>
@@ -260,7 +261,8 @@
                         <p class="text-xs text-orange-700">
                             ⚠️ Cadastro com dados reais obrigatório. Créditos não expiram.
                         </p>
-                        <a href="/cadastrar" class="btn-primary text-sm whitespace-nowrap">Criar Conta Grátis</a>
+                        <a href="/cadastrar" class="btn-primary text-sm whitespace-nowrap guests-only">Criar Conta Grátis</a>
+                        <a href="/recarga-pix" class="btn-primary text-sm whitespace-nowrap hidden logged-only">💸 Recarregar PIX</a>
                     </div>
                 </div>
             </div>
@@ -342,7 +344,8 @@
             </div>
 
             <div class="text-center mt-12">
-                <a href="/cadastrar" class="btn-primary inline-block text-lg">Criar Minha Conta Grátis</a>
+                <a href="/cadastrar" class="btn-primary inline-block text-lg guests-only">Criar Minha Conta Grátis</a>
+                <a href="/painel" class="btn-primary inline-block text-lg hidden logged-only">Acessar Meu Painel</a>
             </div>
         </div>
     </section>
@@ -445,10 +448,13 @@
                 Cadastro 100% gratuito. Sem mensalidade. Pague apenas pelo que usar.
             </p>
             <div class="flex gap-4 justify-center flex-wrap">
-                <a href="/cadastrar" class="bg-white text-orange-600 px-8 py-4 rounded-lg font-bold text-lg hover:bg-gray-100 transition">
+                <a href="/cadastrar" class="bg-white text-orange-600 px-8 py-4 rounded-lg font-bold text-lg hover:bg-gray-100 transition guests-only">
                     Criar Conta Grátis
                 </a>
-                <a href="#como-funciona" class="border-2 border-white text-white px-8 py-4 rounded-lg font-bold text-lg hover:bg-white hover:text-orange-600 transition">
+                <a href="/painel" class="bg-white text-orange-600 px-8 py-4 rounded-lg font-bold text-lg hover:bg-gray-100 transition hidden logged-only">
+                    Acessar Meu Painel
+                </a>
+                <a href="#como-funciona" class="border-2 border-white text-white px-8 py-4 rounded-lg font-bold text-lg hover:bg-white hover:text-orange-600 transition guests-only">
                     Saiba Mais
                 </a>
             </div>
@@ -548,6 +554,10 @@
                 document.getElementById('nav-entrar-mobile').classList.add('hidden');
                 document.getElementById('nav-cadastrar-mobile').classList.add('hidden');
                 document.getElementById('nav-painel-mobile').classList.replace('hidden', 'inline-flex');
+
+                // ── Esconder botões de visitante, mostrar botões de logado ──
+                document.querySelectorAll('.guests-only').forEach(el => el.classList.add('hidden'));
+                document.querySelectorAll('.logged-only').forEach(el => el.classList.remove('hidden'));
             } catch { /* sem servidor ou não logado */ }
         })();
     </script>
