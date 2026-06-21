@@ -667,13 +667,19 @@ app.post('/api/pix/criar', requireAuth, async (req, res) => {
 
     let customerId = user.asaas_customer_id;
     if (!customerId) {
-      const customer = await asaasReq('POST', '/customers', {
-        name: user.name,
-        cpfCnpj: user.cpf_cnpj,
-        email: user.email,
-        ...(user.phone ? { phone: user.phone } : {}),
-      });
-      customerId = customer.id;
+      // Tenta buscar cliente já existente pelo CPF/CNPJ
+      const search = await asaasReq('GET', `/customers?cpfCnpj=${user.cpf_cnpj}&limit=1`);
+      if (search.data && search.data.length > 0) {
+        customerId = search.data[0].id;
+      } else {
+        const customer = await asaasReq('POST', '/customers', {
+          name: user.name,
+          cpfCnpj: user.cpf_cnpj,
+          email: user.email,
+          ...(user.phone ? { phone: user.phone } : {}),
+        });
+        customerId = customer.id;
+      }
       await pool.query('UPDATE users SET asaas_customer_id=$1 WHERE id=$2', [customerId, user.id]);
     }
 
