@@ -664,10 +664,14 @@ app.post('/api/query', requireAuth, async (req, res) => {
       body = { chassi: params?.chassi || '', api_key: AUTOCRLV_KEY };
     }
 
-    const autocrlvServices = ['consultar-crv-v2', 'consultar-atpve'];
+    // consultar-crv-v2 → JSON (código de segurança)
+    // consultar-atpve  → PDF (documento ATPV-e)
+    const autocrlvAllServices  = ['consultar-crv-v2', 'consultar-atpve'];
+    const autocrlvPdfServices  = ['consultar-atpve'];
+
     const fetchOpts = {
       method,
-      headers: autocrlvServices.includes(serviceId)
+      headers: autocrlvAllServices.includes(serviceId)
         ? { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AUTOCRLV_KEY}` }
         : { 'Content-Type': 'application/json', chaveAcesso: CHAVE_ACESSO },
     };
@@ -676,10 +680,11 @@ app.post('/api/query', requireAuth, async (req, res) => {
     const apiRes = await fetch(apiUrl, fetchOpts);
     const ct = apiRes.headers.get('content-type') || '';
 
-    // Detecta PDF por Content-Type ou por serviços que sempre retornam PDF
+    // Detecta PDF: Content-Type OU magic bytes OU serviço que sabemos que retorna PDF
     const pdfContentTypes = ['application/pdf', 'application/octet-stream', 'application/x-pdf'];
-    const isPdf = pdfContentTypes.some(t => ct.includes(t)) ||
-                  (autocrlvServices.includes(serviceId) && !ct.includes('application/json') && !ct.includes('text/'));
+    const isPdfByHeader = pdfContentTypes.some(t => ct.includes(t));
+    // Não força PDF para consultar-crv-v2 — ele retorna JSON com o código
+    const isPdf = isPdfByHeader || autocrlvPdfServices.includes(serviceId);
 
     if (!apiRes.ok) {
       let errMsg = 'Erro na API.';
@@ -699,9 +704,10 @@ app.post('/api/query', requireAuth, async (req, res) => {
     // Lê o corpo uma única vez
     const bodyBuffer = Buffer.from(await apiRes.arrayBuffer());
 
-    // Tenta detectar PDF pelo magic bytes (%PDF)
-    const isPdfByContent = bodyBuffer.slice(0, 4).toString() === '%PDF';
-    const treatAsPdf = isPdf || isPdfByContent;
+    // Nunca trata como PDF serviços que retornam JSON (ex: consultar-crv-v2)
+    const neverPdf = ['consultar-crv-v2'];
+    const isPdfByContent = !neverPdf.includes(serviceId) && bodyBuffer.slice(0, 4).toString() === '%PDF';
+    const treatAsPdf = !neverPdf.includes(serviceId) && (isPdf || isPdfByContent);
 
     await pool.query(
       'UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]
