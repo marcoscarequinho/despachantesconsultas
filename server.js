@@ -40,7 +40,7 @@ const SERVICES = [
   // ── Consultas Básicas ──
   { id:'base-estadual',          name:'Base Estadual',              group:'Consultas Básicas', basePrice:8.00,  inputType:'placa',       icon:'🚗' },
   { id:'base-nacional',          name:'Base Nacional',              group:'Consultas Básicas', basePrice:10.00, inputType:'placa',       icon:'🗺️' },
-  { id:'consulta-cautelar',      name:'Consulta Cautelar VIP GOLD', group:'Consultas Básicas', basePrice:15.00, inputType:'placa',       icon:'🔍' },
+  { id:'consulta-cautelar',      name:'Consulta Cautelar VIP GOLD', group:'Consultas Básicas', basePrice:39.00, inputType:'placa',       icon:'🔍' },
   { id:'consultar-autovistoria', name:'Auto Quilometragem',         group:'Consultas Básicas', basePrice:8.00,  inputType:'placa',       icon:'⚡' },
   { id:'consultar-motor',        name:'Consulta Motor',             group:'Consultas Básicas', basePrice:8.00,  inputType:'motor',       icon:'🔧' },
   { id:'consultar-placa-v2',     name:'Proprietário Atual (v2)',    group:'Consultas Básicas', basePrice:8.00,  inputType:'placa',       icon:'🔍' },
