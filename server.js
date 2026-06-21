@@ -267,27 +267,22 @@ app.post('/api/auth/register', async (req, res) => {
 
     const user = r.rows[0];
 
-    // Creditar R$ 10,00 ao indicante se IPs forem diferentes
+    // Creditar R$ 10,00 ao novo usuário (indicado) se IPs forem diferentes
     if (referredBy && newIP && referrerIP !== newIP) {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
         await client.query(
           'UPDATE users SET credits = credits + $1 WHERE id=$2',
-          [BONUS_INDICACAO, referredBy]
-        );
-        const tx = await client.query(
-          `INSERT INTO transactions (user_id, type, amount, description)
-           VALUES ($1,'commission',$2,$3) RETURNING id`,
-          [referredBy, BONUS_INDICACAO, `Bônus de indicação — ${name.trim()}`]
+          [BONUS_INDICACAO, user.id]
         );
         await client.query(
-          `INSERT INTO commissions (reseller_id, client_id, transaction_id, amount, rate)
-           VALUES ($1,$2,$3,$4,0)`,
-          [referredBy, user.id, tx.rows[0].id, BONUS_INDICACAO]
+          `INSERT INTO transactions (user_id, type, amount, description)
+           VALUES ($1,'deposit',$2,$3)`,
+          [user.id, BONUS_INDICACAO, `Bônus de boas-vindas por indicação`]
         );
         await client.query('COMMIT');
-        console.log(`✅ Bônus R$${BONUS_INDICACAO} creditado ao usuário ${referredBy} pela indicação de ${user.id}`);
+        console.log(`✅ Bônus R$${BONUS_INDICACAO} creditado ao novo usuário ${user.id} por ser indicado de ${referredBy}`);
       } catch (e) {
         await client.query('ROLLBACK');
         console.error('Erro ao creditar bônus indicação:', e.message);
