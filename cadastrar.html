@@ -75,29 +75,6 @@
       <!-- Card principal -->
       <div class="bg-white rounded-xl shadow-lg p-8">
 
-        <!-- Tipo de conta (radio buttons) -->
-        <div class="mb-6">
-          <label class="block text-sm font-semibold text-gray-700 mb-3">Tipo de Conta</label>
-          <div class="grid grid-cols-2 gap-3">
-            <label id="tab-user"
-              class="flex items-center gap-3 border-2 border-blue-500 bg-blue-50 rounded-lg p-4 cursor-pointer transition">
-              <input type="radio" name="role" value="user" checked class="text-blue-600">
-              <div>
-                <div class="font-semibold text-blue-900 text-sm">👤 Usuário</div>
-                <div class="text-xs text-gray-500">Despachante, lojista, jurídico</div>
-              </div>
-            </label>
-            <label id="tab-reseller"
-              class="flex items-center gap-3 border-2 border-gray-200 rounded-lg p-4 cursor-pointer transition hover:border-blue-300">
-              <input type="radio" name="role" value="reseller" class="text-blue-600">
-              <div>
-                <div class="font-semibold text-gray-700 text-sm">📈 Revendedor</div>
-                <div class="text-xs text-gray-500">Gerencie seus próprios clientes</div>
-              </div>
-            </label>
-          </div>
-        </div>
-
         <form id="register-form" novalidate>
           <div class="grid md:grid-cols-2 gap-4">
 
@@ -308,12 +285,6 @@
   </a>
 
   <script>
-    // ── Detectar /cadastrar/revendedor ────────────────────────────────────────
-    if (window.location.pathname.includes('revendedor')) {
-      document.querySelector('input[value="reseller"]').checked = true;
-      updateRoleTabs();
-    }
-
     // ── Preencher código de afiliado pela URL (?ref=CODIGO) ───────────────
     const refCode = new URLSearchParams(location.search).get('ref');
     if (refCode) {
@@ -322,19 +293,6 @@
       document.getElementById('referral_code').value = refCode.toUpperCase();
       field.classList.remove('hidden');
       arrow.textContent = '▼';
-    }
-
-    // ── Tabs de tipo de conta ─────────────────────────────────────────────────
-    document.querySelectorAll('input[name="role"]').forEach(r =>
-      r.addEventListener('change', updateRoleTabs)
-    );
-
-    function updateRoleTabs() {
-      const isReseller = document.querySelector('input[value="reseller"]').checked;
-      const tabUser     = document.getElementById('tab-user');
-      const tabReseller = document.getElementById('tab-reseller');
-      tabUser.className     = `flex items-center gap-3 border-2 rounded-lg p-4 cursor-pointer transition ${!isReseller ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-blue-300'}`;
-      tabReseller.className = `flex items-center gap-3 border-2 rounded-lg p-4 cursor-pointer transition ${isReseller  ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-blue-300'}`;
     }
 
     // ── Toggle campo de afiliado ──────────────────────────────────────────────
@@ -439,7 +397,7 @@
       const phone           = document.getElementById('phone').value.trim();
       const password        = document.getElementById('password').value;
       const confirm         = document.getElementById('confirm_password').value;
-      const role            = document.querySelector('input[name="role"]:checked')?.value || 'user';
+      const role            = 'user';
       const referral_code   = document.getElementById('referral_code').value.trim();
       const accept_terms    = document.getElementById('accept_terms').checked;
 
