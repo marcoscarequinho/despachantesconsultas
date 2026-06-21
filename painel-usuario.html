@@ -924,8 +924,22 @@ function renderFormFields(inputType) {
   const cpfField = field('cpf', 'CPF do Proprietário', 'text', '000.000.000-00');
 
   const vendaBody = `
-    <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-800 mb-2">
-      Preencha os dados da comunicação de venda do veículo
+    <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
+      <p class="text-xs font-semibold text-blue-800 mb-2">📄 Importar dados do CRV / ATPV-e em PDF</p>
+      <p class="text-xs text-blue-700 mb-2">Selecione o PDF do veículo para preencher placa, renavam e dados do CRV automaticamente.</p>
+      <div class="flex gap-2 items-center flex-wrap">
+        <input type="file" id="atpv-pdf-input" accept="application/pdf" class="hidden">
+        <button type="button" onclick="document.getElementById('atpv-pdf-input').click()"
+          class="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5">
+          📂 Selecionar PDF
+        </button>
+        <button type="button" id="btn-importar-atpv" onclick="importarAtpvPdf()" disabled
+          class="btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5 opacity-50">
+          ⚡ Importar e Preencher
+        </button>
+        <span id="atpv-pdf-nome" class="text-xs text-gray-500 truncate max-w-[160px]"></span>
+      </div>
+      <p id="atpv-import-status" class="text-xs mt-1.5 hidden"></p>
     </div>
     <div class="font-semibold text-gray-700 text-sm mb-2">Vendedor</div>
     <div class="grid grid-cols-2 gap-3">
@@ -969,24 +983,7 @@ function renderFormFields(inputType) {
   const templates = {
     placa: placaField,
 
-    placa_renavam: `
-      <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
-        <p class="text-xs font-semibold text-blue-800 mb-2">📄 Importar dados do PDF do ATPV-e</p>
-        <div class="flex gap-2 items-center">
-          <input type="file" id="atpv-pdf-input" accept="application/pdf" class="hidden">
-          <button type="button" onclick="document.getElementById('atpv-pdf-input').click()"
-            class="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5">
-            📂 Selecionar PDF
-          </button>
-          <button type="button" id="btn-importar-atpv" onclick="importarAtpvPdf()" disabled
-            class="btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5 opacity-50">
-            ⚡ Importar e Preencher
-          </button>
-          <span id="atpv-pdf-nome" class="text-xs text-gray-500 truncate max-w-[140px]"></span>
-        </div>
-        <p id="atpv-import-status" class="text-xs mt-1.5 hidden"></p>
-      </div>` +
-      placaField + renavamField +
+    placa_renavam: placaField + renavamField +
       `<p class="text-xs text-amber-600 mt-1">⚠️ Renavam deve ser o número <strong>exato</strong> do documento do veículo (9 a 11 dígitos, sem traços).</p>`,
 
     placa_renavam_cpf: placaField + renavamField + cpfField,
@@ -995,24 +992,7 @@ function renderFormFields(inputType) {
 
     motor: field('motor', 'Número do Motor', 'text', 'MOTOR123456'),
 
-    chassi: `
-      <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
-        <p class="text-xs font-semibold text-blue-800 mb-2">📄 Importar dados do PDF do ATPV-e</p>
-        <div class="flex gap-2 items-center">
-          <input type="file" id="atpv-pdf-input" accept="application/pdf" class="hidden">
-          <button type="button" onclick="document.getElementById('atpv-pdf-input').click()"
-            class="btn-secondary text-xs px-3 py-1.5 flex items-center gap-1.5">
-            📂 Selecionar PDF
-          </button>
-          <button type="button" id="btn-importar-atpv" onclick="importarAtpvPdf()" disabled
-            class="btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5 opacity-50">
-            ⚡ Importar e Preencher
-          </button>
-          <span id="atpv-pdf-nome" class="text-xs text-gray-500 truncate max-w-[140px]"></span>
-        </div>
-        <p id="atpv-import-status" class="text-xs mt-1.5 hidden"></p>
-      </div>` +
-      field('chassi', 'Chassi (17 caracteres — conforme CRV/documento)', 'text', '9BWZZZ377VT004251') +
+    chassi: field('chassi', 'Chassi (17 caracteres — conforme CRV/documento)', 'text', '9BWZZZ377VT004251') +
       `<p class="text-xs text-amber-600 mt-1">⚠️ Informe o chassi <strong>exatamente</strong> como consta no CRV ou documento do veículo (17 caracteres, sem espaços).</p>`,
 
     cpfcnpj: field('cpfcnpj', 'CPF ou CNPJ', 'text', '000.000.000-00'),
@@ -1439,9 +1419,18 @@ async function importarAtpvPdf() {
     }
 
     const preenchidos = [];
-    if (data.chassi  && document.getElementById('f-chassi'))  { document.getElementById('f-chassi').value  = data.chassi;  preenchidos.push('Chassi'); }
-    if (data.placa   && document.getElementById('f-placa'))   { document.getElementById('f-placa').value   = data.placa;   preenchidos.push('Placa'); }
-    if (data.renavam && document.getElementById('f-renavam')) { document.getElementById('f-renavam').value = data.renavam; preenchidos.push('Renavam'); }
+    const set = (id, val, label) => {
+      const el = document.getElementById('f-' + id);
+      if (el && val) { el.value = val; preenchidos.push(label); }
+    };
+    set('chassi',    data.chassi,    'Chassi');
+    set('placa',     data.placa,     'Placa');
+    set('renavam',   data.renavam,   'Renavam');
+    set('crv_numero',data.crv_numero,'Nº CRV');
+    set('crv_codigo',data.crv_codigo,'Cód. Segurança');
+    set('crv_via',   data.crv_via,   'Via');
+    set('crv_data',  data.crv_data,  'Data Emissão');
+    set('crv_uf',    data.crv_uf,    'UF Emissão');
 
     if (preenchidos.length) {
       if (status) { status.className = 'text-xs mt-1.5 text-green-600'; status.textContent = '✅ Preenchido: ' + preenchidos.join(', ') + '. Verifique antes de enviar.'; }

@@ -1024,7 +1024,7 @@ app.post('/api/pdf/extrair-atpv', requireAuth, (req, res) => {
 
   const txt = texto.replace(/\s+/g, ' ').toUpperCase();
 
-  // Chassi: label + 17 chars, ou qualquer token de 17 alfanuméricos
+  // Chassi: 17 chars alfanuméricos
   let chassi = (txt.match(/CHASSI[^A-Z0-9]*([A-Z0-9]{17})/) || [])[1] || '';
   if (!chassi) chassi = (txt.match(/\b([A-Z0-9]{17})\b/) || [])[1] || '';
 
@@ -1033,14 +1033,29 @@ app.post('/api/pdf/extrair-atpv', requireAuth, (req, res) => {
   if (!placa) placa = (txt.match(/\b([A-Z]{3}[\s-]?[0-9][A-Z0-9][0-9]{2})\b/) || [])[1] || '';
   placa = placa.replace(/[\s-]/g, '');
 
-  // Renavam: 9–11 dígitos após label ou isolado
+  // Renavam: 9–11 dígitos
   let renavam = (txt.match(/RENAVAM[^0-9]*(\d{9,11})/) || [])[1] || '';
   if (!renavam) renavam = (txt.match(/\b(\d{9,11})\b/) || [])[1] || '';
+
+  // Número CRV (12 dígitos)
+  let crv_numero = (txt.match(/N[ÚU]MERO.*?CRV[^0-9]*(\d{9,12})/) || txt.match(/CRV[^0-9]*(\d{9,12})/) || [])[1] || '';
+
+  // Código de segurança CRV (8–11 dígitos, diferente do renavam)
+  let crv_codigo = (txt.match(/C[ÓO]DIGO.*?SEGURAN[CÇ]A[^0-9]*(\d{8,11})/) || [])[1] || '';
+
+  // Número da via (1 dígito)
+  let crv_via = (txt.match(/\bVIA\b[^0-9]*(\d)\b/) || [])[1] || '';
+
+  // Data de emissão dd/mm/aaaa
+  let crv_data = (txt.match(/EMISS[ÃA]O[^0-9]*(\d{2}\/\d{2}\/\d{4})/) || txt.match(/(\d{2}\/\d{2}\/\d{4})/) || [])[1] || '';
+
+  // UF emissão (2 letras)
+  let crv_uf = (txt.match(/UF[^A-Z]*([A-Z]{2})\b/) || [])[1] || '';
 
   if (!chassi && !placa && !renavam)
     return res.status(422).json({ error: 'Não foi possível extrair dados do PDF. Preencha manualmente.' });
 
-  res.json({ chassi, placa, renavam });
+  res.json({ chassi, placa, renavam, crv_numero, crv_codigo, crv_via, crv_data, crv_uf });
 });
 
 // ── Rotas HTML ────────────────────────────────────────────────────────────────
