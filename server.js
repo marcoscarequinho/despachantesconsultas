@@ -11,15 +11,12 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-inseguro';
 const CHAVE_ACESSO = process.env.CHAVE_ACESSO || '';
-const BASE_API_URL = 'https://portaldespachantes.online';
-const MARKUP = 1.30;
+const BASE_API_URL = 'https://chekaki.online';
+const MARKUP = 1.40;
 const ASAAS_API_KEY = (process.env.ASAAS_API_KEY || '')
   .split('').filter(c => c.charCodeAt(0) <= 127).join('').trim();
 const ASAAS_BASE = 'https://api.asaas.com/v3';
-const AUTOCRLV_URL         = process.env.AUTOCRLV_URL         || '';
-const AUTOCRLV_ATPV_URL    = process.env.AUTOCRLV_ATPV_URL    || '';
-const AUTOCRLV_ATPV_V1_URL = process.env.AUTOCRLV_ATPV_V1_URL || '';
-const AUTOCRLV_KEY         = process.env.AUTOCRLV_KEY         || '';
+const AUTOCRLV_KEY = process.env.AUTOCRLV_KEY || '';
 
 async function asaasReq(method, endpoint, body = null) {
   const opts = {
@@ -38,91 +35,90 @@ async function asaasReq(method, endpoint, body = null) {
 
 const SERVICES = [
   // ── Consultas Básicas ──
-  { id:'base-estadual',          name:'Base Estadual',              group:'Consultas Básicas', basePrice:8.00,  inputType:'placa',       icon:'🚗' },
-  { id:'base-nacional',          name:'Base Nacional',              group:'Consultas Básicas', basePrice:10.00, inputType:'placa',       icon:'🗺️' },
-  { id:'consulta-cautelar',      name:'Consulta Cautelar VIP GOLD', group:'Consultas Básicas', basePrice:39.00, inputType:'placa',       icon:'🔍' },
-  { id:'consultar-autovistoria', name:'Auto Quilometragem',         group:'Consultas Básicas', basePrice:8.00,  inputType:'placa',       icon:'⚡' },
-  { id:'consultar-motor',        name:'Consulta Motor',             group:'Consultas Básicas', basePrice:8.00,  inputType:'motor',       icon:'🔧' },
-  { id:'consultar-placa-v2',     name:'Proprietário Atual (v2)',    group:'Consultas Básicas', basePrice:8.00,  inputType:'placa',       icon:'🔍' },
-  { id:'consultar-placa-v3',     name:'Consulta Placa v3',          group:'Consultas Básicas', basePrice:8.00,  inputType:'placa_uf',    icon:'🔍' },
-  { id:'consultar-placa-fipe',   name:'Consulta FIPE',              group:'Consultas Básicas', basePrice:5.00,  inputType:'placa',       icon:'💰' },
-  { id:'consultar-foto-leilao',  name:'Foto Leilão',                group:'Consultas Básicas', basePrice:5.00,  inputType:'placa',       icon:'📸' },
-  { id:'consultar-chassi-v2',    name:'Consulta Chassi',            group:'Consultas Básicas', basePrice:10.00, inputType:'chassi',      icon:'🔑' },
+  { id:'base-estadual',          name:'Base Estadual',              group:'Consultas Básicas', basePrice:7.00,   inputType:'placa',       icon:'🚗' },
+  { id:'base-nacional',          name:'Base Nacional',              group:'Consultas Básicas', basePrice:7.00,   inputType:'placa',       icon:'🗺️' },
+  { id:'consulta-cautelar',      name:'Consulta Cautelar VIP GOLD', group:'Consultas Básicas', basePrice:19.99,  inputType:'placa',       icon:'🔍' },
+  { id:'consultar-autovistoria', name:'Auto Quilometragem',         group:'Consultas Básicas', basePrice:7.50,   inputType:'placa',       icon:'⚡' },
+  { id:'consultar-motor',        name:'Consulta Motor',             group:'Consultas Básicas', basePrice:7.50,   inputType:'motor',       icon:'🔧' },
+  { id:'consultar-placa-v2',     name:'Proprietário Atual (v2)',    group:'Consultas Básicas', basePrice:7.50,   inputType:'placa',       icon:'🔍' },
+  { id:'consultar-placa-v3',     name:'Consulta Placa v3',          group:'Consultas Básicas', basePrice:7.50,   inputType:'placa_uf',    icon:'🔍' },
+  { id:'consultar-placa-fipe',   name:'Consulta FIPE',              group:'Consultas Básicas', basePrice:0.00,   inputType:'placa',       icon:'💰' },
+  { id:'consultar-foto-leilao',  name:'Foto Leilão',                group:'Consultas Básicas', basePrice:10.00,  inputType:'placa',       icon:'📸' },
+  { id:'consultar-chassi-v2',    name:'Consulta Chassi',            group:'Consultas Básicas', basePrice:7.50,   inputType:'chassi',      icon:'🔑' },
+  { id:'consultar-cnh',          name:'Consultar CNH',              group:'Consultas Básicas', basePrice:7.50,   inputType:'cpfcnpj',     icon:'🪪' },
   // ── Débitos e Documentação ──
-  { id:'consultar-debito',                name:'Consulta Débito (PDF)',        group:'Débitos e Documentação', basePrice:8.00,  inputType:'placa',        icon:'💳' },
-  { id:'consultar-debito-api',            name:'Débitos (JSON)',               group:'Débitos e Documentação', basePrice:8.00,  inputType:'placa',        icon:'💳' },
-  { id:'consultar-licenciamento',         name:'Licenciamento + BIN',          group:'Débitos e Documentação', basePrice:8.00,  inputType:'placa',        icon:'📋' },
-  { id:'consultar-gravame',               name:'Consulta Gravame',             group:'Débitos e Documentação', basePrice:8.00,  inputType:'placa',        icon:'🏦' },
-  { id:'consultar-historico-proprietario',name:'Histórico de Proprietários',   group:'Débitos e Documentação', basePrice:10.00, inputType:'placa',        icon:'👥' },
-  { id:'renajud',                         name:'RENAJUD',                      group:'Débitos e Documentação', basePrice:12.00, inputType:'placa',        icon:'⚖️' },
-  { id:'consultar-atpve',                 name:'Reemissão ATPV-e (Chassi)',    group:'Débitos e Documentação', basePrice:30.00, inputType:'chassi',       icon:'📄' },
-  { id:'consultar-atpve-v1',             name:'Reemissão ATPV-e (Placa)',     group:'Débitos e Documentação', basePrice:30.00, inputType:'placa_renavam', icon:'📄' },
-  { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:120.00, inputType:'placa',       icon:'🔢' },
-  { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:8.00,  inputType:'placa_renavam',icon:'📝' },
+  { id:'consultar-debito',                name:'Consulta Débito (PDF)',        group:'Débitos e Documentação', basePrice:11.99, inputType:'placa',        icon:'💳' },
+  { id:'consultar-debito-api',            name:'Débitos (JSON)',               group:'Débitos e Documentação', basePrice:11.99, inputType:'placa',        icon:'💳' },
+  { id:'consultar-licenciamento',         name:'Licenciamento + BIN',          group:'Débitos e Documentação', basePrice:10.00, inputType:'placa',        icon:'📋' },
+  { id:'consultar-gravame',               name:'Consulta Gravame',             group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa',        icon:'🏦' },
+  { id:'consultar-historico-proprietario',name:'Histórico de Proprietários',   group:'Débitos e Documentação', basePrice:9.99,  inputType:'placa',        icon:'👥' },
+  { id:'renajud',                         name:'RENAJUD',                      group:'Débitos e Documentação', basePrice:9.50,  inputType:'placa',        icon:'⚖️' },
+  { id:'consultar-atpve',                 name:'Reemissão ATPV-e (Chassi)',    group:'Débitos e Documentação', basePrice:13.50, inputType:'chassi',       icon:'📄' },
+  { id:'consultar-atpve-v1',             name:'Reemissão ATPV-e (Placa)',     group:'Débitos e Documentação', basePrice:13.50, inputType:'placa_renavam', icon:'📄' },
+  { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:25.00, inputType:'placa',        icon:'🔢' },
+  { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa_renavam',icon:'📝' },
   // ── CRLV-e Digital (instantâneo) ──
-  { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:24.90, inputType:'placa_renavam_cpf', icon:'📄' },
-  { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:7.00,  inputType:'placa_renavam_cpf', icon:'📄' },
-  { id:'consultar-crlv-ba', name:'CRLV-e Bahia (BA)',              group:'CRLV-e Digital', basePrice:30.00, inputType:'placa_renavam_cpf', icon:'📄' },
-  { id:'consultar-crlv-go', name:'CRLV-e Goiás (GO)',              group:'CRLV-e Digital', basePrice:9.99,  inputType:'placa_renavam_cpf', icon:'📄' },
-  { id:'consultar-crlv-ma', name:'CRLV-e Maranhão (MA)',           group:'CRLV-e Digital', basePrice:7.00,  inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-ba', name:'CRLV-e Bahia (BA)',              group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-go', name:'CRLV-e Goiás (GO)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-ma', name:'CRLV-e Maranhão (MA)',           group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-mg', name:'CRLV-e Minas Gerais (MG)',       group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
-  { id:'consultar-crlv-ms', name:'CRLV-e Mato Grosso do Sul (MS)',group:'CRLV-e Digital', basePrice:24.90, inputType:'placa_renavam_cpf', icon:'📄' },
-  { id:'consultar-crlv-mt', name:'CRLV-e Mato Grosso (MT)',        group:'CRLV-e Digital', basePrice:7.00,  inputType:'placa_renavam_cpf', icon:'📄' },
-  { id:'consultar-crlv-pa', name:'CRLV-e Pará (PA)',               group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
-  { id:'consultar-crlv-pi', name:'CRLV-e Piauí (PI)',              group:'CRLV-e Digital', basePrice:12.00, inputType:'placa_renavam_cpf', icon:'📄' },
-  { id:'consultar-crlv-pr', name:'CRLV-e Paraná (PR)',             group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
-  { id:'consultar-crlv-ro', name:'CRLV-e Rondônia (RO)',           group:'CRLV-e Digital', basePrice:19.90, inputType:'placa_renavam_cpf', icon:'📄' },
-  { id:'consultar-crlv-rr', name:'CRLV-e Roraima (RR)',            group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
-  { id:'consultar-crlv-se', name:'CRLV-e Sergipe (SE)',            group:'CRLV-e Digital', basePrice:15.00, inputType:'placa_renavam_cpf', icon:'📄' },
-  { id:'consultar-crlv-sp', name:'CRLV-e São Paulo (SP)',          group:'CRLV-e Digital', basePrice:13.00, inputType:'placa_renavam_cpf', icon:'📄' },
-  { id:'consultar-crlv-to', name:'CRLV-e Tocantins (TO)',          group:'CRLV-e Digital', basePrice:7.00,  inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-ms', name:'CRLV-e Mato Grosso do Sul (MS)',group:'CRLV-e Digital', basePrice:15.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-mt', name:'CRLV-e Mato Grosso (MT)',        group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-pi', name:'CRLV-e Piauí (PI)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-pr', name:'CRLV-e Paraná (PR)',             group:'CRLV-e Digital', basePrice:15.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-ro', name:'CRLV-e Rondônia (RO)',           group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-rr', name:'CRLV-e Roraima (RR)',            group:'CRLV-e Digital', basePrice:30.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-se', name:'CRLV-e Sergipe (SE)',            group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-sp', name:'CRLV-e São Paulo (SP)',          group:'CRLV-e Digital', basePrice:15.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  { id:'consultar-crlv-to', name:'CRLV-e Tocantins (TO)',          group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   // ── CRLV-e Agendado (assíncrono) ──
-  { id:'crlv-agendado-al', name:'CRLV-e Agendado Alagoas (AL)',            group:'CRLV-e Agendado', basePrice:30.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'al' },
-  { id:'crlv-agendado-ce', name:'CRLV-e Agendado Ceará (CE)',              group:'CRLV-e Agendado', basePrice:60.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'ce' },
-  { id:'crlv-agendado-df', name:'CRLV-e Agendado Distrito Federal (DF)',   group:'CRLV-e Agendado', basePrice:50.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'df' },
-  { id:'crlv-agendado-es', name:'CRLV-e Agendado Espírito Santo (ES)',     group:'CRLV-e Agendado', basePrice:45.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'es' },
-  { id:'crlv-agendado-pb', name:'CRLV-e Agendado Paraíba (PB)',            group:'CRLV-e Agendado', basePrice:50.00,  inputType:'crlv_agendado_cpf',   icon:'⏳', uf:'pb' },
-  { id:'crlv-agendado-pe', name:'CRLV-e Agendado Pernambuco (PE)',         group:'CRLV-e Agendado', basePrice:100.00, inputType:'crlv_agendado_placa', icon:'⏳', uf:'pe' },
-  { id:'crlv-agendado-pi', name:'CRLV-e Agendado Piauí (PI)',              group:'CRLV-e Agendado', basePrice:12.00,  inputType:'crlv_agendado_cpf',   icon:'⏳', uf:'pi' },
-  { id:'crlv-agendado-rj', name:'CRLV-e Agendado Rio de Janeiro (RJ)',     group:'CRLV-e Agendado', basePrice:20.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'rj' },
-  { id:'crlv-agendado-rn', name:'CRLV-e Agendado Rio Grande do Norte (RN)',group:'CRLV-e Agendado', basePrice:60.00,  inputType:'crlv_agendado_cpf',   icon:'⏳', uf:'rn' },
+  { id:'crlv-agendado-al', name:'CRLV-e Agendado Alagoas (AL)',            group:'CRLV-e Agendado', basePrice:28.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'al' },
+  { id:'crlv-agendado-ce', name:'CRLV-e Agendado Ceará (CE)',              group:'CRLV-e Agendado', basePrice:38.50,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'ce' },
+  { id:'crlv-agendado-df', name:'CRLV-e Agendado Distrito Federal (DF)',   group:'CRLV-e Agendado', basePrice:38.50,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'df' },
+  { id:'crlv-agendado-es', name:'CRLV-e Agendado Espírito Santo (ES)',     group:'CRLV-e Agendado', basePrice:20.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'es' },
+  { id:'crlv-agendado-pb', name:'CRLV-e Agendado Paraíba (PB)',            group:'CRLV-e Agendado', basePrice:35.00,  inputType:'crlv_agendado_cpf',   icon:'⏳', uf:'pb' },
+  { id:'crlv-agendado-pe', name:'CRLV-e Agendado Pernambuco (PE)',         group:'CRLV-e Agendado', basePrice:75.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'pe' },
+  { id:'crlv-agendado-pr', name:'CRLV-e Agendado Paraná (PR)',             group:'CRLV-e Agendado', basePrice:15.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'pr' },
+  { id:'crlv-agendado-rj', name:'CRLV-e Agendado Rio de Janeiro (RJ)',     group:'CRLV-e Agendado', basePrice:10.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'rj' },
+  { id:'crlv-agendado-rn', name:'CRLV-e Agendado Rio Grande do Norte (RN)',group:'CRLV-e Agendado', basePrice:55.00,  inputType:'crlv_agendado_cpf',   icon:'⏳', uf:'rn' },
   { id:'crlv-agendado-sc', name:'CRLV-e Agendado Santa Catarina (SC)',     group:'CRLV-e Agendado', basePrice:60.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'sc' },
-  { id:'crlv-agendado-status', name:'CRLV Agendado — Ver Status',          group:'CRLV-e Agendado', basePrice:0.00,  inputType:'pedido_id_get',       icon:'🔄' },
+  { id:'crlv-agendado-status', name:'CRLV Agendado — Ver Status',          group:'CRLV-e Agendado', basePrice:0.00,   inputType:'pedido_id_get',       icon:'🔄' },
   // ── CRV ──
-  { id:'consultar-crv',      name:'Consulta CRV',       group:'CRV', basePrice:10.00, inputType:'crv_full', icon:'🔐' },
-  { id:'consultar-crv-pi',   name:'Consulta CRV Piauí', group:'CRV', basePrice:10.00, inputType:'placa',    icon:'🔐' },
-  { id:'consultar-crv-v2',   name:'Código Segurança CRV v2', group:'CRV', basePrice:10.00, inputType:'placa',icon:'🔐' },
-  { id:'consultar-placa-crv',name:'Placa + CRV (JSON+PDF)',  group:'CRV', basePrice:12.00, inputType:'placa',icon:'🔐' },
-  { id:'valida-crv',         name:'Valida CRV',         group:'CRV', basePrice:8.00,  inputType:'valida_crv',icon:'✅' },
+  { id:'consultar-crv',      name:'Número CRV Digital',         group:'CRV', basePrice:10.50, inputType:'placa',      icon:'🔐' },
+  { id:'consultar-crv-v2',   name:'Código Segurança CRV (PDF)', group:'CRV', basePrice:6.50,  inputType:'placa',      icon:'🔐' },
+  { id:'consultar-placa-crv',name:'Placa + CRV (JSON+PDF)',     group:'CRV', basePrice:10.50, inputType:'placa',      icon:'🔐' },
+  { id:'valida-crv',         name:'Valida CRV',                 group:'CRV', basePrice:0.00,  inputType:'valida_crv', icon:'✅' },
   // ── Análise de Crédito ──
   { id:'consultar-spc', name:'Consulta SPC/Crédito', group:'Análise de Crédito', basePrice:15.00, inputType:'cpfcnpj', icon:'📊' },
   // ── Comunicação de Venda ──
-  { id:'inserir-comunicacao-venda',   name:'Inserir Comunicação Venda',     group:'Comunicação Venda', basePrice:45.00, inputType:'venda',          icon:'📝' },
+  { id:'inserir-comunicacao-venda',   name:'Inserir Comunicação Venda',     group:'Comunicação Venda', basePrice:23.50, inputType:'venda',          icon:'📝' },
   { id:'cancelar-comunicacao-venda',  name:'Cancelar Comunicação Venda',    group:'Comunicação Venda', basePrice:8.00,  inputType:'cancelar_venda', icon:'❌' },
   { id:'venda-transmitir',            name:'Transmitir Comunicação Venda',  group:'Comunicação Venda', basePrice:5.00,  inputType:'id_only',        icon:'📤' },
   { id:'com-venda-desbloquear',       name:'Desbloquear Comunicação Venda', group:'Comunicação Venda', basePrice:5.00,  inputType:'placa',          icon:'🔓' },
   { id:'com-venda-por-id',            name:'Consultar Comunicação por ID',  group:'Comunicação Venda', basePrice:3.00,  inputType:'id_get',         icon:'🔍' },
   { id:'motivos-cancelamento',        name:'Motivos de Cancelamento',       group:'Comunicação Venda', basePrice:3.00,  inputType:'protocolo_get',  icon:'📋' },
-  // ── Débitos por Estado ──
-  { id:'debito-ac', name:'Débitos AC — Acre',                group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'ac' },
-  { id:'debito-al', name:'Débitos AL — Alagoas',             group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'al' },
-  { id:'debito-am', name:'Débitos AM — Amazonas',            group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'am' },
-  { id:'debito-ap', name:'Débitos AP — Amapá',               group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'ap' },
-  { id:'debito-ce', name:'Débitos CE — Ceará',               group:'Débitos por Estado', basePrice:1.15, inputType:'debito_doc',     icon:'🏛️', uf:'ce' },
-  { id:'debito-df', name:'Débitos DF — Distrito Federal',    group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'df' },
-  { id:'debito-es', name:'Débitos ES — Espírito Santo',      group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'es' },
-  { id:'debito-ma', name:'Débitos MA — Maranhão',            group:'Débitos por Estado', basePrice:1.15, inputType:'debito_doc',     icon:'🏛️', uf:'ma' },
-  { id:'debito-mg', name:'Débitos MG — Minas Gerais',        group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'mg' },
-  { id:'debito-mt', name:'Débitos MT — Mato Grosso',         group:'Débitos por Estado', basePrice:1.15, inputType:'debito_doc',     icon:'🏛️', uf:'mt' },
-  { id:'debito-pa', name:'Débitos PA — Pará',                group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'pa' },
-  { id:'debito-pb', name:'Débitos PB — Paraíba',             group:'Débitos por Estado', basePrice:1.15, inputType:'debito_doc',     icon:'🏛️', uf:'pb' },
-  { id:'debito-pi', name:'Débitos PI — Piauí',               group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'pi' },
-  { id:'debito-pr', name:'Débitos PR — Paraná',              group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'pr' },
-  { id:'debito-rj', name:'Débitos RJ — Rio de Janeiro',      group:'Débitos por Estado', basePrice:1.15, inputType:'debito_doc',     icon:'🏛️', uf:'rj' },
-  { id:'debito-rn', name:'Débitos RN — Rio Grande do Norte', group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'rn' },
-  { id:'debito-ro', name:'Débitos RO — Rondônia',            group:'Débitos por Estado', basePrice:1.15, inputType:'debito_doc',     icon:'🏛️', uf:'ro' },
-  { id:'debito-sc', name:'Débitos SC — Santa Catarina',      group:'Débitos por Estado', basePrice:1.15, inputType:'debito_chassi',  icon:'🏛️', uf:'sc' },
-  { id:'debito-sp', name:'Débitos SP — São Paulo',           group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'sp' },
+  // ── Débitos por Estado (autocrlv.com.br) ──
+  { id:'debito-ac', name:'Débitos AC — Acre',                group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'ac' },
+  { id:'debito-al', name:'Débitos AL — Alagoas',             group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'al' },
+  { id:'debito-am', name:'Débitos AM — Amazonas',            group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'am' },
+  { id:'debito-ap', name:'Débitos AP — Amapá',               group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'ap' },
+  { id:'debito-ce', name:'Débitos CE — Ceará',               group:'Débitos por Estado', basePrice:1.07, inputType:'debito_doc',     icon:'🏛️', uf:'ce' },
+  { id:'debito-df', name:'Débitos DF — Distrito Federal',    group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'df' },
+  { id:'debito-es', name:'Débitos ES — Espírito Santo',      group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'es' },
+  { id:'debito-ma', name:'Débitos MA — Maranhão',            group:'Débitos por Estado', basePrice:1.07, inputType:'debito_doc',     icon:'🏛️', uf:'ma' },
+  { id:'debito-mg', name:'Débitos MG — Minas Gerais',        group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'mg' },
+  { id:'debito-mt', name:'Débitos MT — Mato Grosso',         group:'Débitos por Estado', basePrice:1.07, inputType:'debito_doc',     icon:'🏛️', uf:'mt' },
+  { id:'debito-pa', name:'Débitos PA — Pará',                group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'pa' },
+  { id:'debito-pb', name:'Débitos PB — Paraíba',             group:'Débitos por Estado', basePrice:1.07, inputType:'debito_doc',     icon:'🏛️', uf:'pb' },
+  { id:'debito-pi', name:'Débitos PI — Piauí',               group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'pi' },
+  { id:'debito-pr', name:'Débitos PR — Paraná',              group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'pr' },
+  { id:'debito-rj', name:'Débitos RJ — Rio de Janeiro',      group:'Débitos por Estado', basePrice:1.07, inputType:'debito_doc',     icon:'🏛️', uf:'rj' },
+  { id:'debito-rn', name:'Débitos RN — Rio Grande do Norte', group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'rn' },
+  { id:'debito-ro', name:'Débitos RO — Rondônia',            group:'Débitos por Estado', basePrice:1.07, inputType:'debito_doc',     icon:'🏛️', uf:'ro' },
+  { id:'debito-sc', name:'Débitos SC — Santa Catarina',      group:'Débitos por Estado', basePrice:1.07, inputType:'debito_chassi',  icon:'🏛️', uf:'sc' },
+  { id:'debito-sp', name:'Débitos SP — São Paulo',           group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'sp' },
 ];
 
 // Conexão com o banco Neon
@@ -722,20 +718,18 @@ app.post('/api/query', requireAuth, async (req, res) => {
       apiUrl = `${BASE_API_URL}/motivos-cancelamento/${params.protocolo}`;
       method = 'GET'; body = null;
     }
-    // Código Segurança CRV v2 — endpoint autocrlv.com.br
-    if (serviceId === 'consultar-crv-v2') {
-      apiUrl = AUTOCRLV_URL;
-      body = { placa: params?.placa || '' };
+    // Débitos JSON → endpoint diferente na nova API
+    if (serviceId === 'consultar-debito-api') {
+      apiUrl = `${BASE_API_URL}/consultar-debito-boletos-json`;
     }
-    // Reemissão ATPV-e v2 — por chassi
+    // ATPV-e por chassi
     if (serviceId === 'consultar-atpve') {
       const chassi = (params?.chassi || '').toUpperCase().replace(/\s/g, '');
       if (chassi.length !== 17)
         return res.status(400).json({ error: 'Chassi deve ter exatamente 17 caracteres.' });
-      apiUrl = AUTOCRLV_ATPV_URL;
-      body = { chassi, api_key: AUTOCRLV_KEY };
+      body = { chassi };
     }
-    // Reemissão ATPV-e v1 — por placa + renavam
+    // ATPV-e por placa + renavam → mesmo endpoint da nova API
     if (serviceId === 'consultar-atpve-v1') {
       const placa   = (params?.placa   || '').toUpperCase().replace(/\s|-/g, '');
       const renavam = (params?.renavam || '').replace(/\D/g, '');
@@ -743,11 +737,15 @@ app.post('/api/query', requireAuth, async (req, res) => {
         return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
       if (renavam.length < 9 || renavam.length > 11)
         return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
-      apiUrl = AUTOCRLV_ATPV_V1_URL;
-      body = { placa, renavam, api_key: AUTOCRLV_KEY };
+      apiUrl = `${BASE_API_URL}/consultar-atpve`;
+      body = { placa, renavam };
+    }
+    // CNH: converte cpfCnpj → cpf para a nova API
+    if (serviceId === 'consultar-cnh') {
+      body = { cpf: (params?.cpfCnpj || '').replace(/\D/g, '') };
     }
 
-    // Débitos por Estado — autocrlv.com.br (GET, auth via query param, retorna PDF binário)
+    // Débitos por Estado — autocrlv.com.br (GET, auth via query param)
     const DEBITO_UF_SVCS = ['debito-ac','debito-al','debito-am','debito-ap','debito-ce','debito-df','debito-es','debito-ma','debito-mg','debito-mt','debito-pa','debito-pb','debito-pi','debito-pr','debito-rj','debito-rn','debito-ro','debito-sc','debito-sp'];
     if (DEBITO_UF_SVCS.includes(serviceId)) {
       const uf      = service.uf;
@@ -761,28 +759,16 @@ app.post('/api/query', requireAuth, async (req, res) => {
       body   = null;
     }
 
-    const autocrlvAllServices  = ['consultar-crv-v2', 'consultar-atpve', 'consultar-atpve-v1'];
-    const autocrlvPdfServices  = [...DEBITO_UF_SVCS]; // retornam PDF binário — não cobra se API falhar
-    const autocrlvBase64Pdf    = ['consultar-crv-v2', 'consultar-atpve', 'consultar-atpve-v1'];
-
     const fetchOpts = {
       method,
       headers: DEBITO_UF_SVCS.includes(serviceId)
-        ? {} // auth já está na query string
-        : autocrlvAllServices.includes(serviceId)
-          ? { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AUTOCRLV_KEY}` }
-          : { 'Content-Type': 'application/json', chaveAcesso: CHAVE_ACESSO },
+        ? {}
+        : { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO },
     };
     if (body !== null) fetchOpts.body = JSON.stringify(body);
 
     const apiRes = await fetch(apiUrl, fetchOpts);
     const ct = apiRes.headers.get('content-type') || '';
-
-    // Detecta PDF: Content-Type OU magic bytes OU serviço que sabemos que retorna PDF
-    const pdfContentTypes = ['application/pdf', 'application/octet-stream', 'application/x-pdf'];
-    const isPdfByHeader = pdfContentTypes.some(t => ct.includes(t));
-    // Não força PDF para consultar-crv-v2 — ele retorna JSON com o código
-    const isPdf = isPdfByHeader || autocrlvPdfServices.includes(serviceId);
 
     if (!apiRes.ok) {
       let errMsg = 'Erro na API.';
@@ -804,29 +790,28 @@ app.post('/api/query', requireAuth, async (req, res) => {
     const bodyStr    = bodyBuffer.toString('utf8');
     const isRealPdf  = bodyBuffer.slice(0, 4).toString() === '%PDF';
 
-    // ── Pré-validação: não debita se a resposta não for válida ────────────────
-    // 1) PDF binário direto (atpve) mas corpo não começa com %PDF
-    if (autocrlvPdfServices.includes(serviceId) && !isRealPdf) {
-      let errMsg = 'Resposta inválida da API de emissão.';
+    // Débitos por estado: valida PDF antes de debitar
+    if (DEBITO_UF_SVCS.includes(serviceId) && !isRealPdf) {
+      let errMsg = 'Resposta inválida da API de débitos.';
       try {
         const p = JSON.parse(bodyStr);
         errMsg = p.error || p.message || p.msg || JSON.stringify(p);
       } catch { errMsg = bodyStr.slice(0, 300) || errMsg; }
-      console.error(`[${serviceId}] esperava PDF binário, recebeu: ${errMsg}`);
+      console.error(`[${serviceId}] esperava PDF, recebeu: ${errMsg}`);
       return res.status(422).json({ error: errMsg });
     }
-    // 2) JSON com campo pdf: valida antes de debitar
+
+    // consultar-placa-crv retorna JSON com pdf_base64
     let base64PdfBuf = null;
-    if (autocrlvBase64Pdf.includes(serviceId)) {
+    if (serviceId === 'consultar-placa-crv') {
       let parsed;
       try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
-      if (parsed?.pdf) {
-        base64PdfBuf = Buffer.from(parsed.pdf, 'base64');
-      } else {
-        const errMsg = parsed?.message || parsed?.error || 'PDF não retornado pela API.';
-        const code   = parsed?.code ? ` (código: ${parsed.code})` : '';
-        console.error(`[${serviceId}] sem pdf: ${errMsg}${code}`);
-        return res.status(422).json({ error: `${errMsg}${code}` });
+      if (parsed?.pdf_base64) {
+        base64PdfBuf = Buffer.from(parsed.pdf_base64, 'base64');
+      } else if (!isRealPdf) {
+        const errMsg = parsed?.error || parsed?.message || 'PDF não retornado pela API.';
+        console.error(`[${serviceId}] sem pdf_base64: ${errMsg}`);
+        return res.status(422).json({ error: errMsg });
       }
     }
 
