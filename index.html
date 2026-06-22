@@ -628,13 +628,7 @@
 </style>
 
 <script>
-(function() {
-  const KEY = 'popup_debito_estado_v1';
-  const el  = document.getElementById('popup-debito');
-  if (localStorage.getItem(KEY)) { el.remove(); return; }
-})();
 function fecharPopupDebitoIndex() {
-  localStorage.setItem('popup_debito_estado_v1', '1');
   const el = document.getElementById('popup-debito');
   el.style.transition = 'opacity .3s,transform .3s';
   el.style.opacity = '0';
