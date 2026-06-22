@@ -103,6 +103,26 @@ const SERVICES = [
   { id:'com-venda-desbloquear',       name:'Desbloquear Comunicação Venda', group:'Comunicação Venda', basePrice:5.00,  inputType:'placa',          icon:'🔓' },
   { id:'com-venda-por-id',            name:'Consultar Comunicação por ID',  group:'Comunicação Venda', basePrice:3.00,  inputType:'id_get',         icon:'🔍' },
   { id:'motivos-cancelamento',        name:'Motivos de Cancelamento',       group:'Comunicação Venda', basePrice:3.00,  inputType:'protocolo_get',  icon:'📋' },
+  // ── Débitos por Estado ──
+  { id:'debito-ac', name:'Débitos AC — Acre',                group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'ac' },
+  { id:'debito-al', name:'Débitos AL — Alagoas',             group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'al' },
+  { id:'debito-am', name:'Débitos AM — Amazonas',            group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'am' },
+  { id:'debito-ap', name:'Débitos AP — Amapá',               group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'ap' },
+  { id:'debito-ce', name:'Débitos CE — Ceará',               group:'Débitos por Estado', basePrice:1.15, inputType:'debito_doc',     icon:'🏛️', uf:'ce' },
+  { id:'debito-df', name:'Débitos DF — Distrito Federal',    group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'df' },
+  { id:'debito-es', name:'Débitos ES — Espírito Santo',      group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'es' },
+  { id:'debito-ma', name:'Débitos MA — Maranhão',            group:'Débitos por Estado', basePrice:1.15, inputType:'debito_doc',     icon:'🏛️', uf:'ma' },
+  { id:'debito-mg', name:'Débitos MG — Minas Gerais',        group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'mg' },
+  { id:'debito-mt', name:'Débitos MT — Mato Grosso',         group:'Débitos por Estado', basePrice:1.15, inputType:'debito_doc',     icon:'🏛️', uf:'mt' },
+  { id:'debito-pa', name:'Débitos PA — Pará',                group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'pa' },
+  { id:'debito-pb', name:'Débitos PB — Paraíba',             group:'Débitos por Estado', basePrice:1.15, inputType:'debito_doc',     icon:'🏛️', uf:'pb' },
+  { id:'debito-pi', name:'Débitos PI — Piauí',               group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'pi' },
+  { id:'debito-pr', name:'Débitos PR — Paraná',              group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'pr' },
+  { id:'debito-rj', name:'Débitos RJ — Rio de Janeiro',      group:'Débitos por Estado', basePrice:1.15, inputType:'debito_doc',     icon:'🏛️', uf:'rj' },
+  { id:'debito-rn', name:'Débitos RN — Rio Grande do Norte', group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'rn' },
+  { id:'debito-ro', name:'Débitos RO — Rondônia',            group:'Débitos por Estado', basePrice:1.15, inputType:'debito_doc',     icon:'🏛️', uf:'ro' },
+  { id:'debito-sc', name:'Débitos SC — Santa Catarina',      group:'Débitos por Estado', basePrice:1.15, inputType:'debito_chassi',  icon:'🏛️', uf:'sc' },
+  { id:'debito-sp', name:'Débitos SP — São Paulo',           group:'Débitos por Estado', basePrice:1.15, inputType:'placa_renavam',  icon:'🏛️', uf:'sp' },
 ];
 
 // Conexão com o banco Neon
@@ -727,16 +747,31 @@ app.post('/api/query', requireAuth, async (req, res) => {
       body = { placa, renavam, api_key: AUTOCRLV_KEY };
     }
 
-    // Todos retornam JSON com campo "pdf" em base64
+    // Débitos por Estado — autocrlv.com.br (GET, auth via query param, retorna PDF binário)
+    const DEBITO_UF_SVCS = ['debito-ac','debito-al','debito-am','debito-ap','debito-ce','debito-df','debito-es','debito-ma','debito-mg','debito-mt','debito-pa','debito-pb','debito-pi','debito-pr','debito-rj','debito-rn','debito-ro','debito-sc','debito-sp'];
+    if (DEBITO_UF_SVCS.includes(serviceId)) {
+      const uf      = service.uf;
+      const placa   = (params?.placa   || '').toUpperCase().replace(/[\s-]/g, '');
+      const renavam = (params?.renavam || '').replace(/\D/g, '');
+      const qp = new URLSearchParams({ endpoint:`debitos_${uf}_pdf`, require_api_key:'1', chaveAcesso:AUTOCRLV_KEY, placa, renavam });
+      if (params?.documento) qp.set('documento', (params.documento||'').replace(/\D/g,''));
+      if (params?.chassi)    qp.set('chassi',    (params.chassi||'').toUpperCase());
+      apiUrl = `https://autocrlv.com.br/cliente/api.php?${qp.toString()}`;
+      method = 'GET';
+      body   = null;
+    }
+
     const autocrlvAllServices  = ['consultar-crv-v2', 'consultar-atpve', 'consultar-atpve-v1'];
-    const autocrlvPdfServices  = []; // nenhum retorna PDF binário direto
+    const autocrlvPdfServices  = [...DEBITO_UF_SVCS]; // retornam PDF binário — não cobra se API falhar
     const autocrlvBase64Pdf    = ['consultar-crv-v2', 'consultar-atpve', 'consultar-atpve-v1'];
 
     const fetchOpts = {
       method,
-      headers: autocrlvAllServices.includes(serviceId)
-        ? { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AUTOCRLV_KEY}` }
-        : { 'Content-Type': 'application/json', chaveAcesso: CHAVE_ACESSO },
+      headers: DEBITO_UF_SVCS.includes(serviceId)
+        ? {} // auth já está na query string
+        : autocrlvAllServices.includes(serviceId)
+          ? { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AUTOCRLV_KEY}` }
+          : { 'Content-Type': 'application/json', chaveAcesso: CHAVE_ACESSO },
     };
     if (body !== null) fetchOpts.body = JSON.stringify(body);
 

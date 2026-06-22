@@ -788,6 +788,7 @@ function renderPrices() {
     'CRV':                     '🔐',
     'Análise de Crédito':      '📊',
     'Comunicação Venda':       '📝',
+    'Débitos por Estado':      '🏛️',
   };
 
   document.getElementById('prices-content').innerHTML = Object.entries(groups).map(([group, svcs]) => `
@@ -839,6 +840,8 @@ function inputTypeLabel(t) {
     protocolo_get:       'Entrada: Protocolo (GET)',
     id_only:             'Entrada: ID da Comunicação',
     id_get:              'Entrada: ID da Comunicação (GET)',
+    debito_doc:          'Entrada: Placa + Renavam + CPF/Documento',
+    debito_chassi:       'Entrada: Placa + Renavam + Chassi',
   };
   return map[t] || t;
 }
@@ -864,6 +867,7 @@ function buildCategoryGrid() {
     'CRV':                     { icon:'🔐', color:'bg-purple-50 border-purple-200' },
     'Análise de Crédito':      { icon:'📊', color:'bg-yellow-50 border-yellow-200' },
     'Comunicação Venda':       { icon:'📝', color:'bg-pink-50 border-pink-200' },
+    'Débitos por Estado':      { icon:'🏛️', color:'bg-teal-50 border-teal-200' },
   };
 
   document.getElementById('category-grid').innerHTML = cats.map(cat => {
@@ -1047,6 +1051,14 @@ function renderFormFields(inputType) {
       ${field('id_motivo','Motivo Cancelamento (ID)','text','1',true,'inputmode="numeric"')}`,
 
     venda: vendaBody,
+
+    debito_doc: placaField + renavamField +
+      field('documento', 'CPF do Proprietário', 'text', '000.000.000-00') +
+      `<p class="text-xs text-blue-600 mt-1">ℹ️ Informe o CPF do proprietário do veículo.</p>`,
+
+    debito_chassi: placaField + renavamField +
+      field('chassi', 'Chassi (17 caracteres)', 'text', '9BWZZZ377VT004251') +
+      `<p class="text-xs text-amber-600 mt-1">⚠️ Informe o chassi exatamente como consta no documento (17 caracteres, sem espaços).</p>`,
   };
 
   wrap.innerHTML = templates[inputType] || placaField;
@@ -1167,6 +1179,12 @@ function buildParams(inputType) {
 
   if (inputType === 'cancelar_venda')
     return { id: g('id'), protocolo: g('protocolo'), id_motivo_cancelamento: g('id_motivo') };
+
+  if (inputType === 'debito_doc')
+    return { placa: g('placa'), renavam: g('renavam'), documento: cd(g('documento')) };
+
+  if (inputType === 'debito_chassi')
+    return { placa: g('placa'), renavam: g('renavam'), chassi: g('chassi') };
 
   if (inputType === 'venda')
     return {
@@ -1518,6 +1536,86 @@ async function logout() {
 
 // ── Start ──────────────────────────────────────────────────────────────────────
 init();
+</script>
+
+<!-- ── POPUP NOVO SERVIÇO: DÉBITOS POR ESTADO ──────────────────────────────── -->
+<div id="popup-debito" class="fixed inset-0 z-[9999] flex items-center justify-center p-4" style="background:rgba(0,0,0,.6);backdrop-filter:blur(4px);">
+  <div class="relative w-full max-w-md rounded-2xl overflow-hidden shadow-2xl animate-bounce-in" style="animation:popIn .4s cubic-bezier(.175,.885,.32,1.275) both;">
+    <!-- Faixa de fundo gradiente -->
+    <div class="absolute inset-0" style="background:linear-gradient(135deg,#0f172a 0%,#1e3a5f 50%,#0f4c75 100%);"></div>
+    <!-- Confetes decorativos -->
+    <div class="absolute top-0 left-0 w-full h-1.5" style="background:linear-gradient(90deg,#f97316,#facc15,#22d3ee,#a855f7,#f97316);"></div>
+
+    <div class="relative p-6 text-center space-y-4">
+      <!-- Ícone animado -->
+      <div class="flex justify-center">
+        <div class="w-20 h-20 rounded-full flex items-center justify-center text-4xl shadow-lg"
+             style="background:linear-gradient(135deg,#f97316,#facc15);animation:pulse 2s infinite;">🆕</div>
+      </div>
+
+      <!-- Título -->
+      <div>
+        <div class="text-xs font-bold tracking-widest uppercase mb-1" style="color:#facc15;">✨ Novidade na Plataforma</div>
+        <h2 class="text-2xl font-black text-white leading-tight">Consulta de Débitos<br>por Estado</h2>
+      </div>
+
+      <!-- Preço destaque -->
+      <div class="rounded-xl py-3 px-4" style="background:rgba(249,115,22,.15);border:1px solid rgba(249,115,22,.4);">
+        <div class="text-4xl font-black" style="color:#fb923c;">R$ 1,50</div>
+        <div class="text-sm font-semibold mt-0.5" style="color:#fed7aa;">por consulta — 19 estados disponíveis</div>
+      </div>
+
+      <!-- Mensagem -->
+      <div class="text-sm leading-relaxed" style="color:#bfdbfe;">
+        Consulte multas e IPVA por UF em PDF gerado na hora.<br>
+        <span class="font-semibold" style="color:#6ee7b7;">Se o estado estiver fora do ar ou ocorrer erro de API,
+        o valor <u>não será cobrado</u>.</span><br><br>
+        <span style="color:#94a3b8;">Volte mais tarde ou reporte pelo botão de contato.
+        Por hora, meus <strong class="text-white">agradecimentos</strong> por usar a plataforma! 🙏</span>
+      </div>
+
+      <!-- Botões -->
+      <div class="flex gap-3 pt-1">
+        <button onclick="fecharPopupDebito()"
+          class="flex-1 py-3 rounded-xl font-bold text-sm transition-all hover:scale-105 active:scale-95"
+          style="background:linear-gradient(135deg,#f97316,#ea580c);color:white;box-shadow:0 4px 15px rgba(249,115,22,.4);">
+          🔍 Consultar Agora
+        </button>
+        <button onclick="fecharPopupDebito()"
+          class="px-4 py-3 rounded-xl font-semibold text-sm transition-all hover:scale-105"
+          style="background:rgba(255,255,255,.1);color:#94a3b8;border:1px solid rgba(255,255,255,.15);">
+          Fechar
+        </button>
+      </div>
+
+      <p class="text-xs" style="color:#475569;">Esta mensagem aparece uma única vez.</p>
+    </div>
+  </div>
+</div>
+
+<style>
+@keyframes popIn {
+  from { opacity:0; transform:scale(.7) translateY(30px); }
+  to   { opacity:1; transform:scale(1) translateY(0); }
+}
+</style>
+
+<script>
+(function() {
+  const KEY = 'popup_debito_estado_v1';
+  const el  = document.getElementById('popup-debito');
+  if (localStorage.getItem(KEY)) { el.remove(); return; }
+  el.style.display = 'flex';
+})();
+
+function fecharPopupDebito() {
+  localStorage.setItem('popup_debito_estado_v1', '1');
+  const el = document.getElementById('popup-debito');
+  el.style.transition = 'opacity .3s,transform .3s';
+  el.style.opacity = '0';
+  el.style.transform = 'scale(.9)';
+  setTimeout(() => el.remove(), 300);
+}
 </script>
 </body>
 </html>
