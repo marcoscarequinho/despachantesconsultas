@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Super Admin — DESPACHANTES CONSULTAS</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { --primary:#1e40af; --accent:#f97316; }
+    .btn-primary  { background:var(--accent);color:white;padding:.5rem 1.25rem;border-radius:.5rem;font-weight:600;font-size:.875rem;transition:all .2s;display:inline-flex;align-items:center;gap:.4rem; }
+    .btn-primary:hover  { background:#ea580c; }
+    .btn-secondary{ background:var(--primary);color:white;padding:.5rem 1.25rem;border-radius:.5rem;font-weight:600;font-size:.875rem;transition:all .2s;display:inline-flex;align-items:center;gap:.4rem; }
+    .btn-secondary:hover{ background:#1e3a8a; }
+    .btn-danger   { background:#dc2626;color:white;padding:.4rem 1rem;border-radius:.5rem;font-weight:600;font-size:.8rem;transition:all .2s;display:inline-flex;align-items:center;gap:.3rem; }
+    .btn-danger:hover   { background:#b91c1c; }
+    .btn-ghost    { color:#6b7280;padding:.5rem 1rem;border-radius:.5rem;font-size:.875rem;transition:all .2s;display:inline-flex;align-items:center;gap:.4rem; }
+    .btn-ghost:hover    { background:#f3f4f6;color:#111827; }
+    .nav-item { display:flex;align-items:center;gap:.75rem;padding:.7rem 1.25rem;border-radius:.5rem;cursor:pointer;transition:all .2s;color:rgba(255,255,255,.75);font-size:.9rem; }
+    .nav-item:hover { background:rgba(255,255,255,.1);color:white; }
+    .nav-item.active { background:rgba(255,255,255,.15);color:white;border-left:3px solid var(--accent);padding-left:calc(1.25rem - 3px); }
+    .card { background:white;border-radius:.75rem;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:1.5rem; }
+    .stat-card { background:white;border-radius:.75rem;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:1.25rem;border-left:4px solid transparent; }
+    .badge-green  { display:inline-flex;align-items:center;padding:.15rem .55rem;border-radius:9999px;font-size:.72rem;font-weight:600;background:#dcfce7;color:#166534; }
+    .badge-red    { display:inline-flex;align-items:center;padding:.15rem .55rem;border-radius:9999px;font-size:.72rem;font-weight:600;background:#fee2e2;color:#991b1b; }
+    .badge-blue   { display:inline-flex;align-items:center;padding:.15rem .55rem;border-radius:9999px;font-size:.72rem;font-weight:600;background:#dbeafe;color:#1e40af; }
+    .badge-amber  { display:inline-flex;align-items:center;padding:.15rem .55rem;border-radius:9999px;font-size:.72rem;font-weight:600;background:#fef3c7;color:#92400e; }
+    .badge-purple { display:inline-flex;align-items:center;padding:.15rem .55rem;border-radius:9999px;font-size:.72rem;font-weight:600;background:#ede9fe;color:#5b21b6; }
+    .toast { position:fixed;bottom:1.5rem;right:1.5rem;z-index:9999;background:#1f2937;color:white;padding:.8rem 1.25rem;border-radius:.6rem;font-size:.875rem;box-shadow:0 4px 16px rgba(0,0,0,.2);transform:translateY(0);opacity:1;transition:all .3s; }
+    .toast.hide { transform:translateY(8px);opacity:0; }
+    #sidebar { transition:transform .25s ease; }
+    @media(max-width:768px) { #sidebar { transform:translateX(-100%); } #sidebar.open { transform:translateX(0); } }
+    .input-field { width:100%;padding:.55rem .9rem;border:1px solid #d1d5db;border-radius:.5rem;font-size:.875rem;transition:.15s; }
+    .input-field:focus { outline:none;border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.15); }
+    .label { display:block;font-size:.8rem;font-weight:600;color:#374151;margin-bottom:.3rem; }
+    .modal-backdrop { position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:500;display:flex;align-items:center;justify-content:center;padding:1rem; }
+    .modal-box { background:white;border-radius:.75rem;width:100%;max-width:520px;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.3); }
+    .table-row:hover td { background:#f9fafb; }
+    .action-btn { padding:.3rem .55rem;border-radius:.4rem;font-size:.75rem;font-weight:600;cursor:pointer;transition:all .15s;border:none; }
+    .skeleton { background:linear-gradient(90deg,#f0f0f0 25%,#e0e0e0 50%,#f0f0f0 75%);background-size:200% 100%;animation:shimmer 1.4s infinite;border-radius:.375rem;height:2rem; }
+    @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+    .spin { animation:spin .9s linear infinite; }
+    @keyframes spin { 0%{transform:rotate(0deg)} 100%{transform:rotate(360deg)} }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+
+<!-- SIDEBAR -->
+<aside id="sidebar" class="fixed left-0 top-0 h-full w-64 bg-gray-900 z-40 flex flex-col select-none shadow-xl">
+  <div class="flex items-center gap-3 px-5 py-5 border-b border-gray-700">
+    <div class="w-9 h-9 bg-red-600 rounded-lg flex items-center justify-center flex-shrink-0 text-white text-lg">🛡️</div>
+    <div>
+      <div class="text-white font-bold text-sm leading-tight">SUPER ADMIN</div>
+      <div class="text-gray-400 text-xs">Painel de Administração</div>
+    </div>
+  </div>
+
+  <div class="flex items-center gap-3 px-5 py-4 border-b border-gray-700">
+    <div class="w-9 h-9 bg-red-600 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0">M</div>
+    <div class="min-w-0">
+      <div class="text-white text-sm font-semibold truncate">Marcos Américo</div>
+      <div class="text-red-400 text-xs font-semibold">Super Admin</div>
+    </div>
+  </div>
+
+  <nav class="flex-1 p-3 space-y-1 overflow-y-auto">
+    <div class="nav-item active" data-section="dashboard" onclick="showSection('dashboard')">
+      <span class="text-lg">🏠</span> Dashboard
+    </div>
+    <div class="nav-item" data-section="users" onclick="showSection('users')">
+      <span class="text-lg">👥</span> Usuários
+    </div>
+    <div class="nav-item" data-section="finance" onclick="showSection('finance')">
+      <span class="text-lg">💰</span> Financeiro
+    </div>
+    <div class="nav-item" data-section="queries" onclick="showSection('queries')">
+      <span class="text-lg">🔍</span> Consultas
+    </div>
+    <div class="nav-item" data-section="services" onclick="showSection('services')">
+      <span class="text-lg">📋</span> Serviços
+    </div>
+  </nav>
+
+  <div class="p-3 border-t border-gray-700 space-y-1">
+    <a href="/painel/usuario" class="nav-item text-blue-300 hover:text-blue-200 hover:bg-blue-900/30 block">
+      <span class="text-lg">↩️</span> Meu Painel
+    </a>
+    <button onclick="logout()" class="nav-item w-full text-left text-red-400 hover:text-red-300 hover:bg-red-900/30">
+      <span class="text-lg">🚪</span> Sair
+    </button>
+  </div>
+</aside>
+
+<div id="overlay" class="fixed inset-0 bg-black/50 z-30 hidden" onclick="toggleSidebar()"></div>
+
+<!-- MAIN -->
+<div class="md:ml-64 min-h-screen flex flex-col">
+
+  <header class="bg-white shadow-sm sticky top-0 z-20 flex items-center justify-between px-4 py-3">
+    <div class="flex items-center gap-3">
+      <button onclick="toggleSidebar()" class="md:hidden text-gray-500 p-1">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+      <div class="flex items-center gap-2">
+        <span class="text-red-600 font-bold text-sm bg-red-50 border border-red-200 px-2 py-1 rounded">🛡️ SUPER ADMIN</span>
+        <h1 id="page-title" class="font-bold text-gray-800 text-lg">Dashboard</h1>
+      </div>
+    </div>
+    <button onclick="refreshCurrentSection()" class="btn-ghost text-xs">🔄 Atualizar</button>
+  </header>
+
+  <main class="flex-1 p-4 sm:p-6">
+
+    <!-- ── DASHBOARD ─────────────────────────────────────────────────────── -->
+    <section id="section-dashboard" class="admin-section space-y-6">
+      <div class="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        <div class="stat-card border-l-blue-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Total Usuários</div>
+          <div id="st-total-users" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">cadastrados</div>
+        </div>
+        <div class="stat-card border-l-green-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Usuários Ativos</div>
+          <div id="st-active-users" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">com acesso</div>
+        </div>
+        <div class="stat-card border-l-red-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Banidos</div>
+          <div id="st-banned-users" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">bloqueados</div>
+        </div>
+        <div class="stat-card border-l-purple-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Créditos na Plataforma</div>
+          <div id="st-total-credits" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">saldo total dos usuários</div>
+        </div>
+        <div class="stat-card border-l-orange-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Receita Total</div>
+          <div id="st-total-revenue" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">todos os depósitos</div>
+        </div>
+        <div class="stat-card border-l-teal-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Receita Este Mês</div>
+          <div id="st-month-revenue" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">depósitos do mês</div>
+        </div>
+        <div class="stat-card border-l-indigo-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Consultas Hoje</div>
+          <div id="st-today-queries" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">realizadas hoje</div>
+        </div>
+        <div class="stat-card border-l-pink-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Consultas no Mês</div>
+          <div id="st-month-queries" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">este mês</div>
+        </div>
+      </div>
+
+      <div class="grid sm:grid-cols-3 gap-4">
+        <button onclick="showSection('users')" class="card flex flex-col items-center gap-2 hover:shadow-md transition cursor-pointer border-2 border-transparent hover:border-blue-200">
+          <span class="text-3xl">👥</span>
+          <div class="font-semibold text-gray-800">Gerenciar Usuários</div>
+          <div class="text-xs text-gray-400">Banir, editar, criar, excluir</div>
+        </button>
+        <button onclick="showSection('finance')" class="card flex flex-col items-center gap-2 hover:shadow-md transition cursor-pointer border-2 border-transparent hover:border-green-200">
+          <span class="text-3xl">💰</span>
+          <div class="font-semibold text-gray-800">Financeiro</div>
+          <div class="text-xs text-gray-400">Depósitos, débitos, transações</div>
+        </button>
+        <button onclick="showSection('queries')" class="card flex flex-col items-center gap-2 hover:shadow-md transition cursor-pointer border-2 border-transparent hover:border-orange-200">
+          <span class="text-3xl">🔍</span>
+          <div class="font-semibold text-gray-800">Consultas</div>
+          <div class="text-xs text-gray-400">Histórico de todas as consultas</div>
+        </button>
+      </div>
+    </section>
+
+    <!-- ── USUÁRIOS ───────────────────────────────────────────────────────── -->
+    <section id="section-users" class="admin-section hidden space-y-4">
+      <div class="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 class="text-xl font-bold text-gray-800">Gerenciamento de Usuários</h2>
+          <p class="text-sm text-gray-500">Crie, edite, bana ou exclua usuários da plataforma</p>
+        </div>
+        <button onclick="openCreateModal()" class="btn-primary">+ Novo Usuário</button>
+      </div>
+
+      <div class="card">
+        <div class="flex flex-wrap gap-3">
+          <input id="user-search" type="text" placeholder="Buscar por nome, e-mail ou CPF/CNPJ..."
+            class="input-field flex-1 min-w-48" oninput="filterUsers()">
+          <select id="user-role-filter" class="input-field w-36" onchange="filterUsers()">
+            <option value="">Todos os roles</option>
+            <option value="user">Usuário</option>
+            <option value="reseller">Revendedor</option>
+            <option value="admin">Admin</option>
+          </select>
+          <select id="user-active-filter" class="input-field w-36" onchange="filterUsers()">
+            <option value="">Todos</option>
+            <option value="true">Ativos</option>
+            <option value="false">Banidos</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="card p-0 overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">ID</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Nome / E-mail</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">CPF/CNPJ</th>
+                <th class="px-4 py-3 text-center font-semibold text-gray-600">Role</th>
+                <th class="px-4 py-3 text-right font-semibold text-gray-600">Créditos</th>
+                <th class="px-4 py-3 text-center font-semibold text-gray-600">Status</th>
+                <th class="px-4 py-3 text-center font-semibold text-gray-600">Ações</th>
+              </tr>
+            </thead>
+            <tbody id="users-tbody" class="divide-y divide-gray-50">
+              <tr><td colspan="7" class="px-4 py-8"><div class="space-y-2"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="users-count" class="px-4 py-2 text-xs text-gray-400 border-t border-gray-100"></div>
+      </div>
+    </section>
+
+    <!-- ── FINANCEIRO ─────────────────────────────────────────────────────── -->
+    <section id="section-finance" class="admin-section hidden space-y-4">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Financeiro</h2>
+        <p class="text-sm text-gray-500">Todas as transações da plataforma</p>
+      </div>
+
+      <div class="card">
+        <div class="flex flex-wrap gap-3">
+          <input id="tx-search" type="text" placeholder="Buscar por usuário ou descrição..."
+            class="input-field flex-1 min-w-48" oninput="filterTransactions()">
+          <select id="tx-type-filter" class="input-field w-36" onchange="filterTransactions()">
+            <option value="">Todos</option>
+            <option value="deposit">Depósito</option>
+            <option value="debit">Débito</option>
+            <option value="commission">Comissão</option>
+            <option value="refund">Reembolso</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="card p-0 overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Data</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Usuário</th>
+                <th class="px-4 py-3 text-center font-semibold text-gray-600">Tipo</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">Descrição</th>
+                <th class="px-4 py-3 text-right font-semibold text-gray-600">Valor</th>
+              </tr>
+            </thead>
+            <tbody id="tx-tbody" class="divide-y divide-gray-50">
+              <tr><td colspan="5" class="px-4 py-8"><div class="space-y-2"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="tx-count" class="px-4 py-2 text-xs text-gray-400 border-t border-gray-100"></div>
+      </div>
+    </section>
+
+    <!-- ── CONSULTAS ──────────────────────────────────────────────────────── -->
+    <section id="section-queries" class="admin-section hidden space-y-4">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Histórico de Consultas</h2>
+        <p class="text-sm text-gray-500">Todas as consultas realizadas na plataforma</p>
+      </div>
+
+      <div class="card">
+        <input id="qr-search" type="text" placeholder="Buscar por usuário ou serviço..."
+          class="input-field" oninput="filterQueries()">
+      </div>
+
+      <div class="card p-0 overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Data</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Usuário</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Serviço</th>
+                <th class="px-4 py-3 text-center font-semibold text-gray-600">Tipo</th>
+                <th class="px-4 py-3 text-right font-semibold text-gray-600">Valor</th>
+              </tr>
+            </thead>
+            <tbody id="qr-tbody" class="divide-y divide-gray-50">
+              <tr><td colspan="5" class="px-4 py-8"><div class="space-y-2"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="qr-count" class="px-4 py-2 text-xs text-gray-400 border-t border-gray-100"></div>
+      </div>
+    </section>
+
+    <!-- ── SERVIÇOS ───────────────────────────────────────────────────────── -->
+    <section id="section-services" class="admin-section hidden space-y-4">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Serviços Disponíveis</h2>
+        <p class="text-sm text-gray-500">Catálogo completo de serviços cadastrados</p>
+      </div>
+      <div id="services-content" class="space-y-4"></div>
+    </section>
+
+  </main>
+</div>
+
+<!-- TOAST -->
+<div id="toast" class="toast hide"></div>
+
+<!-- ── MODAL: CRIAR USUÁRIO ──────────────────────────────────────────────── -->
+<div id="modal-create" class="modal-backdrop hidden">
+  <div class="modal-box">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+      <h3 class="font-bold text-gray-800">Criar Novo Usuário</h3>
+      <button onclick="closeModal('modal-create')" class="text-gray-400 hover:text-gray-600 text-xl font-bold">✕</button>
+    </div>
+    <form id="form-create" onsubmit="submitCreateUser(event)" class="p-6 space-y-4">
+      <div class="grid grid-cols-2 gap-4">
+        <div class="col-span-2">
+          <label class="label">Nome Completo *</label>
+          <input id="c-name" type="text" class="input-field" required>
+        </div>
+        <div class="col-span-2">
+          <label class="label">E-mail *</label>
+          <input id="c-email" type="email" class="input-field" required>
+        </div>
+        <div>
+          <label class="label">CPF/CNPJ *</label>
+          <input id="c-cpf" type="text" class="input-field" required>
+        </div>
+        <div>
+          <label class="label">Telefone</label>
+          <input id="c-phone" type="tel" class="input-field" placeholder="(00) 00000-0000">
+        </div>
+        <div>
+          <label class="label">Senha *</label>
+          <input id="c-password" type="password" minlength="8" class="input-field" placeholder="Min. 8 caracteres" required>
+        </div>
+        <div>
+          <label class="label">Role</label>
+          <select id="c-role" class="input-field">
+            <option value="user">Usuário</option>
+            <option value="reseller">Revendedor</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <div class="col-span-2">
+          <label class="label">Créditos Iniciais (R$)</label>
+          <input id="c-credits" type="number" step="0.01" min="0" value="0" class="input-field">
+        </div>
+      </div>
+      <div id="create-error" class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm"></div>
+      <div class="flex gap-3 pt-2">
+        <button type="submit" class="btn-primary flex-1 justify-center">✅ Criar Usuário</button>
+        <button type="button" onclick="closeModal('modal-create')" class="btn-ghost flex-1 justify-center">Cancelar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ── MODAL: EDITAR USUÁRIO ─────────────────────────────────────────────── -->
+<div id="modal-edit" class="modal-backdrop hidden">
+  <div class="modal-box">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+      <h3 class="font-bold text-gray-800">Editar Usuário <span id="edit-id-label" class="text-gray-400 text-sm font-normal"></span></h3>
+      <button onclick="closeModal('modal-edit')" class="text-gray-400 hover:text-gray-600 text-xl font-bold">✕</button>
+    </div>
+    <form id="form-edit" onsubmit="submitEditUser(event)" class="p-6 space-y-4">
+      <input type="hidden" id="edit-id">
+      <div class="grid grid-cols-2 gap-4">
+        <div class="col-span-2">
+          <label class="label">Nome Completo</label>
+          <input id="e-name" type="text" class="input-field" required>
+        </div>
+        <div class="col-span-2">
+          <label class="label">E-mail</label>
+          <input id="e-email" type="email" class="input-field" required>
+        </div>
+        <div>
+          <label class="label">Telefone</label>
+          <input id="e-phone" type="tel" class="input-field">
+        </div>
+        <div>
+          <label class="label">Role</label>
+          <select id="e-role" class="input-field">
+            <option value="user">Usuário</option>
+            <option value="reseller">Revendedor</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        <div class="col-span-2">
+          <label class="label">Créditos (R$)</label>
+          <input id="e-credits" type="number" step="0.01" class="input-field">
+        </div>
+      </div>
+      <div id="edit-error" class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm"></div>
+      <div class="flex gap-3 pt-2">
+        <button type="submit" class="btn-secondary flex-1 justify-center">💾 Salvar</button>
+        <button type="button" onclick="closeModal('modal-edit')" class="btn-ghost flex-1 justify-center">Cancelar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ── MODAL: AJUSTAR CRÉDITOS ───────────────────────────────────────────── -->
+<div id="modal-credits" class="modal-backdrop hidden">
+  <div class="modal-box">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+      <h3 class="font-bold text-gray-800">Ajustar Créditos</h3>
+      <button onclick="closeModal('modal-credits')" class="text-gray-400 hover:text-gray-600 text-xl font-bold">✕</button>
+    </div>
+    <div class="p-6 space-y-4">
+      <div id="credits-user-info" class="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-sm text-blue-800"></div>
+      <input type="hidden" id="credits-user-id">
+      <div>
+        <label class="label">Valor (positivo = adicionar, negativo = remover)</label>
+        <input id="credits-amount" type="number" step="0.01" class="input-field" placeholder="Ex: 50.00 ou -20.00">
+      </div>
+      <div>
+        <label class="label">Descrição (opcional)</label>
+        <input id="credits-desc" type="text" class="input-field" placeholder="Motivo do ajuste">
+      </div>
+      <div id="credits-error" class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm"></div>
+      <div class="flex gap-3 pt-2">
+        <button onclick="submitCredits()" class="btn-primary flex-1 justify-center">💰 Aplicar</button>
+        <button onclick="closeModal('modal-credits')" class="btn-ghost flex-1 justify-center">Cancelar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL: RESETAR SENHA ──────────────────────────────────────────────── -->
+<div id="modal-reset-pwd" class="modal-backdrop hidden">
+  <div class="modal-box">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+      <h3 class="font-bold text-gray-800">Redefinir Senha</h3>
+      <button onclick="closeModal('modal-reset-pwd')" class="text-gray-400 hover:text-gray-600 text-xl font-bold">✕</button>
+    </div>
+    <div class="p-6 space-y-4">
+      <div id="pwd-user-info" class="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800"></div>
+      <input type="hidden" id="pwd-user-id">
+      <div>
+        <label class="label">Nova Senha</label>
+        <input id="pwd-new" type="password" minlength="8" class="input-field" placeholder="Min. 8 caracteres">
+      </div>
+      <div id="pwd-error" class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm"></div>
+      <div class="flex gap-3 pt-2">
+        <button onclick="submitResetPwd()" class="btn-danger flex-1 justify-center">🔑 Redefinir Senha</button>
+        <button onclick="closeModal('modal-reset-pwd')" class="btn-ghost flex-1 justify-center">Cancelar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL: CONFIRMAR EXCLUSÃO ─────────────────────────────────────────── -->
+<div id="modal-delete" class="modal-backdrop hidden">
+  <div class="modal-box max-w-sm">
+    <div class="p-6 text-center space-y-4">
+      <div class="text-5xl">⚠️</div>
+      <h3 class="font-bold text-gray-800 text-lg">Confirmar Exclusão</h3>
+      <p id="delete-msg" class="text-gray-600 text-sm"></p>
+      <div class="flex gap-3 pt-2">
+        <button id="delete-confirm-btn" class="btn-danger flex-1 justify-center">🗑 Excluir</button>
+        <button onclick="closeModal('modal-delete')" class="btn-ghost flex-1 justify-center">Cancelar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL: DETALHES DO USUÁRIO ────────────────────────────────────────── -->
+<div id="modal-details" class="modal-backdrop hidden">
+  <div class="modal-box">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+      <h3 class="font-bold text-gray-800">Detalhes do Usuário</h3>
+      <button onclick="closeModal('modal-details')" class="text-gray-400 hover:text-gray-600 text-xl font-bold">✕</button>
+    </div>
+    <div id="details-content" class="p-6 space-y-4"></div>
+  </div>
+</div>
+
+<script>
+const fmt = v => 'R$ ' + parseFloat(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2});
+const fmtDate = s => { const d=new Date(s); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
+
+let allUsers = [], allTx = [], allQueries = [], allServices = [];
+const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços' };
+
+function toast(msg, type='success') {
+  const el = document.getElementById('toast');
+  el.textContent = (type==='success'?'✅ ':'❌ ') + msg;
+  el.classList.remove('hide');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.add('hide'), 3500);
+}
+
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('overlay').classList.toggle('hidden');
+}
+
+function showSection(id) {
+  document.querySelectorAll('.admin-section').forEach(s => s.classList.add('hidden'));
+  document.getElementById('section-' + id).classList.remove('hidden');
+  document.querySelectorAll('.nav-item[data-section]').forEach(n => n.classList.remove('active'));
+  const nav = document.querySelector(`.nav-item[data-section="${id}"]`);
+  if (nav) nav.classList.add('active');
+  document.getElementById('page-title').textContent = sectionTitles[id] || '';
+  if (window.innerWidth < 768) { document.getElementById('sidebar').classList.remove('open'); document.getElementById('overlay').classList.add('hidden'); }
+  if (id === 'finance'  && !allTx.length)      loadTransactions();
+  if (id === 'queries'  && !allQueries.length)  loadQueries();
+  if (id === 'services' && !allServices.length) loadServices();
+}
+
+function refreshCurrentSection() {
+  const active = document.querySelector('.nav-item.active[data-section]');
+  if (!active) return;
+  const id = active.dataset.section;
+  if (id === 'dashboard') loadStats();
+  if (id === 'users')     loadUsers();
+  if (id === 'finance')   { allTx = []; loadTransactions(); }
+  if (id === 'queries')   { allQueries = []; loadQueries(); }
+  if (id === 'services')  { allServices = []; loadServices(); }
+}
+
+function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
+function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+async function init() {
+  try {
+    const r = await fetch('/api/auth/me');
+    if (!r.ok) { window.location.href = '/entrar'; return; }
+    const user = await r.json();
+    if (user.email !== 'marcos.rodrigues2@aedu.com') { window.location.href = '/painel'; return; }
+    await Promise.all([loadStats(), loadUsers()]);
+  } catch { window.location.href = '/entrar'; }
+}
+
+async function logout() {
+  await fetch('/api/auth/logout', { method:'POST' });
+  window.location.href = '/entrar';
+}
+
+// ── Dashboard Stats ─────────────────────────────────────────────────────────
+async function loadStats() {
+  try {
+    const r = await fetch('/api/admin/stats');
+    if (!r.ok) return;
+    const d = await r.json();
+    document.getElementById('st-total-users').textContent    = d.total_users;
+    document.getElementById('st-active-users').textContent   = d.active_users;
+    document.getElementById('st-banned-users').textContent   = d.banned_users;
+    document.getElementById('st-total-credits').textContent  = fmt(d.total_credits);
+    document.getElementById('st-total-revenue').textContent  = fmt(d.total_revenue);
+    document.getElementById('st-month-revenue').textContent  = fmt(d.month_revenue);
+    document.getElementById('st-today-queries').textContent  = d.today_queries;
+    document.getElementById('st-month-queries').textContent  = d.month_queries;
+  } catch {}
+}
+
+// ── Usuários ────────────────────────────────────────────────────────────────
+async function loadUsers() {
+  try {
+    const r = await fetch('/api/admin/users');
+    if (!r.ok) return;
+    const d = await r.json();
+    allUsers = d.users || [];
+    renderUsers(allUsers);
+  } catch {}
+}
+
+function filterUsers() {
+  const s  = document.getElementById('user-search').value.toLowerCase();
+  const r  = document.getElementById('user-role-filter').value;
+  const a  = document.getElementById('user-active-filter').value;
+  const filtered = allUsers.filter(u =>
+    (!s || u.name.toLowerCase().includes(s) || u.email.toLowerCase().includes(s) || (u.cpf_cnpj||'').includes(s)) &&
+    (!r || u.role === r) &&
+    (a === '' || String(u.active) === a)
+  );
+  renderUsers(filtered);
+}
+
+function roleBadge(role) {
+  const map = { user:'badge-blue', reseller:'badge-amber', admin:'badge-purple' };
+  const labels = { user:'Usuário', reseller:'Revendedor', admin:'Admin' };
+  return `<span class="${map[role]||'badge-blue'}">${labels[role]||role}</span>`;
+}
+
+function renderUsers(users) {
+  document.getElementById('users-count').textContent = `${users.length} usuário(s) exibido(s)`;
+  const tbody = document.getElementById('users-tbody');
+  if (!users.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="text-center py-10 text-gray-400">Nenhum usuário encontrado.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = users.map(u => `
+    <tr class="table-row">
+      <td class="px-4 py-3 text-xs text-gray-400 font-mono">#${u.id}</td>
+      <td class="px-4 py-3">
+        <div class="font-medium text-gray-800 text-sm">${u.name}</div>
+        <div class="text-xs text-gray-400">${u.email}</div>
+      </td>
+      <td class="px-4 py-3 text-xs text-gray-500 hidden md:table-cell font-mono">${u.cpf_cnpj||'—'}</td>
+      <td class="px-4 py-3 text-center">${roleBadge(u.role)}</td>
+      <td class="px-4 py-3 text-right font-semibold text-sm ${parseFloat(u.credits)>0?'text-green-600':'text-gray-500'}">${fmt(u.credits)}</td>
+      <td class="px-4 py-3 text-center">
+        <span class="${u.active?'badge-green':'badge-red'}">${u.active?'Ativo':'Banido'}</span>
+      </td>
+      <td class="px-4 py-3">
+        <div class="flex items-center justify-center gap-1 flex-wrap">
+          <button onclick="openDetails(${u.id})" class="action-btn bg-blue-100 text-blue-700 hover:bg-blue-200" title="Detalhes">👁</button>
+          <button onclick="openEdit(${JSON.stringify(u).replace(/"/g,'&quot;')})" class="action-btn bg-gray-100 text-gray-700 hover:bg-gray-200" title="Editar">✏️</button>
+          <button onclick="openCredits(${u.id},'${u.name.replace(/'/g,"\\'")}',${u.credits})" class="action-btn bg-green-100 text-green-700 hover:bg-green-200" title="Ajustar créditos">💰</button>
+          <button onclick="openResetPwd(${u.id},'${u.name.replace(/'/g,"\\'")}' )" class="action-btn bg-amber-100 text-amber-700 hover:bg-amber-200" title="Redefinir senha">🔑</button>
+          <button onclick="toggleBan(${u.id},${u.active})" class="action-btn ${u.active?'bg-red-100 text-red-700 hover:bg-red-200':'bg-teal-100 text-teal-700 hover:bg-teal-200'}" title="${u.active?'Banir':'Desbanir'}">${u.active?'🚫':'✅'}</button>
+          <button onclick="confirmDelete(${u.id},'${u.name.replace(/'/g,"\\'")}' )" class="action-btn bg-red-100 text-red-700 hover:bg-red-200" title="Excluir">🗑</button>
+        </div>
+      </td>
+    </tr>`).join('');
+}
+
+// ── Ações Usuário ───────────────────────────────────────────────────────────
+async function openDetails(id) {
+  const r = await fetch(`/api/admin/users/${id}`);
+  if (!r.ok) { toast('Erro ao carregar detalhes.','error'); return; }
+  const u = await r.json();
+  document.getElementById('details-content').innerHTML = `
+    <div class="grid grid-cols-2 gap-3 text-sm">
+      <div class="col-span-2"><div class="text-xs text-gray-400 font-semibold uppercase">Nome</div><div class="font-semibold">${u.name}</div></div>
+      <div><div class="text-xs text-gray-400 font-semibold uppercase">E-mail</div><div>${u.email}</div></div>
+      <div><div class="text-xs text-gray-400 font-semibold uppercase">CPF/CNPJ</div><div class="font-mono">${u.cpf_cnpj}</div></div>
+      <div><div class="text-xs text-gray-400 font-semibold uppercase">Telefone</div><div>${u.phone||'—'}</div></div>
+      <div><div class="text-xs text-gray-400 font-semibold uppercase">Role</div><div>${roleBadge(u.role)}</div></div>
+      <div><div class="text-xs text-gray-400 font-semibold uppercase">Créditos</div><div class="font-bold text-green-600">${fmt(u.credits)}</div></div>
+      <div><div class="text-xs text-gray-400 font-semibold uppercase">Status</div><div><span class="${u.active?'badge-green':'badge-red'}">${u.active?'Ativo':'Banido'}</span></div></div>
+      <div><div class="text-xs text-gray-400 font-semibold uppercase">Cód. Afiliado</div><div class="font-mono">${u.affiliate_code||'—'}</div></div>
+      <div><div class="text-xs text-gray-400 font-semibold uppercase">Cadastro</div><div>${fmtDate(u.created_at)}</div></div>
+    </div>
+    <div class="grid grid-cols-3 gap-3 pt-3 border-t border-gray-100">
+      <div class="bg-blue-50 rounded-lg p-3 text-center"><div class="text-xs text-blue-600 font-semibold uppercase">Consultas</div><div class="text-xl font-bold text-blue-700">${u.total_queries}</div></div>
+      <div class="bg-red-50 rounded-lg p-3 text-center"><div class="text-xs text-red-600 font-semibold uppercase">Total Gasto</div><div class="text-lg font-bold text-red-600">${fmt(u.total_spent)}</div></div>
+      <div class="bg-green-50 rounded-lg p-3 text-center"><div class="text-xs text-green-600 font-semibold uppercase">Depositado</div><div class="text-lg font-bold text-green-600">${fmt(u.total_deposited)}</div></div>
+    </div>`;
+  openModal('modal-details');
+}
+
+function openEdit(u) {
+  if (typeof u === 'string') u = JSON.parse(u);
+  document.getElementById('edit-id').value       = u.id;
+  document.getElementById('edit-id-label').textContent = `#${u.id}`;
+  document.getElementById('e-name').value        = u.name;
+  document.getElementById('e-email').value       = u.email;
+  document.getElementById('e-phone').value       = u.phone||'';
+  document.getElementById('e-role').value        = u.role;
+  document.getElementById('e-credits').value     = parseFloat(u.credits).toFixed(2);
+  document.getElementById('edit-error').classList.add('hidden');
+  openModal('modal-edit');
+}
+
+async function submitEditUser(e) {
+  e.preventDefault();
+  const id = document.getElementById('edit-id').value;
+  const body = {
+    name:    document.getElementById('e-name').value.trim(),
+    email:   document.getElementById('e-email').value.trim(),
+    phone:   document.getElementById('e-phone').value.trim(),
+    role:    document.getElementById('e-role').value,
+    credits: document.getElementById('e-credits').value,
+  };
+  const r = await fetch(`/api/admin/users/${id}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+  const d = await r.json();
+  if (!r.ok) { document.getElementById('edit-error').textContent=d.error; document.getElementById('edit-error').classList.remove('hidden'); return; }
+  toast('Usuário atualizado!');
+  closeModal('modal-edit');
+  loadUsers();
+}
+
+function openCredits(id, name, currentCredits) {
+  document.getElementById('credits-user-id').value = id;
+  document.getElementById('credits-user-info').textContent = `Usuário: ${name} | Créditos atuais: ${fmt(currentCredits)}`;
+  document.getElementById('credits-amount').value = '';
+  document.getElementById('credits-desc').value = '';
+  document.getElementById('credits-error').classList.add('hidden');
+  openModal('modal-credits');
+}
+
+async function submitCredits() {
+  const id  = document.getElementById('credits-user-id').value;
+  const amt = document.getElementById('credits-amount').value;
+  const desc= document.getElementById('credits-desc').value;
+  const r   = await fetch(`/api/admin/users/${id}/credits`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({amount:amt,description:desc}) });
+  const d   = await r.json();
+  if (!r.ok) { document.getElementById('credits-error').textContent=d.error; document.getElementById('credits-error').classList.remove('hidden'); return; }
+  toast(`Créditos ajustados! Novo saldo: ${fmt(d.credits)}`);
+  closeModal('modal-credits');
+  loadUsers();
+  loadStats();
+}
+
+function openResetPwd(id, name) {
+  document.getElementById('pwd-user-id').value = id;
+  document.getElementById('pwd-user-info').textContent = `Redefinir senha para: ${name}`;
+  document.getElementById('pwd-new').value = '';
+  document.getElementById('pwd-error').classList.add('hidden');
+  openModal('modal-reset-pwd');
+}
+
+async function submitResetPwd() {
+  const id  = document.getElementById('pwd-user-id').value;
+  const pwd = document.getElementById('pwd-new').value;
+  const r   = await fetch(`/api/admin/users/${id}/reset-password`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({new_password:pwd}) });
+  const d   = await r.json();
+  if (!r.ok) { document.getElementById('pwd-error').textContent=d.error; document.getElementById('pwd-error').classList.remove('hidden'); return; }
+  toast('Senha redefinida com sucesso!');
+  closeModal('modal-reset-pwd');
+}
+
+async function toggleBan(id, currentActive) {
+  const action = currentActive ? 'banir' : 'desbanir';
+  if (!confirm(`Deseja ${action} este usuário?`)) return;
+  const r = await fetch(`/api/admin/users/${id}/toggle`, { method:'PUT' });
+  const d = await r.json();
+  if (!r.ok) { toast(d.error,'error'); return; }
+  toast(d.active ? 'Usuário desbanido!' : 'Usuário banido!');
+  loadUsers();
+  loadStats();
+}
+
+function confirmDelete(id, name) {
+  document.getElementById('delete-msg').textContent = `Tem certeza que deseja excluir "${name}"? Esta ação é irreversível e apagará todas as consultas e transações do usuário.`;
+  document.getElementById('delete-confirm-btn').onclick = () => deleteUser(id);
+  openModal('modal-delete');
+}
+
+async function deleteUser(id) {
+  const r = await fetch(`/api/admin/users/${id}`, { method:'DELETE' });
+  const d = await r.json();
+  if (!r.ok) { toast(d.error,'error'); return; }
+  toast('Usuário excluído!');
+  closeModal('modal-delete');
+  loadUsers();
+  loadStats();
+}
+
+// ── Criar Usuário ───────────────────────────────────────────────────────────
+function openCreateModal() {
+  document.getElementById('form-create').reset();
+  document.getElementById('create-error').classList.add('hidden');
+  openModal('modal-create');
+}
+
+async function submitCreateUser(e) {
+  e.preventDefault();
+  const body = {
+    name:     document.getElementById('c-name').value.trim(),
+    email:    document.getElementById('c-email').value.trim(),
+    cpf_cnpj: document.getElementById('c-cpf').value.trim(),
+    phone:    document.getElementById('c-phone').value.trim(),
+    password: document.getElementById('c-password').value,
+    role:     document.getElementById('c-role').value,
+    credits:  document.getElementById('c-credits').value,
+  };
+  const r = await fetch('/api/admin/users', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+  const d = await r.json();
+  if (!r.ok) { document.getElementById('create-error').textContent=d.error; document.getElementById('create-error').classList.remove('hidden'); return; }
+  toast('Usuário criado com sucesso!');
+  closeModal('modal-create');
+  loadUsers();
+  loadStats();
+}
+
+// ── Financeiro ──────────────────────────────────────────────────────────────
+async function loadTransactions() {
+  try {
+    const r = await fetch('/api/admin/transactions');
+    if (!r.ok) return;
+    const d = await r.json();
+    allTx = d.transactions || [];
+    renderTransactions(allTx);
+  } catch {}
+}
+
+function filterTransactions() {
+  const s = document.getElementById('tx-search').value.toLowerCase();
+  const t = document.getElementById('tx-type-filter').value;
+  const filtered = allTx.filter(x =>
+    (!s || x.user_name.toLowerCase().includes(s) || x.user_email.toLowerCase().includes(s) || (x.description||'').toLowerCase().includes(s)) &&
+    (!t || x.type === t)
+  );
+  renderTransactions(filtered);
+}
+
+const txBadge = t => {
+  const map = { deposit:'badge-green', debit:'badge-red', commission:'badge-amber', refund:'badge-blue' };
+  const labels = { deposit:'Depósito', debit:'Débito', commission:'Comissão', refund:'Reembolso' };
+  return `<span class="${map[t]||'badge-blue'}">${labels[t]||t}</span>`;
+};
+
+function renderTransactions(txs) {
+  document.getElementById('tx-count').textContent = `${txs.length} transação(ões) exibida(s)`;
+  const tbody = document.getElementById('tx-tbody');
+  if (!txs.length) { tbody.innerHTML = `<tr><td colspan="5" class="text-center py-10 text-gray-400">Nenhuma transação.</td></tr>`; return; }
+  tbody.innerHTML = txs.map(x => `
+    <tr class="table-row">
+      <td class="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">${fmtDate(x.created_at)}</td>
+      <td class="px-4 py-3"><div class="text-sm font-medium text-gray-800">${x.user_name}</div><div class="text-xs text-gray-400">${x.user_email}</div></td>
+      <td class="px-4 py-3 text-center">${txBadge(x.type)}</td>
+      <td class="px-4 py-3 text-xs text-gray-500 hidden md:table-cell">${x.description||'—'}</td>
+      <td class="px-4 py-3 text-right font-semibold text-sm ${x.type==='deposit'||x.type==='commission'?'text-green-600':'text-red-500'}">${x.type==='deposit'||x.type==='commission'?'+':'-'}${fmt(x.amount)}</td>
+    </tr>`).join('');
+}
+
+// ── Consultas ───────────────────────────────────────────────────────────────
+async function loadQueries() {
+  try {
+    const r = await fetch('/api/admin/queries');
+    if (!r.ok) return;
+    const d = await r.json();
+    allQueries = d.queries || [];
+    renderQueries(allQueries);
+  } catch {}
+}
+
+function filterQueries() {
+  const s = document.getElementById('qr-search').value.toLowerCase();
+  const filtered = allQueries.filter(q =>
+    !s || q.user_name.toLowerCase().includes(s) || q.user_email.toLowerCase().includes(s) || q.service_name.toLowerCase().includes(s)
+  );
+  renderQueries(filtered);
+}
+
+function renderQueries(qs) {
+  document.getElementById('qr-count').textContent = `${qs.length} consulta(s) exibida(s)`;
+  const tbody = document.getElementById('qr-tbody');
+  if (!qs.length) { tbody.innerHTML = `<tr><td colspan="5" class="text-center py-10 text-gray-400">Nenhuma consulta.</td></tr>`; return; }
+  tbody.innerHTML = qs.map(q => `
+    <tr class="table-row">
+      <td class="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">${fmtDate(q.created_at)}</td>
+      <td class="px-4 py-3"><div class="text-sm font-medium text-gray-800">${q.user_name}</div><div class="text-xs text-gray-400">${q.user_email}</div></td>
+      <td class="px-4 py-3 text-sm text-gray-700">${q.service_name}</td>
+      <td class="px-4 py-3 text-center"><span class="${q.result_type==='pdf'?'badge-blue':'badge-green'}">${q.result_type.toUpperCase()}</span></td>
+      <td class="px-4 py-3 text-right font-semibold text-red-500 text-sm">-${fmt(q.amount)}</td>
+    </tr>`).join('');
+}
+
+// ── Serviços ────────────────────────────────────────────────────────────────
+async function loadServices() {
+  try {
+    const r = await fetch('/api/services');
+    if (!r.ok) return;
+    const d = await r.json();
+    allServices = d.services || [];
+    renderServices();
+  } catch {}
+}
+
+function renderServices() {
+  const groups = {};
+  allServices.forEach(s => { if (!groups[s.group]) groups[s.group]=[]; groups[s.group].push(s); });
+  document.getElementById('services-content').innerHTML = Object.entries(groups).map(([g, svcs]) => `
+    <div class="card p-0 overflow-hidden">
+      <div class="bg-gray-50 border-b border-gray-100 px-5 py-3 flex items-center justify-between">
+        <h3 class="font-semibold text-gray-800">${g}</h3>
+        <span class="text-xs text-gray-400">${svcs.length} serviço(s)</span>
+      </div>
+      <div class="divide-y divide-gray-50">
+        ${svcs.map(s => `
+          <div class="flex items-center justify-between px-5 py-3 hover:bg-gray-50">
+            <div class="flex items-center gap-3">
+              <span class="text-lg">${s.icon}</span>
+              <div>
+                <div class="font-medium text-gray-800 text-sm">${s.name}</div>
+                <div class="text-xs text-gray-400 font-mono">${s.id}</div>
+              </div>
+            </div>
+            <div class="text-right">
+              <div class="font-bold text-orange-500 text-sm">${fmt(s.price)}</div>
+              <div class="text-xs text-gray-400">base: ${fmt(s.basePrice)}</div>
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>`).join('');
+}
+
+// Fecha modal ao clicar no backdrop
+document.querySelectorAll('.modal-backdrop').forEach(m => {
+  m.addEventListener('click', e => { if (e.target === m) m.classList.add('hidden'); });
+});
+
+init();
+</script>
+</body>
+</html>

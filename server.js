@@ -234,6 +234,14 @@ function requireReseller(req, res, next) {
   next();
 }
 
+const SUPER_ADMIN_EMAIL = 'marcos.rodrigues2@aedu.com';
+
+function requireSuperAdmin(req, res, next) {
+  if (req.user.email !== SUPER_ADMIN_EMAIL)
+    return res.status(403).json({ error: 'Acesso restrito ao super administrador.' });
+  next();
+}
+
 // ── POST /api/auth/register ───────────────────────────────────────────────────
 app.post('/api/auth/register', async (req, res) => {
   const { name, cpf_cnpj, email, phone, password, role, referral_code } = req.body;
@@ -1076,6 +1084,179 @@ app.post('/api/pdf/extrair-atpv', requireAuth, (req, res) => {
   });
 });
 
+// ── ADMIN: GET /api/admin/stats ───────────────────────────────────────────────
+app.get('/api/admin/stats', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const [usersRow, activeRow, bannedRow, creditsRow, revenueRow, queriesRow, monthRow, todayRow, depositMonthRow] = await Promise.all([
+      pool.query('SELECT COUNT(*) FROM users'),
+      pool.query('SELECT COUNT(*) FROM users WHERE active=true'),
+      pool.query('SELECT COUNT(*) FROM users WHERE active=false'),
+      pool.query('SELECT COALESCE(SUM(credits),0) AS total FROM users'),
+      pool.query("SELECT COALESCE(SUM(amount),0) AS total FROM transactions WHERE type='deposit'"),
+      pool.query('SELECT COUNT(*) FROM queries'),
+      pool.query("SELECT COUNT(*) FROM queries WHERE created_at >= date_trunc('month', NOW())"),
+      pool.query("SELECT COUNT(*) FROM queries WHERE created_at >= CURRENT_DATE"),
+      pool.query("SELECT COALESCE(SUM(amount),0) AS total FROM transactions WHERE type='deposit' AND created_at >= date_trunc('month', NOW())"),
+    ]);
+    res.json({
+      total_users:     parseInt(usersRow.rows[0].count),
+      active_users:    parseInt(activeRow.rows[0].count),
+      banned_users:    parseInt(bannedRow.rows[0].count),
+      total_credits:   parseFloat(creditsRow.rows[0].total),
+      total_revenue:   parseFloat(revenueRow.rows[0].total),
+      total_queries:   parseInt(queriesRow.rows[0].count),
+      month_queries:   parseInt(monthRow.rows[0].count),
+      today_queries:   parseInt(todayRow.rows[0].count),
+      month_revenue:   parseFloat(depositMonthRow.rows[0].total),
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── ADMIN: GET /api/admin/users ───────────────────────────────────────────────
+app.get('/api/admin/users', requireAuth, requireSuperAdmin, async (req, res) => {
+  const { search = '', role = '', active = '' } = req.query;
+  try {
+    const conds = []; const vals = []; let i = 1;
+    if (search) { conds.push(`(name ILIKE $${i} OR email ILIKE $${i} OR cpf_cnpj ILIKE $${i})`); vals.push(`%${search}%`); i++; }
+    if (role)   { conds.push(`role=$${i}`);   vals.push(role); i++; }
+    if (active !== '') { conds.push(`active=$${i}`); vals.push(active === 'true'); i++; }
+    const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
+    const r = await pool.query(
+      `SELECT id,name,email,cpf_cnpj,phone,role,credits,active,created_at,affiliate_code
+       FROM users ${where} ORDER BY created_at DESC LIMIT 500`, vals
+    );
+    res.json({ users: r.rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── ADMIN: GET /api/admin/users/:id ──────────────────────────────────────────
+app.get('/api/admin/users/:id', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const [u, q, t] = await Promise.all([
+      pool.query('SELECT id,name,email,cpf_cnpj,phone,role,credits,active,created_at,affiliate_code FROM users WHERE id=$1', [req.params.id]),
+      pool.query('SELECT COUNT(*) AS total, COALESCE(SUM(amount),0) AS spent FROM queries WHERE user_id=$1', [req.params.id]),
+      pool.query("SELECT COUNT(*) AS total, COALESCE(SUM(amount),0) AS deposited FROM transactions WHERE user_id=$1 AND type='deposit'", [req.params.id]),
+    ]);
+    if (!u.rows.length) return res.status(404).json({ error: 'Usuário não encontrado.' });
+    res.json({ ...u.rows[0], total_queries: parseInt(q.rows[0].total), total_spent: parseFloat(q.rows[0].spent), total_deposited: parseFloat(t.rows[0].deposited) });
+  } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ── ADMIN: POST /api/admin/users ──────────────────────────────────────────────
+app.post('/api/admin/users', requireAuth, requireSuperAdmin, async (req, res) => {
+  const { name, cpf_cnpj, email, phone, password, role, credits } = req.body;
+  if (!name || !cpf_cnpj || !email || !password)
+    return res.status(400).json({ error: 'Preencha todos os campos obrigatórios.' });
+  if (password.length < 8)
+    return res.status(400).json({ error: 'Senha deve ter ao menos 8 caracteres.' });
+  const doc = cleanDoc(cpf_cnpj); const mail = email.toLowerCase().trim();
+  try {
+    const dup = await pool.query('SELECT id FROM users WHERE email=$1 OR cpf_cnpj=$2', [mail, doc]);
+    if (dup.rows.length) return res.status(409).json({ error: 'E-mail ou CPF/CNPJ já cadastrado.' });
+    const hash = await bcrypt.hash(password, 12);
+    const affCode = generateAffiliateCode(name);
+    const userRole = ['user','reseller','admin'].includes(role) ? role : 'user';
+    const r = await pool.query(
+      `INSERT INTO users (name,cpf_cnpj,email,phone,password_hash,role,affiliate_code,credits)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,name,email,role,credits,active,created_at`,
+      [name.trim(), doc, mail, phone?.trim()||null, hash, userRole, affCode, parseFloat(credits)||0]
+    );
+    res.json({ success: true, user: r.rows[0] });
+  } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ── ADMIN: PUT /api/admin/users/:id ──────────────────────────────────────────
+app.put('/api/admin/users/:id', requireAuth, requireSuperAdmin, async (req, res) => {
+  const { name, email, phone, role, credits } = req.body;
+  try {
+    const r = await pool.query(
+      `UPDATE users SET name=$1,email=$2,phone=$3,role=$4,credits=$5 WHERE id=$6
+       RETURNING id,name,email,phone,role,credits,active`,
+      [name, email, phone||null, role, parseFloat(credits)||0, req.params.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Usuário não encontrado.' });
+    res.json({ success: true, user: r.rows[0] });
+  } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ── ADMIN: PUT /api/admin/users/:id/toggle ────────────────────────────────────
+app.put('/api/admin/users/:id/toggle', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const c = await pool.query('SELECT active FROM users WHERE id=$1', [req.params.id]);
+    if (!c.rows.length) return res.status(404).json({ error: 'Usuário não encontrado.' });
+    const na = !c.rows[0].active;
+    await pool.query('UPDATE users SET active=$1 WHERE id=$2', [na, req.params.id]);
+    res.json({ success: true, active: na });
+  } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ── ADMIN: POST /api/admin/users/:id/credits ──────────────────────────────────
+app.post('/api/admin/users/:id/credits', requireAuth, requireSuperAdmin, async (req, res) => {
+  const val = parseFloat(req.body.amount);
+  if (isNaN(val)) return res.status(400).json({ error: 'Valor inválido.' });
+  try {
+    await pool.query('UPDATE users SET credits = credits + $1 WHERE id=$2', [val, req.params.id]);
+    await pool.query(
+      `INSERT INTO transactions (user_id,type,amount,description) VALUES ($1,$2,$3,$4)`,
+      [req.params.id, val >= 0 ? 'deposit' : 'debit', Math.abs(val), req.body.description || 'Ajuste manual pelo administrador']
+    );
+    const r = await pool.query('SELECT credits FROM users WHERE id=$1', [req.params.id]);
+    res.json({ success: true, credits: parseFloat(r.rows[0].credits) });
+  } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ── ADMIN: POST /api/admin/users/:id/reset-password ──────────────────────────
+app.post('/api/admin/users/:id/reset-password', requireAuth, requireSuperAdmin, async (req, res) => {
+  const { new_password } = req.body;
+  if (!new_password || new_password.length < 8)
+    return res.status(400).json({ error: 'Senha deve ter ao menos 8 caracteres.' });
+  try {
+    const hash = await bcrypt.hash(new_password, 12);
+    await pool.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ── ADMIN: DELETE /api/admin/users/:id ───────────────────────────────────────
+app.delete('/api/admin/users/:id', requireAuth, requireSuperAdmin, async (req, res) => {
+  if (String(req.params.id) === String(req.user.id))
+    return res.status(400).json({ error: 'Não é possível excluir sua própria conta.' });
+  try {
+    await pool.query('DELETE FROM users WHERE id=$1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ── ADMIN: GET /api/admin/transactions ───────────────────────────────────────
+app.get('/api/admin/transactions', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT t.id,t.type,t.amount,t.description,t.created_at,
+              u.name AS user_name,u.email AS user_email
+       FROM transactions t JOIN users u ON u.id=t.user_id
+       ORDER BY t.created_at DESC LIMIT 500`
+    );
+    res.json({ transactions: r.rows });
+  } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ── ADMIN: GET /api/admin/queries ─────────────────────────────────────────────
+app.get('/api/admin/queries', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT q.id,q.service_name,q.amount,q.result_type,q.created_at,
+              u.name AS user_name,u.email AS user_email
+       FROM queries q JOIN users u ON u.id=q.user_id
+       ORDER BY q.created_at DESC LIMIT 500`
+    );
+    res.json({ queries: r.rows });
+  } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
 // ── Rotas HTML ────────────────────────────────────────────────────────────────
 app.get('/', (req, res) =>
   res.sendFile(path.join(__dirname, 'index.html'))
@@ -1102,6 +1283,10 @@ app.get('/recarga-pix', requireAuth, (req, res) => {
 });
 app.get('/painel/revendedor', requireAuth, (req, res) => {
   res.sendFile(path.join(__dirname, 'painel-revendedor.html'));
+});
+app.get('/admin', requireAuth, (req, res) => {
+  if (req.user.email !== SUPER_ADMIN_EMAIL) return res.redirect('/painel');
+  res.sendFile(path.join(__dirname, 'admin.html'));
 });
 
 // ── Iniciar ───────────────────────────────────────────────────────────────────

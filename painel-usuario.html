@@ -116,6 +116,12 @@
       </svg>
       Perfil
     </div>
+    <a id="nav-superadmin" href="/admin"
+      class="nav-item hidden border border-red-500/40 bg-red-900/20 hover:bg-red-900/40"
+      style="color:#fca5a5;">
+      <span class="text-lg flex-shrink-0">🛡️</span>
+      Super Admin
+    </a>
   </nav>
 
   <div class="p-3 border-t border-blue-800">
@@ -638,6 +644,9 @@ async function init() {
     document.getElementById('profile-email').value       = currentUser.email || '';
     document.getElementById('profile-phone').value       = currentUser.phone || '';
 
+    if (currentUser.email === 'marcos.rodrigues2@aedu.com')
+      document.getElementById('nav-superadmin').classList.remove('hidden');
+
     buildCategoryGrid();
     await Promise.all([loadStats(), loadQueries()]);
   } catch {
@@ -880,6 +889,13 @@ function selectCategory(cat) {
   document.getElementById('service-selector-wrap').classList.remove('hidden');
   document.getElementById('query-form-wrap').classList.add('hidden');
   document.getElementById('query-result-wrap').classList.add('hidden');
+  setTimeout(() => {
+    const el = document.getElementById('service-selector-wrap');
+    const header = document.querySelector('header');
+    const offset = (header ? header.offsetHeight : 0) + 16;
+    const top = el.getBoundingClientRect().top + window.scrollY - offset;
+    window.scrollTo({ top, behavior: 'smooth' });
+  }, 50);
 }
 
 function renderServiceList(cat) {
