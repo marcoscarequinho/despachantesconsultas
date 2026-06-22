@@ -155,22 +155,34 @@
         </div>
       </div>
 
-      <div class="grid sm:grid-cols-3 gap-4">
-        <button onclick="showSection('users')" class="card flex flex-col items-center gap-2 hover:shadow-md transition cursor-pointer border-2 border-transparent hover:border-blue-200">
-          <span class="text-3xl">👥</span>
-          <div class="font-semibold text-gray-800">Gerenciar Usuários</div>
-          <div class="text-xs text-gray-400">Banir, editar, criar, excluir</div>
-        </button>
-        <button onclick="showSection('finance')" class="card flex flex-col items-center gap-2 hover:shadow-md transition cursor-pointer border-2 border-transparent hover:border-green-200">
-          <span class="text-3xl">💰</span>
-          <div class="font-semibold text-gray-800">Financeiro</div>
-          <div class="text-xs text-gray-400">Depósitos, débitos, transações</div>
-        </button>
-        <button onclick="showSection('queries')" class="card flex flex-col items-center gap-2 hover:shadow-md transition cursor-pointer border-2 border-transparent hover:border-orange-200">
-          <span class="text-3xl">🔍</span>
-          <div class="font-semibold text-gray-800">Consultas</div>
-          <div class="text-xs text-gray-400">Histórico de todas as consultas</div>
-        </button>
+      <!-- Tabela de todos os usuários no dashboard -->
+      <div class="card p-0 overflow-hidden">
+        <div class="flex items-center justify-between px-5 py-3 bg-gray-50 border-b border-gray-100">
+          <h3 class="font-semibold text-gray-800">👥 Todos os Usuários Cadastrados</h3>
+          <div class="flex items-center gap-2">
+            <input id="dash-search" type="text" placeholder="Buscar..." class="input-field w-48 text-xs py-1.5" oninput="filterDashUsers()">
+            <button onclick="openCreateModal()" class="btn-primary text-xs py-1.5 px-3">+ Novo</button>
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th class="px-4 py-2 text-left font-semibold text-gray-600 text-xs">ID</th>
+                <th class="px-4 py-2 text-left font-semibold text-gray-600 text-xs">Nome / E-mail</th>
+                <th class="px-4 py-2 text-left font-semibold text-gray-600 text-xs hidden md:table-cell">CPF/CNPJ</th>
+                <th class="px-4 py-2 text-center font-semibold text-gray-600 text-xs">Role</th>
+                <th class="px-4 py-2 text-right font-semibold text-gray-600 text-xs">Créditos</th>
+                <th class="px-4 py-2 text-center font-semibold text-gray-600 text-xs">Status</th>
+                <th class="px-4 py-2 text-center font-semibold text-gray-600 text-xs">Ações</th>
+              </tr>
+            </thead>
+            <tbody id="dash-users-tbody" class="divide-y divide-gray-50">
+              <tr><td colspan="7" class="px-4 py-6"><div class="space-y-2"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="dash-users-count" class="px-4 py-2 text-xs text-gray-400 border-t border-gray-100"></div>
       </div>
     </section>
 
@@ -573,6 +585,7 @@ async function loadUsers() {
     const d = await r.json();
     allUsers = d.users || [];
     renderUsers(allUsers);
+    renderDashUsers(allUsers);
   } catch {}
 }
 
@@ -586,6 +599,44 @@ function filterUsers() {
     (a === '' || String(u.active) === a)
   );
   renderUsers(filtered);
+}
+
+function filterDashUsers() {
+  const s = document.getElementById('dash-search').value.toLowerCase();
+  const filtered = s ? allUsers.filter(u =>
+    u.name.toLowerCase().includes(s) || u.email.toLowerCase().includes(s) || (u.cpf_cnpj||'').includes(s)
+  ) : allUsers;
+  renderDashUsers(filtered);
+}
+
+function renderDashUsers(users) {
+  document.getElementById('dash-users-count').textContent = `${users.length} usuário(s)`;
+  const tbody = document.getElementById('dash-users-tbody');
+  if (!users.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="text-center py-8 text-gray-400">Nenhum usuário encontrado.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = users.map(u => `
+    <tr class="table-row">
+      <td class="px-4 py-2 text-xs text-gray-400 font-mono">#${u.id}</td>
+      <td class="px-4 py-2">
+        <div class="font-medium text-gray-800 text-sm">${u.name}</div>
+        <div class="text-xs text-gray-400">${u.email}</div>
+      </td>
+      <td class="px-4 py-2 text-xs text-gray-500 hidden md:table-cell font-mono">${u.cpf_cnpj||'—'}</td>
+      <td class="px-4 py-2 text-center">${roleBadge(u.role)}</td>
+      <td class="px-4 py-2 text-right font-semibold text-sm ${parseFloat(u.credits)>0?'text-green-600':'text-gray-500'}">${fmt(u.credits)}</td>
+      <td class="px-4 py-2 text-center"><span class="${u.active?'badge-green':'badge-red'}">${u.active?'Ativo':'Banido'}</span></td>
+      <td class="px-4 py-2">
+        <div class="flex items-center justify-center gap-1">
+          <button onclick="openDetails(${u.id})" class="action-btn bg-blue-100 text-blue-700 hover:bg-blue-200" title="Detalhes">👁</button>
+          <button onclick="openEdit(${JSON.stringify(u).replace(/"/g,'&quot;')})" class="action-btn bg-gray-100 text-gray-700 hover:bg-gray-200" title="Editar">✏️</button>
+          <button onclick="openCredits(${u.id},'${u.name.replace(/'/g,"\\'")}',${u.credits})" class="action-btn bg-green-100 text-green-700 hover:bg-green-200" title="Créditos">💰</button>
+          <button onclick="toggleBan(${u.id},${u.active})" class="action-btn ${u.active?'bg-red-100 text-red-700 hover:bg-red-200':'bg-teal-100 text-teal-700 hover:bg-teal-200'}" title="${u.active?'Banir':'Desbanir'}">${u.active?'🚫':'✅'}</button>
+          <button onclick="confirmDelete(${u.id},'${u.name.replace(/'/g,"\\'")}' )" class="action-btn bg-red-100 text-red-700 hover:bg-red-200" title="Excluir">🗑</button>
+        </div>
+      </td>
+    </tr>`).join('');
 }
 
 function roleBadge(role) {
@@ -680,7 +731,7 @@ async function submitEditUser(e) {
   if (!r.ok) { document.getElementById('edit-error').textContent=d.error; document.getElementById('edit-error').classList.remove('hidden'); return; }
   toast('Usuário atualizado!');
   closeModal('modal-edit');
-  loadUsers();
+  await loadUsers();
 }
 
 function openCredits(id, name, currentCredits) {
