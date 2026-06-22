@@ -877,6 +877,17 @@ app.put('/api/profile/password', requireAuth, async (req, res) => {
 });
 
 // ── GET /api/pix/diagnostico (temporário — remove após debug) ─────────────────
+app.get('/api/chave/diagnostico', requireAuth, async (req, res) => {
+  const raw = (process.env.CHAVE_ACESSO || '');
+  res.json({
+    tamanho: raw.length,
+    inicio: raw.slice(0, 10) + '...',
+    fim: '...' + raw.slice(-6),
+    temMaisOuBarra: raw.includes('+') || raw.includes('/'),
+    charsInvalidos: raw.split('').filter(c => c.charCodeAt(0) > 127).length,
+  });
+});
+
 app.get('/api/pix/diagnostico', requireAuth, async (req, res) => {
   const keyOk = ASAAS_API_KEY.length > 20;
   let asaasOk = false;
