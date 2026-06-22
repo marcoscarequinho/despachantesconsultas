@@ -45,7 +45,7 @@ const SERVICES = [
   { id:'consultar-placa-fipe',   name:'Consulta FIPE',              group:'Consultas Básicas', basePrice:0.00,   inputType:'placa',       icon:'💰' },
   { id:'consultar-foto-leilao',  name:'Foto Leilão',                group:'Consultas Básicas', basePrice:10.00,  inputType:'placa',       icon:'📸' },
   { id:'consultar-chassi-v2',    name:'Consulta Chassi',            group:'Consultas Básicas', basePrice:7.50,   inputType:'chassi',      icon:'🔑' },
-  { id:'consultar-cnh',          name:'Consultar CNH',              group:'Consultas Básicas', basePrice:7.50,   inputType:'cpfcnpj',     icon:'🪪' },
+  { id:'consultar-cnh',          name:'Consultar CNH',              group:'Consultas Básicas', basePrice:11.43,  inputType:'cpfcnpj',     icon:'🪪' },
   // ── Débitos e Documentação ──
   { id:'consultar-debito',                name:'Consulta Débito (PDF)',        group:'Débitos e Documentação', basePrice:11.99, inputType:'placa',        icon:'💳' },
   { id:'consultar-debito-api',            name:'Débitos (JSON)',               group:'Débitos e Documentação', basePrice:11.99, inputType:'placa',        icon:'💳' },
