@@ -114,7 +114,7 @@ const SERVICES = [
   { id:'debito-pb', name:'Débitos PB — Paraíba',             group:'Débitos por Estado', basePrice:1.07, inputType:'debito_doc',     icon:'🏛️', uf:'pb' },
   { id:'debito-pi', name:'Débitos PI — Piauí',               group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'pi' },
   { id:'debito-pr', name:'Débitos PR — Paraná',              group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'pr' },
-  { id:'debito-rj', name:'Débitos RJ — Rio de Janeiro',      group:'Débitos por Estado', basePrice:1.07, inputType:'debito_doc',     icon:'🏛️', uf:'rj' },
+  // debito-rj removido: endpoint debitos_rj_pdf retorna 405 (não suportado pela autocrlv)
   { id:'debito-rn', name:'Débitos RN — Rio Grande do Norte', group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'rn' },
   { id:'debito-ro', name:'Débitos RO — Rondônia',            group:'Débitos por Estado', basePrice:1.07, inputType:'debito_doc',     icon:'🏛️', uf:'ro' },
   { id:'debito-sc', name:'Débitos SC — Santa Catarina',      group:'Débitos por Estado', basePrice:1.07, inputType:'debito_chassi',  icon:'🏛️', uf:'sc' },
