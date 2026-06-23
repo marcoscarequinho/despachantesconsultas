@@ -250,7 +250,7 @@ function requireReseller(req, res, next) {
   next();
 }
 
-const SUPER_ADMIN_EMAIL = 'marcos.rodrigues2@aedu.com';
+const SUPER_ADMIN_EMAIL = 'contato@mygmail.com.br';
 
 function requireSuperAdmin(req, res, next) {
   if (req.user.email !== SUPER_ADMIN_EMAIL)
@@ -801,9 +801,10 @@ app.post('/api/query', requireAuth, async (req, res) => {
       return res.status(422).json({ error: errMsg });
     }
 
-    // consultar-placa-crv retorna JSON com pdf_base64
+    // serviços que retornam JSON com pdf_base64
+    const PDF_BASE64_SVCS = ['consultar-placa-crv', 'consultar-crv-v2'];
     let base64PdfBuf = null;
-    if (serviceId === 'consultar-placa-crv') {
+    if (PDF_BASE64_SVCS.includes(serviceId)) {
       let parsed;
       try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
       if (parsed?.pdf_base64) {
