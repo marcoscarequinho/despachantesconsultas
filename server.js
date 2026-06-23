@@ -57,7 +57,7 @@ const SERVICES = [
   { id:'consultar-atpve-v1',             name:'Reemissão ATPV-e (Placa)',     group:'Débitos e Documentação', basePrice:13.50, inputType:'placa_renavam', icon:'📄' },
   { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:25.00, inputType:'placa',        icon:'🔢' },
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa_renavam',icon:'📝' },
-  { id:'dados-veiculares-debitos',        name:'Dados Veiculares + Débitos',   group:'Débitos e Documentação', basePrice:10.00, inputType:'placa_renavam_cpfcnpj_uf_select', icon:'🔎' },
+  { id:'dados-veiculares-debitos',        name:'Dados Veiculares + Débitos',   group:'Débitos e Documentação', basePrice:1.786, inputType:'placa_renavam_cpfcnpj_uf_select', icon:'🔎' },
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
