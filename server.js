@@ -194,7 +194,7 @@ async function initDB() {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
-app.use(express.static(path.join(__dirname)));
+app.use(express.static(path.join(__dirname), { etag: false, lastModified: false, setHeaders: (res) => res.set('Cache-Control', 'no-store') }));
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const cleanDoc = (v) => v.replace(/[\.\-\/]/g, '').trim();
@@ -1319,38 +1319,40 @@ app.get('/api/admin/queries', requireAuth, requireSuperAdmin, async (req, res) =
   } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
 });
 
+const noCache = (res) => res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+
 // ── Rotas HTML ────────────────────────────────────────────────────────────────
-app.get('/', (req, res) =>
-  res.sendFile(path.join(__dirname, 'index.html'))
-);
-app.get('/entrar', (req, res) =>
-  res.sendFile(path.join(__dirname, 'entrar.html'))
-);
-app.get('/cadastrar', (req, res) =>
-  res.sendFile(path.join(__dirname, 'cadastrar.html'))
-);
-app.get('/cadastrar/revendedor', (req, res) =>
-  res.sendFile(path.join(__dirname, 'cadastrar.html'))
-);
+app.get('/', (req, res) => {
+  noCache(res); res.sendFile(path.join(__dirname, 'index.html'));
+});
+app.get('/entrar', (req, res) => {
+  noCache(res); res.sendFile(path.join(__dirname, 'entrar.html'));
+});
+app.get('/cadastrar', (req, res) => {
+  noCache(res); res.sendFile(path.join(__dirname, 'cadastrar.html'));
+});
+app.get('/cadastrar/revendedor', (req, res) => {
+  noCache(res); res.sendFile(path.join(__dirname, 'cadastrar.html'));
+});
 app.get('/painel', requireAuth, (req, res) => {
   if (req.user.role === 'reseller' || req.user.role === 'admin')
     return res.redirect('/painel/revendedor');
   res.redirect('/painel/usuario');
 });
 app.get('/painel/usuario', requireAuth, (req, res) => {
-  res.sendFile(path.join(__dirname, 'painel-usuario.html'));
+  noCache(res); res.sendFile(path.join(__dirname, 'painel-usuario.html'));
 });
 app.get('/recarga-pix', requireAuth, (req, res) => {
-  res.sendFile(path.join(__dirname, 'recarga-pix.html'));
+  noCache(res); res.sendFile(path.join(__dirname, 'recarga-pix.html'));
 });
 app.get('/painel/revendedor', requireAuth, (req, res) => {
-  res.sendFile(path.join(__dirname, 'painel-revendedor.html'));
+  noCache(res); res.sendFile(path.join(__dirname, 'painel-revendedor.html'));
 });
 app.get('/admin', requireAuth, async (req, res) => {
   try {
     const r = await pool.query('SELECT email FROM users WHERE id=$1', [req.user.id]);
     if (!r.rows.length || r.rows[0].email !== SUPER_ADMIN_EMAIL) return res.redirect('/painel');
-    res.sendFile(path.join(__dirname, 'admin.html'));
+    noCache(res); res.sendFile(path.join(__dirname, 'admin.html'));
   } catch {
     res.redirect('/painel');
   }
