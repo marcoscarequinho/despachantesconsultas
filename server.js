@@ -57,6 +57,7 @@ const SERVICES = [
   { id:'consultar-atpve-v1',             name:'Reemissão ATPV-e (Placa)',     group:'Débitos e Documentação', basePrice:13.50, inputType:'placa_renavam', icon:'📄' },
   { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:25.00, inputType:'placa',        icon:'🔢' },
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa_renavam',icon:'📝' },
+  { id:'dados-veiculares-debitos',        name:'Dados Veiculares + Débitos',   group:'Débitos e Documentação', basePrice:10.00, inputType:'placa_renavam_cpfcnpj_uf_select', icon:'🔎' },
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -100,25 +101,7 @@ const SERVICES = [
   { id:'com-venda-por-id',            name:'Consultar Comunicação por ID',  group:'Comunicação Venda', basePrice:3.00,  inputType:'id_get',         icon:'🔍' },
   { id:'motivos-cancelamento',        name:'Motivos de Cancelamento',       group:'Comunicação Venda', basePrice:3.00,  inputType:'protocolo_get',  icon:'📋' },
   // ── Débitos por Estado (autocrlv.com.br) ──
-  { id:'debito-ac', name:'Débitos AC — Acre',                group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'ac' },
-  { id:'debito-al', name:'Débitos AL — Alagoas',             group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'al' },
-  { id:'debito-am', name:'Débitos AM — Amazonas',            group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'am' },
-  { id:'debito-ap', name:'Débitos AP — Amapá',               group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'ap' },
-  { id:'debito-ce', name:'Débitos CE — Ceará',               group:'Débitos por Estado', basePrice:1.07, inputType:'debito_doc',     icon:'🏛️', uf:'ce' },
-  { id:'debito-df', name:'Débitos DF — Distrito Federal',    group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'df' },
-  { id:'debito-es', name:'Débitos ES — Espírito Santo',      group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'es' },
-  { id:'debito-ma', name:'Débitos MA — Maranhão',            group:'Débitos por Estado', basePrice:1.07, inputType:'debito_doc',     icon:'🏛️', uf:'ma' },
-  { id:'debito-mg', name:'Débitos MG — Minas Gerais',        group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'mg' },
-  { id:'debito-mt', name:'Débitos MT — Mato Grosso',         group:'Débitos por Estado', basePrice:1.07, inputType:'debito_doc',     icon:'🏛️', uf:'mt' },
-  { id:'debito-pa', name:'Débitos PA — Pará',                group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'pa' },
-  { id:'debito-pb', name:'Débitos PB — Paraíba',             group:'Débitos por Estado', basePrice:1.07, inputType:'debito_doc',     icon:'🏛️', uf:'pb' },
-  { id:'debito-pi', name:'Débitos PI — Piauí',               group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'pi' },
-  { id:'debito-pr', name:'Débitos PR — Paraná',              group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'pr' },
-  // debito-rj removido: endpoint debitos_rj_pdf retorna 405 (não suportado pela autocrlv)
-  { id:'debito-rn', name:'Débitos RN — Rio Grande do Norte', group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'rn' },
-  { id:'debito-ro', name:'Débitos RO — Rondônia',            group:'Débitos por Estado', basePrice:1.07, inputType:'debito_doc',     icon:'🏛️', uf:'ro' },
-  { id:'debito-sc', name:'Débitos SC — Santa Catarina',      group:'Débitos por Estado', basePrice:1.07, inputType:'debito_chassi',  icon:'🏛️', uf:'sc' },
-  { id:'debito-sp', name:'Débitos SP — São Paulo',           group:'Débitos por Estado', basePrice:1.07, inputType:'placa_renavam',  icon:'🏛️', uf:'sp' },
+  { id:'debito-uf', name:'Débitos Veiculares por Estado', group:'Débitos por Estado', basePrice:1.786, inputType:'debito_uf_select', icon:'🏛️' },
 ];
 
 // Conexão com o banco Neon
@@ -723,6 +706,20 @@ app.post('/api/query', requireAuth, async (req, res) => {
       apiUrl = `${BASE_API_URL}/motivos-cancelamento/${params.protocolo}`;
       method = 'GET'; body = null;
     }
+    // Dados Veiculares + Débitos (autocrlv.com.br — emissão por UF)
+    if (serviceId === 'dados-veiculares-debitos') {
+      const placa    = (params?.placa    || '').toUpperCase().replace(/[\s-]/g, '');
+      const renavam  = (params?.renavam  || '').replace(/\D/g, '');
+      const cpf_cnpj = (params?.cpf_cnpj || '').replace(/\D/g, '');
+      const uf       = (params?.uf       || '').toUpperCase().replace(/\s/g, '');
+      if (placa.length < 7)                          return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      if (renavam.length < 9 || renavam.length > 11) return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+      if (!cpf_cnpj)                                 return res.status(400).json({ error: 'CPF/CNPJ do proprietário é obrigatório.' });
+      if (!uf)                                       return res.status(400).json({ error: 'Selecione o estado (UF).' });
+      apiUrl = 'https://autocrlv.com.br/cliente/api_integracao_crlv_emitir.php';
+      method = 'POST';
+      body   = { placa, renavam, cpf_cnpj, uf, api_key: AUTOCRLV_KEY };
+    }
     // Débitos JSON → endpoint diferente na nova API
     if (serviceId === 'consultar-debito-api') {
       apiUrl = `${BASE_API_URL}/consultar-debito-boletos-json`;
@@ -750,6 +747,22 @@ app.post('/api/query', requireAuth, async (req, res) => {
       body = { cpf: (params?.cpfCnpj || '').replace(/\D/g, '') };
     }
 
+    // Débitos por Estado — serviço unificado com dropdown de UF
+    if (serviceId === 'debito-uf') {
+      const uf      = (params?.uf || '').toLowerCase().replace(/\s/g, '');
+      const placa   = (params?.placa   || '').toUpperCase().replace(/[\s-]/g, '');
+      const renavam = (params?.renavam || '').replace(/\D/g, '');
+      if (!uf)                                      return res.status(400).json({ error: 'Selecione o estado (UF).' });
+      if (placa.length < 7)                         return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      if (renavam.length < 9 || renavam.length > 11) return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+      const qp = new URLSearchParams({ endpoint:`debitos_${uf}_pdf`, require_api_key:'1', chaveAcesso:AUTOCRLV_KEY, placa, renavam });
+      if (params?.documento) qp.set('documento', (params.documento||'').replace(/\D/g,''));
+      if (params?.chassi)    qp.set('chassi',    (params.chassi||'').toUpperCase());
+      apiUrl = `https://autocrlv.com.br/cliente/api.php?${qp.toString()}`;
+      method = 'GET';
+      body   = null;
+    }
+
     // Débitos por Estado — autocrlv.com.br (GET, auth via query param)
     const DEBITO_UF_SVCS = ['debito-ac','debito-al','debito-am','debito-ap','debito-ce','debito-df','debito-es','debito-ma','debito-mg','debito-mt','debito-pa','debito-pb','debito-pi','debito-pr','debito-rj','debito-rn','debito-ro','debito-sc','debito-sp'];
     if (DEBITO_UF_SVCS.includes(serviceId)) {
@@ -764,12 +777,15 @@ app.post('/api/query', requireAuth, async (req, res) => {
       body   = null;
     }
 
-    const fetchOpts = {
-      method,
-      headers: DEBITO_UF_SVCS.includes(serviceId)
-        ? {}
-        : { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO },
-    };
+    let fetchHeaders;
+    if (DEBITO_UF_SVCS.includes(serviceId) || serviceId === 'debito-uf') {
+      fetchHeaders = {};
+    } else if (serviceId === 'dados-veiculares-debitos') {
+      fetchHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AUTOCRLV_KEY}` };
+    } else {
+      fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO };
+    }
+    const fetchOpts = { method, headers: fetchHeaders };
     if (body !== null) fetchOpts.body = JSON.stringify(body);
 
     const apiRes = await fetch(apiUrl, fetchOpts);
@@ -796,7 +812,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
     const isRealPdf  = bodyBuffer.slice(0, 4).toString() === '%PDF';
 
     // Débitos por estado: valida PDF antes de debitar
-    if (DEBITO_UF_SVCS.includes(serviceId) && !isRealPdf) {
+    if ((DEBITO_UF_SVCS.includes(serviceId) || serviceId === 'debito-uf') && !isRealPdf) {
       let errMsg = 'Resposta inválida da API de débitos.';
       try {
         const p = JSON.parse(bodyStr);
@@ -807,7 +823,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
     }
 
     // serviços que retornam JSON com pdf_base64
-    const PDF_BASE64_SVCS = ['consultar-placa-crv', 'consultar-crv-v2'];
+    const PDF_BASE64_SVCS = ['consultar-placa-crv', 'consultar-crv-v2', 'dados-veiculares-debitos'];
     let base64PdfBuf = null;
     if (PDF_BASE64_SVCS.includes(serviceId)) {
       let parsed;
@@ -1209,15 +1225,24 @@ app.post('/api/admin/users', requireAuth, requireSuperAdmin, async (req, res) =>
 // ── ADMIN: PUT /api/admin/users/:id ──────────────────────────────────────────
 app.put('/api/admin/users/:id', requireAuth, requireSuperAdmin, async (req, res) => {
   const { name, email, phone, role, credits } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Nome é obrigatório.' });
+  if (!email || !email.trim()) return res.status(400).json({ error: 'E-mail é obrigatório.' });
+  if (!['user','reseller','admin'].includes(role)) return res.status(400).json({ error: 'Role inválido.' });
+  const parsedCredits = parseFloat(credits);
+  if (isNaN(parsedCredits)) return res.status(400).json({ error: 'Valor de créditos inválido.' });
   try {
     const r = await pool.query(
       `UPDATE users SET name=$1,email=$2,phone=$3,role=$4,credits=$5 WHERE id=$6
        RETURNING id,name,email,phone,role,credits,active`,
-      [name, email, phone||null, role, parseFloat(credits)||0, req.params.id]
+      [name.trim(), email.toLowerCase().trim(), phone?.trim()||null, role, parsedCredits, req.params.id]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Usuário não encontrado.' });
     res.json({ success: true, user: r.rows[0] });
-  } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'E-mail já está em uso por outro usuário.' });
+    console.error('Erro ao editar usuário:', err.message);
+    res.status(500).json({ error: 'Erro interno: ' + err.message });
+  }
 });
 
 // ── ADMIN: PUT /api/admin/users/:id/toggle ────────────────────────────────────

@@ -726,12 +726,17 @@ async function submitEditUser(e) {
     role:    document.getElementById('e-role').value,
     credits: document.getElementById('e-credits').value,
   };
-  const r = await fetch(`/api/admin/users/${id}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
-  const d = await r.json();
-  if (!r.ok) { document.getElementById('edit-error').textContent=d.error; document.getElementById('edit-error').classList.remove('hidden'); return; }
-  toast('Usuário atualizado!');
-  closeModal('modal-edit');
-  await loadUsers();
+  try {
+    const r = await fetch(`/api/admin/users/${id}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok) { document.getElementById('edit-error').textContent=d.error; document.getElementById('edit-error').classList.remove('hidden'); return; }
+    toast('Usuário atualizado!');
+    closeModal('modal-edit');
+    await loadUsers();
+  } catch (err) {
+    document.getElementById('edit-error').textContent = 'Erro de conexão. Tente novamente.';
+    document.getElementById('edit-error').classList.remove('hidden');
+  }
 }
 
 function openCredits(id, name, currentCredits) {
@@ -747,13 +752,18 @@ async function submitCredits() {
   const id  = document.getElementById('credits-user-id').value;
   const amt = document.getElementById('credits-amount').value;
   const desc= document.getElementById('credits-desc').value;
-  const r   = await fetch(`/api/admin/users/${id}/credits`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({amount:amt,description:desc}) });
-  const d   = await r.json();
-  if (!r.ok) { document.getElementById('credits-error').textContent=d.error; document.getElementById('credits-error').classList.remove('hidden'); return; }
-  toast(`Créditos ajustados! Novo saldo: ${fmt(d.credits)}`);
-  closeModal('modal-credits');
-  loadUsers();
-  loadStats();
+  try {
+    const r = await fetch(`/api/admin/users/${id}/credits`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({amount:amt,description:desc}) });
+    const d = await r.json();
+    if (!r.ok) { document.getElementById('credits-error').textContent=d.error; document.getElementById('credits-error').classList.remove('hidden'); return; }
+    toast(`Créditos ajustados! Novo saldo: ${fmt(d.credits)}`);
+    closeModal('modal-credits');
+    loadUsers();
+    loadStats();
+  } catch (err) {
+    document.getElementById('credits-error').textContent = 'Erro de conexão. Tente novamente.';
+    document.getElementById('credits-error').classList.remove('hidden');
+  }
 }
 
 function openResetPwd(id, name) {
@@ -767,22 +777,31 @@ function openResetPwd(id, name) {
 async function submitResetPwd() {
   const id  = document.getElementById('pwd-user-id').value;
   const pwd = document.getElementById('pwd-new').value;
-  const r   = await fetch(`/api/admin/users/${id}/reset-password`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({new_password:pwd}) });
-  const d   = await r.json();
-  if (!r.ok) { document.getElementById('pwd-error').textContent=d.error; document.getElementById('pwd-error').classList.remove('hidden'); return; }
-  toast('Senha redefinida com sucesso!');
-  closeModal('modal-reset-pwd');
+  try {
+    const r = await fetch(`/api/admin/users/${id}/reset-password`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({new_password:pwd}) });
+    const d = await r.json();
+    if (!r.ok) { document.getElementById('pwd-error').textContent=d.error; document.getElementById('pwd-error').classList.remove('hidden'); return; }
+    toast('Senha redefinida com sucesso!');
+    closeModal('modal-reset-pwd');
+  } catch (err) {
+    document.getElementById('pwd-error').textContent = 'Erro de conexão. Tente novamente.';
+    document.getElementById('pwd-error').classList.remove('hidden');
+  }
 }
 
 async function toggleBan(id, currentActive) {
   const action = currentActive ? 'banir' : 'desbanir';
   if (!confirm(`Deseja ${action} este usuário?`)) return;
-  const r = await fetch(`/api/admin/users/${id}/toggle`, { method:'PUT' });
-  const d = await r.json();
-  if (!r.ok) { toast(d.error,'error'); return; }
-  toast(d.active ? 'Usuário desbanido!' : 'Usuário banido!');
-  loadUsers();
-  loadStats();
+  try {
+    const r = await fetch(`/api/admin/users/${id}/toggle`, { method:'PUT' });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error,'error'); return; }
+    toast(d.active ? 'Usuário desbanido!' : 'Usuário banido!');
+    loadUsers();
+    loadStats();
+  } catch (err) {
+    toast('Erro de conexão. Tente novamente.','error');
+  }
 }
 
 function confirmDelete(id, name) {
@@ -792,13 +811,17 @@ function confirmDelete(id, name) {
 }
 
 async function deleteUser(id) {
-  const r = await fetch(`/api/admin/users/${id}`, { method:'DELETE' });
-  const d = await r.json();
-  if (!r.ok) { toast(d.error,'error'); return; }
-  toast('Usuário excluído!');
-  closeModal('modal-delete');
-  loadUsers();
-  loadStats();
+  try {
+    const r = await fetch(`/api/admin/users/${id}`, { method:'DELETE' });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error,'error'); return; }
+    toast('Usuário excluído!');
+    closeModal('modal-delete');
+    loadUsers();
+    loadStats();
+  } catch (err) {
+    toast('Erro de conexão. Tente novamente.','error');
+  }
 }
 
 // ── Criar Usuário ───────────────────────────────────────────────────────────
@@ -819,13 +842,18 @@ async function submitCreateUser(e) {
     role:     document.getElementById('c-role').value,
     credits:  document.getElementById('c-credits').value,
   };
-  const r = await fetch('/api/admin/users', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
-  const d = await r.json();
-  if (!r.ok) { document.getElementById('create-error').textContent=d.error; document.getElementById('create-error').classList.remove('hidden'); return; }
-  toast('Usuário criado com sucesso!');
-  closeModal('modal-create');
-  loadUsers();
-  loadStats();
+  try {
+    const r = await fetch('/api/admin/users', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok) { document.getElementById('create-error').textContent=d.error; document.getElementById('create-error').classList.remove('hidden'); return; }
+    toast('Usuário criado com sucesso!');
+    closeModal('modal-create');
+    loadUsers();
+    loadStats();
+  } catch (err) {
+    document.getElementById('create-error').textContent = 'Erro de conexão. Tente novamente.';
+    document.getElementById('create-error').classList.remove('hidden');
+  }
 }
 
 // ── Financeiro ──────────────────────────────────────────────────────────────

@@ -834,6 +834,8 @@ function inputTypeLabel(t) {
   const map = {
     placa:               'Entrada: Placa',
     placa_uf:            'Entrada: Placa + UF',
+    placa_uf_select:                 'Entrada: Placa + Estado',
+    placa_renavam_cpfcnpj_uf_select: 'Entrada: Placa + Renavam + CPF/CNPJ + Estado',
     placa_renavam:       'Entrada: Placa + Renavam',
     placa_renavam_cpf:   'Entrada: Placa + Renavam + CPF',
     motor:               'Entrada: Número do Motor',
@@ -852,6 +854,7 @@ function inputTypeLabel(t) {
     id_get:              'Entrada: ID da Comunicação (GET)',
     debito_doc:          'Entrada: Placa + Renavam + CPF/Documento',
     debito_chassi:       'Entrada: Placa + Renavam + Chassi',
+    debito_uf_select:    'Entrada: Placa + Renavam + Estado',
   };
   return map[t] || t;
 }
@@ -1030,6 +1033,78 @@ function renderFormFields(inputType) {
 
     placa_uf: placaField + field('uf', 'UF (Estado)', 'text', 'SP'),
 
+    placa_uf_select: placaField + `
+      <div>
+        <label class="label">Estado (UF) <span class="text-red-500">*</span></label>
+        <select id="f-uf" class="input-field" required>
+          <option value="">Selecione o estado...</option>
+          <option value="AC">AC — Acre</option>
+          <option value="AL">AL — Alagoas</option>
+          <option value="AM">AM — Amazonas</option>
+          <option value="AP">AP — Amapá</option>
+          <option value="BA">BA — Bahia</option>
+          <option value="CE">CE — Ceará</option>
+          <option value="DF">DF — Distrito Federal</option>
+          <option value="ES">ES — Espírito Santo</option>
+          <option value="GO">GO — Goiás</option>
+          <option value="MA">MA — Maranhão</option>
+          <option value="MG">MG — Minas Gerais</option>
+          <option value="MT">MT — Mato Grosso</option>
+          <option value="PA">PA — Pará</option>
+          <option value="PB">PB — Paraíba</option>
+          <option value="PE">PE — Pernambuco</option>
+          <option value="PI">PI — Piauí</option>
+          <option value="PR">PR — Paraná</option>
+          <option value="RJ">RJ — Rio de Janeiro</option>
+          <option value="RN">RN — Rio Grande do Norte</option>
+          <option value="RO">RO — Rondônia</option>
+          <option value="RR">RR — Roraima</option>
+          <option value="RS">RS — Rio Grande do Sul</option>
+          <option value="SC">SC — Santa Catarina</option>
+          <option value="SE">SE — Sergipe</option>
+          <option value="SP">SP — São Paulo</option>
+          <option value="TO">TO — Tocantins</option>
+        </select>
+      </div>`,
+
+    placa_renavam_cpfcnpj_uf_select: placaField + renavamField + `
+      <div>
+        <label class="label">CPF / CNPJ do Proprietário <span class="text-red-500">*</span></label>
+        <input id="f-cpfcnpj" type="text" placeholder="000.000.000-00 ou 00.000.000/0001-00" class="input-field" required>
+      </div>
+      <div>
+        <label class="label">Estado (UF) <span class="text-red-500">*</span></label>
+        <select id="f-uf" class="input-field" required>
+          <option value="">Selecione o estado...</option>
+          <option value="AC">AC — Acre</option>
+          <option value="AL">AL — Alagoas</option>
+          <option value="AM">AM — Amazonas</option>
+          <option value="AP">AP — Amapá</option>
+          <option value="BA">BA — Bahia</option>
+          <option value="CE">CE — Ceará</option>
+          <option value="DF">DF — Distrito Federal</option>
+          <option value="ES">ES — Espírito Santo</option>
+          <option value="GO">GO — Goiás</option>
+          <option value="MA">MA — Maranhão</option>
+          <option value="MG">MG — Minas Gerais</option>
+          <option value="MT">MT — Mato Grosso</option>
+          <option value="PA">PA — Pará</option>
+          <option value="PB">PB — Paraíba</option>
+          <option value="PE">PE — Pernambuco</option>
+          <option value="PI">PI — Piauí</option>
+          <option value="PR">PR — Paraná</option>
+          <option value="RJ">RJ — Rio de Janeiro</option>
+          <option value="RN">RN — Rio Grande do Norte</option>
+          <option value="RO">RO — Rondônia</option>
+          <option value="RR">RR — Roraima</option>
+          <option value="RS">RS — Rio Grande do Sul</option>
+          <option value="SC">SC — Santa Catarina</option>
+          <option value="SE">SE — Sergipe</option>
+          <option value="SP">SP — São Paulo</option>
+          <option value="TO">TO — Tocantins</option>
+        </select>
+      </div>`,
+
     motor: field('motor', 'Número do Motor', 'text', 'MOTOR123456'),
 
     chassi: field('chassi', 'Chassi (17 caracteres — conforme CRV/documento)', 'text', '9BWZZZ377VT004251') +
@@ -1088,6 +1163,50 @@ function renderFormFields(inputType) {
     debito_chassi: placaField + renavamField +
       field('chassi', 'Chassi (17 caracteres)', 'text', '9BWZZZ377VT004251') +
       `<p class="text-xs text-amber-600 mt-1">⚠️ Informe o chassi exatamente como consta no documento (17 caracteres, sem espaços).</p>`,
+
+    debito_uf_select: placaField + renavamField + `
+      <div>
+        <label class="label">Estado (UF) <span class="text-red-500">*</span></label>
+        <select id="f-uf" class="input-field" required onchange="onDebitoUfChange(this.value)">
+          <option value="">Selecione o estado...</option>
+          <option value="ac">AC — Acre</option>
+          <option value="al">AL — Alagoas</option>
+          <option value="am">AM — Amazonas</option>
+          <option value="ap">AP — Amapá</option>
+          <option value="ba">BA — Bahia</option>
+          <option value="ce">CE — Ceará</option>
+          <option value="df">DF — Distrito Federal</option>
+          <option value="es">ES — Espírito Santo</option>
+          <option value="go">GO — Goiás</option>
+          <option value="ma">MA — Maranhão</option>
+          <option value="mg">MG — Minas Gerais</option>
+          <option value="mt">MT — Mato Grosso</option>
+          <option value="pa">PA — Pará</option>
+          <option value="pb">PB — Paraíba</option>
+          <option value="pe">PE — Pernambuco</option>
+          <option value="pi">PI — Piauí</option>
+          <option value="pr">PR — Paraná</option>
+          <option value="rj">RJ — Rio de Janeiro</option>
+          <option value="rn">RN — Rio Grande do Norte</option>
+          <option value="ro">RO — Rondônia</option>
+          <option value="rr">RR — Roraima</option>
+          <option value="rs">RS — Rio Grande do Sul</option>
+          <option value="sc">SC — Santa Catarina</option>
+          <option value="se">SE — Sergipe</option>
+          <option value="sp">SP — São Paulo</option>
+          <option value="to">TO — Tocantins</option>
+        </select>
+      </div>
+      <div id="f-documento-wrap" class="hidden">
+        <label class="label">CPF do Proprietário <span class="text-red-500">*</span></label>
+        <input id="f-documento" type="text" placeholder="000.000.000-00" class="input-field">
+        <p class="text-xs text-blue-600 mt-1">ℹ️ Obrigatório para a UF selecionada.</p>
+      </div>
+      <div id="f-chassi-wrap" class="hidden">
+        <label class="label">Chassi (17 caracteres) <span class="text-red-500">*</span></label>
+        <input id="f-chassi" type="text" placeholder="9BWZZZ377VT004251" class="input-field" maxlength="17">
+        <p class="text-xs text-amber-600 mt-1">⚠️ Obrigatório para Santa Catarina (SC).</p>
+      </div>`,
   };
 
   wrap.innerHTML = templates[inputType] || placaField;
@@ -1114,6 +1233,21 @@ function renderFormFields(inputType) {
       this.value = d.replace(/(\d{3})(\d{3})(\d{3})(\d{1,2})/, '$1.$2.$3-$4');
     });
   }
+}
+
+function onDebitoUfChange(uf) {
+  const docUfs    = ['ce','ma','mt','pb','ro'];
+  const chassiUfs = ['sc'];
+  const docWrap    = document.getElementById('f-documento-wrap');
+  const chassiWrap = document.getElementById('f-chassi-wrap');
+  const docEl      = document.getElementById('f-documento');
+  const chassiEl   = document.getElementById('f-chassi');
+  const showDoc    = docUfs.includes(uf);
+  const showChassi = chassiUfs.includes(uf);
+  docWrap?.classList.toggle('hidden', !showDoc);
+  chassiWrap?.classList.toggle('hidden', !showChassi);
+  if (docEl)    docEl.required    = showDoc;
+  if (chassiEl) chassiEl.required = showChassi;
 }
 
 function resetForm(showCats = true) {
@@ -1175,6 +1309,9 @@ function buildParams(inputType) {
 
   if (inputType === 'placa')             return { placa: g('placa') };
   if (inputType === 'placa_uf')          return { placa: g('placa'), uf: g('uf') };
+  if (inputType === 'placa_uf_select')   return { placa: g('placa'), uf: g('uf') };
+  if (inputType === 'placa_renavam_cpfcnpj_uf_select')
+    return { placa: g('placa'), renavam: g('renavam'), cpf_cnpj: cd(g('cpfcnpj')), uf: g('uf') };
   if (inputType === 'motor')             return { motor: g('motor') };
   if (inputType === 'chassi')            return { chassi: g('chassi') };
   if (inputType === 'cpfcnpj')          return { cpfCnpj: cd(g('cpfcnpj')) };
@@ -1214,6 +1351,15 @@ function buildParams(inputType) {
 
   if (inputType === 'debito_chassi')
     return { placa: g('placa'), renavam: g('renavam'), chassi: g('chassi') };
+
+  if (inputType === 'debito_uf_select') {
+    const result = { placa: g('placa'), renavam: g('renavam'), uf: g('uf') };
+    const doc    = g('documento');
+    const chassi = g('chassi');
+    if (doc)    result.documento = cd(doc);
+    if (chassi) result.chassi   = chassi.toUpperCase();
+    return result;
+  }
 
   if (inputType === 'venda')
     return {
@@ -1590,8 +1736,8 @@ init();
 
       <!-- Preço destaque -->
       <div class="rounded-xl py-3 px-4" style="background:rgba(249,115,22,.15);border:1px solid rgba(249,115,22,.4);">
-        <div class="text-4xl font-black" style="color:#fb923c;">R$ 1,50</div>
-        <div class="text-sm font-semibold mt-0.5" style="color:#fed7aa;">por consulta — 19 estados disponíveis</div>
+        <div class="text-4xl font-black" style="color:#fb923c;">R$ 2,50</div>
+        <div class="text-sm font-semibold mt-0.5" style="color:#fed7aa;">por consulta — 18 estados disponíveis</div>
       </div>
 
       <!-- Mensagem -->
