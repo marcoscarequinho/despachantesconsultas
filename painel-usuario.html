@@ -858,7 +858,7 @@ function quickSelect(serviceId) {
 
 // ── Nova Consulta ──────────────────────────────────────────────────────────────
 function buildCategoryGrid() {
-  const cats = [...new Set(allServices.map(s => s.group))];
+  const cats = [...new Set(allServices.map(s => s.group))].filter(c => c !== 'CRLV-e Agendado');
   const catIcons = {
     'Consultas Básicas':       { icon:'🔍', color:'bg-blue-50 border-blue-200' },
     'Débitos e Documentação':  { icon:'💳', color:'bg-red-50 border-red-200' },
@@ -904,7 +904,8 @@ function selectCategory(cat) {
 
 function renderServiceList(cat) {
   const svcs = allServices.filter(s => s.group === cat);
-  document.getElementById('service-list').innerHTML = svcs.map(s => `
+
+  const renderBtn = s => `
     <button type="button"
       onclick="selectService(${JSON.stringify(s).replace(/"/g,"&quot;")})"
       class="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-orange-300 hover:bg-orange-50 text-left transition-all">
@@ -914,7 +915,25 @@ function renderServiceList(cat) {
         <div class="text-xs text-gray-400 mt-0.5">${inputTypeLabel(s.inputType)}</div>
       </div>
       <div class="price-tag text-sm flex-shrink-0">${fmt(s.price)}</div>
-    </button>`).join('');
+    </button>`;
+
+  if (cat === 'CRLV-e Digital') {
+    const toIdx = svcs.findIndex(s => s.id === 'consultar-crlv-to');
+    const agendados = allServices.filter(s => s.group === 'CRLV-e Agendado');
+    const before = svcs.slice(0, toIdx + 1);
+    const after  = svcs.slice(toIdx + 1);
+    const separator = `
+      <div class="col-span-2 flex items-center gap-2 pt-3 pb-1 px-1">
+        <span class="text-base">⏳</span>
+        <span class="font-semibold text-amber-700 text-sm">CRLV-e Agendado</span>
+        <div class="flex-1 h-px bg-amber-200"></div>
+      </div>`;
+    document.getElementById('service-list').innerHTML =
+      [...before.map(renderBtn), separator, ...agendados.map(renderBtn), ...after.map(renderBtn)].join('');
+    return;
+  }
+
+  document.getElementById('service-list').innerHTML = svcs.map(renderBtn).join('');
 }
 
 function selectService(svc) {
