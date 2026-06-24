@@ -16,7 +16,8 @@ const MARKUP = 1.40;
 const ASAAS_API_KEY = (process.env.ASAAS_API_KEY || '')
   .split('').filter(c => c.charCodeAt(0) <= 127).join('').trim();
 const ASAAS_BASE = 'https://api.asaas.com/v3';
-const AUTOCRLV_KEY = process.env.AUTOCRLV_KEY || '';
+const AUTOCRLV_KEY    = process.env.AUTOCRLV_KEY    || '';
+const PORTAL_DESP_KEY = process.env.PORTAL_DESP_KEY || '';
 
 async function asaasReq(method, endpoint, body = null) {
   const opts = {
@@ -47,6 +48,7 @@ const SERVICES = [
   { id:'consultar-chassi-v2',    name:'Consulta Chassi',            group:'Consultas Básicas', basePrice:7.50,   inputType:'chassi',      icon:'🔑' },
   { id:'consultar-cnh',          name:'Consultar CNH',              group:'Consultas Básicas', basePrice:11.43,  inputType:'cpfcnpj',     icon:'🪪' },
   // ── Débitos e Documentação ──
+  { id:'consulta-debitos-portal',          name:'Consulta de Débitos',          group:'Débitos e Documentação', basePrice:1.0714, inputType:'placa',       icon:'💳' },
   { id:'consultar-debito',                name:'Consulta Débito (PDF)',        group:'Débitos e Documentação', basePrice:11.99, inputType:'placa',        icon:'💳' },
   { id:'consultar-debito-api',            name:'Débitos (JSON)',               group:'Débitos e Documentação', basePrice:11.99, inputType:'placa',        icon:'💳' },
   { id:'consultar-licenciamento',         name:'Licenciamento + BIN',          group:'Débitos e Documentação', basePrice:10.00, inputType:'placa',        icon:'📋' },
@@ -717,6 +719,14 @@ app.post('/api/query', requireAuth, async (req, res) => {
       method = 'GET';
       body   = null;
     }
+    // Consulta de Débitos — portaldespachantes.online
+    if (serviceId === 'consulta-debitos-portal') {
+      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      apiUrl = 'https://portaldespachantes.online/consultar-debito-api';
+      method = 'POST';
+      body   = { placa };
+    }
     // Débitos JSON → endpoint diferente na nova API
     if (serviceId === 'consultar-debito-api') {
       apiUrl = `${BASE_API_URL}/consultar-debito-boletos-json`;
@@ -779,6 +789,8 @@ app.post('/api/query', requireAuth, async (req, res) => {
       fetchHeaders = {};
     } else if (serviceId === 'dados-veiculares-debitos') {
       fetchHeaders = { 'Authorization': `Bearer ${AUTOCRLV_KEY}` };
+    } else if (serviceId === 'consulta-debitos-portal') {
+      fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY };
     } else {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO };
     }
