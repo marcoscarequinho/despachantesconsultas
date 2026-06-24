@@ -832,7 +832,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
     }
 
     // serviços que retornam JSON com pdf_base64
-    const PDF_BASE64_SVCS = ['consultar-placa-crv', 'consultar-crv-v2'];
+    const PDF_BASE64_SVCS = ['consultar-placa-crv', 'consultar-crv-v2', 'consulta-debitos-portal'];
     let base64PdfBuf = null;
     if (PDF_BASE64_SVCS.includes(serviceId)) {
       let parsed;
