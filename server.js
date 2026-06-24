@@ -85,7 +85,7 @@ const SERVICES = [
   { id:'crlv-agendado-pe', name:'CRLV-e Agendado Pernambuco (PE)',         group:'CRLV-e Agendado', basePrice:75.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'pe' },
   { id:'crlv-agendado-pr', name:'CRLV-e Agendado Paraná (PR)',             group:'CRLV-e Agendado', basePrice:15.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'pr' },
   { id:'crlv-agendado-rj', name:'CRLV-e Agendado Rio de Janeiro (RJ)',     group:'CRLV-e Agendado', basePrice:10.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'rj' },
-  { id:'crlv-agendado-rj-reemissao', name:'Reemissão Crlv-e Rio de Janeiro (RJ)', group:'CRLV-e Agendado', basePrice:110.00, inputType:'crlv_agendado_placa', icon:'⏳', uf:'rj' },
+  { id:'crlv-agendado-rj-reemissao', name:'Reemissão Crlv-e Rio de Janeiro (RJ)', group:'CRLV-e Agendado', basePrice:110.00, inputType:'crlv_agendado_placa', icon:'⏳', uf:'rj', noMarkup:true },
   { id:'crlv-agendado-rn', name:'CRLV-e Agendado Rio Grande do Norte (RN)',group:'CRLV-e Agendado', basePrice:55.00,  inputType:'crlv_agendado_cpf',   icon:'⏳', uf:'rn' },
   { id:'crlv-agendado-sc', name:'CRLV-e Agendado Santa Catarina (SC)',     group:'CRLV-e Agendado', basePrice:60.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'sc' },
   { id:'crlv-agendado-status', name:'CRLV Agendado — Ver Status',          group:'CRLV-e Agendado', basePrice:0.00,   inputType:'pedido_id_get',       icon:'🔄' },
@@ -563,7 +563,7 @@ app.get('/api/services', requireAuth, (req, res) => {
   res.json({
     services: SERVICES.map(s => ({
       ...s,
-      price: parseFloat((s.basePrice * MARKUP).toFixed(2)),
+      price: parseFloat((s.basePrice * (s.noMarkup ? 1 : MARKUP)).toFixed(2)),
     })),
   });
 });
@@ -576,7 +576,7 @@ app.get('/api/services/public', (req, res) => {
       name:  s.name,
       group: s.group,
       icon:  s.icon,
-      price: parseFloat((s.basePrice * MARKUP).toFixed(2)),
+      price: parseFloat((s.basePrice * (s.noMarkup ? 1 : MARKUP)).toFixed(2)),
     })),
   });
 });
@@ -661,7 +661,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
   const service = SERVICES.find(s => s.id === serviceId);
   if (!service) return res.status(400).json({ error: 'Serviço inválido.' });
 
-  const price = parseFloat((service.basePrice * MARKUP).toFixed(2));
+  const price = parseFloat((service.basePrice * (service.noMarkup ? 1 : MARKUP)).toFixed(2));
 
   try {
     const ur = await pool.query(
