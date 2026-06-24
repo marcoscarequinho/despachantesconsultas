@@ -564,7 +564,11 @@ async function logout() {
 async function loadStats() {
   try {
     const r = await fetch('/api/admin/stats');
-    if (!r.ok) return;
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      toast(err.error || 'Erro ao carregar estatísticas.', 'error');
+      return;
+    }
     const d = await r.json();
     document.getElementById('st-total-users').textContent    = d.total_users;
     document.getElementById('st-active-users').textContent   = d.active_users;
@@ -574,19 +578,23 @@ async function loadStats() {
     document.getElementById('st-month-revenue').textContent  = fmt(d.month_revenue);
     document.getElementById('st-today-queries').textContent  = d.today_queries;
     document.getElementById('st-month-queries').textContent  = d.month_queries;
-  } catch {}
+  } catch (err) { toast('Erro de conexão ao carregar estatísticas.', 'error'); }
 }
 
 // ── Usuários ────────────────────────────────────────────────────────────────
 async function loadUsers() {
   try {
     const r = await fetch('/api/admin/users');
-    if (!r.ok) return;
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      toast(err.error || 'Erro ao carregar usuários.', 'error');
+      return;
+    }
     const d = await r.json();
     allUsers = d.users || [];
     renderUsers(allUsers);
     renderDashUsers(allUsers);
-  } catch {}
+  } catch (err) { toast('Erro de conexão ao carregar usuários.', 'error'); }
 }
 
 function filterUsers() {
@@ -630,10 +638,10 @@ function renderDashUsers(users) {
       <td class="px-4 py-2">
         <div class="flex items-center justify-center gap-1">
           <button onclick="openDetails(${u.id})" class="action-btn bg-blue-100 text-blue-700 hover:bg-blue-200" title="Detalhes">👁</button>
-          <button onclick="openEdit(${JSON.stringify(u).replace(/"/g,'&quot;')})" class="action-btn bg-gray-100 text-gray-700 hover:bg-gray-200" title="Editar">✏️</button>
-          <button onclick="openCredits(${u.id},'${u.name.replace(/'/g,"\\'")}',${u.credits})" class="action-btn bg-green-100 text-green-700 hover:bg-green-200" title="Créditos">💰</button>
+          <button onclick="openEditById(${u.id})" class="action-btn bg-gray-100 text-gray-700 hover:bg-gray-200" title="Editar">✏️</button>
+          <button onclick="openCreditsById(${u.id})" class="action-btn bg-green-100 text-green-700 hover:bg-green-200" title="Créditos">💰</button>
           <button onclick="toggleBan(${u.id},${u.active})" class="action-btn ${u.active?'bg-red-100 text-red-700 hover:bg-red-200':'bg-teal-100 text-teal-700 hover:bg-teal-200'}" title="${u.active?'Banir':'Desbanir'}">${u.active?'🚫':'✅'}</button>
-          <button onclick="confirmDelete(${u.id},'${u.name.replace(/'/g,"\\'")}' )" class="action-btn bg-red-100 text-red-700 hover:bg-red-200" title="Excluir">🗑</button>
+          <button onclick="confirmDeleteById(${u.id})" class="action-btn bg-red-100 text-red-700 hover:bg-red-200" title="Excluir">🗑</button>
         </div>
       </td>
     </tr>`).join('');
@@ -668,14 +676,43 @@ function renderUsers(users) {
       <td class="px-4 py-3">
         <div class="flex items-center justify-center gap-1 flex-wrap">
           <button onclick="openDetails(${u.id})" class="action-btn bg-blue-100 text-blue-700 hover:bg-blue-200" title="Detalhes">👁</button>
-          <button onclick="openEdit(${JSON.stringify(u).replace(/"/g,'&quot;')})" class="action-btn bg-gray-100 text-gray-700 hover:bg-gray-200" title="Editar">✏️</button>
-          <button onclick="openCredits(${u.id},'${u.name.replace(/'/g,"\\'")}',${u.credits})" class="action-btn bg-green-100 text-green-700 hover:bg-green-200" title="Ajustar créditos">💰</button>
-          <button onclick="openResetPwd(${u.id},'${u.name.replace(/'/g,"\\'")}' )" class="action-btn bg-amber-100 text-amber-700 hover:bg-amber-200" title="Redefinir senha">🔑</button>
+          <button onclick="openEditById(${u.id})" class="action-btn bg-gray-100 text-gray-700 hover:bg-gray-200" title="Editar">✏️</button>
+          <button onclick="openCreditsById(${u.id})" class="action-btn bg-green-100 text-green-700 hover:bg-green-200" title="Ajustar créditos">💰</button>
+          <button onclick="openResetPwdById(${u.id})" class="action-btn bg-amber-100 text-amber-700 hover:bg-amber-200" title="Redefinir senha">🔑</button>
           <button onclick="toggleBan(${u.id},${u.active})" class="action-btn ${u.active?'bg-red-100 text-red-700 hover:bg-red-200':'bg-teal-100 text-teal-700 hover:bg-teal-200'}" title="${u.active?'Banir':'Desbanir'}">${u.active?'🚫':'✅'}</button>
-          <button onclick="confirmDelete(${u.id},'${u.name.replace(/'/g,"\\'")}' )" class="action-btn bg-red-100 text-red-700 hover:bg-red-200" title="Excluir">🗑</button>
+          <button onclick="confirmDeleteById(${u.id})" class="action-btn bg-red-100 text-red-700 hover:bg-red-200" title="Excluir">🗑</button>
         </div>
       </td>
     </tr>`).join('');
+}
+
+// ── Helpers de lookup ────────────────────────────────────────────────────────
+function getUserById(id) {
+  return allUsers.find(u => u.id == id) || null;
+}
+
+function openEditById(id) {
+  const u = getUserById(id);
+  if (!u) { toast('Usuário não encontrado.', 'error'); return; }
+  openEdit(u);
+}
+
+function openCreditsById(id) {
+  const u = getUserById(id);
+  if (!u) { toast('Usuário não encontrado.', 'error'); return; }
+  openCredits(u.id, u.name, u.credits);
+}
+
+function openResetPwdById(id) {
+  const u = getUserById(id);
+  if (!u) { toast('Usuário não encontrado.', 'error'); return; }
+  openResetPwd(u.id, u.name);
+}
+
+function confirmDeleteById(id) {
+  const u = getUserById(id);
+  if (!u) { toast('Usuário não encontrado.', 'error'); return; }
+  confirmDelete(u.id, u.name);
 }
 
 // ── Ações Usuário ───────────────────────────────────────────────────────────
