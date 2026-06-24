@@ -719,11 +719,18 @@ app.post('/api/query', requireAuth, async (req, res) => {
       method = 'GET';
       body   = null;
     }
-    // Consulta de Débitos — portaldespachantes.online
-    if (serviceId === 'consulta-debitos-portal') {
+    // Serviços migrados para portaldespachantes.online (placa only)
+    const PORTAL_PLACA_MAP = {
+      'consulta-debitos-portal':  'consultar-debito-api',
+      'base-estadual':            'base-estadual',
+      'base-nacional':            'base-nacional',
+      'consultar-gravame':        'consultar-gravame',
+      'consultar-licenciamento':  'consultar-licenciamento',
+    };
+    if (PORTAL_PLACA_MAP[serviceId]) {
       const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
       if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
-      apiUrl = 'https://portaldespachantes.online/consultar-debito-api';
+      apiUrl = `https://portaldespachantes.online/${PORTAL_PLACA_MAP[serviceId]}`;
       method = 'POST';
       body   = { placa };
     }
@@ -789,7 +796,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       fetchHeaders = {};
     } else if (serviceId === 'dados-veiculares-debitos') {
       fetchHeaders = { 'Authorization': `Bearer ${AUTOCRLV_KEY}` };
-    } else if (serviceId === 'consulta-debitos-portal') {
+    } else if (PORTAL_PLACA_MAP[serviceId]) {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY };
     } else {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO };
