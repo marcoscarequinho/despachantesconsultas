@@ -715,10 +715,15 @@ function renderRecentQueries() {
       <div class="text-right flex-shrink-0 ml-3 flex flex-col items-end gap-1">
         <div class="text-sm font-semibold text-red-500">-${fmt(q.amount)}</div>
         ${q.pdf_token
-          ? `<a href="/api/pdf/${q.pdf_token}" target="_blank"
-               class="text-xs bg-blue-600 hover:bg-blue-700 text-white px-2 py-0.5 rounded font-medium">
-               📥 PDF
-             </a>`
+          ? q.result_type === 'html'
+            ? `<a href="/api/html/${q.pdf_token}" target="_blank"
+                 class="text-xs bg-green-600 hover:bg-green-700 text-white px-2 py-0.5 rounded font-medium">
+                 📋 Relatório
+               </a>`
+            : `<a href="/api/pdf/${q.pdf_token}" target="_blank"
+                 class="text-xs bg-blue-600 hover:bg-blue-700 text-white px-2 py-0.5 rounded font-medium">
+                 📥 PDF
+               </a>`
           : `<span class="badge-${q.result_type === 'pdf' ? 'blue' : 'green'}">${q.result_type.toUpperCase()}</span>`
         }
       </div>
@@ -765,13 +770,21 @@ function renderHistoryTable() {
         </td>
         <td class="px-5 py-3 text-center">
           ${q.pdf_token
-            ? `<div class="flex flex-col items-center gap-0.5">
-                 <a href="/api/pdf/${q.pdf_token}" target="_blank"
-                    class="inline-flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 py-1 rounded font-semibold transition">
-                   📥 Baixar PDF
-                 </a>
-                 ${pdfExpires}
-               </div>`
+            ? q.result_type === 'html'
+              ? `<div class="flex flex-col items-center gap-0.5">
+                   <a href="/api/html/${q.pdf_token}" target="_blank"
+                      class="inline-flex items-center gap-1 bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1 rounded font-semibold transition">
+                     📋 Ver Relatório
+                   </a>
+                   ${pdfExpires}
+                 </div>`
+              : `<div class="flex flex-col items-center gap-0.5">
+                   <a href="/api/pdf/${q.pdf_token}" target="_blank"
+                      class="inline-flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 py-1 rounded font-semibold transition">
+                     📥 Baixar PDF
+                   </a>
+                   ${pdfExpires}
+                 </div>`
             : `<span class="badge-${q.result_type === 'pdf' ? 'blue' : 'green'}">${q.result_type.toUpperCase()}</span>`
           }
         </td>
@@ -855,6 +868,7 @@ function inputTypeLabel(t) {
     debito_doc:          'Entrada: Placa + Renavam + CPF/Documento',
     debito_chassi:       'Entrada: Placa + Renavam + Chassi',
     debito_uf_select:    'Entrada: Placa + Renavam + Estado',
+    dados_veiculares_uf: 'Entrada: Placa + Estado',
   };
   return map[t] || t;
 }
@@ -1164,6 +1178,40 @@ function renderFormFields(inputType) {
       field('chassi', 'Chassi (17 caracteres)', 'text', '9BWZZZ377VT004251') +
       `<p class="text-xs text-amber-600 mt-1">⚠️ Informe o chassi exatamente como consta no documento (17 caracteres, sem espaços).</p>`,
 
+    dados_veiculares_uf: placaField + `
+      <div>
+        <label class="label">Estado (UF) <span class="text-red-500">*</span></label>
+        <select id="f-uf" class="input-field" required>
+          <option value="">Selecione o estado...</option>
+          <option value="AC">AC — Acre</option>
+          <option value="AL">AL — Alagoas</option>
+          <option value="AM">AM — Amazonas</option>
+          <option value="AP">AP — Amapá</option>
+          <option value="BA">BA — Bahia</option>
+          <option value="CE">CE — Ceará</option>
+          <option value="DF">DF — Distrito Federal</option>
+          <option value="ES">ES — Espírito Santo</option>
+          <option value="GO">GO — Goiás</option>
+          <option value="MA">MA — Maranhão</option>
+          <option value="MG">MG — Minas Gerais</option>
+          <option value="MT">MT — Mato Grosso</option>
+          <option value="PA">PA — Pará</option>
+          <option value="PB">PB — Paraíba</option>
+          <option value="PE">PE — Pernambuco</option>
+          <option value="PI">PI — Piauí</option>
+          <option value="PR">PR — Paraná</option>
+          <option value="RJ">RJ — Rio de Janeiro</option>
+          <option value="RN">RN — Rio Grande do Norte</option>
+          <option value="RO">RO — Rondônia</option>
+          <option value="RR">RR — Roraima</option>
+          <option value="RS">RS — Rio Grande do Sul</option>
+          <option value="SC">SC — Santa Catarina</option>
+          <option value="SE">SE — Sergipe</option>
+          <option value="SP">SP — São Paulo</option>
+          <option value="TO">TO — Tocantins</option>
+        </select>
+      </div>`,
+
     debito_uf_select: placaField + renavamField + `
       <div>
         <label class="label">Estado (UF) <span class="text-red-500">*</span></label>
@@ -1293,7 +1341,12 @@ async function submitQuery(e) {
         showFormError(data.error || 'Erro ao realizar consulta.');
         return;
       }
-      showJsonResult(data, selectedSvc);
+      if (data.html_token) {
+        window.open(`/api/html/${data.html_token}`, '_blank');
+        showHtmlResult(selectedSvc, data);
+      } else {
+        showJsonResult(data, selectedSvc);
+      }
       await Promise.all([loadStats(), loadQueries()]);
     }
   } catch {
@@ -1310,6 +1363,7 @@ function buildParams(inputType) {
   if (inputType === 'placa')             return { placa: g('placa') };
   if (inputType === 'placa_uf')          return { placa: g('placa'), uf: g('uf') };
   if (inputType === 'placa_uf_select')   return { placa: g('placa'), uf: g('uf') };
+  if (inputType === 'dados_veiculares_uf') return { placa: g('placa'), uf: g('uf') };
   if (inputType === 'placa_renavam_cpfcnpj_uf_select')
     return { placa: g('placa'), renavam: g('renavam'), cpf_cnpj: cd(g('cpfcnpj')), uf: g('uf') };
   if (inputType === 'motor')             return { motor: g('motor') };
@@ -1433,6 +1487,27 @@ function showJsonResult(data, svc) {
   document.getElementById('result-json-raw').textContent = JSON.stringify(result, null, 2);
   document.getElementById('query-result-wrap').scrollIntoView({ behavior:'smooth' });
   toast('Consulta concluída com sucesso!');
+}
+
+function showHtmlResult(svc, data) {
+  document.getElementById('query-form-wrap').classList.add('hidden');
+  document.getElementById('query-result-wrap').classList.remove('hidden');
+  document.getElementById('result-service-name').textContent = svc.name;
+  document.getElementById('result-charged').textContent = '-' + fmt(data.charged);
+  document.getElementById('result-json-wrap').classList.remove('hidden');
+  document.getElementById('result-pdf-wrap').classList.add('hidden');
+  document.getElementById('result-fields').innerHTML = `
+    <div class="col-span-3 text-center py-4">
+      <div class="text-4xl mb-3">📋</div>
+      <p class="text-green-700 font-medium mb-3">Relatório gerado! Uma nova aba foi aberta automaticamente.</p>
+      <a href="/api/html/${data.html_token}" target="_blank"
+         class="btn-primary inline-flex items-center gap-2">
+        🔍 Abrir Relatório
+      </a>
+    </div>`;
+  document.getElementById('result-json-raw').textContent = '';
+  document.getElementById('query-result-wrap').scrollIntoView({ behavior: 'smooth' });
+  toast('Relatório gerado com sucesso!');
 }
 
 function flattenObj(obj, prefix, depth) {
@@ -1731,7 +1806,7 @@ init();
       <!-- Título -->
       <div>
         <div class="text-xs font-bold tracking-widest uppercase mb-1" style="color:#facc15;">✨ Novidade na Plataforma</div>
-        <h2 class="text-2xl font-black text-white leading-tight">Consulta de Débitos<br>por Estado</h2>
+        <h2 class="text-2xl font-black text-white leading-tight">Débitos Veiculares<br>por Estado</h2>
       </div>
 
       <!-- Preço destaque -->

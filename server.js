@@ -57,7 +57,7 @@ const SERVICES = [
   { id:'consultar-atpve-v1',             name:'Reemissão ATPV-e (Placa)',     group:'Débitos e Documentação', basePrice:13.50, inputType:'placa_renavam', icon:'📄' },
   { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:25.00, inputType:'placa',        icon:'🔢' },
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa_renavam',icon:'📝' },
-  { id:'dados-veiculares-debitos',        name:'Dados Veiculares + Débitos',   group:'Débitos e Documentação', basePrice:1.786, inputType:'placa_renavam_cpfcnpj_uf_select', icon:'🔎' },
+  { id:'dados-veiculares-debitos',        name:'Dados Veiculares Básico + Débitos + Gravame', group:'Débitos e Documentação', basePrice:1.786, inputType:'dados_veiculares_uf', icon:'🔎' },
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -706,19 +706,16 @@ app.post('/api/query', requireAuth, async (req, res) => {
       apiUrl = `${BASE_API_URL}/motivos-cancelamento/${params.protocolo}`;
       method = 'GET'; body = null;
     }
-    // Dados Veiculares + Débitos (autocrlv.com.br — emissão por UF)
+    // Dados Veiculares Básico + Débitos + Gravame (autocrlv.com.br)
     if (serviceId === 'dados-veiculares-debitos') {
-      const placa    = (params?.placa    || '').toUpperCase().replace(/[\s-]/g, '');
-      const renavam  = (params?.renavam  || '').replace(/\D/g, '');
-      const cpf_cnpj = (params?.cpf_cnpj || '').replace(/\D/g, '');
-      const uf       = (params?.uf       || '').toUpperCase().replace(/\s/g, '');
-      if (placa.length < 7)                          return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
-      if (renavam.length < 9 || renavam.length > 11) return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
-      if (!cpf_cnpj)                                 return res.status(400).json({ error: 'CPF/CNPJ do proprietário é obrigatório.' });
-      if (!uf)                                       return res.status(400).json({ error: 'Selecione o estado (UF).' });
-      apiUrl = 'https://autocrlv.com.br/cliente/api_integracao_crlv_emitir.php';
-      method = 'POST';
-      body   = { placa, renavam, cpf_cnpj, uf, api_key: AUTOCRLV_KEY };
+      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      const uf    = (params?.uf    || '').toUpperCase().replace(/\s/g, '');
+      if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      if (!uf)              return res.status(400).json({ error: 'Selecione o estado (UF).' });
+      const qp = new URLSearchParams({ chaveAcesso: AUTOCRLV_KEY, uf, placa });
+      apiUrl = `https://autocrlv.com.br/api/v1/dados_veiculares_debitos.php?${qp.toString()}`;
+      method = 'GET';
+      body   = null;
     }
     // Débitos JSON → endpoint diferente na nova API
     if (serviceId === 'consultar-debito-api') {
@@ -781,7 +778,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
     if (DEBITO_UF_SVCS.includes(serviceId) || serviceId === 'debito-uf') {
       fetchHeaders = {};
     } else if (serviceId === 'dados-veiculares-debitos') {
-      fetchHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AUTOCRLV_KEY}` };
+      fetchHeaders = { 'Authorization': `Bearer ${AUTOCRLV_KEY}` };
     } else {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO };
     }
@@ -823,7 +820,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
     }
 
     // serviços que retornam JSON com pdf_base64
-    const PDF_BASE64_SVCS = ['consultar-placa-crv', 'consultar-crv-v2', 'dados-veiculares-debitos'];
+    const PDF_BASE64_SVCS = ['consultar-placa-crv', 'consultar-crv-v2'];
     let base64PdfBuf = null;
     if (PDF_BASE64_SVCS.includes(serviceId)) {
       let parsed;
@@ -833,6 +830,19 @@ app.post('/api/query', requireAuth, async (req, res) => {
       } else if (!isRealPdf) {
         const errMsg = parsed?.error || parsed?.message || 'PDF não retornado pela API.';
         console.error(`[${serviceId}] sem pdf_base64: ${errMsg}`);
+        return res.status(422).json({ error: errMsg });
+      }
+    }
+
+    // Dados Veiculares Básico retorna HTML — captura para servir via /api/html/:token
+    let htmlBuf = null;
+    if (serviceId === 'dados-veiculares-debitos') {
+      if (ct.includes('text/html') && bodyBuffer.length > 100) {
+        htmlBuf = bodyBuffer;
+      } else {
+        let parsed; try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
+        const errMsg = parsed?.error || parsed?.message || bodyStr.slice(0, 200) || 'Resposta inválida da API.';
+        console.error(`[dados-veiculares-debitos] inesperado: ${errMsg}`);
         return res.status(422).json({ error: errMsg });
       }
     }
@@ -849,22 +859,26 @@ app.post('/api/query', requireAuth, async (req, res) => {
       `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
        VALUES ($1,$2,$3,$4,'success',$5,$6,$7) RETURNING id`,
       [req.user.id, serviceId, service.name, JSON.stringify(params || {}),
-       price, txRow.rows[0].id, (isRealPdf || base64PdfBuf) ? 'pdf' : 'json']
+       price, txRow.rows[0].id, htmlBuf ? 'html' : (isRealPdf || base64PdfBuf) ? 'pdf' : 'json']
     );
 
     // ── Envia PDF + salva no cache por 7 dias ────────────────────────────────
     const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null);
-    if (pdfToSend) {
-      const token     = crypto.randomBytes(32).toString('hex');
-      const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+    if (pdfToSend || htmlBuf) {
+      const dataToCache = pdfToSend || htmlBuf;
+      const token       = crypto.randomBytes(32).toString('hex');
+      const expiresAt   = new Date(Date.now() + 7 * 24 * 3600 * 1000);
       await pool.query(
         `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at)
          VALUES ($1,$2,$3,$4,$5)`,
-        [qRow.rows[0].id, req.user.id, token, pdfToSend.toString('base64'), expiresAt]
+        [qRow.rows[0].id, req.user.id, token, dataToCache.toString('base64'), expiresAt]
       ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${serviceId}-${Date.now()}.pdf"`);
-      return res.send(pdfToSend);
+      if (pdfToSend) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${serviceId}-${Date.now()}.pdf"`);
+        return res.send(pdfToSend);
+      }
+      return res.json({ success: true, result: { status: 'Relatório gerado com sucesso' }, charged: price, html_token: token });
     }
 
     try {
@@ -1320,6 +1334,23 @@ app.get('/api/admin/queries', requireAuth, requireSuperAdmin, async (req, res) =
 });
 
 const noCache = (res) => res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+
+// ── GET /api/html/:token ──────────────────────────────────────────────────────
+app.get('/api/html/:token', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT pdf_data FROM pdf_cache WHERE token=$1 AND user_id=$2 AND expires_at > NOW()`,
+      [req.params.token, req.user.id]
+    );
+    if (!r.rows.length)
+      return res.status(404).send('<p style="font-family:sans-serif;padding:2rem">Relatório não encontrado ou expirado.</p>');
+    const buf = Buffer.from(r.rows[0].pdf_data, 'base64');
+    res.setHeader('Content-Type', 'text/html; charset=UTF-8');
+    return res.send(buf);
+  } catch (err) {
+    res.status(500).send('<p>Erro interno.</p>');
+  }
+});
 
 // ── Rotas HTML ────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
