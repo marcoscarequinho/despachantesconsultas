@@ -333,12 +333,19 @@
       let d = this.value.replace(/\D/g, '');
       if (d.length > 11 && d.startsWith('0')) d = d.slice(1);
       d = d.slice(0, 11);
-      if (d.length <= 10) {
-        this.value = d.replace(/(\d{2})(\d{4})(\d{1,4})/, '($1) $2-$3')
-                      .replace(/(\d{2})(\d{1,4})/, '($1) $2');
+      let v = '';
+      if (d.length === 0) {
+        v = '';
+      } else if (d.length <= 2) {
+        v = '(' + d;
+      } else if (d.length <= 6) {
+        v = '(' + d.slice(0,2) + ') ' + d.slice(2);
+      } else if (d.length <= 10) {
+        v = '(' + d.slice(0,2) + ') ' + d.slice(2,6) + '-' + d.slice(6);
       } else {
-        this.value = d.replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3');
+        v = '(' + d.slice(0,2) + ') ' + d.slice(2,7) + '-' + d.slice(7);
       }
+      this.value = v;
     });
 
     // ── Código de afiliado maiúsculo ──────────────────────────────────────────
