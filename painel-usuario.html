@@ -807,7 +807,13 @@ function renderHistoryTable() {
                    </a>
                    ${pdfExpires}
                  </div>`
-            : `<span class="badge-${q.result_type === 'pdf' ? 'blue' : 'green'}">${q.result_type.toUpperCase()}</span>`
+            : q.result_type === 'json' && q.service_id
+              ? `<button type="button"
+                   onclick="requery(${JSON.stringify(q.service_id)}, ${JSON.stringify(q.params || '{}')})"
+                   class="inline-flex items-center gap-1 bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1 rounded font-semibold transition">
+                   🔄 JSON
+                 </button>`
+              : `<span class="badge-${q.result_type === 'pdf' ? 'blue' : 'green'}">${q.result_type.toUpperCase()}</span>`
           }
         </td>
         <td class="px-5 py-3 text-right font-semibold text-red-500 text-sm">-${fmt(q.amount)}</td>
@@ -903,6 +909,20 @@ function quickSelect(serviceId) {
   selectedCat = svc.group;
   renderServiceList(svc.group);
   selectService(svc);
+}
+
+function requery(serviceId, paramsJson) {
+  quickSelect(serviceId);
+  try {
+    const params = JSON.parse(paramsJson);
+    // cpfCnpj param maps to field f-cpfcnpj
+    const fieldMap = { cpfCnpj: 'cpfcnpj' };
+    Object.entries(params).forEach(([k, v]) => {
+      const fieldId = fieldMap[k] || k;
+      const el = document.getElementById('f-' + fieldId);
+      if (el) el.value = v;
+    });
+  } catch {}
 }
 
 // ── Nova Consulta ──────────────────────────────────────────────────────────────
