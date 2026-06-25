@@ -399,7 +399,7 @@ app.post('/api/auth/logout', (req, res) => {
 app.get('/api/auth/me', requireAuth, async (req, res) => {
   try {
     const r = await pool.query(
-      'SELECT id, name, email, role, credits, affiliate_code FROM users WHERE id=$1',
+      'SELECT id, name, email, phone, role, credits, affiliate_code FROM users WHERE id=$1',
       [req.user.id]
     );
     if (r.rows.length === 0) return res.status(404).json({ error: 'Usuário não encontrado.' });
