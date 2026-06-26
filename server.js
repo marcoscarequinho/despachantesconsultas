@@ -46,6 +46,35 @@ async function sendWhatsApp(phone, message) {
   }
 }
 
+async function sendWhatsAppPdf(phone, pdfBuffer, fileName, caption) {
+  if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !phone) return;
+  const digits = phone.replace(/\D/g, '');
+  const formatted = digits.startsWith('55') ? digits : `55${digits}`;
+  try {
+    const r = await fetch(
+      `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/send-document/pdf`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(ZAPI_CLIENT_TOKEN ? { 'Client-Token': ZAPI_CLIENT_TOKEN } : {}),
+        },
+        body: JSON.stringify({
+          phone: formatted,
+          document: pdfBuffer.toString('base64'),
+          fileName,
+          caption,
+        }),
+      }
+    );
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) console.error(`Z-API PDF erro [${formatted}]:`, JSON.stringify(d));
+    else console.log(`✅ WhatsApp PDF enviado para ${formatted}`);
+  } catch (err) {
+    console.error('Erro ao enviar WhatsApp PDF:', err.message);
+  }
+}
+
 async function asaasReq(method, endpoint, body = null) {
   const opts = {
     method,
@@ -921,6 +950,14 @@ app.post('/api/query', requireAuth, async (req, res) => {
         [qRow.rows[0].id, req.user.id, token, dataToCache.toString('base64'), expiresAt]
       ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
       if (pdfToSend) {
+        // Envia PDF via WhatsApp para CRLV-e Digital (instantâneo)
+        if (serviceId.startsWith('consultar-crlv-') && user.phone) {
+          const ufCode = serviceId.replace('consultar-crlv-', '').toUpperCase();
+          const placa  = (params?.placa || '').toUpperCase();
+          const caption = `✅ *CRLV-e ${ufCode} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
+          const fileName = `CRLV-e-${ufCode}-${placa || 'doc'}.pdf`;
+          sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
+        }
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="${serviceId}-${Date.now()}.pdf"`);
         return res.send(pdfToSend);
