@@ -933,17 +933,22 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
       // WhatsApp para CRLV-e Agendado (não é verificação de status)
       if (serviceId.startsWith('crlv-agendado-') && serviceId !== 'crlv-agendado-status' && user.phone) {
-        const pedido  = data?.pedido  || data?.result?.pedido  || {};
-        const svc     = data?.servico || data?.result?.servico || {};
-        const pedidoId = pedido.id || pedido.pedido_id || '-';
+        // Tenta múltiplos caminhos pois o endpoint /solicitar pode retornar estrutura variada
+        const pedido = data?.pedido || data?.data?.pedido || {};
+        const svcData = data?.servico || data?.data?.servico || {};
+        const pedidoId = pedido.id ?? pedido.pedido_id ?? data?.id ?? data?.pedido_id ?? data?.data?.id ?? '-';
+        const placa = (pedido.placa || data?.placa || params?.placa || '-').toString().toUpperCase();
+        const uf = (pedido.uf || data?.uf || service.uf || '-').toString().toUpperCase();
+        const status = pedido.status_normalizado || pedido.status || data?.status || 'pendente';
+        const nomeSvc = svcData.nome_longo || data?.servico_nome || service.name;
         const msg = [
           `✅ *CRLV-e Agendado — Consulta Concluída*`,
           ``,
-          `🚗 *Serviço:* ${svc.nome_longo || service.name}`,
+          `🚗 *Serviço:* ${nomeSvc}`,
           `📋 *ID do Pedido:* ${pedidoId}`,
-          `🔤 *Placa:* ${pedido.placa || '-'}`,
-          `📍 *UF:* ${(pedido.uf || '').toUpperCase() || '-'}`,
-          `📊 *Status:* ${pedido.status_normalizado || pedido.status || '-'}`,
+          `🔤 *Placa:* ${placa}`,
+          `📍 *UF:* ${uf}`,
+          `📊 *Status:* ${status}`,
           ``,
           `⏰ A partir de 2 horas depois de feita essa consulta vá em:`,
           `*CRLV Agendado — Ver Status*`,
