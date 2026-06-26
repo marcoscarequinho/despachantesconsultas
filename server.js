@@ -21,6 +21,7 @@ const PORTAL_DESP_KEY = process.env.PORTAL_DESP_KEY || '';
 const ZAPI_INSTANCE_ID   = process.env.ZAPI_INSTANCE_ID   || '';
 const ZAPI_TOKEN         = process.env.ZAPI_TOKEN         || '';
 const ZAPI_CLIENT_TOKEN  = process.env.ZAPI_CLIENT_TOKEN  || '';
+const WEBHOOK_BASE_URL   = (process.env.WEBHOOK_BASE_URL  || '').replace(/\/$/, '');
 
 async function sendWhatsApp(phone, message) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !phone) return;
@@ -244,6 +245,19 @@ async function initDB() {
       status     VARCHAR(20) DEFAULT 'PENDING',
       credited   BOOLEAN DEFAULT false,
       created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_inbox (
+      id           SERIAL PRIMARY KEY,
+      phone        VARCHAR(30),
+      sender_name  VARCHAR(255),
+      message      TEXT,
+      message_type VARCHAR(30) DEFAULT 'text',
+      message_id   VARCHAR(100) UNIQUE,
+      raw          JSONB,
+      read         BOOLEAN DEFAULT false,
+      created_at   TIMESTAMPTZ DEFAULT NOW()
     );
   `);
   console.log('✅ Tabelas prontas');
@@ -1199,6 +1213,64 @@ app.post('/api/pix/webhook', async (req, res) => {
     }
   } catch (err) {
     console.error('Webhook PIX erro:', err.message);
+  }
+});
+
+// ── POST /api/webhooks/zapi ───────────────────────────────────────────────────
+app.post('/api/webhooks/zapi', async (req, res) => {
+  res.sendStatus(200);
+  const event = req.body;
+  if (!event) return;
+
+  const type = event.type || '';
+
+  try {
+    if (type === 'ReceivedCallback') {
+      const phone      = event.phone || '';
+      const senderName = event.senderName || '';
+      const messageId  = event.messageId || '';
+      const msgType    = event.image ? 'image' : event.audio ? 'audio' : event.video ? 'video' : event.document ? 'document' : 'text';
+      const message    = event.text?.message
+        || event.image?.caption
+        || event.audio?.caption
+        || event.document?.caption
+        || `[${msgType}]`;
+
+      await pool.query(
+        `INSERT INTO whatsapp_inbox (phone, sender_name, message, message_type, message_id, raw)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (message_id) DO NOTHING`,
+        [phone, senderName, message, msgType, messageId, JSON.stringify(event)]
+      );
+      console.log(`📱 WhatsApp recebido de ${phone} (${senderName}): ${message}`);
+    }
+  } catch (err) {
+    console.error('Webhook Z-API erro:', err.message);
+  }
+});
+
+// ── GET /api/admin/whatsapp-inbox ─────────────────────────────────────────────
+app.get('/api/admin/whatsapp-inbox', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, phone, sender_name, message, message_type, read, created_at
+       FROM whatsapp_inbox ORDER BY created_at DESC LIMIT 200`
+    );
+    // Marca como lidas
+    await pool.query(`UPDATE whatsapp_inbox SET read=true WHERE read=false`);
+    res.json({ messages: r.rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── GET /api/admin/whatsapp-inbox/count ──────────────────────────────────────
+app.get('/api/admin/whatsapp-inbox/count', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(`SELECT COUNT(*) FROM whatsapp_inbox WHERE read=false`);
+    res.json({ unread: parseInt(r.rows[0].count) });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
   }
 });
 
