@@ -361,6 +361,18 @@
           <!-- JSON result -->
           <div id="result-json-wrap">
             <div id="result-fields" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4"></div>
+
+            <!-- Botão download CRLV-e Agendado -->
+            <div id="result-crlv-download" class="hidden mt-3 p-4 bg-blue-50 border border-blue-200 rounded-xl text-center">
+              <div class="text-3xl mb-2">📄</div>
+              <p class="text-blue-800 font-bold mb-1">Seu CRLV-e está disponível!</p>
+              <p class="text-blue-600 text-xs mb-3">Clique abaixo para baixar o documento em PDF.</p>
+              <a id="result-crlv-link" href="#" target="_blank" rel="noopener"
+                class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg transition-colors">
+                📥 Baixar CRLV-e (PDF)
+              </a>
+            </div>
+
             <details class="mt-2">
               <summary class="text-xs text-gray-500 cursor-pointer hover:text-gray-700">Ver JSON completo</summary>
               <pre id="result-json-raw"
@@ -1533,6 +1545,18 @@ function showJsonResult(data, svc) {
       <span class="result-label">${k}</span>
       <span class="result-value">${v}</span>
     </div>`).join('');
+
+  // Download CRLV-e quando PDF estiver disponível
+  const crlvDownloadDiv = document.getElementById('result-crlv-download');
+  const crlvLink = document.getElementById('result-crlv-link');
+  const pdfPath = result?.pedido?.pdf_url || result?.status_resumo?.pdf_url || '';
+  const podeBaixar = result?.pdf_disponivel === true || result?.status_resumo?.pode_baixar_pdf === true;
+  if (svc.id === 'crlv-agendado-status' && podeBaixar && pdfPath) {
+    crlvLink.href = 'https://chekaki.online' + pdfPath;
+    crlvDownloadDiv.classList.remove('hidden');
+  } else {
+    crlvDownloadDiv.classList.add('hidden');
+  }
 
   document.getElementById('result-json-raw').textContent = JSON.stringify(result, null, 2);
   document.getElementById('query-result-wrap').scrollIntoView({ behavior:'smooth' });

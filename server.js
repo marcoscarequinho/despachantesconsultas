@@ -18,6 +18,33 @@ const ASAAS_API_KEY = (process.env.ASAAS_API_KEY || '')
 const ASAAS_BASE = 'https://api.asaas.com/v3';
 const AUTOCRLV_KEY    = process.env.AUTOCRLV_KEY    || '';
 const PORTAL_DESP_KEY = process.env.PORTAL_DESP_KEY || '';
+const ZAPI_INSTANCE_ID   = process.env.ZAPI_INSTANCE_ID   || '';
+const ZAPI_TOKEN         = process.env.ZAPI_TOKEN         || '';
+const ZAPI_CLIENT_TOKEN  = process.env.ZAPI_CLIENT_TOKEN  || '';
+
+async function sendWhatsApp(phone, message) {
+  if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !phone) return;
+  const digits = phone.replace(/\D/g, '');
+  const formatted = digits.startsWith('55') ? digits : `55${digits}`;
+  try {
+    const r = await fetch(
+      `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/send-text`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(ZAPI_CLIENT_TOKEN ? { 'Client-Token': ZAPI_CLIENT_TOKEN } : {}),
+        },
+        body: JSON.stringify({ phone: formatted, message }),
+      }
+    );
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) console.error(`Z-API erro [${formatted}]:`, JSON.stringify(d));
+    else console.log(`✅ WhatsApp enviado para ${formatted}`);
+  } catch (err) {
+    console.error('Erro ao enviar WhatsApp:', err.message);
+  }
+}
 
 async function asaasReq(method, endpoint, body = null) {
   const opts = {
@@ -665,7 +692,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
   try {
     const ur = await pool.query(
-      'SELECT credits, active FROM users WHERE id=$1', [req.user.id]
+      'SELECT credits, active, phone FROM users WHERE id=$1', [req.user.id]
     );
     const user = ur.rows[0];
     if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
@@ -903,6 +930,28 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
     try {
       const data = JSON.parse(bodyStr);
+
+      // WhatsApp para CRLV-e Agendado (não é verificação de status)
+      if (serviceId.startsWith('crlv-agendado-') && serviceId !== 'crlv-agendado-status' && user.phone) {
+        const pedido  = data?.pedido  || data?.result?.pedido  || {};
+        const svc     = data?.servico || data?.result?.servico || {};
+        const pedidoId = pedido.id || pedido.pedido_id || '-';
+        const msg = [
+          `✅ *CRLV-e Agendado — Consulta Concluída*`,
+          ``,
+          `🚗 *Serviço:* ${svc.nome_longo || service.name}`,
+          `📋 *ID do Pedido:* ${pedidoId}`,
+          `🔤 *Placa:* ${pedido.placa || '-'}`,
+          `📍 *UF:* ${(pedido.uf || '').toUpperCase() || '-'}`,
+          `📊 *Status:* ${pedido.status_normalizado || pedido.status || '-'}`,
+          ``,
+          `⏰ A partir de 2 horas depois de feita essa consulta vá em:`,
+          `*CRLV Agendado — Ver Status*`,
+          `e use o ID *${pedidoId}* para acompanhar quando for emitido seu CRLV-e.`,
+        ].join('\n');
+        sendWhatsApp(user.phone, msg).catch(() => {});
+      }
+
       return res.json({ success: true, result: data, charged: price });
     } catch {
       return res.json({ success: true, result: { resposta: bodyStr }, charged: price });
