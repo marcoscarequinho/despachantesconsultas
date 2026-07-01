@@ -162,12 +162,20 @@ const SERVICES = [
   { id:'motivos-cancelamento',        name:'Motivos de Cancelamento',       group:'Comunicação Venda', basePrice:3.00,  inputType:'protocolo_get',  icon:'📋' },
   // ── Débitos por Estado (autocrlv.com.br) ──
   { id:'debito-uf', name:'Débitos Veiculares por Estado', group:'Débitos por Estado', basePrice:1.786, inputType:'debito_uf_select', icon:'🏛️' },
-  // ── Número CRV (Apenas antigos) — processamento manual, sem API externa ──
+  // ── Número CRV (Apenas antigos) — processamento manual (entrega via upload no admin) ──
   { id:'crv-antigo-rio', name:'Consulta CRV antigo Rio', group:'Número CRV (Apenas antigos)', basePrice:500.00, inputType:'placa', icon:'📁', uf:'rj', noMarkup:true },
+  { id:'crv-antigo-ce', name:'Consulta CRV antigo CE', group:'Número CRV (Apenas antigos)', basePrice:55.00,  inputType:'placa', icon:'📁', uf:'ce', autocrlvPedidoUf:'ce' },
+  { id:'crv-antigo-ba', name:'Consulta CRV antigo BA', group:'Número CRV (Apenas antigos)', basePrice:199.99, inputType:'placa', icon:'📁', uf:'ba', autocrlvPedidoUf:'ba' },
+  { id:'crv-antigo-sp', name:'Consulta CRV antigo SP', group:'Número CRV (Apenas antigos)', basePrice:139.99, inputType:'placa', icon:'📁', uf:'sp', autocrlvPedidoUf:'sp' },
+  { id:'crv-antigo-rn', name:'Consulta CRV antigo RN', group:'Número CRV (Apenas antigos)', basePrice:150.00, inputType:'placa', icon:'📁', uf:'rn', autocrlvPedidoUf:'rn' },
+  { id:'crv-antigo-pe', name:'Consulta CRV antigo PE', group:'Número CRV (Apenas antigos)', basePrice:100.00, inputType:'placa', icon:'📁', uf:'pe', autocrlvPedidoUf:'pe' },
+  { id:'crv-antigo-pb', name:'Consulta CRV antigo PB', group:'Número CRV (Apenas antigos)', basePrice:79.99,  inputType:'placa', icon:'📁', uf:'pb', autocrlvPedidoUf:'pb' },
+  { id:'crv-antigo-mg', name:'Consulta CRV antigo MG', group:'Número CRV (Apenas antigos)', basePrice:169.99, inputType:'placa', icon:'📁', uf:'mg', autocrlvPedidoUf:'mg' },
 ];
 
-// Serviços desta categoria não chamam API externa: o pedido fica pendente até o
-// super admin subir o PDF manualmente (ver /api/admin/manual-queries).
+// Serviços desta categoria não retornam resultado na hora: o pedido fica pendente até o
+// super admin subir o PDF manualmente (ver /api/admin/manual-queries). Os que têm
+// autocrlvPedidoUf também disparam o pedido na autocrlv.com.br (processamento manual do lado deles).
 const MANUAL_UPLOAD_GROUP = 'Número CRV (Apenas antigos)';
 const MANUAL_SERVICE_IDS  = SERVICES.filter(s => s.group === MANUAL_UPLOAD_GROUP).map(s => s.id);
 
@@ -751,8 +759,35 @@ app.post('/api/query', requireAuth, async (req, res) => {
         error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}`,
       });
 
-    // ── Serviços manuais (upload de arquivo pelo super admin, sem API externa) ──
+    // ── Serviços manuais (upload de arquivo pelo super admin — resultado não vem na hora) ──
     if (MANUAL_SERVICE_IDS.includes(serviceId)) {
+      // Alguns desse grupo também registram o pedido na autocrlv.com.br (processamento manual do lado deles).
+      if (service.autocrlvPedidoUf) {
+        const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+        if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+        const pedidoUrl = `https://autocrlv.com.br/api/v1/numero_crv_antigo_${service.autocrlvPedidoUf}_pedido.php`;
+        let pedidoRes, pedidoData;
+        try {
+          pedidoRes = await fetch(pedidoUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${AUTOCRLV_KEY}`,
+            },
+            body: JSON.stringify({ placa, api_key: AUTOCRLV_KEY }),
+          });
+          pedidoData = await pedidoRes.json().catch(() => ({}));
+        } catch (e) {
+          console.error(`Erro ao registrar pedido autocrlv [${serviceId}]:`, e.message);
+          return res.status(502).json({ error: 'Erro ao registrar pedido. Tente novamente.' });
+        }
+        if (!pedidoRes.ok || pedidoData?.error || pedidoData?.success === false) {
+          const errMsg = pedidoData?.error || pedidoData?.message || `Erro HTTP ${pedidoRes.status} ao registrar pedido.`;
+          console.error(`Erro no pedido autocrlv [${serviceId}]:`, errMsg);
+          return res.status(422).json({ error: errMsg });
+        }
+      }
+
       await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
       const txRow = await pool.query(
         `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
