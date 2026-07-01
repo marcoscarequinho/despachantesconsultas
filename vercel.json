@@ -5,6 +5,7 @@
       "src": "server.js",
       "use": "@vercel/node",
       "config": {
+        "maxDuration": 800,
         "includeFiles": [
           "*.html",
           "*.css",
@@ -14,11 +15,6 @@
       }
     }
   ],
-  "functions": {
-    "server.js": {
-      "maxDuration": 800
-    }
-  },
   "routes": [
     { "src": "/(.*)", "dest": "/server.js" }
   ],
