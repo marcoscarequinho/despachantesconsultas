@@ -811,15 +811,28 @@ app.post('/api/query', requireAuth, async (req, res) => {
     let method = 'POST';
     let body = params || {};
 
-    // CRLV Agendado: solicitar
-    if (serviceId.startsWith('crlv-agendado-') && serviceId !== 'crlv-agendado-status') {
+    // CRLV Agendado Reemissão RJ: solicitar via autocrlv.com.br
+    if (serviceId === 'crlv-agendado-rj-reemissao') {
+      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      apiUrl = 'https://autocrlv.com.br/cliente/api_integracao_crlv_agendado.php';
+      body = { placa, uf: 'RJ2', api_key: AUTOCRLV_KEY };
+    }
+    // CRLV Agendado: solicitar (demais UFs)
+    else if (serviceId.startsWith('crlv-agendado-') && serviceId !== 'crlv-agendado-status') {
       const svcDef = SERVICES.find(s => s.id === serviceId);
       apiUrl = `${BASE_API_URL}/api/crlv-agendado/solicitar`;
       body = { ...params, uf: svcDef?.uf || params.uf };
     }
     // CRLV Agendado: verificar status
     if (serviceId === 'crlv-agendado-status' && params?.pedido_id) {
-      apiUrl = `${BASE_API_URL}/api/crlv-agendado/${params.pedido_id}`;
+      const pid = String(params.pedido_id).trim();
+      if (pid.startsWith('AUTOCRLV-')) {
+        const code = pid.slice('AUTOCRLV-'.length);
+        apiUrl = `https://autocrlv.com.br/cliente/api_integracao_crlv_agendado_status.php?code=${encodeURIComponent(code)}`;
+      } else {
+        apiUrl = `${BASE_API_URL}/api/crlv-agendado/${pid}`;
+      }
       method = 'GET'; body = null;
     }
     // Comunicado venda por ID (GET)
@@ -929,6 +942,8 @@ app.post('/api/query', requireAuth, async (req, res) => {
       fetchHeaders = {};
     } else if (serviceId === 'dados-veiculares-debitos') {
       fetchHeaders = { 'Authorization': `Bearer ${AUTOCRLV_KEY}` };
+    } else if (serviceId === 'crlv-agendado-rj-reemissao' || apiUrl.startsWith('https://autocrlv.com.br/cliente/api_integracao_crlv_agendado')) {
+      fetchHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AUTOCRLV_KEY}` };
     } else if (PORTAL_PLACA_MAP[serviceId]) {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY };
     } else {
@@ -1046,14 +1061,30 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
       // WhatsApp para CRLV-e Agendado (não é verificação de status)
       if (serviceId.startsWith('crlv-agendado-') && serviceId !== 'crlv-agendado-status' && user.phone) {
-        // Tenta múltiplos caminhos pois o endpoint /solicitar pode retornar estrutura variada
-        const pedido = data?.pedido || data?.data?.pedido || {};
-        const svcData = data?.servico || data?.data?.servico || {};
-        const pedidoId = pedido.id ?? pedido.pedido_id ?? data?.id ?? data?.pedido_id ?? data?.data?.id ?? '-';
-        const placa = (pedido.placa || data?.placa || params?.placa || '-').toString().toUpperCase();
-        const uf = (pedido.uf || data?.uf || service.uf || '-').toString().toUpperCase();
-        const status = pedido.status_normalizado || pedido.status || data?.status || 'pendente';
-        const nomeSvc = svcData.nome_longo || data?.servico_nome || service.name;
+        let pedidoId, placa, uf, status, nomeSvc;
+        if (serviceId === 'crlv-agendado-rj-reemissao') {
+          // Resposta da autocrlv.com.br: pedido criado com status_url (?code=...)
+          const statusUrl = data?.status_url || data?.data?.status_url || '';
+          let code = data?.code || data?.codigo || data?.data?.code || '';
+          if (!code && statusUrl) {
+            try { code = new URL(statusUrl).searchParams.get('code') || ''; } catch {}
+          }
+          pedidoId = code ? `AUTOCRLV-${code}` : '-';
+          if (code) data.pedido_id = pedidoId; // conveniência p/ tela "Ver Status"
+          placa = (data?.placa || params?.placa || '-').toString().toUpperCase();
+          uf = 'RJ';
+          status = data?.status || data?.message || 'pendente';
+          nomeSvc = service.name;
+        } else {
+          // Tenta múltiplos caminhos pois o endpoint /solicitar pode retornar estrutura variada
+          const pedido = data?.pedido || data?.data?.pedido || {};
+          const svcData = data?.servico || data?.data?.servico || {};
+          pedidoId = pedido.id ?? pedido.pedido_id ?? data?.id ?? data?.pedido_id ?? data?.data?.id ?? '-';
+          placa = (pedido.placa || data?.placa || params?.placa || '-').toString().toUpperCase();
+          uf = (pedido.uf || data?.uf || service.uf || '-').toString().toUpperCase();
+          status = pedido.status_normalizado || pedido.status || data?.status || 'pendente';
+          nomeSvc = svcData.nome_longo || data?.servico_nome || service.name;
+        }
         const msg = [
           `✅ *CRLV-e Agendado — Consulta Concluída*`,
           ``,

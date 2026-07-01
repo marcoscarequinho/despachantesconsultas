@@ -1566,7 +1566,7 @@ function showJsonResult(data, svc) {
   const pdfPath = result?.pedido?.pdf_url || result?.status_resumo?.pdf_url || '';
   const podeBaixar = result?.pdf_disponivel === true || result?.status_resumo?.pode_baixar_pdf === true;
   if (svc.id === 'crlv-agendado-status' && podeBaixar && pdfPath) {
-    crlvLink.href = 'https://chekaki.online' + pdfPath;
+    crlvLink.href = /^https?:\/\//i.test(pdfPath) ? pdfPath : 'https://chekaki.online' + pdfPath;
     crlvDownloadDiv.classList.remove('hidden');
   } else {
     crlvDownloadDiv.classList.add('hidden');
