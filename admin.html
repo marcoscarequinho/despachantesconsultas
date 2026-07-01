@@ -78,6 +78,10 @@
     <div class="nav-item" data-section="services" onclick="showSection('services')">
       <span class="text-lg">📋</span> Serviços
     </div>
+    <div class="nav-item" data-section="manual" onclick="showSection('manual')">
+      <span class="text-lg">📁</span> Pedidos Manuais
+      <span id="manual-pending-badge" class="ml-auto hidden bg-red-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-full"></span>
+    </div>
   </nav>
 
   <div class="p-3 border-t border-gray-700 space-y-1">
@@ -321,6 +325,36 @@
       <div id="services-content" class="space-y-4"></div>
     </section>
 
+    <!-- ── PEDIDOS MANUAIS ────────────────────────────────────────────────── -->
+    <section id="section-manual" class="admin-section hidden space-y-4">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Pedidos Manuais</h2>
+        <p class="text-sm text-gray-500">Serviços da categoria "Número CRV (Apenas antigos)" — sem API externa, entrega feita por upload de PDF.</p>
+      </div>
+
+      <div class="card p-0 overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Data</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Usuário</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Serviço</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">Placa</th>
+                <th class="px-4 py-3 text-center font-semibold text-gray-600">Status</th>
+                <th class="px-4 py-3 text-right font-semibold text-gray-600">Valor</th>
+                <th class="px-4 py-3 text-center font-semibold text-gray-600">Ação</th>
+              </tr>
+            </thead>
+            <tbody id="manual-tbody" class="divide-y divide-gray-50">
+              <tr><td colspan="7" class="px-4 py-8"><div class="space-y-2"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="manual-count" class="px-4 py-2 text-xs text-gray-400 border-t border-gray-100"></div>
+      </div>
+    </section>
+
   </main>
 </div>
 
@@ -487,6 +521,29 @@
   </div>
 </div>
 
+<!-- ── MODAL: UPLOAD PEDIDO MANUAL ───────────────────────────────────────── -->
+<div id="modal-manual-upload" class="modal-backdrop hidden">
+  <div class="modal-box">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+      <h3 class="font-bold text-gray-800">Enviar Documento (PDF)</h3>
+      <button onclick="closeModal('modal-manual-upload')" class="text-gray-400 hover:text-gray-600 text-xl font-bold">✕</button>
+    </div>
+    <div class="p-6 space-y-4">
+      <div id="manual-upload-info" class="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-sm text-blue-800"></div>
+      <input type="hidden" id="manual-upload-id">
+      <div>
+        <label class="label">Arquivo PDF</label>
+        <input id="manual-upload-file" type="file" accept="application/pdf" class="input-field">
+      </div>
+      <div id="manual-upload-error" class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm"></div>
+      <div class="flex gap-3 pt-2">
+        <button id="manual-upload-btn" onclick="submitManualUpload()" class="btn-primary flex-1 justify-center">📤 Enviar</button>
+        <button onclick="closeModal('modal-manual-upload')" class="btn-ghost flex-1 justify-center">Cancelar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ── MODAL: DETALHES DO USUÁRIO ────────────────────────────────────────── -->
 <div id="modal-details" class="modal-backdrop hidden">
   <div class="modal-box">
@@ -502,8 +559,8 @@
 const fmt = v => 'R$ ' + parseFloat(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2});
 const fmtDate = s => { const d=new Date(s); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
 
-let allUsers = [], allTx = [], allQueries = [], allServices = [];
-const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços' };
+let allUsers = [], allTx = [], allQueries = [], allServices = [], allManualQueries = [];
+const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais' };
 
 function toast(msg, type='success') {
   const el = document.getElementById('toast');
@@ -529,6 +586,7 @@ function showSection(id) {
   if (id === 'finance'  && !allTx.length)      loadTransactions();
   if (id === 'queries'  && !allQueries.length)  loadQueries();
   if (id === 'services' && !allServices.length) loadServices();
+  if (id === 'manual')  loadManualQueries();
 }
 
 function refreshCurrentSection() {
@@ -540,6 +598,7 @@ function refreshCurrentSection() {
   if (id === 'finance')   { allTx = []; loadTransactions(); }
   if (id === 'queries')   { allQueries = []; loadQueries(); }
   if (id === 'services')  { allServices = []; loadServices(); }
+  if (id === 'manual')    loadManualQueries();
 }
 
 function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
@@ -551,7 +610,7 @@ async function init() {
     if (!r.ok) { window.location.href = '/entrar'; return; }
     const user = await r.json();
     if (user.email !== 'contato@mygmail.com.br') { window.location.href = '/painel'; return; }
-    await Promise.all([loadStats(), loadUsers()]);
+    await Promise.all([loadStats(), loadUsers(), loadManualQueries()]);
   } catch { window.location.href = '/entrar'; }
 }
 
@@ -1004,6 +1063,95 @@ function renderServices() {
           </div>`).join('')}
       </div>
     </div>`).join('');
+}
+
+// ── Pedidos Manuais ────────────────────────────────────────────────────────
+async function loadManualQueries() {
+  try {
+    const r = await fetch('/api/admin/manual-queries');
+    if (!r.ok) return;
+    const d = await r.json();
+    allManualQueries = d.queries || [];
+    renderManualQueries();
+    const pending = allManualQueries.filter(q => q.status === 'pendente').length;
+    const badge = document.getElementById('manual-pending-badge');
+    badge.textContent = pending;
+    badge.classList.toggle('hidden', !pending);
+  } catch {}
+}
+
+function renderManualQueries() {
+  const tbody = document.getElementById('manual-tbody');
+  document.getElementById('manual-count').textContent = `${allManualQueries.length} pedido(s)`;
+  if (!allManualQueries.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="text-center py-10 text-gray-400">Nenhum pedido manual.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = allManualQueries.map(q => {
+    let placa = '—';
+    try { placa = JSON.parse(q.params || '{}').placa || '—'; } catch {}
+    const pendente = q.status === 'pendente';
+    return `
+    <tr class="table-row">
+      <td class="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">${fmtDate(q.created_at)}</td>
+      <td class="px-4 py-3"><div class="text-sm font-medium text-gray-800">${q.user_name}</div><div class="text-xs text-gray-400">${q.user_email}</div></td>
+      <td class="px-4 py-3 text-sm text-gray-700">${q.service_name}</td>
+      <td class="px-4 py-3 text-sm text-gray-700 font-mono hidden md:table-cell">${placa}</td>
+      <td class="px-4 py-3 text-center">
+        <span class="${pendente ? 'badge-amber' : 'badge-green'}">${pendente ? '⏳ Pendente' : '✅ Concluído'}</span>
+      </td>
+      <td class="px-4 py-3 text-right font-semibold text-gray-700 text-sm">${fmt(q.amount)}</td>
+      <td class="px-4 py-3 text-center">
+        ${pendente
+          ? `<button onclick="openManualUpload(${q.id}, ${JSON.stringify(q.user_name + ' — ' + q.service_name + ' (placa ' + placa + ')').replace(/"/g,'&quot;')})" class="action-btn bg-blue-600 hover:bg-blue-700 text-white">📤 Upload</button>`
+          : `<span class="text-xs text-gray-400">—</span>`}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function openManualUpload(id, info) {
+  document.getElementById('manual-upload-id').value = id;
+  document.getElementById('manual-upload-info').textContent = info;
+  document.getElementById('manual-upload-file').value = '';
+  document.getElementById('manual-upload-error').classList.add('hidden');
+  openModal('modal-manual-upload');
+}
+
+function submitManualUpload() {
+  const id = document.getElementById('manual-upload-id').value;
+  const fileInput = document.getElementById('manual-upload-file');
+  const errEl = document.getElementById('manual-upload-error');
+  errEl.classList.add('hidden');
+  const file = fileInput.files[0];
+  if (!file) { errEl.textContent = 'Selecione um arquivo PDF.'; errEl.classList.remove('hidden'); return; }
+  if (file.type !== 'application/pdf') { errEl.textContent = 'O arquivo deve ser um PDF.'; errEl.classList.remove('hidden'); return; }
+
+  const btn = document.getElementById('manual-upload-btn');
+  btn.disabled = true; btn.textContent = 'Enviando...';
+
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      const base64 = reader.result.split(',')[1];
+      const r = await fetch(`/api/admin/manual-queries/${id}/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pdf_base64: base64 }),
+      });
+      const d = await r.json();
+      if (!r.ok) { errEl.textContent = d.error || 'Erro ao enviar arquivo.'; errEl.classList.remove('hidden'); return; }
+      toast('Documento enviado! Cliente notificado.');
+      closeModal('modal-manual-upload');
+      allManualQueries = [];
+      loadManualQueries();
+    } catch {
+      errEl.textContent = 'Erro de conexão.'; errEl.classList.remove('hidden');
+    } finally {
+      btn.disabled = false; btn.textContent = '📤 Enviar';
+    }
+  };
+  reader.readAsDataURL(file);
 }
 
 // Fecha modal ao clicar no backdrop

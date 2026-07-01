@@ -22,6 +22,7 @@
     .badge-green { display:inline-flex;align-items:center;padding:.2rem .6rem;border-radius:9999px;font-size:.75rem;font-weight:600;background:#dcfce7;color:#166534; }
     .badge-red   { display:inline-flex;align-items:center;padding:.2rem .6rem;border-radius:9999px;font-size:.75rem;font-weight:600;background:#fee2e2;color:#991b1b; }
     .badge-blue  { display:inline-flex;align-items:center;padding:.2rem .6rem;border-radius:9999px;font-size:.75rem;font-weight:600;background:#dbeafe;color:#1e40af; }
+    .badge-amber { display:inline-flex;align-items:center;padding:.2rem .6rem;border-radius:9999px;font-size:.75rem;font-weight:600;background:#fef3c7;color:#92400e; }
     .toast { position:fixed;bottom:1.5rem;right:1.5rem;z-index:9999;background:#1f2937;color:white;padding:.8rem 1.25rem;border-radius:.6rem;font-size:.875rem;box-shadow:0 4px 16px rgba(0,0,0,.2);transform:translateY(0);opacity:1;transition:all .3s; }
     .toast.hide { transform:translateY(8px);opacity:0; }
     #sidebar { transition:transform .25s ease; }
@@ -766,7 +767,9 @@ function renderRecentQueries() {
                  class="text-xs bg-blue-600 hover:bg-blue-700 text-white px-2 py-0.5 rounded font-medium">
                  📥 PDF
                </a>`
-          : `<span class="badge-${q.result_type === 'pdf' ? 'blue' : 'green'}">${q.result_type.toUpperCase()}</span>`
+          : q.status === 'pendente'
+            ? `<span class="badge-amber">⏳ Pendente</span>`
+            : `<span class="badge-${q.result_type === 'pdf' ? 'blue' : 'green'}">${q.result_type.toUpperCase()}</span>`
         }
       </div>
     </div>`).join('');
@@ -827,6 +830,8 @@ function renderHistoryTable() {
                    </a>
                    ${pdfExpires}
                  </div>`
+            : q.status === 'pendente'
+              ? `<span class="badge-amber">⏳ Pendente</span>`
             : q.result_type === 'json' && q.service_id
               ? `<button type="button"
                    onclick="requery(${JSON.stringify(q.service_id)}, ${JSON.stringify(q.params || '{}')})"
@@ -957,6 +962,7 @@ function buildCategoryGrid() {
     'Análise de Crédito':      { icon:'📊', color:'bg-yellow-50 border-yellow-200' },
     'Comunicação Venda':       { icon:'📝', color:'bg-pink-50 border-pink-200' },
     'Débitos por Estado':      { icon:'🏛️', color:'bg-teal-50 border-teal-200' },
+    'Número CRV (Apenas antigos)': { icon:'📁', color:'bg-indigo-50 border-indigo-200' },
   };
 
   document.getElementById('category-grid').innerHTML = cats.map(cat => {
@@ -1030,14 +1036,14 @@ function selectService(svc) {
   selectedSvc = svc;
   document.getElementById('form-service-name').textContent = svc.icon + ' ' + svc.name;
   document.getElementById('form-service-price').textContent = fmt(svc.price);
-  renderFormFields(svc.inputType);
+  renderFormFields(svc.inputType, svc);
   document.getElementById('query-form-wrap').classList.remove('hidden');
   document.getElementById('query-result-wrap').classList.add('hidden');
   document.getElementById('form-error').classList.add('hidden');
   document.getElementById('query-form-wrap').scrollIntoView({ behavior:'smooth', block:'nearest' });
 }
 
-function renderFormFields(inputType) {
+function renderFormFields(inputType, svc) {
   const wrap = document.getElementById('form-fields');
   const field = (id, label, type = 'text', placeholder = '', required = true, extra = '') =>
     `<div>
@@ -1320,6 +1326,14 @@ function renderFormFields(inputType) {
   };
 
   wrap.innerHTML = templates[inputType] || placaField;
+
+  if (svc && svc.group === 'Número CRV (Apenas antigos)') {
+    wrap.insertAdjacentHTML('afterbegin', `
+      <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 mb-2">
+        📁 <strong>Serviço Manual:</strong> não há emissão automática. Nossa equipe vai localizar o documento
+        e o PDF ficará disponível para download aqui no seu painel assim que estiver pronto.
+      </div>`);
+  }
 
   // Máscara de placa
   const placaEl = document.getElementById('f-placa');

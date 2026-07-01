@@ -162,7 +162,14 @@ const SERVICES = [
   { id:'motivos-cancelamento',        name:'Motivos de Cancelamento',       group:'Comunicação Venda', basePrice:3.00,  inputType:'protocolo_get',  icon:'📋' },
   // ── Débitos por Estado (autocrlv.com.br) ──
   { id:'debito-uf', name:'Débitos Veiculares por Estado', group:'Débitos por Estado', basePrice:1.786, inputType:'debito_uf_select', icon:'🏛️' },
+  // ── Número CRV (Apenas antigos) — processamento manual, sem API externa ──
+  { id:'crv-antigo-rio', name:'Consulta CRV antigo Rio', group:'Número CRV (Apenas antigos)', basePrice:500.00, inputType:'placa', icon:'📁', uf:'rj', noMarkup:true },
 ];
+
+// Serviços desta categoria não chamam API externa: o pedido fica pendente até o
+// super admin subir o PDF manualmente (ver /api/admin/manual-queries).
+const MANUAL_UPLOAD_GROUP = 'Número CRV (Apenas antigos)';
+const MANUAL_SERVICE_IDS  = SERVICES.filter(s => s.group === MANUAL_UPLOAD_GROUP).map(s => s.id);
 
 // Conexão com o banco Neon
 const pool = new Pool({
@@ -264,8 +271,8 @@ async function initDB() {
 }
 
 // ── Middlewares ──────────────────────────────────────────────────────────────
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '20mb' }));
+app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname), { etag: false, lastModified: false, setHeaders: (res) => res.set('Cache-Control', 'no-store') }));
 
@@ -743,6 +750,26 @@ app.post('/api/query', requireAuth, async (req, res) => {
       return res.status(400).json({
         error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}`,
       });
+
+    // ── Serviços manuais (upload de arquivo pelo super admin, sem API externa) ──
+    if (MANUAL_SERVICE_IDS.includes(serviceId)) {
+      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [req.user.id, price, `Consulta: ${service.name}`]
+      );
+      await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'pendente',$5,$6,'pdf')`,
+        [req.user.id, serviceId, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id]
+      );
+      return res.json({
+        success: true,
+        pending: true,
+        result: { status: 'Pedido registrado! Nossa equipe vai localizar o documento e o PDF ficará disponível para download aqui no seu painel.' },
+        charged: price,
+      });
+    }
 
     // Build URL and method
     let apiUrl = `${BASE_API_URL}/${serviceId}`;
@@ -1514,6 +1541,61 @@ app.get('/api/admin/queries', requireAuth, requireSuperAdmin, async (req, res) =
     );
     res.json({ queries: r.rows });
   } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ── ADMIN: GET /api/admin/manual-queries (fila de upload manual) ─────────────
+app.get('/api/admin/manual-queries', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT q.id, q.service_id, q.service_name, q.params, q.amount, q.status, q.created_at,
+              u.id AS user_id, u.name AS user_name, u.email AS user_email, u.phone AS user_phone
+       FROM queries q JOIN users u ON u.id = q.user_id
+       WHERE q.service_id = ANY($1)
+       ORDER BY (q.status = 'pendente') DESC, q.created_at DESC
+       LIMIT 300`,
+      [MANUAL_SERVICE_IDS]
+    );
+    res.json({ queries: r.rows });
+  } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ── ADMIN: POST /api/admin/manual-queries/:id/upload ─────────────────────────
+app.post('/api/admin/manual-queries/:id/upload', requireAuth, requireSuperAdmin, async (req, res) => {
+  const { pdf_base64 } = req.body;
+  if (!pdf_base64) return res.status(400).json({ error: 'Arquivo PDF não enviado.' });
+  try {
+    const qr = await pool.query(
+      `SELECT q.id, q.user_id, q.service_id, q.service_name, u.phone
+       FROM queries q JOIN users u ON u.id = q.user_id WHERE q.id=$1`,
+      [req.params.id]
+    );
+    if (!qr.rows.length) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    const query = qr.rows[0];
+    if (!MANUAL_SERVICE_IDS.includes(query.service_id))
+      return res.status(400).json({ error: 'Este pedido não é de um serviço manual.' });
+
+    const pdfBuf = Buffer.from(pdf_base64, 'base64');
+    if (pdfBuf.slice(0, 4).toString() !== '%PDF')
+      return res.status(400).json({ error: 'Arquivo inválido. Envie um PDF.' });
+
+    const token     = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 3650 * 24 * 3600 * 1000);
+    await pool.query(
+      `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+      [query.id, query.user_id, token, pdfBuf.toString('base64'), expiresAt]
+    );
+    await pool.query(`UPDATE queries SET status='concluido' WHERE id=$1`, [query.id]);
+
+    if (query.phone) {
+      const caption = `✅ *${query.service_name}* — documento pronto!\n\nSeu PDF já está disponível para download no seu painel.`;
+      sendWhatsAppPdf(query.phone, pdfBuf, `${query.service_id}-${query.id}.pdf`, caption).catch(() => {});
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Erro no upload manual:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
 });
 
 const noCache = (res) => res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
