@@ -769,7 +769,13 @@ function renderRecentQueries() {
                </a>`
           : q.status === 'pendente'
             ? `<span class="badge-amber">⏳ Pendente</span>`
-            : `<span class="badge-${q.result_type === 'pdf' ? 'blue' : 'green'}">${q.result_type.toUpperCase()}</span>`
+            : q.result_type === 'json' && q.service_id
+              ? `<button type="button"
+                   onclick="requery(${JSON.stringify(q.service_id)}, ${JSON.stringify(q.params || '{}')})"
+                   class="text-xs bg-green-600 hover:bg-green-700 text-white px-2 py-0.5 rounded font-medium">
+                   🔄 JSON
+                 </button>`
+              : `<span class="badge-${q.result_type === 'pdf' ? 'blue' : 'green'}">${q.result_type.toUpperCase()}</span>`
         }
       </div>
     </div>`).join('');
