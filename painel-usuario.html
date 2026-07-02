@@ -771,7 +771,7 @@ function renderRecentQueries() {
             ? `<span class="badge-amber">⏳ Pendente</span>`
             : q.result_type === 'json' && q.service_id
               ? `<button type="button"
-                   onclick="requery(${JSON.stringify(q.service_id)}, ${JSON.stringify(q.params || '{}')})"
+                   onclick="requery(${JSON.stringify(q.service_id).replace(/"/g,"&quot;")}, ${JSON.stringify(q.params || '{}').replace(/"/g,"&quot;")})"
                    class="text-xs bg-green-600 hover:bg-green-700 text-white px-2 py-0.5 rounded font-medium">
                    🔄 JSON
                  </button>`
@@ -840,7 +840,7 @@ function renderHistoryTable() {
               ? `<span class="badge-amber">⏳ Pendente</span>`
             : q.result_type === 'json' && q.service_id
               ? `<button type="button"
-                   onclick="requery(${JSON.stringify(q.service_id)}, ${JSON.stringify(q.params || '{}')})"
+                   onclick="requery(${JSON.stringify(q.service_id).replace(/"/g,"&quot;")}, ${JSON.stringify(q.params || '{}').replace(/"/g,"&quot;")})"
                    class="inline-flex items-center gap-1 bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1 rounded font-semibold transition">
                    🔄 JSON
                  </button>`
