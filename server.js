@@ -197,6 +197,12 @@ const SERVICES = [
 const MANUAL_UPLOAD_GROUP = 'Número CRV (Apenas antigos)';
 const MANUAL_SERVICE_IDS  = SERVICES.filter(s => s.group === MANUAL_UPLOAD_GROUP).map(s => s.id);
 
+// A reemissão CRLV-e RJ é solicitada na hora via autocrlv.com.br, mas o PDF final
+// não tem endpoint de status/consulta por ID — a autocrlv libera o arquivo no
+// painel deles e o super admin precisa subir manualmente (mesma fila de upload
+// dos serviços de "Número CRV (Apenas antigos)"), para aparecer em Últimas Consultas.
+const MANUAL_UPLOAD_QUEUE_IDS = [...MANUAL_SERVICE_IDS, 'crlv-agendado-rj-reemissao'];
+
 // Conexão com o banco Neon
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -1069,11 +1075,16 @@ app.post('/api/query', requireAuth, async (req, res) => {
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
       [req.user.id, price, `Consulta: ${service.name}`]
     );
+    // Reemissão CRLV-e RJ: autocrlv não expõe status por ID, então o pedido fica
+    // pendente até o super admin subir o PDF manualmente (fila de upload manual).
+    const isPendingManualDelivery = serviceId === 'crlv-agendado-rj-reemissao';
     const qRow = await pool.query(
       `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
-       VALUES ($1,$2,$3,$4,'success',$5,$6,$7) RETURNING id`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
       [req.user.id, serviceId, service.name, JSON.stringify(params || {}),
-       price, txRow.rows[0].id, htmlBuf ? 'html' : (isRealPdf || base64PdfBuf) ? 'pdf' : 'json']
+       isPendingManualDelivery ? 'pendente' : 'success',
+       price, txRow.rows[0].id,
+       isPendingManualDelivery ? 'pdf' : (htmlBuf ? 'html' : (isRealPdf || base64PdfBuf) ? 'pdf' : 'json')]
     );
     await notifyAdminNewQuery(user, service, price, params);
 
@@ -1133,19 +1144,31 @@ app.post('/api/query', requireAuth, async (req, res) => {
           status = pedido.status_normalizado || pedido.status || data?.status || 'pendente';
           nomeSvc = svcData.nome_longo || data?.servico_nome || service.name;
         }
-        const msg = [
-          `✅ *CRLV-e Agendado — Consulta Concluída*`,
-          ``,
-          `🚗 *Serviço:* ${nomeSvc}`,
-          `📋 *ID do Pedido:* ${pedidoId}`,
-          `🔤 *Placa:* ${placa}`,
-          `📍 *UF:* ${uf}`,
-          `📊 *Status:* ${status}`,
-          ``,
-          `⏰ A partir de 2 horas depois de feita essa consulta vá em:`,
-          `*CRLV Agendado — Ver Status*`,
-          `e use o ID *${pedidoId}* para acompanhar quando for emitido seu CRLV-e.`,
-        ].join('\n');
+        const msg = serviceId === 'crlv-agendado-rj-reemissao'
+          ? [
+              `✅ *CRLV-e Agendado — Consulta Concluída*`,
+              ``,
+              `🚗 *Serviço:* ${nomeSvc}`,
+              `📋 *ID do Pedido:* ${pedidoId}`,
+              `🔤 *Placa:* ${placa}`,
+              `📍 *UF:* ${uf}`,
+              `📊 *Status:* ${status}`,
+              ``,
+              `📄 Assim que o documento for liberado, ele ficará disponível para download em *Visão Geral / Últimas Consultas* no seu painel, e você receberá o PDF aqui pelo WhatsApp.`,
+            ].join('\n')
+          : [
+              `✅ *CRLV-e Agendado — Consulta Concluída*`,
+              ``,
+              `🚗 *Serviço:* ${nomeSvc}`,
+              `📋 *ID do Pedido:* ${pedidoId}`,
+              `🔤 *Placa:* ${placa}`,
+              `📍 *UF:* ${uf}`,
+              `📊 *Status:* ${status}`,
+              ``,
+              `⏰ A partir de 2 horas depois de feita essa consulta vá em:`,
+              `*CRLV Agendado — Ver Status*`,
+              `e use o ID *${pedidoId}* para acompanhar quando for emitido seu CRLV-e.`,
+            ].join('\n');
         await sendWhatsApp(user.phone, msg).catch(() => {});
       }
 
@@ -1667,7 +1690,7 @@ app.get('/api/admin/manual-queries', requireAuth, requireSuperAdmin, async (req,
        WHERE q.service_id = ANY($1)
        ORDER BY (q.status = 'pendente') DESC, q.created_at DESC
        LIMIT 300`,
-      [MANUAL_SERVICE_IDS]
+      [MANUAL_UPLOAD_QUEUE_IDS]
     );
     res.json({ queries: r.rows });
   } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
@@ -1685,7 +1708,7 @@ app.post('/api/admin/manual-queries/:id/upload', requireAuth, requireSuperAdmin,
     );
     if (!qr.rows.length) return res.status(404).json({ error: 'Pedido não encontrado.' });
     const query = qr.rows[0];
-    if (!MANUAL_SERVICE_IDS.includes(query.service_id))
+    if (!MANUAL_UPLOAD_QUEUE_IDS.includes(query.service_id))
       return res.status(400).json({ error: 'Este pedido não é de um serviço manual.' });
 
     const pdfBuf = Buffer.from(pdf_base64, 'base64');
