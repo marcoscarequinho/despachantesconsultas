@@ -48,7 +48,7 @@ async function sendWhatsApp(phone, message) {
   }
 }
 
-function notifyAdminNewQuery(user, service, price, params) {
+async function notifyAdminNewQuery(user, service, price, params) {
   if (!ADMIN_PHONE) return;
   const placa = (params?.placa || '').toUpperCase();
   const msg = [
@@ -60,7 +60,7 @@ function notifyAdminNewQuery(user, service, price, params) {
     ...(placa ? [`🔤 *Placa:* ${placa}`] : []),
     `💰 *Valor:* R$ ${price.toFixed(2).replace('.', ',')}`,
   ].join('\n');
-  sendWhatsApp(ADMIN_PHONE, msg).catch(() => {});
+  await sendWhatsApp(ADMIN_PHONE, msg).catch(() => {});
 }
 
 async function sendWhatsAppPdf(phone, pdfBuffer, fileName, caption) {
@@ -816,7 +816,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
          VALUES ($1,$2,$3,$4,'pendente',$5,$6,'pdf')`,
         [req.user.id, serviceId, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id]
       );
-      notifyAdminNewQuery(user, service, price, params);
+      await notifyAdminNewQuery(user, service, price, params);
       return res.json({
         success: true,
         pending: true,
@@ -1075,7 +1075,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       [req.user.id, serviceId, service.name, JSON.stringify(params || {}),
        price, txRow.rows[0].id, htmlBuf ? 'html' : (isRealPdf || base64PdfBuf) ? 'pdf' : 'json']
     );
-    notifyAdminNewQuery(user, service, price, params);
+    await notifyAdminNewQuery(user, service, price, params);
 
     // ── Envia PDF + salva no cache por 7 dias ────────────────────────────────
     const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null);
@@ -1095,7 +1095,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
           const placa  = (params?.placa || '').toUpperCase();
           const caption = `✅ *CRLV-e ${ufCode} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
           const fileName = `CRLV-e-${ufCode}-${placa || 'doc'}.pdf`;
-          sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
+          await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
         }
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="${serviceId}-${Date.now()}.pdf"`);
@@ -1146,7 +1146,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
           `*CRLV Agendado — Ver Status*`,
           `e use o ID *${pedidoId}* para acompanhar quando for emitido seu CRLV-e.`,
         ].join('\n');
-        sendWhatsApp(user.phone, msg).catch(() => {});
+        await sendWhatsApp(user.phone, msg).catch(() => {});
       }
 
       return res.json({ success: true, result: data, charged: price });
@@ -1702,7 +1702,7 @@ app.post('/api/admin/manual-queries/:id/upload', requireAuth, requireSuperAdmin,
 
     if (query.phone) {
       const caption = `✅ *${query.service_name}* — documento pronto!\n\nSeu PDF já está disponível para download no seu painel.`;
-      sendWhatsAppPdf(query.phone, pdfBuf, `${query.service_id}-${query.id}.pdf`, caption).catch(() => {});
+      await sendWhatsAppPdf(query.phone, pdfBuf, `${query.service_id}-${query.id}.pdf`, caption).catch(() => {});
     }
 
     res.json({ success: true });
