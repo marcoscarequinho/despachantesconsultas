@@ -171,6 +171,7 @@ const SERVICES = [
   { id:'crv-antigo-pe', name:'Consulta CRV antigo PE', group:'Número CRV (Apenas antigos)', basePrice:100.00, inputType:'placa', icon:'📁', uf:'pe', autocrlvPedidoUf:'pe' },
   { id:'crv-antigo-pb', name:'Consulta CRV antigo PB', group:'Número CRV (Apenas antigos)', basePrice:79.99,  inputType:'placa', icon:'📁', uf:'pb', autocrlvPedidoUf:'pb' },
   { id:'crv-antigo-mg', name:'Consulta CRV antigo MG', group:'Número CRV (Apenas antigos)', basePrice:169.99, inputType:'placa', icon:'📁', uf:'mg', autocrlvPedidoUf:'mg' },
+  { id:'crv-antigo-es', name:'Consulta CRV antigo ES', group:'Número CRV (Apenas antigos)', basePrice:450.00, inputType:'placa', icon:'📁', uf:'es', noMarkup:true },
 ];
 
 // Serviços desta categoria não retornam resultado na hora: o pedido fica pendente até o
