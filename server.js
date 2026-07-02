@@ -22,6 +22,7 @@ const ZAPI_INSTANCE_ID   = process.env.ZAPI_INSTANCE_ID   || '';
 const ZAPI_TOKEN         = process.env.ZAPI_TOKEN         || '';
 const ZAPI_CLIENT_TOKEN  = process.env.ZAPI_CLIENT_TOKEN  || '';
 const WEBHOOK_BASE_URL   = (process.env.WEBHOOK_BASE_URL  || '').replace(/\/$/, '');
+const ADMIN_PHONE        = process.env.ADMIN_PHONE        || '';
 
 async function sendWhatsApp(phone, message) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !phone) return;
@@ -45,6 +46,21 @@ async function sendWhatsApp(phone, message) {
   } catch (err) {
     console.error('Erro ao enviar WhatsApp:', err.message);
   }
+}
+
+function notifyAdminNewQuery(user, service, price, params) {
+  if (!ADMIN_PHONE) return;
+  const placa = (params?.placa || '').toUpperCase();
+  const msg = [
+    `🔔 *Nova consulta na plataforma*`,
+    ``,
+    `🧾 *Serviço:* ${service.name}`,
+    `👤 *Cliente:* ${user.name || '-'}`,
+    ...(user.email ? [`✉️ *E-mail:* ${user.email}`] : []),
+    ...(placa ? [`🔤 *Placa:* ${placa}`] : []),
+    `💰 *Valor:* R$ ${price.toFixed(2).replace('.', ',')}`,
+  ].join('\n');
+  sendWhatsApp(ADMIN_PHONE, msg).catch(() => {});
 }
 
 async function sendWhatsAppPdf(phone, pdfBuffer, fileName, caption) {
@@ -751,7 +767,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
   try {
     const ur = await pool.query(
-      'SELECT credits, active, phone FROM users WHERE id=$1', [req.user.id]
+      'SELECT credits, active, phone, name, email FROM users WHERE id=$1', [req.user.id]
     );
     const user = ur.rows[0];
     if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
@@ -799,6 +815,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
          VALUES ($1,$2,$3,$4,'pendente',$5,$6,'pdf')`,
         [req.user.id, serviceId, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id]
       );
+      notifyAdminNewQuery(user, service, price, params);
       return res.json({
         success: true,
         pending: true,
@@ -1029,6 +1046,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       [req.user.id, serviceId, service.name, JSON.stringify(params || {}),
        price, txRow.rows[0].id, htmlBuf ? 'html' : (isRealPdf || base64PdfBuf) ? 'pdf' : 'json']
     );
+    notifyAdminNewQuery(user, service, price, params);
 
     // ── Envia PDF + salva no cache por 7 dias ────────────────────────────────
     const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null);
