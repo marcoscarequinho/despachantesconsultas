@@ -617,6 +617,67 @@
 <!-- TOAST -->
 <div id="toast" class="toast hide"></div>
 
+<!-- BANNER FLUTUANTE: PRAZO CRV ANTIGO -->
+<div id="banner-crv-antigo" class="crv-banner hidden" role="status">
+  <div class="crv-banner-inner">
+    <div class="crv-banner-icon">⚠️</div>
+    <div class="crv-banner-text">
+      <strong>Atenção:</strong> nas consultas de <strong>Número CRV (Apenas antigos)</strong>,
+      algumas UFs podem levar de <strong>3 a 5 dias</strong> para a entrega do documento.
+    </div>
+    <button type="button" onclick="fecharBannerCrvAntigo()" class="crv-banner-close" aria-label="Fechar aviso">&times;</button>
+  </div>
+</div>
+
+<style>
+.crv-banner {
+  position: fixed;
+  top: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9997;
+  width: calc(100% - 2rem);
+  max-width: 560px;
+  background: linear-gradient(135deg,#f59e0b,#d97706);
+  color: #fff;
+  border-radius: .9rem;
+  box-shadow: 0 10px 28px rgba(217,119,6,.45);
+  padding: .85rem 1rem;
+  animation: crvBannerIn .5s cubic-bezier(.175,.885,.32,1.275) both,
+             crvBannerPulse 2.4s ease-in-out .6s infinite;
+}
+.crv-banner.hidden { display: none; }
+.crv-banner-inner { display: flex; align-items: flex-start; gap: .65rem; }
+.crv-banner-icon { font-size: 1.35rem; flex-shrink: 0; animation: crvBannerShake 2s ease-in-out infinite; }
+.crv-banner-text { font-size: .8rem; line-height: 1.45; flex: 1; }
+.crv-banner-close {
+  background: rgba(255,255,255,.2); border: none; color: #fff;
+  width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+  cursor: pointer; font-size: 1rem; line-height: 1; transition: background .2s;
+}
+.crv-banner-close:hover { background: rgba(255,255,255,.35); }
+
+@keyframes crvBannerIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(-24px) scale(.92); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+}
+@keyframes crvBannerPulse {
+  0%, 100% { box-shadow: 0 10px 28px rgba(217,119,6,.45); }
+  50%      { box-shadow: 0 10px 34px rgba(217,119,6,.75); }
+}
+@keyframes crvBannerShake {
+  0%, 100% { transform: rotate(0deg); }
+  20%      { transform: rotate(-12deg); }
+  40%      { transform: rotate(10deg); }
+  60%      { transform: rotate(-6deg); }
+  80%      { transform: rotate(4deg); }
+}
+@media (max-width: 480px) {
+  .crv-banner { top: .5rem; }
+  .crv-banner-text { font-size: .75rem; }
+}
+</style>
+
 <script>
 // ── Estado global ──────────────────────────────────────────────────────────────
 let currentUser = null;
@@ -702,9 +763,26 @@ async function init() {
 
     buildCategoryGrid();
     await Promise.all([loadStats(), loadQueries()]);
+    showBannerCrvAntigo();
   } catch {
     window.location.href = '/entrar';
   }
+}
+
+// ── Banner: prazo CRV antigo (aparece toda vez que o painel é aberto) ───────────
+function showBannerCrvAntigo() {
+  setTimeout(() => {
+    document.getElementById('banner-crv-antigo')?.classList.remove('hidden');
+  }, 900);
+}
+
+function fecharBannerCrvAntigo() {
+  const el = document.getElementById('banner-crv-antigo');
+  if (!el) return;
+  el.style.transition = 'opacity .3s, transform .3s';
+  el.style.opacity = '0';
+  el.style.transform = 'translateX(-50%) translateY(-20px)';
+  setTimeout(() => el.classList.add('hidden'), 300);
 }
 
 // ── Stats ──────────────────────────────────────────────────────────────────────
