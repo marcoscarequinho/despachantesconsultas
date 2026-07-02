@@ -1033,6 +1033,34 @@ app.post('/api/query', requireAuth, async (req, res) => {
       }
     }
 
+    // Serviços genéricos (não-PDF, não-HTML): recusa cobrar se a API não retornou
+    // nenhum dado relevante (corpo vazio, JSON vazio/nulo ou com indicador de falha).
+    let genericData = null, genericParseOk = false;
+    const willBePdfOrHtml = isRealPdf || base64PdfBuf || htmlBuf;
+    if (!willBePdfOrHtml) {
+      const trimmed = bodyStr.trim();
+      if (!trimmed) {
+        console.error(`[${serviceId}] resposta vazia da API.`);
+        return res.status(422).json({ error: 'Nenhum resultado encontrado para essa consulta.' });
+      }
+      try { genericData = JSON.parse(trimmed); genericParseOk = true; } catch { genericParseOk = false; }
+      if (genericParseOk) {
+        const isEmptyResult =
+          genericData === null ||
+          (Array.isArray(genericData) && genericData.length === 0) ||
+          (typeof genericData === 'object' && !Array.isArray(genericData) && Object.keys(genericData).length === 0) ||
+          genericData?.success === false ||
+          genericData?.sucesso === false ||
+          genericData?.error;
+        if (isEmptyResult) {
+          const errMsg = genericData?.error || genericData?.message || genericData?.mensagem
+            || 'Nenhum resultado encontrado para essa consulta.';
+          console.error(`[${serviceId}] resposta vazia/sem dados: ${errMsg}`);
+          return res.status(422).json({ error: errMsg });
+        }
+      }
+    }
+
     // ── Debita créditos somente após validar resposta ─────────────────────────
     await pool.query(
       'UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]
@@ -1076,8 +1104,8 @@ app.post('/api/query', requireAuth, async (req, res) => {
       return res.json({ success: true, result: { status: 'Relatório gerado com sucesso' }, charged: price, html_token: token });
     }
 
-    try {
-      const data = JSON.parse(bodyStr);
+    if (genericParseOk) {
+      const data = genericData;
 
       // WhatsApp para CRLV-e Agendado (não é verificação de status)
       if (serviceId.startsWith('crlv-agendado-') && serviceId !== 'crlv-agendado-status' && user.phone) {
@@ -1122,7 +1150,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       }
 
       return res.json({ success: true, result: data, charged: price });
-    } catch {
+    } else {
       return res.json({ success: true, result: { resposta: bodyStr }, charged: price });
     }
   } catch (err) {
