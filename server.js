@@ -159,7 +159,7 @@ const SERVICES = [
   { id:'crlv-agendado-pe', name:'CRLV-e Agendado Pernambuco (PE)',         group:'CRLV-e Agendado', basePrice:75.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'pe' },
   { id:'crlv-agendado-pr', name:'CRLV-e Agendado Paraná (PR)',             group:'CRLV-e Agendado', basePrice:15.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'pr' },
   { id:'crlv-agendado-rj', name:'CRLV-e Agendado Rio de Janeiro (RJ)',     group:'CRLV-e Agendado', basePrice:10.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'rj' },
-  { id:'crlv-agendado-rj-reemissao', name:'Reemissão Crlv-e Rio de Janeiro (RJ)', group:'CRLV-e Agendado', basePrice:110.00, inputType:'crlv_agendado_placa', icon:'⏳', uf:'rj', noMarkup:true },
+  { id:'crlv-agendado-rj-reemissao', name:'Reemissão Crlv-e Rio de Janeiro (RJ)', group:'CRLV-e Agendado', basePrice:90.00, inputType:'placa', icon:'⏳', uf:'rj', noMarkup:true },
   { id:'crlv-agendado-rn', name:'CRLV-e Agendado Rio Grande do Norte (RN)',group:'CRLV-e Agendado', basePrice:55.00,  inputType:'crlv_agendado_cpf',   icon:'⏳', uf:'rn' },
   { id:'crlv-agendado-sc', name:'CRLV-e Agendado Santa Catarina (SC)',     group:'CRLV-e Agendado', basePrice:60.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'sc' },
   { id:'crlv-agendado-status', name:'CRLV Agendado — Ver Status',          group:'CRLV-e Agendado', basePrice:0.00,   inputType:'pedido_id_get',       icon:'🔄' },
@@ -203,17 +203,12 @@ const SERVICES = [
   { id:'crv-antigo-to', name:'Consulta CRV antigo TO', group:'Número CRV (Apenas antigos)', basePrice:350.00, inputType:'placa', icon:'📁', uf:'to', noMarkup:true },
 ];
 
-// Serviços desta categoria não retornam resultado na hora: o pedido fica pendente até o
-// super admin subir o PDF manualmente (ver /api/admin/manual-queries). Os que têm
-// autocrlvPedidoUf também disparam o pedido na autocrlv.com.br (processamento manual do lado deles).
+// Serviços desta categoria (mais a Reemissão CRLV-e RJ) não retornam resultado na hora:
+// o pedido fica pendente até o super admin subir o PDF manualmente (ver
+// /api/admin/manual-queries). Os que têm autocrlvPedidoUf também disparam o pedido
+// na autocrlv.com.br (processamento manual do lado deles).
 const MANUAL_UPLOAD_GROUP = 'Número CRV (Apenas antigos)';
-const MANUAL_SERVICE_IDS  = SERVICES.filter(s => s.group === MANUAL_UPLOAD_GROUP).map(s => s.id);
-
-// A reemissão CRLV-e RJ é solicitada na hora via autocrlv.com.br, mas o PDF final
-// não tem endpoint de status/consulta por ID — a autocrlv libera o arquivo no
-// painel deles e o super admin precisa subir manualmente (mesma fila de upload
-// dos serviços de "Número CRV (Apenas antigos)"), para aparecer em Últimas Consultas.
-const MANUAL_UPLOAD_QUEUE_IDS = [...MANUAL_SERVICE_IDS, 'crlv-agendado-rj-reemissao'];
+const MANUAL_SERVICE_IDS  = [...SERVICES.filter(s => s.group === MANUAL_UPLOAD_GROUP).map(s => s.id), 'crlv-agendado-rj-reemissao'];
 
 // Conexão com o banco Neon
 const pool = new Pool({
@@ -951,15 +946,8 @@ app.post('/api/query', requireAuth, async (req, res) => {
     let method = 'POST';
     let body = params || {};
 
-    // CRLV Agendado Reemissão RJ: solicitar via autocrlv.com.br
-    if (serviceId === 'crlv-agendado-rj-reemissao') {
-      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
-      if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
-      apiUrl = 'https://autocrlv.com.br/cliente/api_integracao_crlv_agendado.php';
-      body = { placa, uf: 'RJ2', api_key: AUTOCRLV_KEY };
-    }
     // CRLV Agendado: solicitar (demais UFs)
-    else if (serviceId.startsWith('crlv-agendado-') && serviceId !== 'crlv-agendado-status') {
+    if (serviceId.startsWith('crlv-agendado-') && serviceId !== 'crlv-agendado-status') {
       const svcDef = SERVICES.find(s => s.id === serviceId);
       apiUrl = `${BASE_API_URL}/api/crlv-agendado/solicitar`;
       body = { ...params, uf: svcDef?.uf || params.uf };
@@ -1082,7 +1070,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       fetchHeaders = {};
     } else if (serviceId === 'dados-veiculares-debitos') {
       fetchHeaders = { 'Authorization': `Bearer ${AUTOCRLV_KEY}` };
-    } else if (serviceId === 'crlv-agendado-rj-reemissao' || apiUrl.startsWith('https://autocrlv.com.br/cliente/api_integracao_crlv_agendado')) {
+    } else if (apiUrl.startsWith('https://autocrlv.com.br/cliente/api_integracao_crlv_agendado')) {
       fetchHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AUTOCRLV_KEY}` };
     } else if (PORTAL_PLACA_MAP[serviceId]) {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY };
@@ -1190,16 +1178,12 @@ app.post('/api/query', requireAuth, async (req, res) => {
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
       [req.user.id, price, `Consulta: ${service.name}`]
     );
-    // Reemissão CRLV-e RJ: autocrlv não expõe status por ID, então o pedido fica
-    // pendente até o super admin subir o PDF manualmente (fila de upload manual).
-    const isPendingManualDelivery = serviceId === 'crlv-agendado-rj-reemissao';
     const qRow = await pool.query(
       `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+       VALUES ($1,$2,$3,$4,'success',$5,$6,$7) RETURNING id`,
       [req.user.id, serviceId, service.name, JSON.stringify(params || {}),
-       isPendingManualDelivery ? 'pendente' : 'success',
        price, txRow.rows[0].id,
-       isPendingManualDelivery ? 'pdf' : (htmlBuf ? 'html' : (isRealPdf || base64PdfBuf) ? 'pdf' : 'json')]
+       htmlBuf ? 'html' : (isRealPdf || base64PdfBuf) ? 'pdf' : 'json']
     );
     await notifyAdminNewQuery(user, service, price, params);
 
@@ -1235,55 +1219,27 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
       // WhatsApp para CRLV-e Agendado (não é verificação de status)
       if (serviceId.startsWith('crlv-agendado-') && serviceId !== 'crlv-agendado-status' && user.phone) {
-        let pedidoId, placa, uf, status, nomeSvc;
-        if (serviceId === 'crlv-agendado-rj-reemissao') {
-          // Resposta da autocrlv.com.br: pedido criado com status_url (?code=...)
-          const statusUrl = data?.status_url || data?.data?.status_url || '';
-          let code = data?.code || data?.codigo || data?.data?.code || '';
-          if (!code && statusUrl) {
-            try { code = new URL(statusUrl).searchParams.get('code') || ''; } catch {}
-          }
-          pedidoId = code ? `AUTOCRLV-${code}` : '-';
-          if (code) data.pedido_id = pedidoId; // conveniência p/ tela "Ver Status"
-          placa = (data?.placa || params?.placa || '-').toString().toUpperCase();
-          uf = 'RJ';
-          status = data?.status || data?.message || 'pendente';
-          nomeSvc = service.name;
-        } else {
-          // Tenta múltiplos caminhos pois o endpoint /solicitar pode retornar estrutura variada
-          const pedido = data?.pedido || data?.data?.pedido || {};
-          const svcData = data?.servico || data?.data?.servico || {};
-          pedidoId = pedido.id ?? pedido.pedido_id ?? data?.id ?? data?.pedido_id ?? data?.data?.id ?? '-';
-          placa = (pedido.placa || data?.placa || params?.placa || '-').toString().toUpperCase();
-          uf = (pedido.uf || data?.uf || service.uf || '-').toString().toUpperCase();
-          status = pedido.status_normalizado || pedido.status || data?.status || 'pendente';
-          nomeSvc = svcData.nome_longo || data?.servico_nome || service.name;
-        }
-        const msg = serviceId === 'crlv-agendado-rj-reemissao'
-          ? [
-              `✅ *CRLV-e Agendado — Consulta Concluída*`,
-              ``,
-              `🚗 *Serviço:* ${nomeSvc}`,
-              `📋 *ID do Pedido:* ${pedidoId}`,
-              `🔤 *Placa:* ${placa}`,
-              `📍 *UF:* ${uf}`,
-              `📊 *Status:* ${status}`,
-              ``,
-              `📄 Assim que o documento for liberado, ele ficará disponível para download em *Visão Geral / Últimas Consultas* no seu painel, e você receberá o PDF aqui pelo WhatsApp.`,
-            ].join('\n')
-          : [
-              `✅ *CRLV-e Agendado — Consulta Concluída*`,
-              ``,
-              `🚗 *Serviço:* ${nomeSvc}`,
-              `📋 *ID do Pedido:* ${pedidoId}`,
-              `🔤 *Placa:* ${placa}`,
-              `📍 *UF:* ${uf}`,
-              `📊 *Status:* ${status}`,
-              ``,
-              `⏰ A partir de 2 horas depois de feita essa consulta vá em:`,
-              `*CRLV Agendado — Ver Status*`,
-              `e use o ID *${pedidoId}* para acompanhar quando for emitido seu CRLV-e.`,
-            ].join('\n');
+        // Tenta múltiplos caminhos pois o endpoint /solicitar pode retornar estrutura variada
+        const pedido = data?.pedido || data?.data?.pedido || {};
+        const svcData = data?.servico || data?.data?.servico || {};
+        const pedidoId = pedido.id ?? pedido.pedido_id ?? data?.id ?? data?.pedido_id ?? data?.data?.id ?? '-';
+        const placa = (pedido.placa || data?.placa || params?.placa || '-').toString().toUpperCase();
+        const uf = (pedido.uf || data?.uf || service.uf || '-').toString().toUpperCase();
+        const status = pedido.status_normalizado || pedido.status || data?.status || 'pendente';
+        const nomeSvc = svcData.nome_longo || data?.servico_nome || service.name;
+        const msg = [
+          `✅ *CRLV-e Agendado — Consulta Concluída*`,
+          ``,
+          `🚗 *Serviço:* ${nomeSvc}`,
+          `📋 *ID do Pedido:* ${pedidoId}`,
+          `🔤 *Placa:* ${placa}`,
+          `📍 *UF:* ${uf}`,
+          `📊 *Status:* ${status}`,
+          ``,
+          `⏰ A partir de 2 horas depois de feita essa consulta vá em:`,
+          `*CRLV Agendado — Ver Status*`,
+          `e use o ID *${pedidoId}* para acompanhar quando for emitido seu CRLV-e.`,
+        ].join('\n');
         await sendWhatsApp(user.phone, msg).catch(() => {});
       }
 
@@ -1805,7 +1761,7 @@ app.get('/api/admin/manual-queries', requireAuth, requireSuperAdmin, async (req,
        WHERE q.service_id = ANY($1)
        ORDER BY (q.status = 'pendente') DESC, q.created_at DESC
        LIMIT 300`,
-      [MANUAL_UPLOAD_QUEUE_IDS]
+      [MANUAL_SERVICE_IDS]
     );
     res.json({ queries: r.rows });
   } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
@@ -1823,7 +1779,7 @@ app.post('/api/admin/manual-queries/:id/upload', requireAuth, requireSuperAdmin,
     );
     if (!qr.rows.length) return res.status(404).json({ error: 'Pedido não encontrado.' });
     const query = qr.rows[0];
-    if (!MANUAL_UPLOAD_QUEUE_IDS.includes(query.service_id))
+    if (!MANUAL_SERVICE_IDS.includes(query.service_id))
       return res.status(400).json({ error: 'Este pedido não é de um serviço manual.' });
 
     const pdfBuf = Buffer.from(pdf_base64, 'base64');
@@ -1916,7 +1872,7 @@ Precisa puxar a capivara do carro ou emitir a ATPV-e? Aqui é vapt-vupt:
 
 🔎 Nossos Serviços:
 
-Galera, minha plataforma está com preços melhores do que a TDI, cod segurança 9,10, reemissão de ATPVE 18,90, CRLV-e do Rio 14,00, reemissão CRVL-e Rio 110,00, o kit de códigos da ATPVE quando tem comunicação de venda, 35,00.
+Galera, minha plataforma está com preços melhores do que a TDI, cod segurança 9,10, reemissão de ATPVE 18,90, CRLV-e do Rio 14,00, reemissão CRVL-e Rio 90,00, o kit de códigos da ATPVE quando tem comunicação de venda, 35,00.
 Olá! Quero te indicar a plataforma DESPACHANTES CONSULTAS — consultas veiculares e CRLV-e digital para profissionais.
 
 🎁 Cadastre-se pelo meu link e ganhe R$ 10,00 de crédito grátis para usar na plataforma!
