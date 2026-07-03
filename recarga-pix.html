@@ -151,7 +151,7 @@
       <div class="card p-4">
         <div class="text-2xl mb-1">🔒</div>
         <div class="font-semibold text-gray-800">Seguro</div>
-        <div>Gateway Asaas homologado</div>
+        <div>Gateway Mercado Pago homologado</div>
       </div>
       <div class="card p-4">
         <div class="text-2xl mb-1">📱</div>
@@ -186,17 +186,6 @@
         document.getElementById('saldo-display').textContent =
           'R$ ' + c.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
       } catch { window.location.href = '/entrar'; return; }
-
-      // Diagnóstico Asaas
-      try {
-        const d = await fetch('/api/pix/diagnostico').then(r => r.json());
-        if (!d.asaasConectado) {
-          mostrarErro(
-            'Gateway PIX indisponível: ' + (d.asaasErro || 'chave API não configurada no servidor.') +
-            ' | Key carregada: ' + d.keyCarregada + ' (' + d.keyTamanho + ' chars) | Node: ' + d.nodeVersion
-          );
-        }
-      } catch { /* ignora erro de diagnóstico */ }
     })();
 
     // Botões de valor rápido

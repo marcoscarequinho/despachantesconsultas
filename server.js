@@ -13,9 +13,9 @@ const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-inseguro';
 const CHAVE_ACESSO = process.env.CHAVE_ACESSO || '';
 const BASE_API_URL = 'https://chekaki.online';
 const MARKUP = 1.40;
-const ASAAS_API_KEY = (process.env.ASAAS_API_KEY || '')
+const MP_ACCESS_TOKEN = (process.env.MP_ACCESS_TOKEN || '')
   .split('').filter(c => c.charCodeAt(0) <= 127).join('').trim();
-const ASAAS_BASE = 'https://api.asaas.com/v3';
+const MP_BASE = 'https://api.mercadopago.com';
 const AUTOCRLV_KEY    = process.env.AUTOCRLV_KEY    || '';
 const PORTAL_DESP_KEY = process.env.PORTAL_DESP_KEY || '';
 const ZAPI_INSTANCE_ID   = process.env.ZAPI_INSTANCE_ID   || '';
@@ -92,16 +92,20 @@ async function sendWhatsAppPdf(phone, pdfBuffer, fileName, caption) {
   }
 }
 
-async function asaasReq(method, endpoint, body = null) {
+async function mpReq(method, endpoint, body = null, extraHeaders = {}) {
   const opts = {
     method,
-    headers: { 'access_token': ASAAS_API_KEY, 'Content-Type': 'application/json' },
+    headers: {
+      'Authorization': `Bearer ${MP_ACCESS_TOKEN}`,
+      'Content-Type': 'application/json',
+      ...extraHeaders,
+    },
   };
   if (body) opts.body = JSON.stringify(body);
-  const r = await fetch(`${ASAAS_BASE}${endpoint}`, opts);
+  const r = await fetch(`${MP_BASE}${endpoint}`, opts);
   const data = await r.json();
   if (!r.ok) {
-    const msg = data.errors?.[0]?.description || data.error || 'Erro Asaas';
+    const msg = data.message || data.error || data.cause?.[0]?.description || 'Erro Mercado Pago';
     throw new Error(msg);
   }
   return data;
@@ -286,12 +290,20 @@ async function initDB() {
     CREATE TABLE IF NOT EXISTS pix_payments (
       id         SERIAL PRIMARY KEY,
       user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      asaas_id   VARCHAR(100) UNIQUE NOT NULL,
+      gateway_id VARCHAR(100) UNIQUE NOT NULL,
       value      NUMERIC(10,2) NOT NULL,
       status     VARCHAR(20) DEFAULT 'PENDING',
       credited   BOOLEAN DEFAULT false,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+  `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pix_payments' AND column_name='asaas_id') THEN
+        ALTER TABLE pix_payments RENAME COLUMN asaas_id TO gateway_id;
+      END IF;
+    END $$;
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS whatsapp_inbox (
@@ -1272,7 +1284,6 @@ app.put('/api/profile/password', requireAuth, async (req, res) => {
   }
 });
 
-// ── GET /api/pix/diagnostico (temporário — remove após debug) ─────────────────
 app.get('/api/chave/diagnostico', requireAuth, async (req, res) => {
   const raw = (process.env.CHAVE_ACESSO || '');
   res.json({
@@ -1284,33 +1295,6 @@ app.get('/api/chave/diagnostico', requireAuth, async (req, res) => {
   });
 });
 
-app.get('/api/pix/diagnostico', requireAuth, async (req, res) => {
-  const keyOk = ASAAS_API_KEY.length > 20;
-  let asaasOk = false;
-  let asaasErro = null;
-  try {
-    const r = await fetch(`${ASAAS_BASE}/customers?limit=1`, {
-      headers: { 'access_token': ASAAS_API_KEY },
-    });
-    const d = await r.json();
-    asaasOk = r.ok;
-    if (!r.ok) asaasErro = JSON.stringify(d);
-  } catch (e) {
-    asaasErro = e.message;
-  }
-  const raw = (process.env.ASAAS_API_KEY || '');
-  res.json({
-    keyCarregada: keyOk,
-    keyTamanho: ASAAS_API_KEY.length,
-    keyTamanhoRaw: raw.length,
-    charsCorrompidos: raw.split('').filter(c => c.charCodeAt(0) > 127).length,
-    keyInicio: ASAAS_API_KEY.slice(0, 12) + '...',
-    asaasConectado: asaasOk,
-    asaasErro,
-    nodeVersion: process.version,
-  });
-});
-
 // ── POST /api/pix/criar ───────────────────────────────────────────────────────
 app.post('/api/pix/criar', requireAuth, async (req, res) => {
   const value = parseFloat(req.body.value);
@@ -1319,51 +1303,42 @@ app.post('/api/pix/criar', requireAuth, async (req, res) => {
 
   try {
     const ur = await pool.query(
-      'SELECT id, name, email, phone, cpf_cnpj, asaas_customer_id FROM users WHERE id=$1',
+      'SELECT id, name, email, cpf_cnpj FROM users WHERE id=$1',
       [req.user.id]
     );
     const user = ur.rows[0];
+    const doc = (user.cpf_cnpj || '').replace(/\D/g, '');
+    const docType = doc.length > 11 ? 'CNPJ' : 'CPF';
+    const nameParts = (user.name || 'Cliente').trim().split(/\s+/);
+    const firstName = nameParts[0];
+    const lastName  = nameParts.slice(1).join(' ') || firstName;
 
-    let customerId = user.asaas_customer_id;
-    if (!customerId) {
-      // Tenta buscar cliente já existente pelo CPF/CNPJ
-      const search = await asaasReq('GET', `/customers?cpfCnpj=${user.cpf_cnpj}&limit=1`);
-      if (search.data && search.data.length > 0) {
-        customerId = search.data[0].id;
-      } else {
-        const customer = await asaasReq('POST', '/customers', {
-          name: user.name,
-          cpfCnpj: user.cpf_cnpj,
-          email: user.email,
-          ...(user.phone ? { phone: user.phone } : {}),
-        });
-        customerId = customer.id;
-      }
-      await pool.query('UPDATE users SET asaas_customer_id=$1 WHERE id=$2', [customerId, user.id]);
-    }
-
-    const today = new Date().toISOString().split('T')[0];
-    const payment = await asaasReq('POST', '/payments', {
-      customer: customerId,
-      billingType: 'PIX',
-      value,
-      dueDate: today,
+    const payment = await mpReq('POST', '/v1/payments', {
+      transaction_amount: value,
       description: `Recarga de créditos — ${user.name}`,
-    });
+      payment_method_id: 'pix',
+      payer: {
+        email: user.email,
+        first_name: firstName,
+        last_name: lastName,
+        identification: { type: docType, number: doc },
+      },
+    }, { 'X-Idempotency-Key': crypto.randomUUID() });
 
-    const qr = await asaasReq('GET', `/payments/${payment.id}/pixQrCode`);
+    const txData = payment.point_of_interaction?.transaction_data || {};
+    if (!txData.qr_code) throw new Error('Mercado Pago não retornou o QR Code PIX.');
 
     await pool.query(
-      `INSERT INTO pix_payments (user_id, asaas_id, value, status)
-       VALUES ($1,$2,$3,'PENDING') ON CONFLICT (asaas_id) DO NOTHING`,
-      [req.user.id, payment.id, value]
+      `INSERT INTO pix_payments (user_id, gateway_id, value, status)
+       VALUES ($1,$2,$3,'PENDING') ON CONFLICT (gateway_id) DO NOTHING`,
+      [req.user.id, String(payment.id), value]
     );
 
     res.json({
       paymentId: payment.id,
-      qrCode: qr.encodedImage,
-      pixCopiaECola: qr.payload,
-      expirationDate: qr.expirationDate,
+      qrCode: txData.qr_code_base64,
+      pixCopiaECola: txData.qr_code,
+      expirationDate: payment.date_of_expiration,
       value,
     });
   } catch (err) {
@@ -1377,7 +1352,7 @@ app.get('/api/pix/status/:paymentId', requireAuth, async (req, res) => {
   try {
     const { paymentId } = req.params;
     const pr = await pool.query(
-      'SELECT * FROM pix_payments WHERE asaas_id=$1 AND user_id=$2',
+      'SELECT * FROM pix_payments WHERE gateway_id=$1 AND user_id=$2',
       [paymentId, req.user.id]
     );
     if (!pr.rows.length) return res.status(404).json({ error: 'Pagamento não encontrado.' });
@@ -1385,9 +1360,9 @@ app.get('/api/pix/status/:paymentId', requireAuth, async (req, res) => {
 
     if (p.credited) return res.json({ status: 'RECEIVED', credited: true, value: parseFloat(p.value) });
 
-    const ap = await asaasReq('GET', `/payments/${paymentId}`);
+    const mp = await mpReq('GET', `/v1/payments/${paymentId}`);
 
-    if (ap.status === 'RECEIVED' || ap.status === 'CONFIRMED') {
+    if (mp.status === 'approved') {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
@@ -1396,7 +1371,7 @@ app.get('/api/pix/status/:paymentId', requireAuth, async (req, res) => {
           `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'deposit',$2,$3)`,
           [p.user_id, p.value, `Recarga PIX — R$ ${parseFloat(p.value).toFixed(2).replace('.', ',')}`]
         );
-        await client.query('UPDATE pix_payments SET status=$1, credited=true WHERE id=$2', [ap.status, p.id]);
+        await client.query('UPDATE pix_payments SET status=$1, credited=true WHERE id=$2', [mp.status, p.id]);
         await client.query('COMMIT');
       } catch (e) {
         await client.query('ROLLBACK');
@@ -1404,11 +1379,11 @@ app.get('/api/pix/status/:paymentId', requireAuth, async (req, res) => {
       } finally {
         client.release();
       }
-      return res.json({ status: ap.status, credited: true, value: parseFloat(p.value) });
+      return res.json({ status: 'RECEIVED', credited: true, value: parseFloat(p.value) });
     }
 
-    await pool.query('UPDATE pix_payments SET status=$1 WHERE id=$2', [ap.status, p.id]);
-    res.json({ status: ap.status, credited: false });
+    await pool.query('UPDATE pix_payments SET status=$1 WHERE id=$2', [mp.status, p.id]);
+    res.json({ status: mp.status, credited: false });
   } catch (err) {
     console.error('Erro PIX status:', err.message);
     res.status(500).json({ error: 'Erro ao verificar pagamento.' });
@@ -1416,19 +1391,25 @@ app.get('/api/pix/status/:paymentId', requireAuth, async (req, res) => {
 });
 
 // ── POST /api/pix/webhook ─────────────────────────────────────────────────────
+// Mercado Pago envia notificações leves (só o id) — sempre confirmamos o status
+// consultando a API diretamente, nunca confiando no corpo do webhook.
 app.post('/api/pix/webhook', async (req, res) => {
   res.sendStatus(200);
-  const { event, payment } = req.body || {};
-  if (!payment?.id) return;
-  if (event !== 'PAYMENT_RECEIVED' && event !== 'PAYMENT_CONFIRMED') return;
+  const body = req.body || {};
+  const type = body.type || body.topic || req.query.type || req.query.topic;
+  const paymentId = body.data?.id || req.query['data.id'] || req.query.id;
+  if (type !== 'payment' || !paymentId) return;
 
   try {
     const pr = await pool.query(
-      'SELECT * FROM pix_payments WHERE asaas_id=$1 AND credited=false',
-      [payment.id]
+      'SELECT * FROM pix_payments WHERE gateway_id=$1 AND credited=false',
+      [String(paymentId)]
     );
     if (!pr.rows.length) return;
     const p = pr.rows[0];
+
+    const mp = await mpReq('GET', `/v1/payments/${paymentId}`);
+    if (mp.status !== 'approved') return;
 
     const client = await pool.connect();
     try {
@@ -1438,7 +1419,7 @@ app.post('/api/pix/webhook', async (req, res) => {
         `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'deposit',$2,$3)`,
         [p.user_id, p.value, `Recarga PIX — R$ ${parseFloat(p.value).toFixed(2).replace('.', ',')}`]
       );
-      await client.query('UPDATE pix_payments SET status=$1, credited=true WHERE id=$2', [event.replace('PAYMENT_', ''), p.id]);
+      await client.query('UPDATE pix_payments SET status=$1, credited=true WHERE id=$2', [mp.status, p.id]);
       await client.query('COMMIT');
     } catch (e) {
       await client.query('ROLLBACK');
