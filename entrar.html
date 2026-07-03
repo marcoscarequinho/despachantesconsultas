@@ -116,9 +116,9 @@
 
           <!-- Esqueci senha -->
           <div class="text-right mb-6">
-            <a href="#" class="text-xs text-blue-700 hover:text-orange-500 font-medium">
+            <button type="button" id="btn-forgot" class="text-xs text-blue-700 hover:text-orange-500 font-medium">
               Esqueci minha senha
-            </a>
+            </button>
           </div>
 
           <!-- Botão -->
@@ -160,6 +160,61 @@
       </p>
     </div>
   </main>
+
+  <!-- Modal: Esqueci minha senha -->
+  <div id="forgot-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
+    <div class="bg-white rounded-xl shadow-lg p-8 w-full max-w-md">
+      <div class="flex justify-between items-start mb-4">
+        <h2 class="text-xl font-bold text-blue-900">Redefinir senha</h2>
+        <button type="button" id="btn-forgot-close" class="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+      </div>
+
+      <div id="forgot-alert" class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 mb-4 text-sm"></div>
+      <div id="forgot-alert-success" class="hidden bg-green-50 border border-green-200 text-green-700 rounded-lg px-4 py-3 mb-4 text-sm"></div>
+
+      <!-- Passo 1: informar identificador -->
+      <div id="forgot-step-1">
+        <p class="text-sm text-gray-600 mb-4">
+          Informe seu e-mail ou CPF/CNPJ cadastrado. Enviaremos um código de verificação pelo WhatsApp
+          vinculado à sua conta.
+        </p>
+        <label for="forgot-identifier" class="block text-sm font-semibold text-gray-700 mb-2">
+          E-mail ou CPF/CNPJ
+        </label>
+        <input id="forgot-identifier" type="text" placeholder="seu@email.com ou 000.000.000-00"
+          class="w-full px-4 py-3 border border-gray-300 rounded-lg text-sm mb-4
+                 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+        <button type="button" id="btn-forgot-send" class="w-full btn-primary text-center">
+          Enviar código
+        </button>
+      </div>
+
+      <!-- Passo 2: código + nova senha -->
+      <div id="forgot-step-2" class="hidden">
+        <p class="text-sm text-gray-600 mb-4">
+          Digite o código de 6 dígitos recebido no WhatsApp e escolha sua nova senha.
+        </p>
+        <label for="forgot-code" class="block text-sm font-semibold text-gray-700 mb-2">Código</label>
+        <input id="forgot-code" type="text" inputmode="numeric" maxlength="6" placeholder="000000"
+          class="w-full px-4 py-3 border border-gray-300 rounded-lg text-sm mb-4 tracking-widest text-center
+                 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+        <label for="forgot-new-password" class="block text-sm font-semibold text-gray-700 mb-2">Nova senha</label>
+        <input id="forgot-new-password" type="password" placeholder="••••••••"
+          class="w-full px-4 py-3 border border-gray-300 rounded-lg text-sm mb-4
+                 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+        <label for="forgot-confirm-password" class="block text-sm font-semibold text-gray-700 mb-2">Confirmar nova senha</label>
+        <input id="forgot-confirm-password" type="password" placeholder="••••••••"
+          class="w-full px-4 py-3 border border-gray-300 rounded-lg text-sm mb-4
+                 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+        <button type="button" id="btn-forgot-reset" class="w-full btn-primary text-center">
+          Redefinir senha
+        </button>
+        <button type="button" id="btn-forgot-back" class="w-full text-center text-xs text-gray-500 hover:text-gray-700 mt-3">
+          &larr; Voltar
+        </button>
+      </div>
+    </div>
+  </div>
 
   <!-- WhatsApp flutuante -->
   <a href="https://wa.me/5522999951574" class="whatsapp-float" target="_blank" aria-label="WhatsApp">
@@ -262,6 +317,130 @@
     function hideError() {
       document.getElementById('alert-error').classList.add('hidden');
     }
+
+    // ── Esqueci minha senha ───────────────────────────────────────────────────
+    const forgotModal      = document.getElementById('forgot-modal');
+    const forgotStep1      = document.getElementById('forgot-step-1');
+    const forgotStep2      = document.getElementById('forgot-step-2');
+    const forgotAlert      = document.getElementById('forgot-alert');
+    const forgotAlertOk    = document.getElementById('forgot-alert-success');
+    let forgotIdentifier   = '';
+
+    function forgotShowError(msg) {
+      forgotAlertOk.classList.add('hidden');
+      forgotAlert.textContent = msg;
+      forgotAlert.classList.remove('hidden');
+    }
+
+    function forgotShowSuccess(msg) {
+      forgotAlert.classList.add('hidden');
+      forgotAlertOk.textContent = msg;
+      forgotAlertOk.classList.remove('hidden');
+    }
+
+    function forgotHideAlerts() {
+      forgotAlert.classList.add('hidden');
+      forgotAlertOk.classList.add('hidden');
+    }
+
+    function openForgotModal() {
+      forgotIdentifier = '';
+      document.getElementById('forgot-identifier').value = '';
+      document.getElementById('forgot-code').value = '';
+      document.getElementById('forgot-new-password').value = '';
+      document.getElementById('forgot-confirm-password').value = '';
+      forgotHideAlerts();
+      forgotStep1.classList.remove('hidden');
+      forgotStep2.classList.add('hidden');
+      forgotModal.classList.remove('hidden');
+    }
+
+    function closeForgotModal() {
+      forgotModal.classList.add('hidden');
+    }
+
+    document.getElementById('btn-forgot').addEventListener('click', openForgotModal);
+    document.getElementById('btn-forgot-close').addEventListener('click', closeForgotModal);
+    forgotModal.addEventListener('click', (e) => {
+      if (e.target === forgotModal) closeForgotModal();
+    });
+
+    document.getElementById('btn-forgot-back').addEventListener('click', () => {
+      forgotHideAlerts();
+      forgotStep2.classList.add('hidden');
+      forgotStep1.classList.remove('hidden');
+    });
+
+    document.getElementById('btn-forgot-send').addEventListener('click', async () => {
+      const identifier = document.getElementById('forgot-identifier').value.trim();
+      if (!identifier) {
+        forgotShowError('Informe seu e-mail ou CPF/CNPJ.');
+        return;
+      }
+      forgotHideAlerts();
+      const btn = document.getElementById('btn-forgot-send');
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/auth/forgot-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identifier }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          forgotShowError(data.error || 'Erro ao solicitar redefinição. Tente novamente.');
+          return;
+        }
+        forgotIdentifier = identifier;
+        forgotStep1.classList.add('hidden');
+        forgotStep2.classList.remove('hidden');
+        forgotShowSuccess(data.message || 'Código enviado! Verifique seu WhatsApp.');
+      } catch {
+        forgotShowError('Falha na conexão. Verifique sua internet e tente novamente.');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById('btn-forgot-reset').addEventListener('click', async () => {
+      const code = document.getElementById('forgot-code').value.trim();
+      const newPassword = document.getElementById('forgot-new-password').value;
+      const confirmPassword = document.getElementById('forgot-confirm-password').value;
+
+      if (!code || !newPassword || !confirmPassword) {
+        forgotShowError('Preencha todos os campos.');
+        return;
+      }
+      if (newPassword !== confirmPassword) {
+        forgotShowError('As senhas não coincidem.');
+        return;
+      }
+      if (newPassword.length < 8) {
+        forgotShowError('A senha deve ter ao menos 8 caracteres.');
+        return;
+      }
+
+      const btn = document.getElementById('btn-forgot-reset');
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/auth/reset-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identifier: forgotIdentifier, code, new_password: newPassword }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          forgotShowError(data.error || 'Erro ao redefinir senha. Tente novamente.');
+          return;
+        }
+        forgotShowSuccess('Senha redefinida com sucesso! Você já pode entrar.');
+        setTimeout(closeForgotModal, 2000);
+      } catch {
+        forgotShowError('Falha na conexão. Verifique sua internet e tente novamente.');
+      } finally {
+        btn.disabled = false;
+      }
+    });
   </script>
 </body>
 </html>

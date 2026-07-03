@@ -299,6 +299,16 @@ async function initDB() {
       created_at   TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS password_resets (
+      id         SERIAL PRIMARY KEY,
+      user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      code_hash  VARCHAR(255) NOT NULL,
+      attempts   INTEGER DEFAULT 0,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
   console.log('✅ Tabelas prontas');
 }
 
@@ -502,6 +512,99 @@ app.post('/api/auth/login', async (req, res) => {
 app.post('/api/auth/logout', (req, res) => {
   res.clearCookie('auth_token');
   res.json({ success: true });
+});
+
+// ── POST /api/auth/forgot-password ────────────────────────────────────────────
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const { identifier } = req.body;
+  if (!identifier)
+    return res.status(400).json({ error: 'Informe seu e-mail ou CPF/CNPJ.' });
+
+  const id = identifier.trim();
+  const isEmail = id.includes('@');
+  const lookup = isEmail ? id.toLowerCase() : cleanDoc(id);
+  const field = isEmail ? 'email' : 'cpf_cnpj';
+
+  const genericMsg = 'Se os dados informados estiverem corretos, enviaremos um código de verificação via WhatsApp para o número cadastrado na conta.';
+
+  try {
+    const r = await pool.query(`SELECT id, phone FROM users WHERE ${field}=$1 AND active=true`, [lookup]);
+    if (r.rows.length > 0 && r.rows[0].phone) {
+      const user = r.rows[0];
+      const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+      const codeHash = await bcrypt.hash(code, 10);
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+      await pool.query('DELETE FROM password_resets WHERE user_id=$1', [user.id]);
+      await pool.query(
+        `INSERT INTO password_resets (user_id, code_hash, expires_at) VALUES ($1,$2,$3)`,
+        [user.id, codeHash, expiresAt]
+      );
+
+      const msg = [
+        `🔐 *Redefinição de senha*`,
+        ``,
+        `Seu código de verificação é: *${code}*`,
+        ``,
+        `Válido por 10 minutos. Se você não solicitou, ignore esta mensagem.`,
+      ].join('\n');
+      await sendWhatsApp(user.phone, msg).catch(() => {});
+    }
+    // Resposta sempre genérica para não revelar quais contas existem
+    res.json({ success: true, message: genericMsg });
+  } catch (err) {
+    console.error('Erro no forgot-password:', err.message);
+    res.status(500).json({ error: 'Erro interno. Tente novamente.' });
+  }
+});
+
+// ── POST /api/auth/reset-password ─────────────────────────────────────────────
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { identifier, code, new_password } = req.body;
+  if (!identifier || !code || !new_password)
+    return res.status(400).json({ error: 'Preencha todos os campos.' });
+  if (new_password.length < 8)
+    return res.status(400).json({ error: 'A senha deve ter ao menos 8 caracteres.' });
+
+  const id = identifier.trim();
+  const isEmail = id.includes('@');
+  const lookup = isEmail ? id.toLowerCase() : cleanDoc(id);
+  const field = isEmail ? 'email' : 'cpf_cnpj';
+
+  try {
+    const ur = await pool.query(`SELECT id FROM users WHERE ${field}=$1`, [lookup]);
+    if (ur.rows.length === 0)
+      return res.status(400).json({ error: 'Código inválido ou expirado.' });
+    const userId = ur.rows[0].id;
+
+    const pr = await pool.query(
+      'SELECT id, code_hash, expires_at, attempts FROM password_resets WHERE user_id=$1',
+      [userId]
+    );
+    if (pr.rows.length === 0)
+      return res.status(400).json({ error: 'Código inválido ou expirado.' });
+    const reset = pr.rows[0];
+
+    if (new Date(reset.expires_at) < new Date() || reset.attempts >= 5) {
+      await pool.query('DELETE FROM password_resets WHERE id=$1', [reset.id]);
+      return res.status(400).json({ error: 'Código inválido ou expirado.' });
+    }
+
+    const match = await bcrypt.compare(code, reset.code_hash);
+    if (!match) {
+      await pool.query('UPDATE password_resets SET attempts = attempts + 1 WHERE id=$1', [reset.id]);
+      return res.status(400).json({ error: 'Código inválido ou expirado.' });
+    }
+
+    const hash = await bcrypt.hash(new_password, 12);
+    await pool.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, userId]);
+    await pool.query('DELETE FROM password_resets WHERE id=$1', [reset.id]);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Erro no reset-password:', err.message);
+    res.status(500).json({ error: 'Erro interno. Tente novamente.' });
+  }
 });
 
 // ── GET /api/auth/me ──────────────────────────────────────────────────────────
