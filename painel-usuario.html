@@ -1149,15 +1149,6 @@ function renderFormFields(inputType, svc) {
         <input type="file" id="atpv-pdf-input" accept="application/pdf" class="hidden" onchange="importarAtpvPdf()">
       </label>
       <p id="atpv-import-status" class="text-xs mt-2 hidden"></p>
-      <div id="atpv-debug-wrap" class="hidden mt-2">
-        <div class="flex items-center justify-between mb-1">
-          <span class="text-xs font-semibold text-blue-800">Texto extraído do PDF (debug)</span>
-          <button type="button" onclick="copiarTextoAtpvDebug()" class="text-xs text-blue-700 underline">Selecionar tudo + Copiar</button>
-        </div>
-        <p id="atpv-debug-copy-status" class="text-xs mb-1 hidden"></p>
-        <textarea id="atpv-debug-text" readonly class="w-full text-xs border border-blue-200 rounded p-2 bg-white" rows="16" onclick="this.select()"></textarea>
-        <p class="text-xs text-blue-700 mt-1">⚠️ Contém dados reais (CPF, nome) — edite/apague antes de enviar a alguém. Se o botão "Copiar" não funcionar, clique dentro da caixa (isso já seleciona tudo) e use Ctrl+C.</p>
-      </div>
     </div>
     <div class="font-semibold text-gray-700 text-sm mb-2">Vendedor</div>
     <div class="grid grid-cols-2 gap-3">
@@ -1931,16 +1922,6 @@ async function paginaParaCanvas(page, scale = 2.5) {
 async function processarTextoAtpv(texto, setStatus, campos) {
   setStatus('⏳ Identificando campos…', 'text-blue-600');
 
-  // Mostra o texto bruto e os campos de formulário extraídos para conferência/
-  // depuração — o parser roda em cima disso, então se algo sair errado dá pra
-  // ver exatamente por quê.
-  const debugWrap = document.getElementById('atpv-debug-wrap');
-  const debugText = document.getElementById('atpv-debug-text');
-  if (debugWrap && debugText) {
-    debugText.value = (campos?.length ? 'CAMPOS DE FORMULÁRIO:\n' + JSON.stringify(campos, null, 2) + '\n\nTEXTO DA PÁGINA:\n' : '') + texto;
-    debugWrap.classList.remove('hidden');
-  }
-
   const r    = await fetch('/api/pdf/extrair-atpv', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1978,22 +1959,6 @@ async function processarTextoAtpv(texto, setStatus, campos) {
     setStatus('✅ Preenchido: ' + preenchidos.join(', ') + '. Verifique antes de enviar.', 'text-green-600');
   else
     setStatus('⚠️ Não encontrei campos reconhecíveis. Preencha manualmente.', 'text-amber-600');
-}
-
-function copiarTextoAtpvDebug() {
-  const el = document.getElementById('atpv-debug-text');
-  const status = document.getElementById('atpv-debug-copy-status');
-  const setStatus = (msg, cor) => {
-    if (!status) return;
-    status.className = `text-xs mb-1 ${cor}`;
-    status.textContent = msg;
-    status.classList.remove('hidden');
-  };
-  if (!el) return;
-  el.select();
-  navigator.clipboard.writeText(el.value)
-    .then(() => { toast('Texto copiado.'); setStatus('✅ Copiado! Cole em qualquer lugar (Ctrl+V).', 'text-green-600'); })
-    .catch(() => setStatus('⚠️ Não consegui copiar automaticamente. O texto já está selecionado — use Ctrl+C agora.', 'text-amber-600'));
 }
 
 async function importarAtpvPdf() {

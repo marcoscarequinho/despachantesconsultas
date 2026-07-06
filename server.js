@@ -1697,6 +1697,12 @@ app.post('/api/pdf/extrair-atpv', requireAuth, (req, res) => {
   if (!texto && !(Array.isArray(campos) && campos.length))
     return res.status(400).json({ error: 'Nenhum dado enviado.' });
 
+  // TEMP DEBUG: registra nos logs do servidor o que o PDF.js extraiu, para
+  // ajustar o parser sem depender do usuário copiar/colar o texto. Remover
+  // depois que o ATPV-e estiver preenchendo certo.
+  console.log('[ATPV DEBUG] campos:', JSON.stringify(campos || []));
+  console.log('[ATPV DEBUG] texto:', texto || '');
+
   const doCampos = Array.isArray(campos) && campos.length ? extrairDeCampos(campos) : null;
 
   const txt = (texto || '').replace(/\s+/g, ' ').toUpperCase();
