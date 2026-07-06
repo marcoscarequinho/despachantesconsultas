@@ -994,6 +994,80 @@ app.post('/api/query', requireAuth, async (req, res) => {
       apiUrl = `${BASE_API_URL}/motivos-cancelamento/${params.protocolo}`;
       method = 'GET'; body = null;
     }
+    // Inserir comunicação de venda — a API exige id/numero_via/cidade/valor como número
+    // JSON (não string) e rejeita com erro genérico ("Dados incompletos.") quando o tipo
+    // não bate, então validamos e convertemos aqui antes de repassar.
+    if (serviceId === 'inserir-comunicacao-venda') {
+      const v    = params?.vendedor  || {};
+      const c    = params?.comprador || {};
+      const end  = c.endereco        || {};
+      const vda  = params?.venda     || {};
+      const veic = params?.veiculo   || {};
+      const crv  = veic.crv          || {};
+
+      const placa    = (veic.placa   || '').toUpperCase().replace(/[\s-]/g, '');
+      const renavam  = (veic.renavam || '').replace(/\D/g, '');
+      const vCpf     = (v.cpf || '').replace(/\D/g, '');
+      const cCpf     = (c.cpf || '').replace(/\D/g, '');
+      const cep      = (end.cep || '').replace(/\D/g, '');
+      const numeroVia       = parseInt(crv.numero_via, 10);
+      const cidadeComprador = parseInt(end.cidade, 10);
+      const cidadeVenda     = parseInt(vda.cidade, 10);
+      const valorStr = String(vda.valor ?? '').trim();
+      const valor    = valorStr.includes(',')
+        ? parseFloat(valorStr.replace(/\./g, '').replace(',', '.'))
+        : parseFloat(valorStr);
+
+      if (placa.length < 7)                          return res.status(400).json({ error: 'Placa do veículo inválida. Informe no formato ABC1D23.' });
+      if (renavam.length < 9 || renavam.length > 11)  return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+      if (vCpf.length !== 11)                         return res.status(400).json({ error: 'CPF do vendedor inválido. Deve ter 11 dígitos.' });
+      if (cCpf.length !== 11)                         return res.status(400).json({ error: 'CPF do comprador inválido. Deve ter 11 dígitos.' });
+      if (!v.nome?.trim())                            return res.status(400).json({ error: 'Informe o nome do vendedor.' });
+      if (!c.nome?.trim())                            return res.status(400).json({ error: 'Informe o nome do comprador.' });
+      if (cep.length !== 8)                            return res.status(400).json({ error: 'CEP inválido. Deve ter 8 dígitos.' });
+      if (!end.uf || end.uf.trim().length !== 2)      return res.status(400).json({ error: 'UF do endereço do comprador inválida.' });
+      if (!vda.estado || vda.estado.trim().length !== 2) return res.status(400).json({ error: 'UF da venda inválida.' });
+      if (Number.isNaN(cidadeComprador))              return res.status(400).json({ error: 'Código IBGE da cidade do comprador inválido.' });
+      if (Number.isNaN(cidadeVenda))                   return res.status(400).json({ error: 'Código IBGE da cidade da venda inválido.' });
+      if (Number.isNaN(valor) || valor <= 0)          return res.status(400).json({ error: 'Valor da venda inválido.' });
+      if (!/^\d{2}\/\d{2}\/\d{4}$/.test(vda.data || '')) return res.status(400).json({ error: 'Data da venda inválida. Use o formato DD/MM/AAAA.' });
+      if (!Number.isInteger(numeroVia) || numeroVia < 1) return res.status(400).json({ error: 'Número da via do CRV inválido.' });
+      if (!/^\d{2}\/\d{2}\/\d{4}$/.test(crv.data_emissao || '')) return res.status(400).json({ error: 'Data de emissão do CRV inválida. Use o formato DD/MM/AAAA.' });
+
+      body = {
+        vendedor: { tipo_pessoa: 'F', cpf: vCpf, nome: v.nome.trim().toUpperCase() },
+        comprador: {
+          tipo_pessoa: 'F', cpf: cCpf, nome: c.nome.trim().toUpperCase(),
+          endereco: {
+            cep, logradouro: end.logradouro || '', numero: end.numero || '',
+            bairro: end.bairro || '', complemento: end.complemento || '',
+            cidade: cidadeComprador, uf: end.uf.trim().toUpperCase(),
+          },
+        },
+        venda: {
+          cidade: cidadeVenda, data: vda.data, valor,
+          comprador_solicitante: 'S', estado: vda.estado.trim().toUpperCase(),
+        },
+        veiculo: {
+          placa, renavam,
+          crv: {
+            numero: crv.numero || '', codigo_seguranca: crv.codigo_seguranca || '',
+            numero_via: numeroVia, data_emissao: crv.data_emissao,
+            uf_emissao: (crv.uf_emissao || '').trim().toUpperCase(),
+          },
+        },
+      };
+    }
+    // Cancelar comunicação de venda — a API exige id e id_motivo_cancelamento como número
+    if (serviceId === 'cancelar-comunicacao-venda') {
+      const id        = parseInt(params?.id, 10);
+      const idMotivo  = parseInt(params?.id_motivo_cancelamento, 10);
+      const protocolo = (params?.protocolo || '').trim();
+      if (!Number.isInteger(id) || id <= 0)           return res.status(400).json({ error: 'ID da comunicação inválido.' });
+      if (!protocolo)                                 return res.status(400).json({ error: 'Informe o protocolo.' });
+      if (!Number.isInteger(idMotivo) || idMotivo <= 0) return res.status(400).json({ error: 'Informe o motivo do cancelamento.' });
+      body = { id, protocolo, id_motivo_cancelamento: idMotivo };
+    }
     // Dados Veiculares Básico + Débitos + Gravame (autocrlv.com.br)
     if (serviceId === 'dados-veiculares-debitos') {
       const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
@@ -1499,16 +1573,29 @@ app.post('/api/pdf/extrair-atpv', requireAuth, (req, res) => {
   const txt = texto.replace(/\s+/g, ' ').toUpperCase();
   const m   = (r) => (txt.match(r) || [])[1] || '';
 
+  // ── Vendedor/Comprador CPF (extraídos cedo para não colidir com renavam/chassi) ──
+  const v_cpf_raw = m(/(?:VENDEDOR|ALIENANTE|TRANSMITENTE)[^0-9]*(\d{3}[\.\s]?\d{3}[\.\s]?\d{3}[\.\s\-]?\d{2})/);
+  const v_nome = m(/(?:VENDEDOR|ALIENANTE|TRANSMITENTE)[^A-Z]*([A-ZÁÀÃÂÉÊÍÓÔÕÚÇ][A-ZÁÀÃÂÉÊÍÓÔÕÚÇ\s]{4,60}?)(?:\s{2,}|CPF|CNPJ)/);
+  const c_cpf_raw = m(/(?:COMPRADOR|ADQUIRENTE)[^0-9]*(\d{3}[\.\s]?\d{3}[\.\s]?\d{3}[\.\s\-]?\d{2})/);
+  const cpfsConhecidos = [v_cpf_raw, c_cpf_raw].map(v => v.replace(/[\.\-\s]/g, '')).filter(Boolean);
+
   // ── Veículo ──
   let placa  = m(/PLACA[^A-Z0-9]*([A-Z]{3}[\s-]?[0-9A-Z][0-9A-Z]{2}[0-9]{2})/);
   if (!placa) placa = m(/\b([A-Z]{3}[\s-]?[0-9][A-Z0-9][0-9]{2})\b/);
   placa = placa.replace(/[\s-]/g, '');
 
   let renavam = m(/RENAVAM[^0-9]*(\d{9,11})/);
-  if (!renavam) renavam = m(/\b(\d{9,11})\b/);
+  if (!renavam || cpfsConhecidos.includes(renavam)) {
+    // Fallback: primeiro número solto de 9-11 dígitos que não seja um CPF já identificado
+    const candidatos = txt.match(/\b\d{9,11}\b/g) || [];
+    renavam = candidatos.find(n => !cpfsConhecidos.includes(n)) || renavam || '';
+  }
 
-  let chassi = m(/CHASSI[^A-Z0-9]*([A-Z0-9]{17})/);
-  if (!chassi) chassi = m(/\b([A-Z0-9]{17})\b/);
+  // Chassi (VIN): sempre alfanumérico com pelo menos uma letra e sem I/O/Q — evita
+  // que uma sequência de 17 dígitos puros (ex.: outro código do documento) seja
+  // confundida com o chassi real.
+  let chassi = m(/CHASSI[^A-Z0-9]*([A-HJ-NPR-Z0-9]{17})/);
+  if (!chassi) chassi = m(/\b(?=[A-HJ-NPR-Z0-9]{17}\b)(?=[A-HJ-NPR-Z0-9]*[A-HJ-NPR-Z])[A-HJ-NPR-Z0-9]{17}\b/);
 
   // ── CRV ──
   const crv_numero = m(/(?:N[ÚU]MERO\s+(?:DO\s+)?CRV|CRV\s+N[ÚU]MERO)[^0-9]*(\d{9,12})/);
@@ -1517,20 +1604,20 @@ app.post('/api/pdf/extrair-atpv', requireAuth, (req, res) => {
   const crv_uf     = m(/(?:UF|ESTADO)\s+(?:DE\s+)?EMISS[ÃA]O[^A-Z]*([A-Z]{2})\b/);
   const datas      = txt.match(/\d{2}\/\d{2}\/\d{4}/g) || [];
   const crv_data   = datas[0] || '';
-
-  // ── Vendedor ──
-  const v_cpf  = m(/(?:VENDEDOR|ALIENANTE|TRANSMITENTE)[^0-9]*(\d{3}[\.\s]?\d{3}[\.\s]?\d{3}[\.\s\-]?\d{2})/);
-  const v_nome = m(/(?:VENDEDOR|ALIENANTE|TRANSMITENTE)[^A-Z]*([A-ZÁÀÃÂÉÊÍÓÔÕÚÇ][A-ZÁÀÃÂÉÊÍÓÔÕÚÇ\s]{4,60}?)(?:\s{2,}|CPF|CNPJ)/);
+  const v_cpf = v_cpf_raw;
 
   // ── Comprador ──
-  const c_cpf  = m(/(?:COMPRADOR|ADQUIRENTE)[^0-9]*(\d{3}[\.\s]?\d{3}[\.\s]?\d{3}[\.\s\-]?\d{2})/);
+  const c_cpf  = c_cpf_raw;
   const c_nome = m(/(?:COMPRADOR|ADQUIRENTE)[^A-Z]*([A-ZÁÀÃÂÉÊÍÓÔÕÚÇ][A-ZÁÀÃÂÉÊÍÓÔÕÚÇ\s]{4,60}?)(?:\s{2,}|CPF|CNPJ)/);
   const c_cep  = m(/CEP[^0-9]*(\d{5}[\-]?\d{3})/);
   const c_uf   = m(/(?:ESTADO|UF)[^A-Z]*(?:DO\s+COMPRADOR)?[^A-Z]*([A-Z]{2})\b/);
 
   // ── Venda ──
   const venda_valor  = m(/VALOR[^0-9]*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)/);
-  const venda_data   = datas[1] || datas[0] || '';
+  // Só usa a 2ª data encontrada no PDF; se houver apenas uma, ela já foi atribuída
+  // ao CRV (crv_data) e não deve ser duplicada aqui — melhor deixar em branco para
+  // o usuário conferir do que preencher automaticamente com a data errada.
+  const venda_data   = datas[1] || '';
   const venda_estado = m(/(?:MUNIC[ÍI]PIO|CIDADE)\s+(?:DA\s+)?VENDA[^A-Z]*[A-ZÁÀÃÂÉÊÍÓÔÕÚÇ\s]+[\s,]+([A-Z]{2})\b/);
 
   if (!placa && !renavam && !chassi)

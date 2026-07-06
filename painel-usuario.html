@@ -1161,8 +1161,8 @@ function renderFormFields(inputType, svc) {
       ${field('c_nome','Nome Comprador','text','NOME COMPLETO')}
     </div>
     <div class="grid grid-cols-2 gap-3">
-      ${field('c_cep','CEP','text','01001000')}
-      ${field('c_cidade','Código IBGE Cidade','text','3550308')}
+      ${field('c_cep','CEP (8 dígitos)','text','01001000',true,'inputmode="numeric" maxlength="8"')}
+      ${field('c_cidade','Código IBGE Cidade','text','3550308',true,'inputmode="numeric"')}
     </div>
     <div class="grid grid-cols-2 gap-3">
       ${field('c_logradouro','Logradouro','text','RUA EXEMPLO')}
@@ -1433,12 +1433,21 @@ function renderFormFields(inputType, svc) {
       this.value = this.value.replace(/\D/g, '').slice(0, 11);
     });
   }
-  // Máscara CPF
-  const cpfEl = document.getElementById('f-cpf');
-  if (cpfEl) {
-    cpfEl.addEventListener('input', function() {
-      const d = this.value.replace(/\D/g, '').slice(0, 11);
-      this.value = d.replace(/(\d{3})(\d{3})(\d{3})(\d{1,2})/, '$1.$2.$3-$4');
+  // Máscara CPF (aplica em qualquer campo de CPF: cpf, v_cpf, c_cpf)
+  ['cpf', 'v_cpf', 'c_cpf'].forEach(id => {
+    const el = document.getElementById('f-' + id);
+    if (el) {
+      el.addEventListener('input', function() {
+        const d = this.value.replace(/\D/g, '').slice(0, 11);
+        this.value = d.replace(/(\d{3})(\d{3})(\d{3})(\d{1,2})/, '$1.$2.$3-$4');
+      });
+    }
+  });
+  // Máscara CEP (só números, 8 dígitos)
+  const cepEl = document.getElementById('f-c_cep');
+  if (cepEl) {
+    cepEl.addEventListener('input', function() {
+      this.value = this.value.replace(/\D/g, '').slice(0, 8);
     });
   }
 }
@@ -1476,9 +1485,12 @@ async function submitQuery(e) {
   if (!selectedSvc) return;
 
   document.getElementById('form-error').classList.add('hidden');
-  setQueryLoading(true);
 
   const params = buildParams(selectedSvc.inputType);
+  const validationError = validateParams(selectedSvc.inputType, params);
+  if (validationError) { showFormError(validationError); return; }
+
+  setQueryLoading(true);
 
   try {
     const res = await fetch('/api/query', {
@@ -1593,6 +1605,43 @@ function buildParams(inputType) {
     };
 
   return {};
+}
+
+// Validação rápida no cliente antes de enviar (espelha as regras do servidor,
+// para dar feedback imediato sem depender da resposta da API externa).
+function validateParams(inputType, p) {
+  if (inputType === 'cancelar_venda') {
+    if (!p.id)                        return 'Informe o ID da comunicação.';
+    if (!p.protocolo)                 return 'Informe o protocolo.';
+    if (!p.id_motivo_cancelamento)    return 'Informe o motivo do cancelamento.';
+    return null;
+  }
+  if (inputType === 'venda') {
+    const v = p.vendedor, c = p.comprador, end = c.endereco, vda = p.venda, veic = p.veiculo, crv = veic.crv;
+    if (veic.placa.length < 7)                     return 'Placa do veículo inválida. Informe no formato ABC1D23.';
+    if (veic.renavam.length < 9 || veic.renavam.length > 11) return 'Renavam inválido. Deve ter entre 9 e 11 dígitos.';
+    if (v.cpf.length !== 11)                       return 'CPF do vendedor inválido. Deve ter 11 dígitos.';
+    if (!v.nome)                                   return 'Informe o nome do vendedor.';
+    if (c.cpf.length !== 11)                       return 'CPF do comprador inválido. Deve ter 11 dígitos.';
+    if (!c.nome)                                   return 'Informe o nome do comprador.';
+    if (end.cep.length !== 8)                      return 'CEP inválido. Deve ter 8 dígitos.';
+    if (!end.logradouro)                           return 'Informe o logradouro do comprador.';
+    if (!end.numero)                               return 'Informe o número do endereço do comprador.';
+    if (!end.bairro)                               return 'Informe o bairro do comprador.';
+    if (!/^\d+$/.test(end.cidade))                 return 'Código IBGE da cidade do comprador inválido.';
+    if (end.uf.length !== 2)                       return 'UF do endereço do comprador inválida.';
+    if (!/^\d+$/.test(vda.cidade))                  return 'Código IBGE da cidade da venda inválido.';
+    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(vda.data))    return 'Data da venda inválida. Use o formato DD/MM/AAAA.';
+    if (!vda.valor)                                return 'Informe o valor da venda.';
+    if (vda.estado.length !== 2)                    return 'UF da venda inválida.';
+    if (!crv.numero)                                return 'Informe o número do CRV.';
+    if (!crv.codigo_seguranca)                      return 'Informe o código de segurança do CRV.';
+    if (!crv.numero_via)                            return 'Informe o número da via do CRV.';
+    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(crv.data_emissao)) return 'Data de emissão do CRV inválida. Use o formato DD/MM/AAAA.';
+    if (crv.uf_emissao.length !== 2)                 return 'UF de emissão do CRV inválida.';
+    return null;
+  }
+  return null;
 }
 
 function setQueryLoading(on) {
