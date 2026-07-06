@@ -1920,23 +1920,24 @@ async function paginaParaCanvas(page, scale = 2.5) {
   return canvas;
 }
 
-// ── Envia texto ao servidor e preenche campos ──────────────────────────────────
-async function processarTextoAtpv(texto, setStatus) {
+// ── Envia texto (e campos de formulário, se houver) ao servidor e preenche o form ──
+async function processarTextoAtpv(texto, setStatus, campos) {
   setStatus('⏳ Identificando campos…', 'text-blue-600');
 
-  // Mostra o texto bruto extraído para conferência/depuração — o parser roda em
-  // cima disso, então se algum campo sair errado dá pra ver exatamente por quê.
+  // Mostra o texto bruto e os campos de formulário extraídos para conferência/
+  // depuração — o parser roda em cima disso, então se algo sair errado dá pra
+  // ver exatamente por quê.
   const debugWrap = document.getElementById('atpv-debug-wrap');
   const debugText = document.getElementById('atpv-debug-text');
   if (debugWrap && debugText) {
-    debugText.value = texto;
+    debugText.value = (campos?.length ? 'CAMPOS DE FORMULÁRIO:\n' + JSON.stringify(campos, null, 2) + '\n\nTEXTO DA PÁGINA:\n' : '') + texto;
     debugWrap.classList.remove('hidden');
   }
 
   const r    = await fetch('/api/pdf/extrair-atpv', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ texto }),
+    body: JSON.stringify({ texto, campos }),
   });
   const data = await r.json();
   if (!r.ok) { setStatus('⚠️ ' + (data.error || 'Sem dados encontrados.'), 'text-amber-600'); return; }
@@ -2003,12 +2004,25 @@ async function importarAtpvPdf() {
     const arrayBuf = await input.files[0].arrayBuffer();
     const pdf      = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuf) }).promise;
 
-    // ── Tentativa 1: extração de texto nativo ────────────────────────────────
+    // ── Tentativa 1: campos de formulário (ATPV-e SENATRAN é um PDF preenchível —
+    // os valores reais ficam em campos de formulário, não no texto da página) ──
     let texto = '';
+    const campos = [];
     for (let i = 1; i <= pdf.numPages; i++) {
       const pg      = await pdf.getPage(i);
       const content = await pg.getTextContent();
       texto += content.items.map(it => it.str).join(' ') + ' ';
+
+      const annots = await pg.getAnnotations({ intent: 'display' });
+      annots.forEach(a => {
+        if (a.fieldName && a.fieldValue != null && String(a.fieldValue).trim())
+          campos.push({ nome: a.fieldName, valor: String(a.fieldValue).trim() });
+      });
+    }
+
+    if (campos.length) {
+      await processarTextoAtpv(texto, setStatus, campos);
+      return;
     }
 
     if (texto.replace(/\s/g,'').length > 80) {

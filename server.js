@@ -1589,13 +1589,117 @@ app.get('/api/cep/:cep', requireAuth, async (req, res) => {
   }
 });
 
-// ── POST /api/pdf/extrair-atpv ────────────────────────────────────────────────
-// Recebe texto extraído pelo PDF.js no browser e retorna campos via regex
-app.post('/api/pdf/extrair-atpv', requireAuth, (req, res) => {
-  const { texto } = req.body;
-  if (!texto) return res.status(400).json({ error: 'Texto não enviado.' });
+// ── Extrai campos a partir dos valores de formulário do PDF (AcroForm) ─────────
+// O ATPV-e do SENATRAN é um PDF preenchível: os valores reais (CPF, nome, chassi
+// etc.) ficam em campos de formulário, não no texto da página — por isso os
+// rótulos aparecem todos juntos no texto (só o "template" estático) enquanto os
+// valores ficam soltos em outro lugar, sem proximidade com o rótulo correspondente.
+// Como o nome interno de cada campo nem sempre é descritivo, classificamos os
+// valores pelo FORMATO (placa, CPF, data, UF...) e usamos o nome do campo como
+// desempate quando ele contém uma palavra-chave reconhecível.
+function extrairDeCampos(campos) {
+  const norm = (s) => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const lista = campos
+    .map(c => ({ chave: norm(c.nome), valor: String(c.valor || '').trim() }))
+    .filter(c => c.valor);
 
-  const txt = texto.replace(/\s+/g, ' ').toUpperCase();
+  // Controla quais ENTRADAS (não valores) já foram atribuídas a um campo de
+  // saída — usar o valor em si para isso quebraria sempre que dois campos
+  // diferentes tiverem o mesmo conteúdo (ex.: UF do comprador igual à UF da
+  // venda, bem comum), fazendo o segundo "desaparecer" por engano.
+  const usadas = new Set();
+  const marcar = (entrada) => { if (entrada) usadas.add(entrada); return entrada ? entrada.valor : ''; };
+  const livres = () => lista.filter(c => !usadas.has(c));
+  // aceita tanto RegExp (via .test) quanto função predicado — isChassiF é uma
+  // função porque precisa de duas condições (17 chars + tem letra)
+  const bate = (padrao, v) => typeof padrao === 'function' ? padrao(v) : padrao.test(v);
+
+  // entradas livres cujo nome do campo contém todas as palavras dadas
+  const porNome = (...palavras) => livres().filter(c => palavras.every(p => c.chave.includes(p)));
+
+  // primeira entrada (nome > formato) que combina com o padrão e ainda está livre
+  const primeiro = (padrao, ...palavrasNome) => {
+    const porPalavra = palavrasNome.length ? porNome(...palavrasNome).find(c => bate(padrao, c.valor)) : null;
+    if (porPalavra) return marcar(porPalavra);
+    const porFormato = livres().find(c => bate(padrao, c.valor));
+    return marcar(porFormato);
+  };
+
+  // campo que aparece 2x (vendedor/comprador) com o mesmo formato — usa o nome
+  // do campo pra saber de quem é; se não der pra saber, assume a ordem em que os
+  // campos aparecem no formulário (vendedor vem antes do comprador no ATPV-e).
+  const par = (padrao, tagsA, tagsB) => {
+    const entA = porNome(...tagsA).find(c => bate(padrao, c.valor));
+    let a = marcar(entA);
+    const entB = porNome(...tagsB).find(c => bate(padrao, c.valor));
+    let b = marcar(entB);
+    if (!a) { const f = livres().find(c => bate(padrao, c.valor)); a = marcar(f); }
+    if (!b) { const f = livres().find(c => bate(padrao, c.valor)); b = marcar(f); }
+    return [a, b];
+  };
+
+  const isPlaca   = /^[A-Z]{3}[\s-]?[0-9][A-Z0-9][0-9]{2}$/i;
+  const isChassiF = (v) => /^[A-HJ-NPR-Z0-9]{17}$/i.test(v) && /[A-Z]/i.test(v);
+  const isCep     = /^\d{5}-?\d{3}$/;
+  const isUF      = /^[A-Z]{2}$/i;
+  const isData    = /^\d{2}\/\d{2}\/\d{4}$/;
+  const isValor   = /^\d{1,3}(\.\d{3})*(,\d{2})?$|^\d+([.,]\d{2})?$/;
+  const isCpf     = /^\d{3}\.?\d{3}\.?\d{3}-?\d{2}$/;
+  const isNumero9a12 = /^\d{9,12}$/;
+  const isNome    = (v) => /^[A-ZÀ-Ú' ]{4,60}$/i.test(v) && /\s/.test(v.trim());
+
+  const placa      = primeiro(isPlaca, 'placa');
+  const chassiVal  = primeiro(isChassiF, 'chassi');
+  const renavam    = primeiro(isNumero9a12, 'renavam');
+  const crv_numero = primeiro(isNumero9a12, 'crv', 'numero');
+  const crv_codigo = primeiro(isNumero9a12, 'seguranca');
+  const crv_via    = primeiro(/^\d{1,2}$/, 'via');
+  const crv_uf     = primeiro(isUF, 'emissao');
+  const crv_data   = primeiro(isData, 'emissao');
+
+  const [v_cpf, c_cpf] = par(isCpf, ['vendedor'], ['comprador']);
+  const [v_nomeVal, c_nomeVal] = (() => {
+    let vn = marcar(porNome('vendedor', 'nome').find(c => isNome(c.valor)) || porNome('vendedor').find(c => isNome(c.valor)));
+    let cn = marcar(porNome('comprador', 'nome').find(c => isNome(c.valor)) || porNome('comprador').find(c => isNome(c.valor)));
+    if (!vn) vn = marcar(livres().find(c => isNome(c.valor)));
+    if (!cn) cn = marcar(livres().find(c => isNome(c.valor)));
+    return [vn, cn];
+  })();
+
+  const c_cep       = primeiro(isCep, 'cep');
+  const c_uf         = primeiro(isUF, 'comprador') || primeiro(isUF, 'uf');
+  const venda_valor  = primeiro(isValor, 'valor');
+  const venda_data   = primeiro(isData, 'venda') || primeiro(isData);
+  const venda_estado = primeiro(isUF, 'venda') || primeiro(isUF, 'uf');
+
+  return {
+    placa: placa.replace(/[\s-]/g, ''),
+    renavam: renavam.replace(/\D/g, ''),
+    chassi: chassiVal,
+    crv_numero, crv_codigo, crv_via, crv_data, crv_uf,
+    v_cpf: v_cpf.replace(/[\.\-\s]/g, ''),
+    v_nome: v_nomeVal,
+    c_cpf: c_cpf.replace(/[\.\-\s]/g, ''),
+    c_nome: c_nomeVal,
+    c_cep: c_cep.replace(/[\.\-\s]/g, ''),
+    c_uf,
+    venda_valor: venda_valor.replace(/\./g, '').replace(',', '.'),
+    venda_data,
+    venda_estado,
+  };
+}
+
+// ── POST /api/pdf/extrair-atpv ────────────────────────────────────────────────
+// Recebe texto (e, se o PDF for preenchível, os campos de formulário) extraídos
+// pelo PDF.js no browser e retorna os campos identificados.
+app.post('/api/pdf/extrair-atpv', requireAuth, (req, res) => {
+  const { texto, campos } = req.body;
+  if (!texto && !(Array.isArray(campos) && campos.length))
+    return res.status(400).json({ error: 'Nenhum dado enviado.' });
+
+  const doCampos = Array.isArray(campos) && campos.length ? extrairDeCampos(campos) : null;
+
+  const txt = (texto || '').replace(/\s+/g, ' ').toUpperCase();
   const m   = (r) => (txt.match(r) || [])[1] || '';
 
   // ── Vendedor/Comprador CPF (extraídos cedo para não colidir com renavam/chassi) ──
@@ -1654,10 +1758,7 @@ app.post('/api/pdf/extrair-atpv', requireAuth, (req, res) => {
   const venda_data   = datas[1] || '';
   const venda_estado = m(/(?:MUNIC[ÍI]PIO|CIDADE)\s+(?:DA\s+)?VENDA[^A-Z]*[A-ZÁÀÃÂÉÊÍÓÔÕÚÇ\s]+[\s,]+([A-Z]{2})\b/);
 
-  if (!placa && !renavam && !chassi)
-    return res.status(422).json({ error: 'Não foi possível extrair dados do PDF. Preencha manualmente.' });
-
-  res.json({
+  const doTexto = {
     placa, renavam, chassi, crv_numero, crv_codigo, crv_via, crv_data, crv_uf,
     v_cpf: v_cpf.replace(/[\.\-\s]/g,''),
     v_nome: v_nome.trim(),
@@ -1668,7 +1769,20 @@ app.post('/api/pdf/extrair-atpv', requireAuth, (req, res) => {
     venda_valor: venda_valor.replace(/\./g,'').replace(',','.'),
     venda_data,
     venda_estado,
-  });
+  };
+
+  // Quando o PDF tem campos de formulário, eles são a fonte confiável (o texto
+  // da página só tem os rótulos do template); usa o regex no texto apenas para
+  // completar o que os campos não trouxerem.
+  const resultado = {};
+  for (const chave of Object.keys(doTexto)) {
+    resultado[chave] = (doCampos && doCampos[chave]) ? doCampos[chave] : doTexto[chave];
+  }
+
+  if (!resultado.placa && !resultado.renavam && !resultado.chassi)
+    return res.status(422).json({ error: 'Não foi possível extrair dados do PDF. Preencha manualmente.' });
+
+  res.json(resultado);
 });
 
 // ── ADMIN: GET /api/admin/stats ───────────────────────────────────────────────
