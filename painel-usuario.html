@@ -1918,14 +1918,14 @@ async function paginaParaCanvas(page, scale = 2.5) {
   return canvas;
 }
 
-// ── Envia texto (e campos de formulário, se houver) ao servidor e preenche o form ──
-async function processarTextoAtpv(texto, setStatus, campos) {
+// ── Envia texto (+ campos de formulário e/ou posições, se houver) e preenche o form ──
+async function processarTextoAtpv(texto, setStatus, campos, posicoes) {
   setStatus('⏳ Identificando campos…', 'text-blue-600');
 
   const r    = await fetch('/api/pdf/extrair-atpv', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ texto, campos }),
+    body: JSON.stringify({ texto, campos, posicoes }),
   });
   const data = await r.json();
   if (!r.ok) { setStatus('⚠️ ' + (data.error || 'Sem dados encontrados.'), 'text-amber-600'); return; }
@@ -1986,14 +1986,21 @@ async function importarAtpvPdf() {
     const arrayBuf = await input.files[0].arrayBuffer();
     const pdf      = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuf) }).promise;
 
-    // ── Tentativa 1: campos de formulário (ATPV-e SENATRAN é um PDF preenchível —
-    // os valores reais ficam em campos de formulário, não no texto da página) ──
+    // ── Tentativa 1: campos de formulário (se o PDF for um AcroForm preenchível) ──
+    // e, de todo modo, a posição (x/y) de cada texto na página — o ATPV-e do
+    // SENATRAN normalmente é "achatado" (sem formulário interativo): os rótulos
+    // ficam todos juntos no texto e os valores em outra ordem, mas continuam
+    // visualmente alinhados abaixo do rótulo correspondente.
     let texto = '';
     const campos = [];
+    const posicoes = [];
     for (let i = 1; i <= pdf.numPages; i++) {
       const pg      = await pdf.getPage(i);
       const content = await pg.getTextContent();
       texto += content.items.map(it => it.str).join(' ') + ' ';
+      content.items.forEach(it => {
+        if (it.str && it.str.trim()) posicoes.push({ str: it.str, x: it.transform[4], y: it.transform[5] });
+      });
 
       const annots = await pg.getAnnotations({ intent: 'display' });
       annots.forEach(a => {
@@ -2002,8 +2009,8 @@ async function importarAtpvPdf() {
       });
     }
 
-    if (campos.length) {
-      await processarTextoAtpv(texto, setStatus, campos);
+    if (campos.length || posicoes.length) {
+      await processarTextoAtpv(texto, setStatus, campos, posicoes);
       return;
     }
 

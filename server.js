@@ -1689,34 +1689,121 @@ function extrairDeCampos(campos) {
   };
 }
 
+// ── Extrai campos pela POSIÇÃO do texto na página (x/y de cada item do PDF.js) ──
+// O ATPV-e do SENATRAN, quando "achatado" (sem AcroForm — ver extrairDeCampos),
+// é um formulário em duas colunas onde cada rótulo fica visualmente ACIMA (ou,
+// em um caso, ao lado) do seu valor — mas a ORDEM em que o texto sai do PDF não
+// segue esse layout visual. Reconstruindo as linhas por coordenada (y desc, x
+// asc) e pareando cada rótulo conhecido com o texto na mesma coluna logo
+// abaixo, conseguimos ler qualquer valor independente do formato (isso também
+// resolve o chassi: veículos antigos têm chassi só numérico, mais novos têm
+// letras — aqui não importa, pegamos o que estiver na posição certa).
+function extrairDePosicoes(itens) {
+  const norm = (s) => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+
+  const validos = (itens || [])
+    .filter(i => i && typeof i.str === 'string' && i.str.trim() && typeof i.x === 'number' && typeof i.y === 'number')
+    .map(i => ({ str: i.str, x: i.x, y: i.y }));
+  if (!validos.length) return {};
+
+  validos.sort((a, b) => b.y - a.y || a.x - b.x);
+  const linhas = [];
+  for (const it of validos) {
+    const ultima = linhas[linhas.length - 1];
+    if (ultima && Math.abs(ultima.y - it.y) < 5) ultima.itens.push(it);
+    else linhas.push({ y: it.y, itens: [it] });
+  }
+  linhas.forEach(l => l.itens.sort((a, b) => a.x - b.x));
+
+  const acharLinha = (textoAlvo, dentro) => {
+    const alvo = norm(textoAlvo);
+    for (let i = 0; i < linhas.length; i++) {
+      if (dentro && !dentro(linhas[i].y)) continue;
+      const item = linhas[i].itens.find(it => norm(it.str) === alvo);
+      if (item) return { linhaIdx: i, item };
+    }
+    return null;
+  };
+  const valorAbaixo = (linhaIdx, x, maxLinhas = 3, xTol = 20) => {
+    for (let j = linhaIdx + 1; j < linhas.length && j <= linhaIdx + maxLinhas; j++) {
+      const cand = linhas[j].itens.find(it => Math.abs(it.x - x) <= xTol && it.str.trim());
+      if (cand) return cand.str.trim();
+    }
+    return '';
+  };
+  const valorMesmaLinha = (linhaIdx, x) => {
+    const cand = linhas[linhaIdx].itens.find(it => it.x > x + 5 && it.str.trim());
+    return cand ? cand.str.trim() : '';
+  };
+
+  const lComprador = acharLinha('IDENTIFICAÇÃO DO COMPRADOR');
+  const yCompradorInicio = lComprador ? lComprador.item.y : -Infinity;
+  const naSecao = (secao) => (y) => secao === 'vendedor' ? y > yCompradorInicio : y <= yCompradorInicio;
+
+  const campo = (label, secao) => {
+    const l = acharLinha(label, secao ? naSecao(secao) : undefined);
+    return l ? valorAbaixo(l.linhaIdx, l.item.x) : '';
+  };
+
+  const placa      = campo('PLACA');
+  const renavam    = campo('CÓDIGO RENAVAM').replace(/\D/g, '');
+  const chassi     = campo('CHASSI');
+  const crv_numero = campo('NÚMERO CRV');
+  const crv_codigo = campo('CÓDIGO DE SEGURANÇA CRV');
+  const crv_data   = campo('DATA EMISSÃO DO CRV');
+  const venda_data = campo('DATA DECLARADA DA VENDA');
+
+  // UF de emissão (DETRAN emissor) — fica ao lado do texto "DETRAN -"
+  const lDetran = acharLinha('DETRAN -');
+  const crv_uf = lDetran ? (linhas[lDetran.linhaIdx].itens.find(it => it.x > lDetran.item.x)?.str.trim() || '') : '';
+
+  const v_nome = campo('NOME', 'vendedor');
+  const v_cpf  = campo('CPF/CNPJ', 'vendedor').replace(/[.\-\s]/g, '');
+  const c_nome = campo('NOME', 'comprador');
+  const c_cpf  = campo('CPF/CNPJ', 'comprador').replace(/[.\-\s]/g, '');
+  const c_uf   = campo('UF', 'comprador');
+
+  const lValor = acharLinha('Valor declarado na venda: R$');
+  const venda_valor_raw = lValor ? valorMesmaLinha(lValor.linhaIdx, lValor.item.x) : '';
+  const venda_valor = venda_valor_raw.replace(/\./g, '').replace(',', '.');
+
+  // Endereço do comprador: valor pode ocupar 1-2 linhas até aparecer o CEP
+  let c_cep = '';
+  const lEndereco = acharLinha('ENDEREÇO DE DOMICÍLIO OU RESIDÊNCIA', naSecao('comprador'));
+  if (lEndereco) {
+    let texto = '';
+    for (let j = lEndereco.linhaIdx + 1; j < linhas.length; j++) {
+      const linhaTexto = linhas[j].itens.map(it => it.str).join(' ').trim();
+      if (!linhaTexto) continue;
+      if (/ASSINATURA|MENSAGENS|AUTENTICA/.test(norm(linhaTexto))) break;
+      texto += (texto ? ' ' : '') + linhaTexto;
+      if (/CEP/i.test(linhaTexto)) break;
+    }
+    const cepM = texto.match(/CEP[:\s]*([0-9]{5}-?[0-9]{3})/i);
+    c_cep = cepM ? cepM[1].replace(/\D/g, '') : '';
+  }
+
+  // "Estado" da venda não tem rótulo próprio neste modelo de documento — a UF
+  // do DETRAN emissor é o melhor palpite disponível (normalmente a mesma).
+  const venda_estado = crv_uf;
+
+  return {
+    placa, renavam, chassi, crv_numero, crv_codigo, crv_via: '', crv_data, crv_uf,
+    v_cpf, v_nome, c_cpf, c_nome, c_cep, c_uf,
+    venda_valor, venda_data, venda_estado,
+  };
+}
+
 // ── POST /api/pdf/extrair-atpv ────────────────────────────────────────────────
 // Recebe texto (e, se o PDF for preenchível, os campos de formulário) extraídos
 // pelo PDF.js no browser e retorna os campos identificados.
 app.post('/api/pdf/extrair-atpv', requireAuth, async (req, res) => {
-  const { texto, campos } = req.body;
-  if (!texto && !(Array.isArray(campos) && campos.length))
+  const { texto, campos, posicoes } = req.body;
+  if (!texto && !(Array.isArray(campos) && campos.length) && !(Array.isArray(posicoes) && posicoes.length))
     return res.status(400).json({ error: 'Nenhum dado enviado.' });
 
-  // TEMP DEBUG: grava o que o PDF.js extraiu numa tabela (logs truncam texto
-  // longo), para ajustar o parser sem depender do usuário copiar/colar nada.
-  // Precisa de await — em ambiente serverless a execução pode ser congelada
-  // assim que a resposta é enviada, matando qualquer escrita pendente no banco.
-  // Remover isso (e a tabela) depois que o ATPV-e estiver preenchendo certo.
-  try {
-    await pool.query(
-      `CREATE TABLE IF NOT EXISTS atpv_debug (
-         id SERIAL PRIMARY KEY, user_id INTEGER, texto TEXT, campos JSONB, created_at TIMESTAMP DEFAULT NOW()
-       )`
-    );
-    await pool.query(
-      `INSERT INTO atpv_debug (user_id, texto, campos) VALUES ($1,$2,$3)`,
-      [req.user.id, texto || '', JSON.stringify(campos || [])]
-    );
-  } catch (e) {
-    console.error('[ATPV DEBUG] falha ao gravar:', e.message);
-  }
-
-  const doCampos = Array.isArray(campos) && campos.length ? extrairDeCampos(campos) : null;
+  const doCampos    = Array.isArray(campos) && campos.length ? extrairDeCampos(campos) : null;
+  const doPosicoes  = Array.isArray(posicoes) && posicoes.length ? extrairDePosicoes(posicoes) : null;
 
   const txt = (texto || '').replace(/\s+/g, ' ').toUpperCase();
   const m   = (r) => (txt.match(r) || [])[1] || '';
@@ -1790,12 +1877,12 @@ app.post('/api/pdf/extrair-atpv', requireAuth, async (req, res) => {
     venda_estado,
   };
 
-  // Quando o PDF tem campos de formulário, eles são a fonte confiável (o texto
-  // da página só tem os rótulos do template); usa o regex no texto apenas para
-  // completar o que os campos não trouxerem.
+  // Prioridade: campos de formulário (quando o PDF é preenchível) > posição do
+  // texto na página (quando é "achatado", caso mais comum do ATPV-e) > regex
+  // por proximidade no texto puro (último recurso, cobre variações de layout).
   const resultado = {};
   for (const chave of Object.keys(doTexto)) {
-    resultado[chave] = (doCampos && doCampos[chave]) ? doCampos[chave] : doTexto[chave];
+    resultado[chave] = (doCampos && doCampos[chave]) || (doPosicoes && doPosicoes[chave]) || doTexto[chave];
   }
 
   if (!resultado.placa && !resultado.renavam && !resultado.chassi)
