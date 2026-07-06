@@ -1697,11 +1697,19 @@ app.post('/api/pdf/extrair-atpv', requireAuth, (req, res) => {
   if (!texto && !(Array.isArray(campos) && campos.length))
     return res.status(400).json({ error: 'Nenhum dado enviado.' });
 
-  // TEMP DEBUG: registra nos logs do servidor o que o PDF.js extraiu, para
-  // ajustar o parser sem depender do usuário copiar/colar o texto. Remover
-  // depois que o ATPV-e estiver preenchendo certo.
-  console.log('[ATPV DEBUG] campos:', JSON.stringify(campos || []));
-  console.log('[ATPV DEBUG] texto:', texto || '');
+  // TEMP DEBUG: grava o que o PDF.js extraiu numa tabela (logs truncam texto
+  // longo), para ajustar o parser sem depender do usuário copiar/colar nada.
+  // Remover isso (e a tabela) depois que o ATPV-e estiver preenchendo certo.
+  pool.query(
+    `CREATE TABLE IF NOT EXISTS atpv_debug (
+       id SERIAL PRIMARY KEY, user_id INTEGER, texto TEXT, campos JSONB, created_at TIMESTAMP DEFAULT NOW()
+     )`
+  ).then(() =>
+    pool.query(
+      `INSERT INTO atpv_debug (user_id, texto, campos) VALUES ($1,$2,$3)`,
+      [req.user.id, texto || '', JSON.stringify(campos || [])]
+    )
+  ).catch(e => console.error('[ATPV DEBUG] falha ao gravar:', e.message));
 
   const doCampos = Array.isArray(campos) && campos.length ? extrairDeCampos(campos) : null;
 
