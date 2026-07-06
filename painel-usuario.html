@@ -1149,6 +1149,14 @@ function renderFormFields(inputType, svc) {
         <input type="file" id="atpv-pdf-input" accept="application/pdf" class="hidden" onchange="importarAtpvPdf()">
       </label>
       <p id="atpv-import-status" class="text-xs mt-2 hidden"></p>
+      <div id="atpv-debug-wrap" class="hidden mt-2">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-xs font-semibold text-blue-800">Texto extraído do PDF (debug)</span>
+          <button type="button" onclick="copiarTextoAtpvDebug()" class="text-xs text-blue-700 underline">Copiar</button>
+        </div>
+        <textarea id="atpv-debug-text" readonly class="w-full text-xs border border-blue-200 rounded p-2 bg-white" rows="6"></textarea>
+        <p class="text-xs text-blue-700 mt-1">⚠️ Contém dados reais (CPF, nome) — edite/apague antes de enviar a alguém.</p>
+      </div>
     </div>
     <div class="font-semibold text-gray-700 text-sm mb-2">Vendedor</div>
     <div class="grid grid-cols-2 gap-3">
@@ -1164,6 +1172,7 @@ function renderFormFields(inputType, svc) {
       ${field('c_cep','CEP (8 dígitos)','text','01001000',true,'inputmode="numeric" maxlength="8"')}
       ${field('c_cidade','Código IBGE Cidade','text','3550308',true,'inputmode="numeric"')}
     </div>
+    <p id="cep-status" class="text-xs mt-1 mb-2 hidden"></p>
     <div class="grid grid-cols-2 gap-3">
       ${field('c_logradouro','Logradouro','text','RUA EXEMPLO')}
       ${field('c_numero','Número','text','123')}
@@ -1443,12 +1452,39 @@ function renderFormFields(inputType, svc) {
       });
     }
   });
-  // Máscara CEP (só números, 8 dígitos)
+  // Máscara CEP (só números, 8 dígitos) + autopreenchimento de endereço via ViaCEP
   const cepEl = document.getElementById('f-c_cep');
   if (cepEl) {
     cepEl.addEventListener('input', function() {
       this.value = this.value.replace(/\D/g, '').slice(0, 8);
+      if (this.value.length === 8) autocompletarCep(this.value);
     });
+  }
+}
+
+async function autocompletarCep(cep) {
+  const status = document.getElementById('cep-status');
+  const setStatus = (msg, cor) => {
+    if (!status) return;
+    status.className = `text-xs mt-1 mb-2 ${cor}`;
+    status.textContent = msg;
+    status.classList.remove('hidden');
+  };
+  setStatus('⏳ Buscando endereço…', 'text-blue-600');
+  try {
+    const r = await fetch(`/api/cep/${cep}`);
+    const data = await r.json();
+    if (!r.ok) { setStatus('⚠️ ' + (data.error || 'CEP não encontrado.'), 'text-amber-600'); return; }
+
+    const set = (id, val) => { const el = document.getElementById('f-' + id); if (el && val) el.value = val; };
+    set('c_logradouro', data.logradouro);
+    set('c_bairro',     data.bairro);
+    set('c_uf',         data.uf);
+    set('c_cidade',     data.cidade_ibge);
+
+    setStatus(`✅ ${data.cidade_nome ? data.cidade_nome + '/' + data.uf : 'Endereço encontrado'} — confira os campos.`, 'text-green-600');
+  } catch {
+    setStatus('⚠️ Erro ao buscar CEP. Preencha manualmente.', 'text-amber-600');
   }
 }
 
@@ -1887,6 +1923,16 @@ async function paginaParaCanvas(page, scale = 2.5) {
 // ── Envia texto ao servidor e preenche campos ──────────────────────────────────
 async function processarTextoAtpv(texto, setStatus) {
   setStatus('⏳ Identificando campos…', 'text-blue-600');
+
+  // Mostra o texto bruto extraído para conferência/depuração — o parser roda em
+  // cima disso, então se algum campo sair errado dá pra ver exatamente por quê.
+  const debugWrap = document.getElementById('atpv-debug-wrap');
+  const debugText = document.getElementById('atpv-debug-text');
+  if (debugWrap && debugText) {
+    debugText.value = texto;
+    debugWrap.classList.remove('hidden');
+  }
+
   const r    = await fetch('/api/pdf/extrair-atpv', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1918,10 +1964,18 @@ async function processarTextoAtpv(texto, setStatus) {
   set('venda_data',   data.venda_data,    'Data Venda');
   set('venda_estado', data.venda_estado,  'Estado');
 
+  if (data.c_cep && data.c_cep.length === 8) autocompletarCep(data.c_cep);
+
   if (preenchidos.length)
     setStatus('✅ Preenchido: ' + preenchidos.join(', ') + '. Verifique antes de enviar.', 'text-green-600');
   else
     setStatus('⚠️ Não encontrei campos reconhecíveis. Preencha manualmente.', 'text-amber-600');
+}
+
+function copiarTextoAtpvDebug() {
+  const el = document.getElementById('atpv-debug-text');
+  if (!el) return;
+  navigator.clipboard.writeText(el.value).then(() => showToast('Texto copiado.'));
 }
 
 async function importarAtpvPdf() {

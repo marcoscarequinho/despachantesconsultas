@@ -1564,6 +1564,31 @@ app.get('/api/admin/whatsapp-inbox/count', requireAuth, requireSuperAdmin, async
   }
 });
 
+// ── GET /api/cep/:cep ─────────────────────────────────────────────────────────
+// Busca endereço + código IBGE do município via ViaCEP, para autopreencher o
+// formulário de Comunicação de Venda a partir do CEP do comprador.
+app.get('/api/cep/:cep', requireAuth, async (req, res) => {
+  const cep = (req.params.cep || '').replace(/\D/g, '');
+  if (cep.length !== 8) return res.status(400).json({ error: 'CEP inválido. Deve ter 8 dígitos.' });
+
+  try {
+    const viaCepRes = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+    if (!viaCepRes.ok) return res.status(502).json({ error: 'Erro ao consultar o CEP.' });
+    const data = await viaCepRes.json();
+    if (data.erro) return res.status(404).json({ error: 'CEP não encontrado.' });
+    res.json({
+      logradouro: data.logradouro || '',
+      bairro: data.bairro || '',
+      uf: data.uf || '',
+      cidade_nome: data.localidade || '',
+      cidade_ibge: data.ibge || '',
+    });
+  } catch (err) {
+    console.error('Erro ao consultar ViaCEP:', err.message);
+    res.status(502).json({ error: 'Erro ao consultar o CEP.' });
+  }
+});
+
 // ── POST /api/pdf/extrair-atpv ────────────────────────────────────────────────
 // Recebe texto extraído pelo PDF.js no browser e retorna campos via regex
 app.post('/api/pdf/extrair-atpv', requireAuth, (req, res) => {
@@ -1574,28 +1599,37 @@ app.post('/api/pdf/extrair-atpv', requireAuth, (req, res) => {
   const m   = (r) => (txt.match(r) || [])[1] || '';
 
   // ── Vendedor/Comprador CPF (extraídos cedo para não colidir com renavam/chassi) ──
-  const v_cpf_raw = m(/(?:VENDEDOR|ALIENANTE|TRANSMITENTE)[^0-9]*(\d{3}[\.\s]?\d{3}[\.\s]?\d{3}[\.\s\-]?\d{2})/);
-  const v_nome = m(/(?:VENDEDOR|ALIENANTE|TRANSMITENTE)[^A-Z]*([A-ZÁÀÃÂÉÊÍÓÔÕÚÇ][A-ZÁÀÃÂÉÊÍÓÔÕÚÇ\s]{4,60}?)(?:\s{2,}|CPF|CNPJ)/);
-  const c_cpf_raw = m(/(?:COMPRADOR|ADQUIRENTE)[^0-9]*(\d{3}[\.\s]?\d{3}[\.\s]?\d{3}[\.\s\-]?\d{2})/);
-  const cpfsConhecidos = [v_cpf_raw, c_cpf_raw].map(v => v.replace(/[\.\-\s]/g, '')).filter(Boolean);
+  // Janela limitada a 40 caracteres entre o rótulo e o valor: evita que o regex
+  // "vaze" para outra seção do documento (ex.: pegar o Renavam do veículo em vez
+  // do CPF) quando o rótulo e o valor de outro campo ficam próximos no texto extraído.
+  let v_cpf_raw = m(/(?:VENDEDOR|ALIENANTE|TRANSMITENTE)[^0-9]{0,40}?(\d{3}[\.\s]?\d{3}[\.\s]?\d{3}[\.\s\-]?\d{2})/);
+  const v_nome = m(/(?:VENDEDOR|ALIENANTE|TRANSMITENTE)[^A-Z]{0,40}?([A-ZÁÀÃÂÉÊÍÓÔÕÚÇ][A-ZÁÀÃÂÉÊÍÓÔÕÚÇ\s]{4,60}?)(?:\s{2,}|CPF|CNPJ)/);
+  let c_cpf_raw = m(/(?:COMPRADOR|ADQUIRENTE)[^0-9]{0,40}?(\d{3}[\.\s]?\d{3}[\.\s]?\d{3}[\.\s\-]?\d{2})/);
 
   // ── Veículo ──
   let placa  = m(/PLACA[^A-Z0-9]*([A-Z]{3}[\s-]?[0-9A-Z][0-9A-Z]{2}[0-9]{2})/);
   if (!placa) placa = m(/\b([A-Z]{3}[\s-]?[0-9][A-Z0-9][0-9]{2})\b/);
   placa = placa.replace(/[\s-]/g, '');
 
-  let renavam = m(/RENAVAM[^0-9]*(\d{9,11})/);
-  if (!renavam || cpfsConhecidos.includes(renavam)) {
+  const cpfsConhecidos = () => [v_cpf_raw, c_cpf_raw].map(v => v.replace(/[\.\-\s]/g, '')).filter(Boolean);
+
+  let renavam = m(/RENAVAM[^0-9]{0,40}?(\d{9,11})/);
+  if (!renavam || cpfsConhecidos().includes(renavam)) {
     // Fallback: primeiro número solto de 9-11 dígitos que não seja um CPF já identificado
     const candidatos = txt.match(/\b\d{9,11}\b/g) || [];
-    renavam = candidatos.find(n => !cpfsConhecidos.includes(n)) || renavam || '';
+    renavam = candidatos.find(n => !cpfsConhecidos().includes(n)) || renavam || '';
   }
 
   // Chassi (VIN): sempre alfanumérico com pelo menos uma letra e sem I/O/Q — evita
   // que uma sequência de 17 dígitos puros (ex.: outro código do documento) seja
   // confundida com o chassi real.
-  let chassi = m(/CHASSI[^A-Z0-9]*([A-HJ-NPR-Z0-9]{17})/);
+  let chassi = m(/CHASSI[^A-Z0-9]{0,40}?([A-HJ-NPR-Z0-9]{17})/);
   if (!chassi) chassi = m(/\b(?=[A-HJ-NPR-Z0-9]{17}\b)(?=[A-HJ-NPR-Z0-9]*[A-HJ-NPR-Z])[A-HJ-NPR-Z0-9]{17}\b/);
+
+  // Um CPF que na verdade é o Renavam do veículo indica que o regex vazou para a
+  // seção errada — melhor deixar em branco do que preencher errado.
+  if (renavam && v_cpf_raw.replace(/[\.\-\s]/g, '') === renavam) v_cpf_raw = '';
+  if (renavam && c_cpf_raw.replace(/[\.\-\s]/g, '') === renavam) c_cpf_raw = '';
 
   // ── CRV ──
   const crv_numero = m(/(?:N[ÚU]MERO\s+(?:DO\s+)?CRV|CRV\s+N[ÚU]MERO)[^0-9]*(\d{9,12})/);
