@@ -78,7 +78,7 @@ async function sendWhatsAppPdf(phone, pdfBuffer, fileName, caption) {
         },
         body: JSON.stringify({
           phone: formatted,
-          base64: pdfBuffer.toString('base64'),
+          document: `data:application/pdf;base64,${pdfBuffer.toString('base64')}`,
           fileName,
           caption,
         }),
