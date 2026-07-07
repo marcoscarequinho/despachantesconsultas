@@ -329,6 +329,12 @@ async function initDB() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS crlv_agendado_notifications (
+      pedido_id  VARCHAR(100) PRIMARY KEY,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
   console.log('✅ Tabelas prontas');
 }
 
@@ -1328,6 +1334,41 @@ app.post('/api/query', requireAuth, async (req, res) => {
           `e use o ID *${pedidoId}* para acompanhar quando for emitido seu CRLV-e.`,
         ].join('\n');
         await sendWhatsApp(user.phone, msg).catch(() => {});
+      }
+
+      // WhatsApp com o PDF assim que "Ver Status" indicar que o CRLV-e Agendado ficou pronto
+      if (serviceId === 'crlv-agendado-status' && user.phone) {
+        const pedido       = data?.pedido || data?.data?.pedido || {};
+        const statusResumo = data?.status_resumo || data?.data?.status_resumo || {};
+        const pdfPath       = pedido.pdf_url || statusResumo.pdf_url || '';
+        const podeBaixar    = data?.pdf_disponivel === true || statusResumo.pode_baixar_pdf === true;
+        const pedidoIdNotif = params?.pedido_id ? String(params.pedido_id).trim() : null;
+
+        if (podeBaixar && pdfPath && pedidoIdNotif) {
+          try {
+            const already = await pool.query(
+              'SELECT 1 FROM crlv_agendado_notifications WHERE pedido_id=$1', [pedidoIdNotif]
+            );
+            if (already.rows.length === 0) {
+              const fullUrl = /^https?:\/\//i.test(pdfPath) ? pdfPath : 'https://chekaki.online' + pdfPath;
+              const pdfApiRes = await fetch(fullUrl);
+              if (pdfApiRes.ok) {
+                const pdfBuf = Buffer.from(await pdfApiRes.arrayBuffer());
+                if (pdfBuf.slice(0, 4).toString() === '%PDF') {
+                  const placa = (pedido.placa || data?.placa || '-').toString().toUpperCase();
+                  const uf    = (pedido.uf    || data?.uf    || '-').toString().toUpperCase();
+                  const caption = `✅ *CRLV-e Agendado pronto!*\n🔤 Placa: ${placa}\n📍 UF: ${uf}\n📋 Pedido: ${pedidoIdNotif}\n\nDocumento gerado pela MC Despachadoria.`;
+                  await sendWhatsAppPdf(user.phone, pdfBuf, `CRLV-e-Agendado-${pedidoIdNotif}.pdf`, caption).catch(() => {});
+                  await pool.query(
+                    'INSERT INTO crlv_agendado_notifications (pedido_id) VALUES ($1) ON CONFLICT DO NOTHING', [pedidoIdNotif]
+                  );
+                }
+              }
+            }
+          } catch (e) {
+            console.error('Erro ao notificar CRLV-e Agendado via WhatsApp:', e.message);
+          }
+        }
       }
 
       return res.json({ success: true, result: data, charged: price });
