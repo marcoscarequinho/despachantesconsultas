@@ -12,6 +12,8 @@
           "*.js",
           "*.txt",
           "*.xml",
+          "*.ico",
+          "*.png",
           "!node_modules/**"
         ]
       }
