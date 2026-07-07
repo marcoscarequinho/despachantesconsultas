@@ -205,6 +205,7 @@ const SERVICES = [
   { id:'crv-antigo-rr', name:'Consulta CRV antigo RR', group:'Número CRV (Apenas antigos)', basePrice:490.00, inputType:'placa', icon:'📁', uf:'rr', noMarkup:true },
   { id:'crv-antigo-se', name:'Consulta CRV antigo SE', group:'Número CRV (Apenas antigos)', basePrice:448.00, inputType:'placa', icon:'📁', uf:'se', noMarkup:true },
   { id:'crv-antigo-to', name:'Consulta CRV antigo TO', group:'Número CRV (Apenas antigos)', basePrice:350.00, inputType:'placa', icon:'📁', uf:'to', noMarkup:true },
+  { id:'crv-antigo-sc', name:'Consulta CRV antigo SC', group:'Número CRV (Apenas antigos)', basePrice:600.00, inputType:'placa', icon:'📁', uf:'sc', noMarkup:true },
 ];
 
 // Serviços desta categoria (mais a Reemissão CRLV-e RJ) não retornam resultado na hora:
