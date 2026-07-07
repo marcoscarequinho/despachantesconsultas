@@ -10,6 +10,8 @@
           "*.html",
           "*.css",
           "*.js",
+          "*.txt",
+          "*.xml",
           "!node_modules/**"
         ]
       }
