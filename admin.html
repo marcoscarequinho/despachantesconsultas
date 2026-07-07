@@ -1094,6 +1094,17 @@ function renderManualQueries() {
     let placa = '—';
     try { placa = JSON.parse(q.params || '{}').placa || '—'; } catch {}
     const pendente = q.status === 'pendente';
+    let whatsappStatus = '';
+    if (!pendente) {
+      if (q.whatsapp_sent_at) {
+        whatsappStatus = `<div class="text-xs text-green-600 mt-1">✅ WhatsApp enviado</div>`;
+      } else if (!q.user_phone) {
+        whatsappStatus = `<div class="text-xs text-gray-400 mt-1">— sem telefone</div>`;
+      } else {
+        whatsappStatus = `<div class="text-xs text-red-500 mt-1">⚠️ Não enviado</div>
+          <button onclick="resendWhatsapp(${q.id}, this)" class="text-xs text-blue-600 hover:underline mt-0.5">🔁 Reenviar</button>`;
+      }
+    }
     return `
     <tr class="table-row">
       <td class="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">${fmtDate(q.created_at)}</td>
@@ -1102,6 +1113,7 @@ function renderManualQueries() {
       <td class="px-4 py-3 text-sm text-gray-700 font-mono hidden md:table-cell">${placa}</td>
       <td class="px-4 py-3 text-center">
         <span class="${pendente ? 'badge-amber' : 'badge-green'}">${pendente ? '⏳ Pendente' : '✅ Concluído'}</span>
+        ${whatsappStatus}
       </td>
       <td class="px-4 py-3 text-right font-semibold text-gray-700 text-sm">${fmt(q.amount)}</td>
       <td class="px-4 py-3 text-center">
@@ -1111,6 +1123,23 @@ function renderManualQueries() {
       </td>
     </tr>`;
   }).join('');
+}
+
+async function resendWhatsapp(id, btn) {
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = 'Enviando...';
+  try {
+    const r = await fetch(`/api/admin/manual-queries/${id}/resend-whatsapp`, { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Erro ao reenviar.'); btn.disabled = false; btn.textContent = original; return; }
+    toast('Reenviado pelo WhatsApp!');
+    allManualQueries = [];
+    loadManualQueries();
+  } catch {
+    toast('Erro de conexão.');
+    btn.disabled = false; btn.textContent = original;
+  }
 }
 
 function openManualUpload(id, info) {

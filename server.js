@@ -64,7 +64,7 @@ async function notifyAdminNewQuery(user, service, price, params) {
 }
 
 async function sendWhatsAppPdf(phone, pdfBuffer, fileName, caption) {
-  if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !phone) return;
+  if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !phone) return false;
   const digits = phone.replace(/\D/g, '');
   const formatted = digits.startsWith('55') ? digits : `55${digits}`;
   try {
@@ -85,10 +85,12 @@ async function sendWhatsAppPdf(phone, pdfBuffer, fileName, caption) {
       }
     );
     const d = await r.json().catch(() => ({}));
-    if (!r.ok) console.error(`Z-API PDF erro [${formatted}]:`, JSON.stringify(d));
-    else console.log(`✅ WhatsApp PDF enviado para ${formatted}`);
+    if (!r.ok) { console.error(`Z-API PDF erro [${formatted}]:`, JSON.stringify(d)); return false; }
+    console.log(`✅ WhatsApp PDF enviado para ${formatted}`);
+    return true;
   } catch (err) {
     console.error('Erro ao enviar WhatsApp PDF:', err.message);
+    return false;
   }
 }
 
@@ -276,6 +278,7 @@ async function initDB() {
   `);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS asaas_customer_id VARCHAR(100);`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ip_address VARCHAR(45);`);
+  await pool.query(`ALTER TABLE queries ADD COLUMN IF NOT EXISTS whatsapp_sent_at TIMESTAMPTZ;`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pdf_cache (
       id         SERIAL PRIMARY KEY,
@@ -2144,7 +2147,7 @@ app.get('/api/admin/queries', requireAuth, requireSuperAdmin, async (req, res) =
 app.get('/api/admin/manual-queries', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT q.id, q.service_id, q.service_name, q.params, q.amount, q.status, q.created_at,
+      `SELECT q.id, q.service_id, q.service_name, q.params, q.amount, q.status, q.created_at, q.whatsapp_sent_at,
               u.id AS user_id, u.name AS user_name, u.email AS user_email, u.phone AS user_phone
        FROM queries q JOIN users u ON u.id = q.user_id
        WHERE q.service_id = ANY($1)
@@ -2183,14 +2186,54 @@ app.post('/api/admin/manual-queries/:id/upload', requireAuth, requireSuperAdmin,
     );
     await pool.query(`UPDATE queries SET status='concluido' WHERE id=$1`, [query.id]);
 
+    let whatsappSent = false;
     if (query.phone) {
       const caption = `✅ *${query.service_name}* — documento pronto!\n\nSeu PDF já está disponível para download no seu painel.`;
-      await sendWhatsAppPdf(query.phone, pdfBuf, `${query.service_id}-${query.id}.pdf`, caption).catch(() => {});
+      whatsappSent = await sendWhatsAppPdf(query.phone, pdfBuf, `${query.service_id}-${query.id}.pdf`, caption).catch(() => false);
+      if (whatsappSent) {
+        await pool.query(`UPDATE queries SET whatsapp_sent_at = NOW() WHERE id=$1`, [query.id]);
+      }
     }
 
-    res.json({ success: true });
+    res.json({ success: true, whatsappSent });
   } catch (err) {
     console.error('Erro no upload manual:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── ADMIN: POST /api/admin/manual-queries/:id/resend-whatsapp ────────────────
+app.post('/api/admin/manual-queries/:id/resend-whatsapp', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const qr = await pool.query(
+      `SELECT q.id, q.user_id, q.service_id, q.service_name, q.status, u.phone
+       FROM queries q JOIN users u ON u.id = q.user_id WHERE q.id=$1`,
+      [req.params.id]
+    );
+    if (!qr.rows.length) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    const query = qr.rows[0];
+    if (!MANUAL_SERVICE_IDS.includes(query.service_id))
+      return res.status(400).json({ error: 'Este pedido não é de um serviço manual.' });
+    if (query.status !== 'concluido')
+      return res.status(400).json({ error: 'Este pedido ainda não tem PDF enviado.' });
+    if (!query.phone)
+      return res.status(400).json({ error: 'Usuário sem telefone cadastrado.' });
+
+    const pr = await pool.query(
+      `SELECT pdf_data FROM pdf_cache WHERE query_id=$1 ORDER BY created_at DESC LIMIT 1`,
+      [query.id]
+    );
+    if (!pr.rows.length) return res.status(404).json({ error: 'PDF não encontrado para este pedido.' });
+    const pdfBuf = Buffer.from(pr.rows[0].pdf_data, 'base64');
+
+    const caption = `✅ *${query.service_name}* — documento pronto!\n\nSeu PDF já está disponível para download no seu painel.`;
+    const sent = await sendWhatsAppPdf(query.phone, pdfBuf, `${query.service_id}-${query.id}.pdf`, caption).catch(() => false);
+    if (!sent) return res.status(502).json({ error: 'Falha ao reenviar pelo WhatsApp. Tente novamente.' });
+
+    await pool.query(`UPDATE queries SET whatsapp_sent_at = NOW() WHERE id=$1`, [query.id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Erro no reenvio manual de WhatsApp:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
   }
 });
