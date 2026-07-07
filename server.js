@@ -335,6 +335,17 @@ async function initDB() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS crlv_agendado_pending (
+      pedido_id  VARCHAR(100) PRIMARY KEY,
+      user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      phone      VARCHAR(20),
+      service_id VARCHAR(100),
+      uf         VARCHAR(5),
+      placa      VARCHAR(20),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
   console.log('✅ Tabelas prontas');
 }
 
@@ -1334,6 +1345,17 @@ app.post('/api/query', requireAuth, async (req, res) => {
           `e use o ID *${pedidoId}* para acompanhar quando for emitido seu CRLV-e.`,
         ].join('\n');
         await sendWhatsApp(user.phone, msg).catch(() => {});
+
+        // Enfileira o pedido para o cron checar o status periodicamente e
+        // avisar por WhatsApp assim que o PDF ficar pronto (sem depender do
+        // usuário voltar e clicar em "Ver Status" manualmente).
+        if (pedidoId && pedidoId !== '-') {
+          await pool.query(
+            `INSERT INTO crlv_agendado_pending (pedido_id, user_id, phone, service_id, uf, placa)
+             VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (pedido_id) DO NOTHING`,
+            [String(pedidoId), req.user.id, user.phone, serviceId, uf, placa]
+          ).catch(e => console.error('Erro ao enfileirar CRLV-e Agendado:', e.message));
+        }
       }
 
       // WhatsApp com o PDF assim que "Ver Status" indicar que o CRLV-e Agendado ficou pronto
@@ -1362,6 +1384,9 @@ app.post('/api/query', requireAuth, async (req, res) => {
                   await pool.query(
                     'INSERT INTO crlv_agendado_notifications (pedido_id) VALUES ($1) ON CONFLICT DO NOTHING', [pedidoIdNotif]
                   );
+                  await pool.query(
+                    'DELETE FROM crlv_agendado_pending WHERE pedido_id=$1', [pedidoIdNotif]
+                  ).catch(() => {});
                 }
               }
             }
@@ -2372,6 +2397,96 @@ app.post('/api/admin/broadcast-whatsapp', requireAuth, requireSuperAdmin, async 
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('Erro no broadcast manual:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Cron: verifica pedidos de CRLV-e Agendado pendentes e avisa por WhatsApp ──
+async function checkCrlvAgendadoStatus(pedidoId) {
+  const pid = String(pedidoId).trim();
+  let apiUrl, headers;
+  if (pid.startsWith('AUTOCRLV-')) {
+    const code = pid.slice('AUTOCRLV-'.length);
+    apiUrl  = `https://autocrlv.com.br/cliente/api_integracao_crlv_agendado_status.php?code=${encodeURIComponent(code)}`;
+    headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AUTOCRLV_KEY}` };
+  } else {
+    apiUrl  = `${BASE_API_URL}/api/crlv-agendado/${pid}`;
+    headers = { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO };
+  }
+  const apiRes = await fetch(apiUrl, { method: 'GET', headers });
+  if (!apiRes.ok) return null;
+  const data = await apiRes.json().catch(() => null);
+  if (!data) return null;
+  const pedido       = data?.pedido || data?.data?.pedido || {};
+  const statusResumo = data?.status_resumo || data?.data?.status_resumo || {};
+  const pdfPath    = pedido.pdf_url || statusResumo.pdf_url || '';
+  const podeBaixar = data?.pdf_disponivel === true || statusResumo.pode_baixar_pdf === true;
+  const placa = (pedido.placa || data?.placa || '-').toString().toUpperCase();
+  const uf    = (pedido.uf    || data?.uf    || '-').toString().toUpperCase();
+  return { podeBaixar, pdfPath, placa, uf };
+}
+
+async function runCrlvAgendadoPendingCheck() {
+  await pool.query(`DELETE FROM crlv_agendado_pending WHERE created_at < NOW() - INTERVAL '20 days'`).catch(() => {});
+  const { rows: pendentes } = await pool.query('SELECT * FROM crlv_agendado_pending ORDER BY created_at ASC LIMIT 200');
+  let notified = 0, checked = 0;
+  for (const row of pendentes) {
+    checked++;
+    try {
+      const already = await pool.query('SELECT 1 FROM crlv_agendado_notifications WHERE pedido_id=$1', [row.pedido_id]);
+      if (already.rows.length > 0) {
+        await pool.query('DELETE FROM crlv_agendado_pending WHERE pedido_id=$1', [row.pedido_id]);
+        continue;
+      }
+
+      const status = await checkCrlvAgendadoStatus(row.pedido_id);
+      if (status?.podeBaixar && status.pdfPath && row.phone) {
+        const fullUrl = /^https?:\/\//i.test(status.pdfPath) ? status.pdfPath : 'https://chekaki.online' + status.pdfPath;
+        const pdfApiRes = await fetch(fullUrl);
+        if (pdfApiRes.ok) {
+          const pdfBuf = Buffer.from(await pdfApiRes.arrayBuffer());
+          if (pdfBuf.slice(0, 4).toString() === '%PDF') {
+            const placa = status.placa !== '-' ? status.placa : (row.placa || '-');
+            const uf    = status.uf    !== '-' ? status.uf    : (row.uf    || '-');
+            const caption = `✅ *CRLV-e Agendado pronto!*\n🔤 Placa: ${placa}\n📍 UF: ${uf}\n📋 Pedido: ${row.pedido_id}\n\nDocumento gerado pela MC Despachadoria.`;
+            await sendWhatsAppPdf(row.phone, pdfBuf, `CRLV-e-Agendado-${row.pedido_id}.pdf`, caption).catch(() => {});
+            await pool.query('INSERT INTO crlv_agendado_notifications (pedido_id) VALUES ($1) ON CONFLICT DO NOTHING', [row.pedido_id]);
+            await pool.query('DELETE FROM crlv_agendado_pending WHERE pedido_id=$1', [row.pedido_id]);
+            notified++;
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`Erro ao checar CRLV-e Agendado pedido ${row.pedido_id}:`, e.message);
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
+  console.log(`✅ Checagem CRLV-e Agendado: ${checked} verificados, ${notified} avisados`);
+  return { checked, notified, pending: pendentes.length };
+}
+
+// ── GET /api/cron/crlv-agendado-status (Vercel Cron) ──────────────────────────
+app.get('/api/cron/crlv-agendado-status', async (req, res) => {
+  const secret = process.env.CRON_SECRET || '';
+  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const result = await runCrlvAgendadoPendingCheck();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Erro no cron crlv-agendado-status:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/admin/crlv-agendado-status-check (teste manual pelo admin) ─────
+app.post('/api/admin/crlv-agendado-status-check', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const result = await runCrlvAgendadoPendingCheck();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Erro na checagem manual CRLV-e Agendado:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
