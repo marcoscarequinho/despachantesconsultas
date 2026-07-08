@@ -1063,6 +1063,13 @@ app.post('/api/query', requireAuth, async (req, res) => {
           },
         },
       };
+      // DEBUG temporário — remover após diagnosticar o erro "Campos obrigatórios
+      // ausentes ou inválidos." reportado pela API upstream (CPFs mascarados).
+      console.log('[inserir-comunicacao-venda] payload:', JSON.stringify({
+        ...body,
+        vendedor:  { ...body.vendedor,  cpf: body.vendedor.cpf.replace(/\d(?=\d{4})/g, '*') },
+        comprador: { ...body.comprador, cpf: body.comprador.cpf.replace(/\d(?=\d{4})/g, '*') },
+      }));
     }
     // Cancelar comunicação de venda — a API exige id e id_motivo_cancelamento como número
     if (serviceId === 'cancelar-comunicacao-venda') {
