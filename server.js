@@ -18,6 +18,8 @@ const MP_ACCESS_TOKEN = (process.env.MP_ACCESS_TOKEN || '')
 const MP_BASE = 'https://api.mercadopago.com';
 const AUTOCRLV_KEY    = process.env.AUTOCRLV_KEY    || '';
 const PORTAL_DESP_KEY = process.env.PORTAL_DESP_KEY || '';
+const DATACUBE_API_URL = 'https://api.consultasdeveiculos.com';
+const DATACUBE_TOKEN   = process.env.DATACUBE_TOKEN || '';
 const ZAPI_INSTANCE_ID   = process.env.ZAPI_INSTANCE_ID   || '';
 const ZAPI_TOKEN         = process.env.ZAPI_TOKEN         || '';
 const ZAPI_CLIENT_TOKEN  = process.env.ZAPI_CLIENT_TOKEN  || '';
@@ -215,6 +217,54 @@ const SERVICES = [
 // /api/admin/manual-queries).
 const MANUAL_UPLOAD_GROUP = 'Número CRV (Apenas antigos)';
 const MANUAL_SERVICE_IDS  = [...SERVICES.filter(s => s.group === MANUAL_UPLOAD_GROUP).map(s => s.id), 'crlv-agendado-rj-reemissao'];
+
+// ── SERVICES_V2 — API Datacube (api.consultasdeveiculos.com) ──────────────────
+// Catálogo completamente separado do SERVICES/autocrlv/chekaki acima. Preços em
+// basePrice são o custo cobrado pela Datacube na faixa "De 0 - 10.000" da tabela
+// de valores; o preço final ao cliente aplica o mesmo MARKUP (40%) do restante
+// do sistema. Exposto no painel na aba "Opção 2 Nova Consulta" (rota /api/query-v2).
+const SERVICES_V2 = [
+  { id:'dc-agregados',              name:'Agregados',                               group:'Veículos - Informações', basePrice:0.380,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/agregados' },
+  { id:'dc-agregados-v2',           name:'Agregados V2',                            group:'Veículos - Informações', basePrice:0.380,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/agregados_v2' },
+  { id:'dc-bin-nacional',           name:'BIN Nacional',                            group:'Veículos - Informações', basePrice:2.214,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/bin-nacional' },
+  { id:'dc-bin-nacional-v2',        name:'BIN Nacional V2',                         group:'Veículos - Informações', basePrice:2.214,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/bin-nacional-v2' },
+  { id:'dc-bin-estadual',           name:'Base Estadual (BIN)',                     group:'Veículos - Informações', basePrice:2.214,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/bin-estadual' },
+  { id:'dc-base-nacional-v2',       name:'Base Nacional V2',                        group:'Veículos - Informações', basePrice:2.203,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/base-nacional-v2' },
+  { id:'dc-informacao-basica',      name:'Informação Básica',                       group:'Veículos - Informações', basePrice:0.359,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/informacao-basica' },
+  { id:'dc-consulta-0km',           name:'Veículo 0km',                             group:'Veículos - Informações', basePrice:6.486,  inputType:'dc_chassi',     icon:'🚗', dcPath:'/veiculos/consulta-0km' },
+  { id:'dc-informacao-basica-v2',   name:'Informação Básica V2',                    group:'Veículos - Informações', basePrice:0.391,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/informacao-basica-v2' },
+  { id:'dc-proprietario-ano-lic',   name:'Proprietário / Ano Último Licenciamento', group:'Veículos - Informações', basePrice:1.006,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/proprietario-ano-licenciamento' },
+  { id:'dc-proprietario-atual',     name:'Proprietário Atual',                      group:'Veículos - Informações', basePrice:1.266,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/proprietario-atual' },
+  { id:'dc-informacao-simples-v2',  name:'Informação Simples V2',                   group:'Veículos - Informações', basePrice:1.563,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/informacao-simples-v2' },
+  { id:'dc-infracoes-v3',           name:'Infrações V3',                            group:'Veículos - Informações', basePrice:3.891,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/infracoes-v3' },
+  { id:'dc-renainf',                name:'Renainf',                                 group:'Veículos - Informações', basePrice:3.594,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renainf' },
+  { id:'dc-informacao-por-renavam', name:'Informações por Renavam',                 group:'Veículos - Informações', basePrice:0.375,  inputType:'dc_renavam',    icon:'🚗', dcPath:'/veiculos/informacao-por-renavam' },
+  { id:'dc-decodificar-chassi',     name:'Decodificação de Chassi',                 group:'Veículos - Informações', basePrice:0.359,  inputType:'dc_chassi',     icon:'🚗', dcPath:'/veiculos/decodificar-chassi' },
+  { id:'dc-decodificar-motor',      name:'Decodificação de Motor',                  group:'Veículos - Informações', basePrice:0.359,  inputType:'dc_motor',      icon:'🚗', dcPath:'/veiculos/decodificar-motor' },
+  { id:'dc-cronotacografo',         name:'Cronotacógrafo',                          group:'Veículos - Informações', basePrice:0.738,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/cronotacografo' },
+  { id:'dc-gravames-v2',            name:'Gravames V2',                             group:'Veículos - Informações', basePrice:3.594,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/gravames-v2' },
+  { id:'dc-gravames-v3',            name:'Gravames V3',                             group:'Veículos - Informações', basePrice:3.091,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/gravames-v3' },
+  { id:'dc-historico-gravames',     name:'Histórico de Gravames',                   group:'Veículos - Informações', basePrice:4.672,  inputType:'dc_chassi',     icon:'🚗', dcPath:'/veiculos/historico_gravames' },
+  { id:'dc-uf-placa',               name:'UF da Placa',                             group:'Veículos - Informações', basePrice:0.281,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/uf-placa' },
+  { id:'dc-marcas',                 name:'Marcas',                                  group:'Veículos - Informações', basePrice:0.230,  inputType:'dc_tipo',       icon:'🚗', dcPath:'/veiculos/marcas' },
+  { id:'dc-modelos',                name:'Modelos',                                 group:'Veículos - Informações', basePrice:0.230,  inputType:'dc_tipo_marca', icon:'🚗', dcPath:'/veiculos/modelos' },
+  { id:'dc-recall',                 name:'Recall',                                  group:'Veículos - Informações', basePrice:0.391,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/recall' },
+  { id:'dc-renavam',                name:'Renavam',                                 group:'Veículos - Informações', basePrice:0.853,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renavam' },
+  { id:'dc-renavam-v2',             name:'Renavam V2',                              group:'Veículos - Informações', basePrice:0.234,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renavam-v2' },
+  { id:'dc-leilao',                 name:'Leilão',                                  group:'Veículos - Informações', basePrice:19.155, inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/leilao' },
+  { id:'dc-indicio-roubo-furto',    name:'Indício de Roubo e Furto',                group:'Veículos - Informações', basePrice:0.375,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/indicio-roubo-furto' },
+  { id:'dc-sinistro',               name:'Indício de Sinistro',                     group:'Veículos - Informações', basePrice:0.947,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/sinistro' },
+  { id:'dc-roubo-furto',            name:'Roubo e Furto',                           group:'Veículos - Informações', basePrice:16.514, inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/roubo_furto' },
+  { id:'dc-historico-fipe',         name:'Histórico FIPE',                          group:'Veículos - Informações', basePrice:0.234,  inputType:'dc_fipe',       icon:'🚗', dcPath:'/veiculos/historico-fipe' },
+  { id:'dc-renajud-v3',             name:'Renajud V3',                              group:'Veículos - Informações', basePrice:3.047,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renajud-v3' },
+  { id:'dc-renajud-v4',             name:'Renajud V4',                              group:'Veículos - Informações', basePrice:2.791,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renajud-v4' },
+  { id:'dc-csv',                    name:'Certificado de Segurança Veicular (CSV)', group:'Veículos - Informações', basePrice:4.314,  inputType:'dc_csv',        icon:'🚗', dcPath:'/veiculos/csv' },
+  { id:'dc-veiculos-doc',           name:'Veículos por Documento (CPF/CNPJ)',       group:'Veículos - Informações', basePrice:7.188,  inputType:'dc_documento',  icon:'🚗', dcPath:'/pessoas/veiculos' },
+  { id:'dc-veiculos-doc-v2',        name:'Veículos por Documento V2',               group:'Veículos - Informações', basePrice:8.984,  inputType:'dc_documento',  icon:'🚗', dcPath:'/pessoas/veiculos_v2' },
+  { id:'dc-veiculos-doc-v3',        name:'Veículos por Documento V3',               group:'Veículos - Informações', basePrice:8.984,  inputType:'dc_documento',  icon:'🚗', dcPath:'/pessoas/veiculos_v3' },
+  { id:'dc-historico-proprietario', name:'Histórico de Proprietários',              group:'Veículos - Informações', basePrice:7.813,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/historico-proprietario' },
+  { id:'dc-roubo-furto-simples',    name:'Roubo e Furto Simples',                   group:'Veículos - Informações', basePrice:6.250,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/roubo_furto_simples' },
+];
 
 // Conexão com o banco Neon
 const pool = new Pool({
@@ -832,6 +882,16 @@ app.get('/api/services/public', (req, res) => {
   });
 });
 
+// ── GET /api/services-v2 (catálogo Datacube — aba "Opção 2 Nova Consulta") ────
+app.get('/api/services-v2', requireAuth, (req, res) => {
+  res.json({
+    services: SERVICES_V2.map(s => ({
+      ...s,
+      price: parseFloat((s.basePrice * MARKUP).toFixed(2)),
+    })),
+  });
+});
+
 // ── GET /api/user/stats ───────────────────────────────────────────────────────
 app.get('/api/user/stats', requireAuth, async (req, res) => {
   try {
@@ -1397,6 +1457,144 @@ app.post('/api/query', requireAuth, async (req, res) => {
     }
   } catch (err) {
     console.error('Erro em /api/query:', err.message);
+    res.status(500).json({ error: 'Erro interno. Tente novamente.' });
+  }
+});
+
+// ── POST /api/query-v2 (API Datacube — aba "Opção 2 Nova Consulta") ───────────
+// Fluxo isolado do /api/query: usa o mesmo saldo/tabelas do usuário, mas nunca
+// toca em SERVICES, MANUAL_SERVICE_IDS ou nas integrações chekaki/autocrlv.
+app.post('/api/query-v2', requireAuth, async (req, res) => {
+  const { serviceId, params } = req.body;
+  if (!serviceId) return res.status(400).json({ error: 'Serviço não informado.' });
+
+  const service = SERVICES_V2.find(s => s.id === serviceId);
+  if (!service) return res.status(400).json({ error: 'Serviço inválido.' });
+
+  const price = parseFloat((service.basePrice * MARKUP).toFixed(2));
+
+  try {
+    const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.user.id]);
+    const user = ur.rows[0];
+    if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+    if (parseFloat(user.credits) < price)
+      return res.status(400).json({
+        error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}`,
+      });
+
+    const form = new URLSearchParams({ auth_token: DATACUBE_TOKEN });
+
+    switch (service.inputType) {
+      case 'dc_placa': {
+        const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+        if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+        form.set('placa', placa);
+        break;
+      }
+      case 'dc_chassi': {
+        const chassi = (params?.chassi || '').toUpperCase().replace(/\s/g, '');
+        if (chassi.length !== 17) return res.status(400).json({ error: 'Chassi deve ter exatamente 17 caracteres.' });
+        form.set('chassi', chassi);
+        break;
+      }
+      case 'dc_motor': {
+        const motor = (params?.motor || '').toUpperCase().replace(/\s/g, '');
+        if (!motor) return res.status(400).json({ error: 'Informe o número do motor.' });
+        form.set('motor', motor);
+        break;
+      }
+      case 'dc_renavam': {
+        const renavam = (params?.renavam || '').replace(/\D/g, '');
+        if (renavam.length < 9 || renavam.length > 11) return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+        form.set('renavam', renavam);
+        break;
+      }
+      case 'dc_documento': {
+        const documento = (params?.documento || '').replace(/\D/g, '');
+        if (documento.length !== 11 && documento.length !== 14)
+          return res.status(400).json({ error: 'Documento inválido. Informe CPF (11 dígitos) ou CNPJ (14 dígitos).' });
+        form.set('documento', documento);
+        break;
+      }
+      case 'dc_tipo': {
+        const tipo = (params?.tipo || '').toLowerCase().trim();
+        if (!['carro', 'moto', 'caminhao'].includes(tipo))
+          return res.status(400).json({ error: 'Selecione um tipo de veículo válido (carro, moto ou caminhão).' });
+        form.set('tipo', tipo);
+        break;
+      }
+      case 'dc_tipo_marca': {
+        const tipo  = (params?.tipo  || '').toLowerCase().trim();
+        const marca = (params?.marca || '').trim();
+        if (!['carro', 'moto', 'caminhao'].includes(tipo))
+          return res.status(400).json({ error: 'Selecione um tipo de veículo válido (carro, moto ou caminhão).' });
+        if (!marca) return res.status(400).json({ error: 'Informe a marca.' });
+        form.set('tipo', tipo);
+        form.set('marca', marca);
+        break;
+      }
+      case 'dc_fipe': {
+        const codigoFipe = (params?.codigo_fipe    || '').trim();
+        const anoFab     = (params?.ano_fabricacao || '').trim();
+        const anoMod     = (params?.ano_modelo     || '').trim();
+        if (!codigoFipe)            return res.status(400).json({ error: 'Informe o código FIPE.' });
+        if (!/^\d{4}$/.test(anoFab)) return res.status(400).json({ error: 'Ano de fabricação inválido.' });
+        if (!/^\d{4}$/.test(anoMod)) return res.status(400).json({ error: 'Ano de modelo inválido.' });
+        form.set('codigo_fipe', codigoFipe);
+        form.set('ano_fabricacao', anoFab);
+        form.set('ano_modelo', anoMod);
+        break;
+      }
+      case 'dc_csv': {
+        const placa    = (params?.placa    || '').toUpperCase().replace(/[\s-]/g, '');
+        const renavam  = (params?.renavam  || '').replace(/\D/g, '');
+        const documento = (params?.documento || '').replace(/\D/g, '');
+        if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+        if (renavam.length < 9 || renavam.length > 11) return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+        if (documento.length !== 11 && documento.length !== 14)
+          return res.status(400).json({ error: 'Documento inválido. Informe CPF ou CNPJ.' });
+        form.set('placa', placa);
+        form.set('renavam', renavam);
+        form.set('documento', documento);
+        break;
+      }
+      default:
+        return res.status(400).json({ error: 'Tipo de entrada não suportado.' });
+    }
+
+    let apiRes, apiData;
+    try {
+      apiRes = await fetch(`${DATACUBE_API_URL}${service.dcPath}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: form.toString(),
+      });
+      apiData = await apiRes.json().catch(() => null);
+    } catch (e) {
+      console.error(`Erro na API Datacube [${serviceId}]:`, e.message);
+      return res.status(502).json({ error: 'Erro ao consultar a API. Tente novamente.' });
+    }
+
+    if (!apiRes.ok || !apiData || apiData.status === false) {
+      const errMsg = apiData ? extractApiErrorMsg(apiData) : `Erro HTTP ${apiRes.status}.`;
+      console.error(`Erro API Datacube [${serviceId}] HTTP ${apiRes.status}: ${errMsg}`);
+      return res.status(apiRes.status && apiRes.status >= 400 ? apiRes.status : 502).json({ error: errMsg });
+    }
+
+    await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
+    const txRow = await pool.query(
+      `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+      [req.user.id, price, `Consulta: ${service.name} (Opção 2)`]
+    );
+    await pool.query(
+      `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+       VALUES ($1,$2,$3,$4,'success',$5,$6,'json')`,
+      [req.user.id, service.id, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id]
+    );
+
+    return res.json({ success: true, result: apiData.result ?? apiData, charged: price });
+  } catch (err) {
+    console.error('Erro em /api/query-v2:', err.message);
     res.status(500).json({ error: 'Erro interno. Tente novamente.' });
   }
 });

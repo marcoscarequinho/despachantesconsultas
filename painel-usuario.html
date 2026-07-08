@@ -91,6 +91,13 @@
       </svg>
       Nova Consulta
     </div>
+    <div class="nav-item" data-section="query2" onclick="showSection('query2')">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+      </svg>
+      Opção 2 Nova Consulta
+    </div>
     <a href="/recarga-pix"
       class="nav-item"
       style="color:#86efac;border:1px solid rgba(34,197,94,.4);background:rgba(20,83,45,.35);">
@@ -400,6 +407,94 @@
       </div>
     </section>
 
+    <!-- ── OPÇÃO 2 NOVA CONSULTA (API Datacube) ───────────────────────────── -->
+    <section id="section-query2" class="dash-section hidden space-y-5">
+
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Opção 2 Nova Consulta</h2>
+        <p class="text-sm text-gray-500">Consultas veiculares via API Datacube — catálogo independente da aba "Nova Consulta"</p>
+      </div>
+
+      <!-- Saldo disponível -->
+      <div class="card bg-gradient-to-br from-orange-50 to-white border border-orange-200 flex items-center gap-4">
+        <div class="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center text-xl flex-shrink-0">💳</div>
+        <div>
+          <div class="text-sm text-gray-600">Saldo disponível</div>
+          <div id="query2-credits" class="text-2xl font-bold text-orange-600">R$ 0,00</div>
+        </div>
+        <div class="ml-auto text-xs text-gray-400">Mesmo saldo da aba Nova Consulta</div>
+      </div>
+
+      <!-- Seleção de serviço -->
+      <div class="card">
+        <h3 class="font-semibold text-gray-800 mb-3">Selecione o Serviço</h3>
+        <input id="service-filter-v2" type="text" placeholder="🔍 Buscar serviço..."
+          class="input-field mb-3" oninput="filterServiceListV2()">
+        <div class="grid sm:grid-cols-2 gap-2" id="service-list-v2"></div>
+      </div>
+
+      <!-- Formulário dinâmico -->
+      <div id="query-form-wrap-v2" class="card hidden">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h3 id="form-service-name-v2" class="font-semibold text-gray-800"></h3>
+            <div class="flex items-center gap-2 mt-1">
+              <span class="text-xs text-gray-500">Custo:</span>
+              <span id="form-service-price-v2" class="price-tag"></span>
+            </div>
+          </div>
+          <button onclick="resetFormV2()" class="text-xs text-gray-500 hover:text-gray-700">✕ Cancelar</button>
+        </div>
+
+        <form id="query-form-v2" onsubmit="submitQueryV2(event)" class="space-y-4">
+          <div id="form-fields-v2" class="space-y-4"></div>
+
+          <div id="form-error-v2"
+            class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm flex gap-2">
+            <span class="flex-shrink-0">⚠️</span>
+            <span id="form-error-msg-v2"></span>
+          </div>
+
+          <button id="query-submit-v2" type="submit" class="btn-primary w-full justify-center py-3">
+            <span id="query-submit-text-v2">Realizar Consulta</span>
+            <svg id="query-spinner-v2" class="hidden w-4 h-4 spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+            </svg>
+          </button>
+        </form>
+      </div>
+
+      <!-- Resultado -->
+      <div id="query-result-wrap-v2" class="hidden space-y-4">
+        <div class="result-card p-5">
+          <div class="flex items-center gap-3 mb-4">
+            <div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-xl">✅</div>
+            <div>
+              <div class="font-bold text-green-800">Consulta Concluída</div>
+              <div id="result-service-name-v2" class="text-sm text-green-700"></div>
+            </div>
+            <div class="ml-auto text-right">
+              <div class="text-xs text-gray-500">Debitado</div>
+              <div id="result-charged-v2" class="font-bold text-red-500 text-sm"></div>
+            </div>
+          </div>
+
+          <div id="result-fields-v2" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4"></div>
+
+          <details class="mt-2">
+            <summary class="text-xs text-gray-500 cursor-pointer hover:text-gray-700">Ver JSON completo</summary>
+            <pre id="result-json-raw-v2"
+              class="mt-2 bg-gray-900 text-green-400 text-xs p-4 rounded-lg overflow-x-auto max-h-80 overflow-y-auto"></pre>
+          </details>
+        </div>
+
+        <button onclick="resetFormV2()" class="btn-secondary w-full justify-center">
+          🔄 Nova Consulta
+        </button>
+      </div>
+    </section>
+
     <!-- ── HISTÓRICO ───────────────────────────────────────────────────── -->
     <section id="section-history" class="dash-section hidden space-y-5">
 
@@ -694,10 +789,15 @@ const sectionTitles = {
   overview:  'Visão Geral',
   affiliate: 'Indicações',
   query:    'Nova Consulta',
+  query2:   'Opção 2 Nova Consulta',
   history:  'Histórico',
   prices:   'Tabela de Preços',
   profile:  'Perfil',
 };
+
+// ── Estado global — Opção 2 (Datacube) ──────────────────────────────────────────
+let allServicesV2 = [];
+let selectedSvcV2 = null;
 
 // ── Formatação ─────────────────────────────────────────────────────────────────
 const fmt = v =>
@@ -743,13 +843,15 @@ function showSection(id) {
 // ── Inicialização ──────────────────────────────────────────────────────────────
 async function init() {
   try {
-    const [meRes, svcRes] = await Promise.all([
+    const [meRes, svcRes, svcRes2] = await Promise.all([
       fetch('/api/auth/me'),
       fetch('/api/services'),
+      fetch('/api/services-v2'),
     ]);
     if (!meRes.ok) { window.location.href = '/entrar'; return; }
     currentUser = await meRes.json();
-    allServices = (await svcRes.json()).services || [];
+    allServices   = (await svcRes.json()).services  || [];
+    allServicesV2 = (await svcRes2.json()).services || [];
 
     const initial = currentUser.name ? currentUser.name.charAt(0).toUpperCase() : '?';
     document.getElementById('user-avatar').textContent   = initial;
@@ -765,6 +867,7 @@ async function init() {
       document.getElementById('nav-superadmin').classList.remove('hidden');
 
     buildCategoryGrid();
+    renderServiceListV2();
     await Promise.all([loadStats(), loadQueries()]);
     showBannerCrvAntigo();
   } catch {
@@ -799,6 +902,7 @@ async function loadStats() {
     document.getElementById('stat-month').textContent         = fmt(d.month_spent);
     document.getElementById('stat-total-spent').textContent   = fmt(d.total_spent);
     document.getElementById('query-credits').textContent      = fmt(d.credits);
+    document.getElementById('query2-credits').textContent     = fmt(d.credits);
     document.getElementById('header-credits').textContent     = fmt(d.credits);
   } catch {}
 }
@@ -1769,6 +1873,223 @@ function flattenObj(obj, prefix, depth) {
     if (typeof v === 'object' && v !== null && depth > 1) return flattenObj(v, key, depth - 1);
     return [[key, String(v ?? '')]];
   });
+}
+
+// ── Opção 2 Nova Consulta (API Datacube) ────────────────────────────────────────
+// Fluxo completo à parte do "Nova Consulta" acima: estado (allServicesV2,
+// selectedSvcV2), elementos DOM com sufixo "-v2" e endpoint /api/query-v2 —
+// nada aqui toca allServices/selectedSvc ou /api/query.
+function inputTypeLabelV2(t) {
+  const labels = {
+    dc_placa:      'Placa',
+    dc_chassi:     'Chassi',
+    dc_motor:      'Motor',
+    dc_renavam:    'Renavam',
+    dc_documento:  'CPF/CNPJ',
+    dc_tipo:       'Tipo de veículo',
+    dc_tipo_marca: 'Tipo + Marca',
+    dc_fipe:       'Código FIPE',
+    dc_csv:        'Placa + Renavam + Documento',
+  };
+  return labels[t] || '';
+}
+
+function renderServiceListV2(filter = '') {
+  const f = filter.toLowerCase().trim();
+  const svcs = allServicesV2.filter(s => !f || s.name.toLowerCase().includes(f));
+  const renderBtn = s => `
+    <button type="button"
+      onclick="selectServiceV2(${JSON.stringify(s).replace(/"/g,"&quot;")})"
+      class="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-orange-300 hover:bg-orange-50 text-left transition-all">
+      <span class="text-xl flex-shrink-0">${s.icon}</span>
+      <div class="min-w-0 flex-1">
+        <div class="font-medium text-gray-800 text-sm">${s.name}</div>
+        <div class="text-xs text-gray-400 mt-0.5">${inputTypeLabelV2(s.inputType)}</div>
+      </div>
+      <div class="price-tag text-sm flex-shrink-0">${fmt(s.price)}</div>
+    </button>`;
+  document.getElementById('service-list-v2').innerHTML = svcs.map(renderBtn).join('')
+    || '<p class="text-sm text-gray-400 col-span-2 text-center py-4">Nenhum serviço encontrado.</p>';
+}
+
+function filterServiceListV2() {
+  renderServiceListV2(document.getElementById('service-filter-v2').value);
+}
+
+function selectServiceV2(svc) {
+  if (typeof svc === 'string') svc = JSON.parse(svc);
+  selectedSvcV2 = svc;
+  document.getElementById('form-service-name-v2').textContent = svc.icon + ' ' + svc.name;
+  document.getElementById('form-service-price-v2').textContent = fmt(svc.price);
+  renderFormFieldsV2(svc.inputType);
+  document.getElementById('query-form-wrap-v2').classList.remove('hidden');
+  document.getElementById('query-result-wrap-v2').classList.add('hidden');
+  document.getElementById('form-error-v2').classList.add('hidden');
+  document.getElementById('query-form-wrap-v2').scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
+
+function renderFormFieldsV2(inputType) {
+  const field = (id, label, type = 'text', placeholder = '', required = true, extra = '') =>
+    `<div>
+      <label class="label">${label}${required ? ' <span class="text-red-500">*</span>' : ''}</label>
+      <input id="f2-${id}" type="${type}" placeholder="${placeholder}"
+        class="input-field" ${required ? 'required' : ''} ${extra}>
+    </div>`;
+
+  const tipoSelect = `
+    <div>
+      <label class="label">Tipo de Veículo <span class="text-red-500">*</span></label>
+      <select id="f2-tipo" class="input-field" required>
+        <option value="">Selecione...</option>
+        <option value="carro">Carro</option>
+        <option value="moto">Moto</option>
+        <option value="caminhao">Caminhão</option>
+      </select>
+    </div>`;
+
+  const templates = {
+    dc_placa:      field('placa', 'Placa', 'text', 'ABC1234 ou ABC-1234'),
+    dc_chassi:     field('chassi', 'Chassi', 'text', '9BWZZZ377VT004251', true, 'maxlength="17"'),
+    dc_motor:      field('motor', 'Número do Motor', 'text', 'ABC1234567'),
+    dc_renavam:    field('renavam', 'Renavam', 'text', '12345678901'),
+    dc_documento:  field('documento', 'CPF ou CNPJ', 'text', '000.000.000-00 ou 00.000.000/0001-00'),
+    dc_tipo:       tipoSelect,
+    dc_tipo_marca: tipoSelect + field('marca', 'Marca', 'text', 'BMW'),
+    dc_fipe: `
+      <div class="grid grid-cols-3 gap-3">
+        ${field('codigo_fipe', 'Código FIPE', 'text', '001004-9')}
+        ${field('ano_fabricacao', 'Ano Fabricação', 'text', '2020')}
+        ${field('ano_modelo', 'Ano Modelo', 'text', '2021')}
+      </div>`,
+    dc_csv: `
+      ${field('placa', 'Placa', 'text', 'ABC1234')}
+      <div class="grid grid-cols-2 gap-3">
+        ${field('renavam', 'Renavam', 'text', '12345678901')}
+        ${field('documento', 'CPF ou CNPJ', 'text', '000.000.000-00')}
+      </div>`,
+  };
+
+  document.getElementById('form-fields-v2').innerHTML =
+    templates[inputType] || '<p class="text-sm text-gray-500">Tipo de entrada não suportado.</p>';
+}
+
+function buildParamsV2(inputType) {
+  const g = id => (document.getElementById('f2-' + id)?.value || '').trim();
+  if (inputType === 'dc_placa')      return { placa: g('placa') };
+  if (inputType === 'dc_chassi')     return { chassi: g('chassi') };
+  if (inputType === 'dc_motor')      return { motor: g('motor') };
+  if (inputType === 'dc_renavam')    return { renavam: g('renavam') };
+  if (inputType === 'dc_documento')  return { documento: g('documento') };
+  if (inputType === 'dc_tipo')       return { tipo: g('tipo') };
+  if (inputType === 'dc_tipo_marca') return { tipo: g('tipo'), marca: g('marca') };
+  if (inputType === 'dc_fipe')       return { codigo_fipe: g('codigo_fipe'), ano_fabricacao: g('ano_fabricacao'), ano_modelo: g('ano_modelo') };
+  if (inputType === 'dc_csv')        return { placa: g('placa'), renavam: g('renavam'), documento: g('documento') };
+  return {};
+}
+
+function validateParamsV2(inputType, p) {
+  if (inputType === 'dc_placa' && p.placa.length < 7)
+    return 'Placa inválida. Informe no formato ABC1D23.';
+  if (inputType === 'dc_chassi' && p.chassi.length !== 17)
+    return 'Chassi deve ter exatamente 17 caracteres.';
+  if (inputType === 'dc_motor' && !p.motor)
+    return 'Informe o número do motor.';
+  if (inputType === 'dc_renavam') {
+    const r = p.renavam.replace(/\D/g, '');
+    if (r.length < 9 || r.length > 11) return 'Renavam inválido. Deve ter entre 9 e 11 dígitos.';
+  }
+  if (inputType === 'dc_documento') {
+    const d = p.documento.replace(/\D/g, '');
+    if (d.length !== 11 && d.length !== 14) return 'Documento inválido. Informe CPF ou CNPJ.';
+  }
+  if (inputType === 'dc_tipo' && !p.tipo)
+    return 'Selecione o tipo de veículo.';
+  if (inputType === 'dc_tipo_marca') {
+    if (!p.tipo)  return 'Selecione o tipo de veículo.';
+    if (!p.marca) return 'Informe a marca.';
+  }
+  if (inputType === 'dc_fipe') {
+    if (!p.codigo_fipe)                    return 'Informe o código FIPE.';
+    if (!/^\d{4}$/.test(p.ano_fabricacao)) return 'Ano de fabricação inválido.';
+    if (!/^\d{4}$/.test(p.ano_modelo))     return 'Ano de modelo inválido.';
+  }
+  if (inputType === 'dc_csv') {
+    if (p.placa.length < 7) return 'Placa inválida. Informe no formato ABC1D23.';
+    const r = p.renavam.replace(/\D/g, '');
+    if (r.length < 9 || r.length > 11) return 'Renavam inválido. Deve ter entre 9 e 11 dígitos.';
+    const d = p.documento.replace(/\D/g, '');
+    if (d.length !== 11 && d.length !== 14) return 'Documento inválido. Informe CPF ou CNPJ.';
+  }
+  return null;
+}
+
+function resetFormV2() {
+  selectedSvcV2 = null;
+  document.getElementById('query-form-wrap-v2').classList.add('hidden');
+  document.getElementById('query-result-wrap-v2').classList.add('hidden');
+  document.getElementById('form-error-v2').classList.add('hidden');
+  document.getElementById('query-form-v2').reset();
+}
+
+function setQueryLoadingV2(on) {
+  document.getElementById('query-submit-v2').disabled = on;
+  document.getElementById('query-submit-text-v2').textContent = on ? 'Processando...' : 'Realizar Consulta';
+  document.getElementById('query-spinner-v2').classList.toggle('hidden', !on);
+}
+
+function showFormErrorV2(msg) {
+  document.getElementById('form-error-msg-v2').textContent = msg;
+  document.getElementById('form-error-v2').classList.remove('hidden');
+}
+
+async function submitQueryV2(e) {
+  e.preventDefault();
+  if (!selectedSvcV2) return;
+
+  document.getElementById('form-error-v2').classList.add('hidden');
+
+  const params = buildParamsV2(selectedSvcV2.inputType);
+  const validationError = validateParamsV2(selectedSvcV2.inputType, params);
+  if (validationError) { showFormErrorV2(validationError); return; }
+
+  setQueryLoadingV2(true);
+  try {
+    const res = await fetch('/api/query-v2', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serviceId: selectedSvcV2.id, params }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showFormErrorV2(data.error || 'Erro ao realizar consulta.');
+      return;
+    }
+    showJsonResultV2(data, selectedSvcV2);
+    await Promise.all([loadStats(), loadQueries()]);
+  } catch {
+    showFormErrorV2('Erro de conexão. Verifique sua internet e tente novamente.');
+  } finally {
+    setQueryLoadingV2(false);
+  }
+}
+
+function showJsonResultV2(data, svc) {
+  document.getElementById('query-form-wrap-v2').classList.add('hidden');
+  document.getElementById('query-result-wrap-v2').classList.remove('hidden');
+  document.getElementById('result-service-name-v2').textContent = svc.name;
+  document.getElementById('result-charged-v2').textContent = '-' + fmt(data.charged);
+
+  const result = data.result || {};
+  const fields = flattenObj(result, '', 3);
+  document.getElementById('result-fields-v2').innerHTML = fields.slice(0, 60).map(([k, v]) => `
+    <div class="result-field bg-white rounded-lg p-3 border border-gray-100">
+      <span class="result-label">${k}</span>
+      <span class="result-value">${v}</span>
+    </div>`).join('');
+
+  document.getElementById('result-json-raw-v2').textContent = JSON.stringify(result, null, 2);
+  document.getElementById('query-result-wrap-v2').scrollIntoView({ behavior:'smooth' });
+  toast('Consulta concluída com sucesso!');
 }
 
 // ── Perfil ─────────────────────────────────────────────────────────────────────
