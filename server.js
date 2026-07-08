@@ -904,6 +904,19 @@ app.get('/api/pdf/:token', requireAuth, async (req, res) => {
   }
 });
 
+// Algumas APIs upstream (ex.: chekaki.online) aninham o motivo real do erro em
+// `details.details.msg` em vez de expor no nível raiz — desce a cadeia de
+// `details` para achar a mensagem mais específica disponível.
+function extractApiErrorMsg(data) {
+  let msg = data?.error || data?.message || data?.msg;
+  let current = data;
+  while (current?.details && typeof current.details === 'object') {
+    current = current.details;
+    msg = current?.msg || current?.message || current?.error || msg;
+  }
+  return msg || JSON.stringify(data);
+}
+
 // ── POST /api/query ───────────────────────────────────────────────────────────
 app.post('/api/query', requireAuth, async (req, res) => {
   const { serviceId, params } = req.body;
@@ -1168,7 +1181,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
         if (ct.includes('application/json') || ct.includes('text/')) {
           const errData = await apiRes.json().catch(() => null)
             || { error: await apiRes.text().catch(() => 'Sem resposta') };
-          errMsg = errData?.error || errData?.message || JSON.stringify(errData);
+          errMsg = extractApiErrorMsg(errData);
         } else {
           errMsg = `HTTP ${apiRes.status}`;
         }
@@ -1187,7 +1200,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       let errMsg = 'Resposta inválida da API de débitos.';
       try {
         const p = JSON.parse(bodyStr);
-        errMsg = p.error || p.message || p.msg || JSON.stringify(p);
+        errMsg = extractApiErrorMsg(p);
       } catch { errMsg = bodyStr.slice(0, 300) || errMsg; }
       console.error(`[${serviceId}] esperava PDF, recebeu: ${errMsg}`);
       return res.status(422).json({ error: errMsg });
@@ -1202,7 +1215,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       if (parsed?.pdf_base64) {
         base64PdfBuf = Buffer.from(parsed.pdf_base64, 'base64');
       } else if (!isRealPdf) {
-        const errMsg = parsed?.error || parsed?.message || 'PDF não retornado pela API.';
+        const errMsg = parsed ? extractApiErrorMsg(parsed) : 'PDF não retornado pela API.';
         console.error(`[${serviceId}] sem pdf_base64: ${errMsg}`);
         return res.status(422).json({ error: errMsg });
       }
@@ -1215,7 +1228,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
         htmlBuf = bodyBuffer;
       } else {
         let parsed; try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
-        const errMsg = parsed?.error || parsed?.message || bodyStr.slice(0, 200) || 'Resposta inválida da API.';
+        const errMsg = parsed ? extractApiErrorMsg(parsed) : (bodyStr.slice(0, 200) || 'Resposta inválida da API.');
         console.error(`[dados-veiculares-debitos] inesperado: ${errMsg}`);
         return res.status(422).json({ error: errMsg });
       }
