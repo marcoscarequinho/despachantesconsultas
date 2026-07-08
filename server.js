@@ -1041,9 +1041,9 @@ app.post('/api/query', requireAuth, async (req, res) => {
       if (!/^\d{2}\/\d{2}\/\d{4}$/.test(crv.data_emissao || '')) return res.status(400).json({ error: 'Data de emissão do CRV inválida. Use o formato DD/MM/AAAA.' });
 
       body = {
-        vendedor: { tipo_pessoa: 'F', cpf: vCpf, nome: v.nome.trim().toUpperCase() },
+        vendedor: { tipo_pessoa: 'F', cpf: vCpf, cnpj: '', nome: v.nome.trim().toUpperCase() },
         comprador: {
-          tipo_pessoa: 'F', cpf: cCpf, nome: c.nome.trim().toUpperCase(),
+          tipo_pessoa: 'F', cpf: cCpf, cnpj: '', nome: c.nome.trim().toUpperCase(),
           endereco: {
             cep, logradouro: end.logradouro || '', numero: end.numero || '',
             bairro: end.bairro || '', complemento: end.complemento || '',
