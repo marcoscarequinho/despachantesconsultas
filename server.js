@@ -293,6 +293,14 @@ const SERVICES_V2 = [
   { id:'dc-debito-sc-v2', name:'Débitos - Santa Catarina V2',      group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/sc-v2' },
   { id:'dc-debito-sp',    name:'Débitos - São Paulo',              group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/sp' },
   { id:'dc-debito-to',    name:'Débitos - Tocantins',              group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_doc',     icon:'🏛️', dcPath:'/debitos/to' },
+
+  // ── Consultar Crédito — preços com o mesmo MARKUP (40%) do resto do sistema ──
+  { id:'dc-credito-completa-pf',    name:'Crédito Completa PF',    group:'Consultar Crédito', basePrice:36.281, inputType:'dc_cpf',       icon:'💳', dcPath:'/credito/credito-completa-pf' },
+  { id:'dc-credito-completa-pj',    name:'Crédito Completa PJ',    group:'Consultar Crédito', basePrice:36.281, inputType:'dc_cnpj',      icon:'💳', dcPath:'/credito/credito-completa-pj' },
+  { id:'dc-restricao-score-pf',     name:'Restrição Score PF',     group:'Consultar Crédito', basePrice:33.594, inputType:'dc_cpf',       icon:'💳', dcPath:'/credito/restricao-score-pf' },
+  { id:'dc-restricao-score-pj',     name:'Restrição Score PJ',     group:'Consultar Crédito', basePrice:33.594, inputType:'dc_cnpj',      icon:'💳', dcPath:'/credito/restricao-score-pj' },
+  { id:'dc-localizacao-score',      name:'Localização Score',      group:'Consultar Crédito', basePrice:8.594,  inputType:'dc_documento', icon:'💳', dcPath:'/credito/localizacao-score' },
+  { id:'dc-endividamento-bancario', name:'Endividamento Bancário', group:'Consultar Crédito', basePrice:7.031,  inputType:'dc_documento', icon:'💳', dcPath:'/credito/endividamento-bancario' },
 ];
 
 // Conexão com o banco Neon
@@ -1625,6 +1633,18 @@ app.post('/api/query-v2', requireAuth, async (req, res) => {
         const renavam = (params?.renavam || '').replace(/\D/g, '');
         if (renavam.length < 9 || renavam.length > 11) return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
         form.set('renavam', renavam);
+        break;
+      }
+      case 'dc_cpf': {
+        const cpf = (params?.cpf || '').replace(/\D/g, '');
+        if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+        form.set('cpf', cpf);
+        break;
+      }
+      case 'dc_cnpj': {
+        const cnpj = (params?.cnpj || '').replace(/\D/g, '');
+        if (cnpj.length !== 14) return res.status(400).json({ error: 'CNPJ inválido. Deve ter 14 dígitos.' });
+        form.set('cnpj', cnpj);
         break;
       }
       default:

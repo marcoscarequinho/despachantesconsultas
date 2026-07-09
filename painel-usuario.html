@@ -1916,6 +1916,8 @@ function inputTypeLabelV2(t) {
     dc_debito_doc:    'Placa + Renavam + CPF/CNPJ',
     dc_debito_chassi: 'Placa + Renavam + Chassi',
     dc_debito_renavam:'Renavam',
+    dc_cpf:            'CPF',
+    dc_cnpj:           'CNPJ',
   };
   return labels[t] || '';
 }
@@ -1926,6 +1928,7 @@ function buildCategoryGridV2() {
   const catIcons = {
     'Documentos':          { icon:'📄', color:'bg-blue-50 border-blue-200' },
     'Débitos por Estado':  { icon:'🏛️', color:'bg-teal-50 border-teal-200' },
+    'Consultar Crédito':   { icon:'💳', color:'bg-purple-50 border-purple-200' },
   };
 
   document.getElementById('category-grid-v2').innerHTML = cats.map(cat => {
@@ -2053,6 +2056,8 @@ function renderFormFieldsV2(inputType) {
       </div>
       ${field('chassi', 'Chassi', 'text', '9BWZZZ377VT004251', true, 'maxlength="17"')}`,
     dc_debito_renavam: field('renavam', 'Renavam', 'text', '12345678901'),
+    dc_cpf:  field('cpf', 'CPF', 'text', '000.000.000-00'),
+    dc_cnpj: field('cnpj', 'CNPJ', 'text', '00.000.000/0001-00'),
   };
 
   document.getElementById('form-fields-v2').innerHTML =
@@ -2074,6 +2079,8 @@ function buildParamsV2(inputType) {
   if (inputType === 'dc_debito_doc')    return { placa: g('placa'), renavam: g('renavam'), documento: g('documento') };
   if (inputType === 'dc_debito_chassi') return { placa: g('placa'), renavam: g('renavam'), chassi: g('chassi') };
   if (inputType === 'dc_debito_renavam') return { renavam: g('renavam') };
+  if (inputType === 'dc_cpf')  return { cpf: g('cpf') };
+  if (inputType === 'dc_cnpj') return { cnpj: g('cnpj') };
   return {};
 }
 
@@ -2131,6 +2138,14 @@ function validateParamsV2(inputType, p) {
   if (inputType === 'dc_debito_renavam') {
     const r = p.renavam.replace(/\D/g, '');
     if (r.length < 9 || r.length > 11) return 'Renavam inválido. Deve ter entre 9 e 11 dígitos.';
+  }
+  if (inputType === 'dc_cpf') {
+    const c = p.cpf.replace(/\D/g, '');
+    if (c.length !== 11) return 'CPF inválido. Deve ter 11 dígitos.';
+  }
+  if (inputType === 'dc_cnpj') {
+    const c = p.cnpj.replace(/\D/g, '');
+    if (c.length !== 14) return 'CNPJ inválido. Deve ter 14 dígitos.';
   }
   return null;
 }
