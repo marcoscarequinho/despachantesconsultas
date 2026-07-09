@@ -2190,9 +2190,10 @@ function renderFormFieldsV2(inputType) {
         ${field('comprador.documento', 'CPF/CNPJ do Comprador', 'text', '000.000.000-00')}
       </div>
       <div class="grid grid-cols-2 gap-3">
-        ${field('comprador.endereco.cep', 'CEP', 'text', '00000-000', false)}
+        ${field('comprador.endereco.cep', 'CEP (8 dígitos)', 'text', '00000000', false, 'inputmode="numeric" maxlength="8"')}
         ${field('comprador.endereco.logradouro', 'Logradouro', 'text', '', false)}
       </div>
+      <p id="f2-cep-status" class="text-xs mt-1 mb-2 hidden"></p>
       <div class="grid grid-cols-3 gap-3">
         ${field('comprador.endereco.numero', 'Número', 'text', '', false)}
         ${field('comprador.endereco.bairro', 'Bairro', 'text', '', false)}
@@ -2228,6 +2229,42 @@ function renderFormFieldsV2(inputType) {
 
   document.getElementById('form-fields-v2').innerHTML =
     templates[inputType] || '<p class="text-sm text-gray-500">Tipo de entrada não suportado.</p>';
+
+  if (inputType === 'dc_comunicado_venda') {
+    const cepEl = document.getElementById('f2-comprador.endereco.cep');
+    if (cepEl) {
+      cepEl.addEventListener('input', function() {
+        this.value = this.value.replace(/\D/g, '').slice(0, 8);
+        if (this.value.length === 8) autocompletarCepV2(this.value);
+      });
+    }
+  }
+}
+
+async function autocompletarCepV2(cep) {
+  const status = document.getElementById('f2-cep-status');
+  const setStatus = (msg, cor) => {
+    if (!status) return;
+    status.className = `text-xs mt-1 mb-2 ${cor}`;
+    status.textContent = msg;
+    status.classList.remove('hidden');
+  };
+  setStatus('⏳ Buscando endereço…', 'text-blue-600');
+  try {
+    const r = await fetch(`/api/cep/${cep}`);
+    const data = await r.json();
+    if (!r.ok) { setStatus('⚠️ ' + (data.error || 'CEP não encontrado.'), 'text-amber-600'); return; }
+
+    const set = (id, val) => { const el = document.getElementById('f2-' + id); if (el && val) el.value = val; };
+    set('comprador.endereco.logradouro', data.logradouro);
+    set('comprador.endereco.bairro',     data.bairro);
+    set('comprador.endereco.uf',         data.uf);
+    set('comprador.endereco.cidade',     data.cidade_nome);
+
+    setStatus(`✅ ${data.cidade_nome ? data.cidade_nome + '/' + data.uf : 'Endereço encontrado'} — confira os campos.`, 'text-green-600');
+  } catch {
+    setStatus('⚠️ Erro ao buscar CEP. Preencha manualmente.', 'text-amber-600');
+  }
 }
 
 function handleComprovanteUploadV2(input) {
