@@ -1927,6 +1927,9 @@ function inputTypeLabelV2(t) {
     dc_cnh_pr:            'CPF + CNH + Validade da CNH',
     dc_cnh_se:            'CNH + Registro + Nascimento',
     dc_cnh_cpf_nascimento:'CPF + Nascimento',
+    dc_telefone:          'DDD + Número',
+    dc_uf:                'UF',
+    dc_qrcode:            'Imagem QRCode (base64)',
   };
   return labels[t] || '';
 }
@@ -1940,6 +1943,7 @@ function buildCategoryGridV2() {
     'Consultar Crédito':   { icon:'💳', color:'bg-purple-50 border-purple-200' },
     'Divida Ativa':        { icon:'⚖️', color:'bg-amber-50 border-amber-200' },
     'CNH':                 { icon:'🪪', color:'bg-rose-50 border-rose-200' },
+    'Cadastros':           { icon:'🗂️', color:'bg-indigo-50 border-indigo-200' },
   };
 
   document.getElementById('category-grid-v2').innerHTML = cats.map(cat => {
@@ -2112,6 +2116,18 @@ function renderFormFieldsV2(inputType) {
         ${field('cpf', 'CPF', 'text', '000.000.000-00')}
         ${field('data_nascimento', 'Data Nascimento', 'text', 'DD/MM/AAAA')}
       </div>`,
+    dc_telefone: `
+      <div class="grid grid-cols-2 gap-3">
+        ${field('ddd', 'DDD', 'text', '11', true, 'maxlength="2"')}
+        ${field('numero', 'Número', 'text', '999999999')}
+      </div>`,
+    dc_uf: field('uf', 'UF', 'text', 'SP', true, 'maxlength="2"'),
+    dc_qrcode: `
+      <div>
+        <label class="label">Imagem em Base64 <span class="text-red-500">*</span></label>
+        <textarea id="f2-image_base64" class="input-field" rows="4" placeholder="Cole aqui o conteúdo base64 da imagem do QRCode" required></textarea>
+      </div>
+      ${field('verify_signature', 'Verificar Assinatura (1 ou 0)', 'text', '1')}`,
   };
 
   document.getElementById('form-fields-v2').innerHTML =
@@ -2144,6 +2160,9 @@ function buildParamsV2(inputType) {
   if (inputType === 'dc_cnh_pr') return { cpf: g('cpf'), cnh: g('cnh'), data_validade_cnh: g('data_validade_cnh') };
   if (inputType === 'dc_cnh_se') return { cnh: g('cnh'), registro: g('registro'), data_nascimento: g('data_nascimento') };
   if (inputType === 'dc_cnh_cpf_nascimento') return { cpf: g('cpf'), data_nascimento: g('data_nascimento') };
+  if (inputType === 'dc_telefone') return { ddd: g('ddd'), numero: g('numero') };
+  if (inputType === 'dc_uf') return { uf: g('uf') };
+  if (inputType === 'dc_qrcode') return { image_base64: g('image_base64'), verify_signature: g('verify_signature') || '1' };
   return {};
 }
 
@@ -2255,6 +2274,15 @@ function validateParamsV2(inputType, p) {
     if (c.length !== 11) return 'CPF inválido. Deve ter 11 dígitos.';
     if (!p.data_nascimento) return 'Informe a data de nascimento.';
   }
+  if (inputType === 'dc_telefone') {
+    const d = p.ddd.replace(/\D/g, '');
+    if (d.length !== 2) return 'DDD inválido. Deve ter 2 dígitos.';
+    if (!p.numero) return 'Informe o número de telefone.';
+  }
+  if (inputType === 'dc_uf' && p.uf.length !== 2)
+    return 'UF inválida. Informe a sigla com 2 letras.';
+  if (inputType === 'dc_qrcode' && !p.image_base64)
+    return 'Informe a imagem em base64 do QRCode.';
   return null;
 }
 

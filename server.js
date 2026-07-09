@@ -321,6 +321,18 @@ const SERVICES_V2 = [
   { id:'dc-cnh-rn', name:'CNH - Rio Grande do Norte',   group:'CNH', basePrice:0.498, inputType:'dc_cnh_cpf_cnh',       icon:'🪪', dcPath:'/cnh/rn-completa' },
   { id:'dc-cnh-se', name:'CNH - Sergipe',               group:'CNH', basePrice:0.498, inputType:'dc_cnh_se',            icon:'🪪', dcPath:'/cnh/se-completa' },
   { id:'dc-cnh-to', name:'CNH - Tocantins',             group:'CNH', basePrice:0.588, inputType:'dc_cnh_cpf_nascimento',icon:'🪪', dcPath:'/cnh/to-completa' },
+
+  // ── Cadastros — preços com o mesmo MARKUP (40%) do resto do sistema ─────────
+  { id:'dc-cadastro-empresas-cpf',    name:'Empresas do CPF',           group:'Cadastros', basePrice:0.313, inputType:'dc_cpf',      icon:'🗂️', dcPath:'/pessoas/empresas' },
+  { id:'dc-cadastro-nome-cpf',        name:'Nome do CPF',               group:'Cadastros', basePrice:0.234, inputType:'dc_cpf',      icon:'🗂️', dcPath:'/pessoas/nome' },
+  { id:'dc-cadastro-dados-cpf',       name:'Dados Cadastrais do CPF',   group:'Cadastros', basePrice:1.380, inputType:'dc_cpf',      icon:'🗂️', dcPath:'/pessoas/cadastro' },
+  { id:'dc-cadastro-localizacao-cpf', name:'Localização CPF',           group:'Cadastros', basePrice:1.381, inputType:'dc_cpf',      icon:'🗂️', dcPath:'/pessoas/localizacao' },
+  { id:'dc-cadastro-localizacao-v3',  name:'Localização CPF V3',        group:'Cadastros', basePrice:2.844, inputType:'dc_cpf',      icon:'🗂️', dcPath:'/pessoas/localizacao_v3' },
+  { id:'dc-cadastro-telefone',        name:'Pessoas por Telefone',      group:'Cadastros', basePrice:0.706, inputType:'dc_telefone', icon:'🗂️', dcPath:'/pessoas/telefone' },
+  { id:'dc-cadastro-cnpj',            name:'Dados do CNPJ',             group:'Cadastros', basePrice:0.234, inputType:'dc_cnpj',     icon:'🗂️', dcPath:'/empresas/informacoes' },
+  { id:'dc-cadastro-municipios-serpro',name:'Municípios - Código Serpro',group:'Cadastros', basePrice:0.391, inputType:'dc_uf',       icon:'🗂️', dcPath:'/demografia/municipios-serpro' },
+  { id:'dc-cadastro-municipios-ibge', name:'Municípios - Código IBGE',  group:'Cadastros', basePrice:0.391, inputType:'dc_uf',       icon:'🗂️', dcPath:'/demografia/municipios-ibge' },
+  { id:'dc-cadastro-qrcode',          name:'Decodificar Documento (QRCode)', group:'Cadastros', basePrice:0.308, inputType:'dc_qrcode', icon:'🗂️', dcPath:'/documentos/decodificar' },
 ];
 
 // Conexão com o banco Neon
@@ -1755,6 +1767,29 @@ app.post('/api/query-v2', requireAuth, async (req, res) => {
         if (!data_nascimento) return res.status(400).json({ error: 'Data de nascimento é obrigatória.' });
         form.set('cpf', cpf);
         form.set('data_nascimento', data_nascimento);
+        break;
+      }
+      case 'dc_telefone': {
+        const ddd = (params?.ddd || '').replace(/\D/g, '');
+        const numero = (params?.numero || '').replace(/\D/g, '');
+        if (ddd.length !== 2) return res.status(400).json({ error: 'DDD inválido. Deve ter 2 dígitos.' });
+        if (!numero) return res.status(400).json({ error: 'Número de telefone é obrigatório.' });
+        form.set('ddd', ddd);
+        form.set('numero', numero);
+        break;
+      }
+      case 'dc_uf': {
+        const uf = (params?.uf || '').trim().toUpperCase();
+        if (uf.length !== 2) return res.status(400).json({ error: 'UF inválida. Deve ter 2 letras.' });
+        form.set('uf', uf);
+        break;
+      }
+      case 'dc_qrcode': {
+        const image_base64 = (params?.image_base64 || '').trim();
+        const verify_signature = (params?.verify_signature || '1').trim();
+        if (!image_base64) return res.status(400).json({ error: 'Imagem em base64 é obrigatória.' });
+        form.set('image_base64', image_base64);
+        form.set('verify_signature', verify_signature);
         break;
       }
       default:
