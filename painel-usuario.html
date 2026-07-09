@@ -2209,8 +2209,10 @@ function renderFormFieldsV2(inputType) {
         ${field('venda.valor', 'Valor da Venda', 'text', '0,00')}
       </div>
       <div>
-        <label class="label">Comprovante (PDF Base64 do ATPV-e e/ou CRV frente e verso) <span class="text-red-500">*</span></label>
-        <textarea id="f2-comprovante" class="input-field" rows="4" placeholder="Cole aqui o conteúdo base64 do comprovante" required></textarea>
+        <label class="label">Comprovante (PDF do ATPV-e e/ou CRV frente e verso) <span class="text-red-500">*</span></label>
+        <input type="file" id="f2-comprovante-file" class="input-field" accept="application/pdf,.pdf" onchange="handleComprovanteUploadV2(this)">
+        <input type="hidden" id="f2-comprovante">
+        <div id="f2-comprovante-status" class="text-xs text-gray-500 mt-1"></div>
       </div>`,
     dc_cancelar_comunicado_venda: `
       <div class="grid grid-cols-2 gap-3">
@@ -2226,6 +2228,35 @@ function renderFormFieldsV2(inputType) {
 
   document.getElementById('form-fields-v2').innerHTML =
     templates[inputType] || '<p class="text-sm text-gray-500">Tipo de entrada não suportado.</p>';
+}
+
+function handleComprovanteUploadV2(input) {
+  const statusEl = document.getElementById('f2-comprovante-status');
+  const hiddenEl = document.getElementById('f2-comprovante');
+  const file = input.files && input.files[0];
+  if (!file) { hiddenEl.value = ''; statusEl.textContent = ''; return; }
+  if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+    statusEl.textContent = 'Arquivo inválido. Selecione um PDF.';
+    statusEl.className = 'text-xs text-red-500 mt-1';
+    input.value = '';
+    hiddenEl.value = '';
+    return;
+  }
+  statusEl.textContent = 'Carregando...';
+  statusEl.className = 'text-xs text-gray-500 mt-1';
+  const reader = new FileReader();
+  reader.onload = () => {
+    const base64 = String(reader.result).split(',')[1] || '';
+    hiddenEl.value = base64;
+    statusEl.textContent = `✓ ${file.name} (${(file.size / 1024).toFixed(0)} KB)`;
+    statusEl.className = 'text-xs text-green-600 mt-1';
+  };
+  reader.onerror = () => {
+    statusEl.textContent = 'Erro ao ler o arquivo. Tente novamente.';
+    statusEl.className = 'text-xs text-red-500 mt-1';
+    hiddenEl.value = '';
+  };
+  reader.readAsDataURL(file);
 }
 
 function buildParamsV2(inputType) {
