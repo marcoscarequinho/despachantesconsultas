@@ -301,6 +301,11 @@ const SERVICES_V2 = [
   { id:'dc-restricao-score-pj',     name:'Restrição Score PJ',     group:'Consultar Crédito', basePrice:33.594, inputType:'dc_cnpj',      icon:'💳', dcPath:'/credito/restricao-score-pj' },
   { id:'dc-localizacao-score',      name:'Localização Score',      group:'Consultar Crédito', basePrice:8.594,  inputType:'dc_documento', icon:'💳', dcPath:'/credito/localizacao-score' },
   { id:'dc-endividamento-bancario', name:'Endividamento Bancário', group:'Consultar Crédito', basePrice:7.031,  inputType:'dc_documento', icon:'💳', dcPath:'/credito/endividamento-bancario' },
+
+  // ── Divida Ativa — preços com o mesmo MARKUP (40%) do resto do sistema ──────
+  { id:'dc-dividaativa-sp', name:'Dívida Ativa - São Paulo',        group:'Divida Ativa', basePrice:0.392, inputType:'dc_renavam', icon:'⚖️', dcPath:'/dividaativa/sp' },
+  { id:'dc-dividaativa-df', name:'Dívida Ativa - Distrito Federal', group:'Divida Ativa', basePrice:0.377, inputType:'dc_debito',  icon:'⚖️', dcPath:'/dividaativa/df' },
+  { id:'dc-dividaativa-rj', name:'Dívida Ativa - Rio de Janeiro',   group:'Divida Ativa', basePrice:0.391, inputType:'dc_renavam', icon:'⚖️', dcPath:'/dividaativa/rj' },
 ];
 
 // Conexão com o banco Neon
