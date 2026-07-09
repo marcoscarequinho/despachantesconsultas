@@ -222,48 +222,77 @@ const MANUAL_SERVICE_IDS  = [...SERVICES.filter(s => s.group === MANUAL_UPLOAD_G
 // Catálogo completamente separado do SERVICES/autocrlv/chekaki acima. Preços em
 // basePrice são o custo cobrado pela Datacube na faixa "De 0 - 10.000" da tabela
 // de valores; o preço final ao cliente aplica o mesmo MARKUP (40%) do restante
-// do sistema. Exposto no painel na aba "Opção 2 Nova Consulta" (rota /api/query-v2).
+// do sistema, exceto quando noMarkup:true (ex.: categoria "Débitos por Estado",
+// vendida a valor fixo de R$3,00). Exposto no painel na aba "Opção 2 Nova
+// Consulta" (rota /api/query-v2).
 const SERVICES_V2 = [
-  { id:'dc-agregados',              name:'Agregados',                               group:'Veículos - Informações', basePrice:0.380,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/agregados' },
-  { id:'dc-agregados-v2',           name:'Agregados V2',                            group:'Veículos - Informações', basePrice:0.380,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/agregados_v2' },
-  { id:'dc-bin-nacional',           name:'BIN Nacional',                            group:'Veículos - Informações', basePrice:2.214,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/bin-nacional' },
-  { id:'dc-bin-nacional-v2',        name:'BIN Nacional V2',                         group:'Veículos - Informações', basePrice:2.214,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/bin-nacional-v2' },
-  { id:'dc-bin-estadual',           name:'Base Estadual (BIN)',                     group:'Veículos - Informações', basePrice:2.214,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/bin-estadual' },
-  { id:'dc-base-nacional-v2',       name:'Base Nacional V2',                        group:'Veículos - Informações', basePrice:2.203,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/base-nacional-v2' },
-  { id:'dc-informacao-basica',      name:'Informação Básica',                       group:'Veículos - Informações', basePrice:0.359,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/informacao-basica' },
-  { id:'dc-consulta-0km',           name:'Veículo 0km',                             group:'Veículos - Informações', basePrice:6.486,  inputType:'dc_chassi',     icon:'🚗', dcPath:'/veiculos/consulta-0km' },
-  { id:'dc-informacao-basica-v2',   name:'Informação Básica V2',                    group:'Veículos - Informações', basePrice:0.391,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/informacao-basica-v2' },
-  { id:'dc-proprietario-ano-lic',   name:'Proprietário / Ano Último Licenciamento', group:'Veículos - Informações', basePrice:1.006,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/proprietario-ano-licenciamento' },
-  { id:'dc-proprietario-atual',     name:'Proprietário Atual',                      group:'Veículos - Informações', basePrice:1.266,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/proprietario-atual' },
-  { id:'dc-informacao-simples-v2',  name:'Informação Simples V2',                   group:'Veículos - Informações', basePrice:1.563,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/informacao-simples-v2' },
-  { id:'dc-infracoes-v3',           name:'Infrações V3',                            group:'Veículos - Informações', basePrice:3.891,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/infracoes-v3' },
-  { id:'dc-renainf',                name:'Renainf',                                 group:'Veículos - Informações', basePrice:3.594,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renainf' },
-  { id:'dc-informacao-por-renavam', name:'Informações por Renavam',                 group:'Veículos - Informações', basePrice:0.375,  inputType:'dc_renavam',    icon:'🚗', dcPath:'/veiculos/informacao-por-renavam' },
-  { id:'dc-decodificar-chassi',     name:'Decodificação de Chassi',                 group:'Veículos - Informações', basePrice:0.359,  inputType:'dc_chassi',     icon:'🚗', dcPath:'/veiculos/decodificar-chassi' },
-  { id:'dc-decodificar-motor',      name:'Decodificação de Motor',                  group:'Veículos - Informações', basePrice:0.359,  inputType:'dc_motor',      icon:'🚗', dcPath:'/veiculos/decodificar-motor' },
-  { id:'dc-cronotacografo',         name:'Cronotacógrafo',                          group:'Veículos - Informações', basePrice:0.738,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/cronotacografo' },
-  { id:'dc-gravames-v2',            name:'Gravames V2',                             group:'Veículos - Informações', basePrice:3.594,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/gravames-v2' },
-  { id:'dc-gravames-v3',            name:'Gravames V3',                             group:'Veículos - Informações', basePrice:3.091,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/gravames-v3' },
-  { id:'dc-historico-gravames',     name:'Histórico de Gravames',                   group:'Veículos - Informações', basePrice:4.672,  inputType:'dc_chassi',     icon:'🚗', dcPath:'/veiculos/historico_gravames' },
-  { id:'dc-uf-placa',               name:'UF da Placa',                             group:'Veículos - Informações', basePrice:0.281,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/uf-placa' },
-  { id:'dc-marcas',                 name:'Marcas',                                  group:'Veículos - Informações', basePrice:0.230,  inputType:'dc_tipo',       icon:'🚗', dcPath:'/veiculos/marcas' },
-  { id:'dc-modelos',                name:'Modelos',                                 group:'Veículos - Informações', basePrice:0.230,  inputType:'dc_tipo_marca', icon:'🚗', dcPath:'/veiculos/modelos' },
-  { id:'dc-recall',                 name:'Recall',                                  group:'Veículos - Informações', basePrice:0.391,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/recall' },
-  { id:'dc-renavam',                name:'Renavam',                                 group:'Veículos - Informações', basePrice:0.853,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renavam' },
-  { id:'dc-renavam-v2',             name:'Renavam V2',                              group:'Veículos - Informações', basePrice:0.234,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renavam-v2' },
-  { id:'dc-leilao',                 name:'Leilão',                                  group:'Veículos - Informações', basePrice:19.155, inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/leilao' },
-  { id:'dc-indicio-roubo-furto',    name:'Indício de Roubo e Furto',                group:'Veículos - Informações', basePrice:0.375,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/indicio-roubo-furto' },
-  { id:'dc-sinistro',               name:'Indício de Sinistro',                     group:'Veículos - Informações', basePrice:0.947,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/sinistro' },
-  { id:'dc-roubo-furto',            name:'Roubo e Furto',                           group:'Veículos - Informações', basePrice:16.514, inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/roubo_furto' },
-  { id:'dc-historico-fipe',         name:'Histórico FIPE',                          group:'Veículos - Informações', basePrice:0.234,  inputType:'dc_fipe',       icon:'🚗', dcPath:'/veiculos/historico-fipe' },
-  { id:'dc-renajud-v3',             name:'Renajud V3',                              group:'Veículos - Informações', basePrice:3.047,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renajud-v3' },
-  { id:'dc-renajud-v4',             name:'Renajud V4',                              group:'Veículos - Informações', basePrice:2.791,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renajud-v4' },
-  { id:'dc-csv',                    name:'Certificado de Segurança Veicular (CSV)', group:'Veículos - Informações', basePrice:4.314,  inputType:'dc_csv',        icon:'🚗', dcPath:'/veiculos/csv' },
-  { id:'dc-veiculos-doc',           name:'Veículos por Documento (CPF/CNPJ)',       group:'Veículos - Informações', basePrice:7.188,  inputType:'dc_documento',  icon:'🚗', dcPath:'/pessoas/veiculos' },
-  { id:'dc-veiculos-doc-v2',        name:'Veículos por Documento V2',               group:'Veículos - Informações', basePrice:8.984,  inputType:'dc_documento',  icon:'🚗', dcPath:'/pessoas/veiculos_v2' },
-  { id:'dc-veiculos-doc-v3',        name:'Veículos por Documento V3',               group:'Veículos - Informações', basePrice:8.984,  inputType:'dc_documento',  icon:'🚗', dcPath:'/pessoas/veiculos_v3' },
-  { id:'dc-historico-proprietario', name:'Histórico de Proprietários',              group:'Veículos - Informações', basePrice:7.813,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/historico-proprietario' },
-  { id:'dc-roubo-furto-simples',    name:'Roubo e Furto Simples',                   group:'Veículos - Informações', basePrice:6.250,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/roubo_furto_simples' },
+  { id:'dc-agregados',              name:'Agregados',                               group:'Documentos', basePrice:0.380,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/agregados' },
+  { id:'dc-agregados-v2',           name:'Agregados V2',                            group:'Documentos', basePrice:0.380,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/agregados_v2' },
+  { id:'dc-bin-nacional',           name:'BIN Nacional',                            group:'Documentos', basePrice:2.214,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/bin-nacional' },
+  { id:'dc-bin-nacional-v2',        name:'BIN Nacional V2',                         group:'Documentos', basePrice:2.214,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/bin-nacional-v2' },
+  { id:'dc-bin-estadual',           name:'Base Estadual (BIN)',                     group:'Documentos', basePrice:2.214,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/bin-estadual' },
+  { id:'dc-base-nacional-v2',       name:'Base Nacional V2',                        group:'Documentos', basePrice:2.203,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/base-nacional-v2' },
+  { id:'dc-informacao-basica',      name:'Informação Básica',                       group:'Documentos', basePrice:0.359,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/informacao-basica' },
+  { id:'dc-consulta-0km',           name:'Veículo 0km',                             group:'Documentos', basePrice:6.486,  inputType:'dc_chassi',     icon:'🚗', dcPath:'/veiculos/consulta-0km' },
+  { id:'dc-informacao-basica-v2',   name:'Informação Básica V2',                    group:'Documentos', basePrice:0.391,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/informacao-basica-v2' },
+  { id:'dc-proprietario-ano-lic',   name:'Proprietário / Ano Último Licenciamento', group:'Documentos', basePrice:1.006,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/proprietario-ano-licenciamento' },
+  { id:'dc-proprietario-atual',     name:'Proprietário Atual',                      group:'Documentos', basePrice:1.266,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/proprietario-atual' },
+  { id:'dc-informacao-simples-v2',  name:'Informação Simples V2',                   group:'Documentos', basePrice:1.563,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/informacao-simples-v2' },
+  { id:'dc-infracoes-v3',           name:'Infrações V3',                            group:'Documentos', basePrice:3.891,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/infracoes-v3' },
+  { id:'dc-renainf',                name:'Renainf',                                 group:'Documentos', basePrice:3.594,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renainf' },
+  { id:'dc-informacao-por-renavam', name:'Informações por Renavam',                 group:'Documentos', basePrice:0.375,  inputType:'dc_renavam',    icon:'🚗', dcPath:'/veiculos/informacao-por-renavam' },
+  { id:'dc-decodificar-chassi',     name:'Decodificação de Chassi',                 group:'Documentos', basePrice:0.359,  inputType:'dc_chassi',     icon:'🚗', dcPath:'/veiculos/decodificar-chassi' },
+  { id:'dc-decodificar-motor',      name:'Decodificação de Motor',                  group:'Documentos', basePrice:0.359,  inputType:'dc_motor',      icon:'🚗', dcPath:'/veiculos/decodificar-motor' },
+  { id:'dc-cronotacografo',         name:'Cronotacógrafo',                          group:'Documentos', basePrice:0.738,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/cronotacografo' },
+  { id:'dc-gravames-v2',            name:'Gravames V2',                             group:'Documentos', basePrice:3.594,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/gravames-v2' },
+  { id:'dc-gravames-v3',            name:'Gravames V3',                             group:'Documentos', basePrice:3.091,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/gravames-v3' },
+  { id:'dc-historico-gravames',     name:'Histórico de Gravames',                   group:'Documentos', basePrice:4.672,  inputType:'dc_chassi',     icon:'🚗', dcPath:'/veiculos/historico_gravames' },
+  { id:'dc-uf-placa',               name:'UF da Placa',                             group:'Documentos', basePrice:0.281,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/uf-placa' },
+  { id:'dc-marcas',                 name:'Marcas',                                  group:'Documentos', basePrice:0.230,  inputType:'dc_tipo',       icon:'🚗', dcPath:'/veiculos/marcas' },
+  { id:'dc-modelos',                name:'Modelos',                                 group:'Documentos', basePrice:0.230,  inputType:'dc_tipo_marca', icon:'🚗', dcPath:'/veiculos/modelos' },
+  { id:'dc-recall',                 name:'Recall',                                  group:'Documentos', basePrice:0.391,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/recall' },
+  { id:'dc-renavam',                name:'Renavam',                                 group:'Documentos', basePrice:0.853,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renavam' },
+  { id:'dc-renavam-v2',             name:'Renavam V2',                              group:'Documentos', basePrice:0.234,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renavam-v2' },
+  { id:'dc-leilao',                 name:'Leilão',                                  group:'Documentos', basePrice:19.155, inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/leilao' },
+  { id:'dc-indicio-roubo-furto',    name:'Indício de Roubo e Furto',                group:'Documentos', basePrice:0.375,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/indicio-roubo-furto' },
+  { id:'dc-sinistro',               name:'Indício de Sinistro',                     group:'Documentos', basePrice:0.947,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/sinistro' },
+  { id:'dc-roubo-furto',            name:'Roubo e Furto',                           group:'Documentos', basePrice:16.514, inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/roubo_furto' },
+  { id:'dc-historico-fipe',         name:'Histórico FIPE',                          group:'Documentos', basePrice:0.234,  inputType:'dc_fipe',       icon:'🚗', dcPath:'/veiculos/historico-fipe' },
+  { id:'dc-renajud-v3',             name:'Renajud V3',                              group:'Documentos', basePrice:3.047,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renajud-v3' },
+  { id:'dc-renajud-v4',             name:'Renajud V4',                              group:'Documentos', basePrice:2.791,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renajud-v4' },
+  { id:'dc-csv',                    name:'Certificado de Segurança Veicular (CSV)', group:'Documentos', basePrice:4.314,  inputType:'dc_csv',        icon:'🚗', dcPath:'/veiculos/csv' },
+  { id:'dc-veiculos-doc',           name:'Veículos por Documento (CPF/CNPJ)',       group:'Documentos', basePrice:7.188,  inputType:'dc_documento',  icon:'🚗', dcPath:'/pessoas/veiculos' },
+  { id:'dc-veiculos-doc-v2',        name:'Veículos por Documento V2',               group:'Documentos', basePrice:8.984,  inputType:'dc_documento',  icon:'🚗', dcPath:'/pessoas/veiculos_v2' },
+  { id:'dc-veiculos-doc-v3',        name:'Veículos por Documento V3',               group:'Documentos', basePrice:8.984,  inputType:'dc_documento',  icon:'🚗', dcPath:'/pessoas/veiculos_v3' },
+  { id:'dc-historico-proprietario', name:'Histórico de Proprietários',              group:'Documentos', basePrice:7.813,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/historico-proprietario' },
+  { id:'dc-roubo-furto-simples',    name:'Roubo e Furto Simples',                   group:'Documentos', basePrice:6.250,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/roubo_furto_simples' },
+
+  // ── Débitos por Estado — valor fixo R$3,00, sem markup ───────────────────────
+  { id:'dc-debito-ac',    name:'Débitos - Acre',                   group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/ac' },
+  { id:'dc-debito-al',    name:'Débitos - Alagoas',                group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/al' },
+  { id:'dc-debito-ap',    name:'Débitos - Amapá',                  group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/ap' },
+  { id:'dc-debito-am',    name:'Débitos - Amazonas',               group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/am' },
+  { id:'dc-debito-ce',    name:'Débitos - Ceará',                  group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_doc',     icon:'🏛️', dcPath:'/debitos/ce' },
+  { id:'dc-debito-df',    name:'Débitos - Distrito Federal',       group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/df' },
+  { id:'dc-debito-es',    name:'Débitos - Espírito Santo',         group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/es' },
+  { id:'dc-debito-go',    name:'Débitos - Goiás',                  group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/go' },
+  { id:'dc-debito-ma',    name:'Débitos - Maranhão',               group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_doc',     icon:'🏛️', dcPath:'/debitos/ma' },
+  { id:'dc-debito-mt',    name:'Débitos - Mato Grosso',            group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_doc',     icon:'🏛️', dcPath:'/debitos/mt' },
+  { id:'dc-debito-ms',    name:'Débitos - Mato Grosso do Sul',     group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_doc',     icon:'🏛️', dcPath:'/debitos/ms' },
+  { id:'dc-debito-mg',    name:'Débitos - Minas Gerais',           group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/mg-simples' },
+  { id:'dc-debito-pa',    name:'Débitos - Pará',                   group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/pa' },
+  { id:'dc-debito-pb',    name:'Débitos - Paraíba',                group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_doc',     icon:'🏛️', dcPath:'/debitos/pb' },
+  { id:'dc-debito-pr',    name:'Débitos - Paraná',                 group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_renavam', icon:'🏛️', dcPath:'/debitos/pr' },
+  { id:'dc-debito-pi',    name:'Débitos - Piauí',                  group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/pi' },
+  { id:'dc-debito-rj',    name:'Débitos - Rio de Janeiro',         group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_doc',     icon:'🏛️', dcPath:'/debitos/rj' },
+  { id:'dc-debito-rn',    name:'Débitos - Rio Grande do Norte',    group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/rn' },
+  { id:'dc-debito-rs',    name:'Débitos - Rio Grande do Sul',      group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/rs-v2' },
+  { id:'dc-debito-ro',    name:'Débitos - Rondônia',               group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_doc',     icon:'🏛️', dcPath:'/debitos/ro' },
+  { id:'dc-debito-rr',    name:'Débitos - Roraima',                group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/rr' },
+  { id:'dc-debito-sc',    name:'Débitos - Santa Catarina',         group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_chassi',  icon:'🏛️', dcPath:'/debitos/sc' },
+  { id:'dc-debito-sc-v2', name:'Débitos - Santa Catarina V2',      group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/sc-v2' },
+  { id:'dc-debito-sp',    name:'Débitos - São Paulo',              group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/sp' },
+  { id:'dc-debito-to',    name:'Débitos - Tocantins',              group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_doc',     icon:'🏛️', dcPath:'/debitos/to' },
 ];
 
 // Conexão com o banco Neon
@@ -887,7 +916,7 @@ app.get('/api/services-v2', requireAuth, (req, res) => {
   res.json({
     services: SERVICES_V2.map(s => ({
       ...s,
-      price: parseFloat((s.basePrice * MARKUP).toFixed(2)),
+      price: parseFloat((s.basePrice * (s.noMarkup ? 1 : MARKUP)).toFixed(2)),
     })),
   });
 });
@@ -1471,7 +1500,7 @@ app.post('/api/query-v2', requireAuth, async (req, res) => {
   const service = SERVICES_V2.find(s => s.id === serviceId);
   if (!service) return res.status(400).json({ error: 'Serviço inválido.' });
 
-  const price = parseFloat((service.basePrice * MARKUP).toFixed(2));
+  const price = parseFloat((service.basePrice * (service.noMarkup ? 1 : MARKUP)).toFixed(2));
 
   try {
     const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.user.id]);
@@ -1556,6 +1585,46 @@ app.post('/api/query-v2', requireAuth, async (req, res) => {
         form.set('placa', placa);
         form.set('renavam', renavam);
         form.set('documento', documento);
+        break;
+      }
+      case 'dc_debito': {
+        const placa   = (params?.placa   || '').toUpperCase().replace(/[\s-]/g, '');
+        const renavam = (params?.renavam || '').replace(/\D/g, '');
+        if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+        if (renavam.length < 9 || renavam.length > 11) return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+        form.set('placa', placa);
+        form.set('renavam', renavam);
+        break;
+      }
+      case 'dc_debito_doc': {
+        const placa     = (params?.placa     || '').toUpperCase().replace(/[\s-]/g, '');
+        const renavam   = (params?.renavam   || '').replace(/\D/g, '');
+        const documento = (params?.documento || '').replace(/\D/g, '');
+        if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+        if (renavam.length < 9 || renavam.length > 11) return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+        if (documento.length !== 11 && documento.length !== 14)
+          return res.status(400).json({ error: 'Documento inválido. Informe CPF ou CNPJ.' });
+        form.set('placa', placa);
+        form.set('renavam', renavam);
+        form.set('documento', documento);
+        break;
+      }
+      case 'dc_debito_chassi': {
+        const placa   = (params?.placa   || '').toUpperCase().replace(/[\s-]/g, '');
+        const renavam = (params?.renavam || '').replace(/\D/g, '');
+        const chassi  = (params?.chassi  || '').toUpperCase().replace(/\s/g, '');
+        if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+        if (renavam.length < 9 || renavam.length > 11) return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+        if (chassi.length !== 17) return res.status(400).json({ error: 'Chassi deve ter exatamente 17 caracteres.' });
+        form.set('placa', placa);
+        form.set('renavam', renavam);
+        form.set('chassi', chassi);
+        break;
+      }
+      case 'dc_debito_renavam': {
+        const renavam = (params?.renavam || '').replace(/\D/g, '');
+        if (renavam.length < 9 || renavam.length > 11) return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+        form.set('renavam', renavam);
         break;
       }
       default:

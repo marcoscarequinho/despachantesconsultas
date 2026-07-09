@@ -425,8 +425,14 @@
         <div class="ml-auto text-xs text-gray-400">Mesmo saldo da aba Nova Consulta</div>
       </div>
 
-      <!-- Seleção de serviço -->
+      <!-- Seleção de categoria -->
       <div class="card">
+        <h3 class="font-semibold text-gray-800 mb-4">Categoria do Serviço</h3>
+        <div id="category-grid-v2" class="grid grid-cols-2 sm:grid-cols-3 gap-3"></div>
+      </div>
+
+      <!-- Seleção de serviço -->
+      <div id="service-selector-wrap-v2" class="card hidden">
         <h3 class="font-semibold text-gray-800 mb-3">Selecione o Serviço</h3>
         <input id="service-filter-v2" type="text" placeholder="🔍 Buscar serviço..."
           class="input-field mb-3" oninput="filterServiceListV2()">
@@ -489,9 +495,14 @@
           </details>
         </div>
 
-        <button onclick="resetFormV2()" class="btn-secondary w-full justify-center">
-          🔄 Nova Consulta
-        </button>
+        <div class="grid grid-cols-2 gap-3">
+          <button onclick="printResultV2()" class="btn-secondary w-full justify-center">
+            🖨️ Imprimir Consulta
+          </button>
+          <button onclick="resetFormV2()" class="btn-secondary w-full justify-center">
+            🔄 Nova Consulta
+          </button>
+        </div>
       </div>
     </section>
 
@@ -798,6 +809,8 @@ const sectionTitles = {
 // ── Estado global — Opção 2 (Datacube) ──────────────────────────────────────────
 let allServicesV2 = [];
 let selectedSvcV2 = null;
+let selectedCatV2 = null;
+let lastResultV2  = null;
 
 // ── Formatação ─────────────────────────────────────────────────────────────────
 const fmt = v =>
@@ -852,6 +865,7 @@ async function init() {
     currentUser = await meRes.json();
     allServices   = (await svcRes.json()).services  || [];
     allServicesV2 = (await svcRes2.json()).services || [];
+    buildCategoryGridV2();
 
     const initial = currentUser.name ? currentUser.name.charAt(0).toUpperCase() : '?';
     document.getElementById('user-avatar').textContent   = initial;
@@ -1881,22 +1895,68 @@ function flattenObj(obj, prefix, depth) {
 // nada aqui toca allServices/selectedSvc ou /api/query.
 function inputTypeLabelV2(t) {
   const labels = {
-    dc_placa:      'Placa',
-    dc_chassi:     'Chassi',
-    dc_motor:      'Motor',
-    dc_renavam:    'Renavam',
-    dc_documento:  'CPF/CNPJ',
-    dc_tipo:       'Tipo de veículo',
-    dc_tipo_marca: 'Tipo + Marca',
-    dc_fipe:       'Código FIPE',
-    dc_csv:        'Placa + Renavam + Documento',
+    dc_placa:         'Placa',
+    dc_chassi:        'Chassi',
+    dc_motor:         'Motor',
+    dc_renavam:       'Renavam',
+    dc_documento:     'CPF/CNPJ',
+    dc_tipo:          'Tipo de veículo',
+    dc_tipo_marca:    'Tipo + Marca',
+    dc_fipe:          'Código FIPE',
+    dc_csv:           'Placa + Renavam + Documento',
+    dc_debito:        'Placa + Renavam',
+    dc_debito_doc:    'Placa + Renavam + CPF/CNPJ',
+    dc_debito_chassi: 'Placa + Renavam + Chassi',
+    dc_debito_renavam:'Renavam',
   };
   return labels[t] || '';
 }
 
+// ── Categorias — Opção 2 ──────────────────────────────────────────────────────
+function buildCategoryGridV2() {
+  const cats = [...new Set(allServicesV2.map(s => s.group))];
+  const catIcons = {
+    'Documentos':          { icon:'📄', color:'bg-blue-50 border-blue-200' },
+    'Débitos por Estado':  { icon:'🏛️', color:'bg-teal-50 border-teal-200' },
+  };
+
+  document.getElementById('category-grid-v2').innerHTML = cats.map(cat => {
+    const ci = catIcons[cat] || { icon:'📌', color:'bg-gray-50 border-gray-200' };
+    const count = allServicesV2.filter(s => s.group === cat).length;
+    return `
+      <div class="service-cat ${ci.color}" onclick="selectCategoryV2('${cat}')">
+        <div class="text-2xl mb-1">${ci.icon}</div>
+        <div class="font-semibold text-gray-800 text-xs leading-tight">${cat}</div>
+        <div class="text-xs text-gray-400 mt-0.5">${count} serviço(s)</div>
+      </div>`;
+  }).join('');
+}
+
+function selectCategoryV2(cat) {
+  selectedCatV2 = cat;
+  document.querySelectorAll('#category-grid-v2 .service-cat').forEach(el => el.classList.remove('selected'));
+  document.querySelectorAll('#category-grid-v2 .service-cat').forEach(el => {
+    if (el.textContent.includes(cat.slice(0, 8))) el.classList.add('selected');
+  });
+  const filterEl = document.getElementById('service-filter-v2');
+  if (filterEl) filterEl.value = '';
+  renderServiceListV2();
+  document.getElementById('service-selector-wrap-v2').classList.remove('hidden');
+  document.getElementById('query-form-wrap-v2').classList.add('hidden');
+  document.getElementById('query-result-wrap-v2').classList.add('hidden');
+  setTimeout(() => {
+    const el = document.getElementById('service-selector-wrap-v2');
+    const header = document.querySelector('header');
+    const offset = (header ? header.offsetHeight : 0) + 16;
+    const top = el.getBoundingClientRect().top + window.scrollY - offset;
+    window.scrollTo({ top, behavior: 'smooth' });
+  }, 50);
+}
+
 function renderServiceListV2(filter = '') {
   const f = filter.toLowerCase().trim();
-  const svcs = allServicesV2.filter(s => !f || s.name.toLowerCase().includes(f));
+  const svcs = allServicesV2.filter(s =>
+    s.group === selectedCatV2 && (!f || s.name.toLowerCase().includes(f)));
   const renderBtn = s => `
     <button type="button"
       onclick="selectServiceV2(${JSON.stringify(s).replace(/"/g,"&quot;")})"
@@ -1967,6 +2027,24 @@ function renderFormFieldsV2(inputType) {
         ${field('renavam', 'Renavam', 'text', '12345678901')}
         ${field('documento', 'CPF ou CNPJ', 'text', '000.000.000-00')}
       </div>`,
+    dc_debito: `
+      <div class="grid grid-cols-2 gap-3">
+        ${field('placa', 'Placa', 'text', 'ABC1234')}
+        ${field('renavam', 'Renavam', 'text', '12345678901')}
+      </div>`,
+    dc_debito_doc: `
+      <div class="grid grid-cols-2 gap-3">
+        ${field('placa', 'Placa', 'text', 'ABC1234')}
+        ${field('renavam', 'Renavam', 'text', '12345678901')}
+      </div>
+      ${field('documento', 'CPF ou CNPJ do Proprietário', 'text', '000.000.000-00')}`,
+    dc_debito_chassi: `
+      <div class="grid grid-cols-2 gap-3">
+        ${field('placa', 'Placa', 'text', 'ABC1234')}
+        ${field('renavam', 'Renavam', 'text', '12345678901')}
+      </div>
+      ${field('chassi', 'Chassi', 'text', '9BWZZZ377VT004251', true, 'maxlength="17"')}`,
+    dc_debito_renavam: field('renavam', 'Renavam', 'text', '12345678901'),
   };
 
   document.getElementById('form-fields-v2').innerHTML =
@@ -1984,6 +2062,10 @@ function buildParamsV2(inputType) {
   if (inputType === 'dc_tipo_marca') return { tipo: g('tipo'), marca: g('marca') };
   if (inputType === 'dc_fipe')       return { codigo_fipe: g('codigo_fipe'), ano_fabricacao: g('ano_fabricacao'), ano_modelo: g('ano_modelo') };
   if (inputType === 'dc_csv')        return { placa: g('placa'), renavam: g('renavam'), documento: g('documento') };
+  if (inputType === 'dc_debito')        return { placa: g('placa'), renavam: g('renavam') };
+  if (inputType === 'dc_debito_doc')    return { placa: g('placa'), renavam: g('renavam'), documento: g('documento') };
+  if (inputType === 'dc_debito_chassi') return { placa: g('placa'), renavam: g('renavam'), chassi: g('chassi') };
+  if (inputType === 'dc_debito_renavam') return { renavam: g('renavam') };
   return {};
 }
 
@@ -2020,15 +2102,41 @@ function validateParamsV2(inputType, p) {
     const d = p.documento.replace(/\D/g, '');
     if (d.length !== 11 && d.length !== 14) return 'Documento inválido. Informe CPF ou CNPJ.';
   }
+  if (inputType === 'dc_debito') {
+    if (p.placa.length < 7) return 'Placa inválida. Informe no formato ABC1D23.';
+    const r = p.renavam.replace(/\D/g, '');
+    if (r.length < 9 || r.length > 11) return 'Renavam inválido. Deve ter entre 9 e 11 dígitos.';
+  }
+  if (inputType === 'dc_debito_doc') {
+    if (p.placa.length < 7) return 'Placa inválida. Informe no formato ABC1D23.';
+    const r = p.renavam.replace(/\D/g, '');
+    if (r.length < 9 || r.length > 11) return 'Renavam inválido. Deve ter entre 9 e 11 dígitos.';
+    const d = p.documento.replace(/\D/g, '');
+    if (d.length !== 11 && d.length !== 14) return 'Documento inválido. Informe CPF ou CNPJ.';
+  }
+  if (inputType === 'dc_debito_chassi') {
+    if (p.placa.length < 7) return 'Placa inválida. Informe no formato ABC1D23.';
+    const r = p.renavam.replace(/\D/g, '');
+    if (r.length < 9 || r.length > 11) return 'Renavam inválido. Deve ter entre 9 e 11 dígitos.';
+    if (p.chassi.length !== 17) return 'Chassi deve ter exatamente 17 caracteres.';
+  }
+  if (inputType === 'dc_debito_renavam') {
+    const r = p.renavam.replace(/\D/g, '');
+    if (r.length < 9 || r.length > 11) return 'Renavam inválido. Deve ter entre 9 e 11 dígitos.';
+  }
   return null;
 }
 
-function resetFormV2() {
+function resetFormV2(showCats = true) {
   selectedSvcV2 = null;
   document.getElementById('query-form-wrap-v2').classList.add('hidden');
   document.getElementById('query-result-wrap-v2').classList.add('hidden');
   document.getElementById('form-error-v2').classList.add('hidden');
   document.getElementById('query-form-v2').reset();
+  if (showCats) {
+    document.getElementById('service-selector-wrap-v2').classList.add('hidden');
+    document.querySelectorAll('#category-grid-v2 .service-cat').forEach(el => el.classList.remove('selected'));
+  }
 }
 
 function setQueryLoadingV2(on) {
@@ -2064,7 +2172,7 @@ async function submitQueryV2(e) {
       showFormErrorV2(data.error || 'Erro ao realizar consulta.');
       return;
     }
-    showJsonResultV2(data, selectedSvcV2);
+    showJsonResultV2(data, selectedSvcV2, params);
     await Promise.all([loadStats(), loadQueries()]);
   } catch {
     showFormErrorV2('Erro de conexão. Verifique sua internet e tente novamente.');
@@ -2073,7 +2181,7 @@ async function submitQueryV2(e) {
   }
 }
 
-function showJsonResultV2(data, svc) {
+function showJsonResultV2(data, svc, params) {
   document.getElementById('query-form-wrap-v2').classList.add('hidden');
   document.getElementById('query-result-wrap-v2').classList.remove('hidden');
   document.getElementById('result-service-name-v2').textContent = svc.name;
@@ -2090,6 +2198,63 @@ function showJsonResultV2(data, svc) {
   document.getElementById('result-json-raw-v2').textContent = JSON.stringify(result, null, 2);
   document.getElementById('query-result-wrap-v2').scrollIntoView({ behavior:'smooth' });
   toast('Consulta concluída com sucesso!');
+
+  lastResultV2 = { svc, result, charged: data.charged, params: params || {}, ts: new Date() };
+}
+
+// Abre uma janela limpa (sem sidebar/menu) só com os dados da consulta e chama
+// o print do navegador — o usuário escolhe "Salvar como PDF" ou impressora física.
+function printResultV2() {
+  if (!lastResultV2) return;
+  const { svc, result, charged, params, ts } = lastResultV2;
+  const fields = flattenObj(result, '', 3);
+  const inputSummary = Object.entries(params)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join(' · ');
+
+  const rows = fields.map(([k, v]) => `
+    <tr><td>${escapeHtml(k)}</td><td>${escapeHtml(v)}</td></tr>`).join('');
+
+  const win = window.open('', '_blank', 'width=800,height=900');
+  if (!win) { toast('Habilite pop-ups para imprimir.', 'error'); return; }
+  win.document.write(`
+    <!DOCTYPE html>
+    <html lang="pt-BR">
+    <head>
+      <meta charset="UTF-8">
+      <title>${escapeHtml(svc.name)} — Consulta</title>
+      <style>
+        body { font-family: Arial, Helvetica, sans-serif; color:#111827; padding:32px; }
+        h1 { font-size:18px; margin:0 0 4px; }
+        .meta { color:#6b7280; font-size:12px; margin-bottom:20px; }
+        .meta span { display:block; }
+        table { width:100%; border-collapse:collapse; font-size:13px; }
+        td { padding:8px 10px; border-bottom:1px solid #e5e7eb; vertical-align:top; }
+        td:first-child { font-weight:600; color:#374151; width:38%; text-transform:uppercase; font-size:11px; letter-spacing:.03em; }
+        .footer { margin-top:24px; font-size:11px; color:#9ca3af; }
+        @media print { body { padding:12mm; } }
+      </style>
+    </head>
+    <body>
+      <h1>${escapeHtml(svc.name)}</h1>
+      <div class="meta">
+        <span>Consulta em: ${ts.toLocaleString('pt-BR')}</span>
+        ${inputSummary ? `<span>Parâmetros: ${escapeHtml(inputSummary)}</span>` : ''}
+        <span>Valor debitado: ${fmt(charged)}</span>
+      </div>
+      <table><tbody>${rows}</tbody></table>
+      <div class="footer">DESPACHANTES CONSULTAS — Opção 2 Nova Consulta (Datacube)</div>
+    </body>
+    </html>`);
+  win.document.close();
+  win.focus();
+  win.onload = () => win.print();
+  setTimeout(() => win.print(), 300);
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
 
 // ── Perfil ─────────────────────────────────────────────────────────────────────
