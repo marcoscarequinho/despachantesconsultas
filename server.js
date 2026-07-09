@@ -333,6 +333,14 @@ const SERVICES_V2 = [
   { id:'dc-cadastro-municipios-serpro',name:'Municípios - Código Serpro',group:'Cadastros', basePrice:0.391, inputType:'dc_uf',       icon:'🗂️', dcPath:'/demografia/municipios-serpro' },
   { id:'dc-cadastro-municipios-ibge', name:'Municípios - Código IBGE',  group:'Cadastros', basePrice:0.391, inputType:'dc_uf',       icon:'🗂️', dcPath:'/demografia/municipios-ibge' },
   { id:'dc-cadastro-qrcode',          name:'Decodificar Documento (QRCode)', group:'Cadastros', basePrice:0.308, inputType:'dc_qrcode', icon:'🗂️', dcPath:'/documentos/decodificar' },
+
+  // ── Orgãos — preços com o mesmo MARKUP (40%) do resto do sistema ────────────
+  { id:'dc-orgaos-sintegra',        name:'SINTEGRA - Nacional',            group:'Orgãos', basePrice:0.391, inputType:'dc_sintegra',           icon:'🏢', dcPath:'/orgaos/sintegra' },
+  { id:'dc-orgaos-nfe',             name:'Consulta NFe',                   group:'Orgãos', basePrice:0.391, inputType:'dc_nfe',                icon:'🏢', dcPath:'/orgaos/nfe' },
+  { id:'dc-orgaos-suframa',         name:'SUFRAMA - Nacional',             group:'Orgãos', basePrice:0.378, inputType:'dc_cnpj',               icon:'🏢', dcPath:'/orgaos/suframa' },
+  { id:'dc-orgaos-situacao-cpf',    name:'Situação do CPF na Receita Federal', group:'Orgãos', basePrice:0.383, inputType:'dc_cnh_cpf_nascimento', icon:'🏢', dcPath:'/pessoas/situacao' },
+  { id:'dc-orgaos-situacao-cnpj',   name:'Situação do CNPJ na Receita Federal', group:'Orgãos', basePrice:0.391, inputType:'dc_cnpj',           icon:'🏢', dcPath:'/empresas/situacao' },
+  { id:'dc-orgaos-mandados-cnj',    name:'Mandados de Prisão (CNJ)',       group:'Orgãos', basePrice:0.382, inputType:'dc_cpf',                icon:'🏢', dcPath:'/orgaos/mandados_cnj' },
 ];
 
 // Conexão com o banco Neon
@@ -1790,6 +1798,26 @@ app.post('/api/query-v2', requireAuth, async (req, res) => {
         if (!image_base64) return res.status(400).json({ error: 'Imagem em base64 é obrigatória.' });
         form.set('image_base64', image_base64);
         form.set('verify_signature', verify_signature);
+        break;
+      }
+      case 'dc_sintegra': {
+        const cnpj_ie = (params?.cnpj_ie || '').trim();
+        const tipo = (params?.tipo || '').trim().toUpperCase();
+        const uf = (params?.uf || '').trim().toUpperCase();
+        if (!cnpj_ie) return res.status(400).json({ error: 'CNPJ ou IE é obrigatório.' });
+        if (tipo !== 'CNPJ' && tipo !== 'IE') return res.status(400).json({ error: 'Tipo inválido. Deve ser CNPJ ou IE.' });
+        if (tipo === 'IE' && uf.length !== 2) return res.status(400).json({ error: 'UF é obrigatória e deve ter 2 letras quando o tipo for IE.' });
+        form.set('cnpj_ie', cnpj_ie);
+        form.set('tipo', tipo);
+        if (uf) form.set('uf', uf);
+        break;
+      }
+      case 'dc_nfe': {
+        const chave = (params?.chave || '').trim();
+        const baixarBoletos = (params?.baixarBoletos || '').trim();
+        if (!chave) return res.status(400).json({ error: 'Chave da NFe é obrigatória.' });
+        form.set('chave', chave);
+        if (baixarBoletos) form.set('baixarBoletos', baixarBoletos);
         break;
       }
       default:

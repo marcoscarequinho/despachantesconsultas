@@ -1930,6 +1930,8 @@ function inputTypeLabelV2(t) {
     dc_telefone:          'DDD + Número',
     dc_uf:                'UF',
     dc_qrcode:            'Imagem QRCode (base64)',
+    dc_sintegra:          'CNPJ/IE + Tipo + UF',
+    dc_nfe:               'Chave da NFe',
   };
   return labels[t] || '';
 }
@@ -1944,6 +1946,7 @@ function buildCategoryGridV2() {
     'Divida Ativa':        { icon:'⚖️', color:'bg-amber-50 border-amber-200' },
     'CNH':                 { icon:'🪪', color:'bg-rose-50 border-rose-200' },
     'Cadastros':           { icon:'🗂️', color:'bg-indigo-50 border-indigo-200' },
+    'Orgãos':              { icon:'🏢', color:'bg-cyan-50 border-cyan-200' },
   };
 
   document.getElementById('category-grid-v2').innerHTML = cats.map(cat => {
@@ -2128,6 +2131,28 @@ function renderFormFieldsV2(inputType) {
         <textarea id="f2-image_base64" class="input-field" rows="4" placeholder="Cole aqui o conteúdo base64 da imagem do QRCode" required></textarea>
       </div>
       ${field('verify_signature', 'Verificar Assinatura (1 ou 0)', 'text', '1')}`,
+    dc_sintegra: `
+      ${field('cnpj_ie', 'CNPJ ou Inscrição Estadual', 'text', '00.000.000/0001-00')}
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="label">Tipo <span class="text-red-500">*</span></label>
+          <select id="f2-tipo" class="input-field" required>
+            <option value="">Selecione...</option>
+            <option value="CNPJ">CNPJ</option>
+            <option value="IE">IE</option>
+          </select>
+        </div>
+        ${field('uf', 'UF (obrigatório para IE)', 'text', 'SP', false, 'maxlength="2"')}
+      </div>`,
+    dc_nfe: `
+      ${field('chave', 'Chave de Acesso da NFe', 'text', '44 dígitos da chave')}
+      <div>
+        <label class="label">Baixar Boletos</label>
+        <select id="f2-baixarBoletos" class="input-field">
+          <option value="">Não</option>
+          <option value="true">Sim</option>
+        </select>
+      </div>`,
   };
 
   document.getElementById('form-fields-v2').innerHTML =
@@ -2163,6 +2188,8 @@ function buildParamsV2(inputType) {
   if (inputType === 'dc_telefone') return { ddd: g('ddd'), numero: g('numero') };
   if (inputType === 'dc_uf') return { uf: g('uf') };
   if (inputType === 'dc_qrcode') return { image_base64: g('image_base64'), verify_signature: g('verify_signature') || '1' };
+  if (inputType === 'dc_sintegra') return { cnpj_ie: g('cnpj_ie'), tipo: g('tipo'), uf: g('uf') };
+  if (inputType === 'dc_nfe') return { chave: g('chave'), baixarBoletos: g('baixarBoletos') };
   return {};
 }
 
@@ -2283,6 +2310,13 @@ function validateParamsV2(inputType, p) {
     return 'UF inválida. Informe a sigla com 2 letras.';
   if (inputType === 'dc_qrcode' && !p.image_base64)
     return 'Informe a imagem em base64 do QRCode.';
+  if (inputType === 'dc_sintegra') {
+    if (!p.cnpj_ie) return 'Informe o CNPJ ou a Inscrição Estadual.';
+    if (p.tipo !== 'CNPJ' && p.tipo !== 'IE') return 'Selecione o tipo: CNPJ ou IE.';
+    if (p.tipo === 'IE' && p.uf.length !== 2) return 'UF é obrigatória e deve ter 2 letras quando o tipo for IE.';
+  }
+  if (inputType === 'dc_nfe' && !p.chave)
+    return 'Informe a chave de acesso da NFe.';
   return null;
 }
 
