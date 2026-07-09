@@ -130,8 +130,6 @@ const SERVICES = [
   { id:'consultar-cnh',          name:'Consultar CNH',              group:'Consultas Básicas', basePrice:11.43,  inputType:'cpfcnpj',     icon:'🪪' },
   // ── Débitos e Documentação ──
   { id:'consulta-debitos-portal',          name:'Consulta de Débitos',          group:'Débitos e Documentação', basePrice:1.0714, inputType:'placa',       icon:'💳' },
-  { id:'consultar-debito',                name:'Consulta Débito (PDF)',        group:'Débitos e Documentação', basePrice:11.99, inputType:'placa',        icon:'💳' },
-  { id:'consultar-debito-api',            name:'Débitos (JSON)',               group:'Débitos e Documentação', basePrice:11.99, inputType:'placa',        icon:'💳' },
   { id:'consultar-debito-boletos-json',   name:'Emissão de boleto + Multas',   group:'Débitos e Documentação', basePrice:20.00, inputType:'placa',        icon:'🧾' },
   { id:'consultar-licenciamento',         name:'Licenciamento + BIN',          group:'Débitos e Documentação', basePrice:10.00, inputType:'placa',        icon:'📋' },
   { id:'consultar-gravame',               name:'Consulta Gravame',             group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa',        icon:'🏦' },
@@ -141,7 +139,6 @@ const SERVICES = [
   { id:'consultar-atpve-v1',             name:'Reemissão ATPV-e (Placa)',     group:'Débitos e Documentação', basePrice:13.50, inputType:'placa_renavam', icon:'📄' },
   { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:25.00, inputType:'placa',        icon:'🔢' },
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa_renavam',icon:'📝' },
-  { id:'dados-veiculares-debitos',        name:'Dados Veiculares Básico + Débitos + Gravame', group:'Débitos e Documentação', basePrice:1.786, inputType:'dados_veiculares_uf', icon:'🔎' },
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -1222,17 +1219,6 @@ app.post('/api/query', requireAuth, async (req, res) => {
       if (!Number.isInteger(idMotivo) || idMotivo <= 0) return res.status(400).json({ error: 'Informe o motivo do cancelamento.' });
       body = { id, protocolo, id_motivo_cancelamento: idMotivo };
     }
-    // Dados Veiculares Básico + Débitos + Gravame (autocrlv.com.br)
-    if (serviceId === 'dados-veiculares-debitos') {
-      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
-      const uf    = (params?.uf    || '').toUpperCase().replace(/\s/g, '');
-      if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
-      if (!uf)              return res.status(400).json({ error: 'Selecione o estado (UF).' });
-      const qp = new URLSearchParams({ chaveAcesso: AUTOCRLV_KEY, uf, placa });
-      apiUrl = `https://autocrlv.com.br/api/v1/dados_veiculares_debitos.php?${qp.toString()}`;
-      method = 'GET';
-      body   = null;
-    }
     // Serviços migrados para portaldespachantes.online (placa only)
     const PORTAL_PLACA_MAP = {
       'consulta-debitos-portal':  'consultar-debito-api',
@@ -1247,10 +1233,6 @@ app.post('/api/query', requireAuth, async (req, res) => {
       apiUrl = `https://portaldespachantes.online/${PORTAL_PLACA_MAP[serviceId]}`;
       method = 'POST';
       body   = { placa };
-    }
-    // Débitos JSON → endpoint diferente na nova API
-    if (serviceId === 'consultar-debito-api') {
-      apiUrl = `${BASE_API_URL}/consultar-debito-boletos-json`;
     }
     // ATPV-e por chassi
     if (serviceId === 'consultar-atpve') {
@@ -1308,8 +1290,6 @@ app.post('/api/query', requireAuth, async (req, res) => {
     let fetchHeaders;
     if (DEBITO_UF_SVCS.includes(serviceId) || serviceId === 'debito-uf') {
       fetchHeaders = {};
-    } else if (serviceId === 'dados-veiculares-debitos') {
-      fetchHeaders = { 'Authorization': `Bearer ${AUTOCRLV_KEY}` };
     } else if (apiUrl.startsWith('https://autocrlv.com.br/cliente/api_integracao_crlv_agendado')) {
       fetchHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AUTOCRLV_KEY}` };
     } else if (PORTAL_PLACA_MAP[serviceId]) {
@@ -1369,18 +1349,8 @@ app.post('/api/query', requireAuth, async (req, res) => {
       }
     }
 
-    // Dados Veiculares Básico retorna HTML — captura para servir via /api/html/:token
+    // Serviços que retornam HTML — capturado para servir via /api/html/:token
     let htmlBuf = null;
-    if (serviceId === 'dados-veiculares-debitos') {
-      if (ct.includes('text/html') && bodyBuffer.length > 100) {
-        htmlBuf = bodyBuffer;
-      } else {
-        let parsed; try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
-        const errMsg = parsed ? extractApiErrorMsg(parsed) : (bodyStr.slice(0, 200) || 'Resposta inválida da API.');
-        console.error(`[dados-veiculares-debitos] inesperado: ${errMsg}`);
-        return res.status(422).json({ error: errMsg });
-      }
-    }
 
     // Serviços genéricos (não-PDF, não-HTML): recusa cobrar se a API não retornou
     // nenhum dado relevante (corpo vazio, JSON vazio/nulo ou com indicador de falha).

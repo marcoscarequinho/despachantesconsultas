@@ -1134,7 +1134,6 @@ function inputTypeLabel(t) {
     debito_doc:          'Entrada: Placa + Renavam + CPF/Documento',
     debito_chassi:       'Entrada: Placa + Renavam + Chassi',
     debito_uf_select:    'Entrada: Placa + Renavam + Estado',
-    dados_veiculares_uf: 'Entrada: Placa + Estado',
   };
   return map[t] || t;
 }
@@ -1460,40 +1459,6 @@ function renderFormFields(inputType, svc) {
       field('chassi', 'Chassi (17 caracteres)', 'text', '9BWZZZ377VT004251') +
       `<p class="text-xs text-amber-600 mt-1">⚠️ Informe o chassi exatamente como consta no documento (17 caracteres, sem espaços).</p>`,
 
-    dados_veiculares_uf: placaField + `
-      <div>
-        <label class="label">Estado (UF) <span class="text-red-500">*</span></label>
-        <select id="f-uf" class="input-field" required>
-          <option value="">Selecione o estado...</option>
-          <option value="AC">AC — Acre</option>
-          <option value="AL">AL — Alagoas</option>
-          <option value="AM">AM — Amazonas</option>
-          <option value="AP">AP — Amapá</option>
-          <option value="BA">BA — Bahia</option>
-          <option value="CE">CE — Ceará</option>
-          <option value="DF">DF — Distrito Federal</option>
-          <option value="ES">ES — Espírito Santo</option>
-          <option value="GO">GO — Goiás</option>
-          <option value="MA">MA — Maranhão</option>
-          <option value="MG">MG — Minas Gerais</option>
-          <option value="MT">MT — Mato Grosso</option>
-          <option value="PA">PA — Pará</option>
-          <option value="PB">PB — Paraíba</option>
-          <option value="PE">PE — Pernambuco</option>
-          <option value="PI">PI — Piauí</option>
-          <option value="PR">PR — Paraná</option>
-          <option value="RJ">RJ — Rio de Janeiro</option>
-          <option value="RN">RN — Rio Grande do Norte</option>
-          <option value="RO">RO — Rondônia</option>
-          <option value="RR">RR — Roraima</option>
-          <option value="RS">RS — Rio Grande do Sul</option>
-          <option value="SC">SC — Santa Catarina</option>
-          <option value="SE">SE — Sergipe</option>
-          <option value="SP">SP — São Paulo</option>
-          <option value="TO">TO — Tocantins</option>
-        </select>
-      </div>`,
-
     debito_uf_select: placaField + renavamField + `
       <div>
         <label class="label">Estado (UF) <span class="text-red-500">*</span></label>
@@ -1692,7 +1657,6 @@ function buildParams(inputType) {
   if (inputType === 'placa')             return { placa: g('placa') };
   if (inputType === 'placa_uf')          return { placa: g('placa'), uf: g('uf') };
   if (inputType === 'placa_uf_select')   return { placa: g('placa'), uf: g('uf') };
-  if (inputType === 'dados_veiculares_uf') return { placa: g('placa'), uf: g('uf') };
   if (inputType === 'placa_renavam_cpfcnpj_uf_select')
     return { placa: g('placa'), renavam: g('renavam'), cpf_cnpj: cd(g('cpfcnpj')), uf: g('uf') };
   if (inputType === 'motor')             return { motor: g('motor') };
