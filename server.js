@@ -306,6 +306,21 @@ const SERVICES_V2 = [
   { id:'dc-dividaativa-sp', name:'Dívida Ativa - São Paulo',        group:'Divida Ativa', basePrice:0.392, inputType:'dc_renavam', icon:'⚖️', dcPath:'/dividaativa/sp' },
   { id:'dc-dividaativa-df', name:'Dívida Ativa - Distrito Federal', group:'Divida Ativa', basePrice:0.377, inputType:'dc_debito',  icon:'⚖️', dcPath:'/dividaativa/df' },
   { id:'dc-dividaativa-rj', name:'Dívida Ativa - Rio de Janeiro',   group:'Divida Ativa', basePrice:0.391, inputType:'dc_renavam', icon:'⚖️', dcPath:'/dividaativa/rj' },
+
+  // ── CNH — preços com o mesmo MARKUP (40%) do resto do sistema ───────────────
+  { id:'dc-cnh-ac', name:'CNH - Acre',                 group:'CNH', basePrice:0.498, inputType:'dc_cnh_nome_cpf',      icon:'🪪', dcPath:'/cnh/ac-completa' },
+  { id:'dc-cnh-al', name:'CNH - Alagoas',               group:'CNH', basePrice:0.567, inputType:'dc_cnh_al',            icon:'🪪', dcPath:'/cnh/al-completa' },
+  { id:'dc-cnh-ce', name:'CNH - Ceará',                 group:'CNH', basePrice:0.498, inputType:'dc_cnh_cpf_formulario',icon:'🪪', dcPath:'/cnh/ce-completa' },
+  { id:'dc-cnh-go', name:'CNH - Goiás',                 group:'CNH', basePrice:0.498, inputType:'dc_cnh_only',          icon:'🪪', dcPath:'/cnh/go-completa' },
+  { id:'dc-cnh-ma', name:'CNH - Maranhão',              group:'CNH', basePrice:0.498, inputType:'dc_cnh_cpf_cnh',       icon:'🪪', dcPath:'/cnh/ma-completa' },
+  { id:'dc-cnh-mt', name:'CNH - Mato Grosso',           group:'CNH', basePrice:0.828, inputType:'dc_cnh_cpf_renach',    icon:'🪪', dcPath:'/cnh/mt-completa' },
+  { id:'dc-cnh-ms', name:'CNH - Mato Grosso do Sul',    group:'CNH', basePrice:0.498, inputType:'dc_cnh_cpf_cnh',       icon:'🪪', dcPath:'/cnh/ms-completa' },
+  { id:'dc-cnh-pa', name:'CNH - Pará',                  group:'CNH', basePrice:0.783, inputType:'dc_cnh_cpf_cnh',       icon:'🪪', dcPath:'/cnh/pa-completa' },
+  { id:'dc-cnh-pr', name:'CNH - Paraná',                group:'CNH', basePrice:0.744, inputType:'dc_cnh_pr',            icon:'🪪', dcPath:'/cnh/pr-completa' },
+  { id:'dc-cnh-rj', name:'CNH - Rio de Janeiro',        group:'CNH', basePrice:0.498, inputType:'dc_cnh_cpf_cnh',       icon:'🪪', dcPath:'/cnh/rj-completa' },
+  { id:'dc-cnh-rn', name:'CNH - Rio Grande do Norte',   group:'CNH', basePrice:0.498, inputType:'dc_cnh_cpf_cnh',       icon:'🪪', dcPath:'/cnh/rn-completa' },
+  { id:'dc-cnh-se', name:'CNH - Sergipe',               group:'CNH', basePrice:0.498, inputType:'dc_cnh_se',            icon:'🪪', dcPath:'/cnh/se-completa' },
+  { id:'dc-cnh-to', name:'CNH - Tocantins',             group:'CNH', basePrice:0.588, inputType:'dc_cnh_cpf_nascimento',icon:'🪪', dcPath:'/cnh/to-completa' },
 ];
 
 // Conexão com o banco Neon
@@ -1650,6 +1665,96 @@ app.post('/api/query-v2', requireAuth, async (req, res) => {
         const cnpj = (params?.cnpj || '').replace(/\D/g, '');
         if (cnpj.length !== 14) return res.status(400).json({ error: 'CNPJ inválido. Deve ter 14 dígitos.' });
         form.set('cnpj', cnpj);
+        break;
+      }
+      case 'dc_cnh_nome_cpf': {
+        const nome = (params?.nome || '').trim();
+        const cpf = (params?.cpf || '').replace(/\D/g, '');
+        if (!nome) return res.status(400).json({ error: 'Nome é obrigatório.' });
+        if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+        form.set('nome', nome);
+        form.set('cpf', cpf);
+        break;
+      }
+      case 'dc_cnh_al': {
+        const cpf = (params?.cpf || '').replace(/\D/g, '');
+        const data_nascimento = (params?.data_nascimento || '').trim();
+        const cod_municipio_nascimento = (params?.cod_municipio_nascimento || '').trim();
+        const uf_nascimento = (params?.uf_nascimento || '').trim();
+        if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+        if (!data_nascimento) return res.status(400).json({ error: 'Data de nascimento é obrigatória.' });
+        if (!cod_municipio_nascimento) return res.status(400).json({ error: 'Código do município de nascimento é obrigatório.' });
+        if (!uf_nascimento) return res.status(400).json({ error: 'UF de nascimento é obrigatória.' });
+        form.set('cpf', cpf);
+        form.set('data_nascimento', data_nascimento);
+        form.set('cod_municipio_nascimento', cod_municipio_nascimento);
+        form.set('uf_nascimento', uf_nascimento);
+        break;
+      }
+      case 'dc_cnh_cpf_formulario': {
+        const cpf = (params?.cpf || '').replace(/\D/g, '');
+        const formulario = (params?.formulario || '').trim();
+        if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+        if (!formulario) return res.status(400).json({ error: 'Número do formulário é obrigatório.' });
+        form.set('cpf', cpf);
+        form.set('formulario', formulario);
+        break;
+      }
+      case 'dc_cnh_only': {
+        const cnh = (params?.cnh || '').trim();
+        if (!cnh) return res.status(400).json({ error: 'Número da CNH é obrigatório.' });
+        form.set('cnh', cnh);
+        break;
+      }
+      case 'dc_cnh_cpf_cnh': {
+        const cpf = (params?.cpf || '').replace(/\D/g, '');
+        const cnh = (params?.cnh || '').trim();
+        if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+        if (!cnh) return res.status(400).json({ error: 'Número da CNH é obrigatório.' });
+        form.set('cpf', cpf);
+        form.set('cnh', cnh);
+        break;
+      }
+      case 'dc_cnh_cpf_renach': {
+        const cpf = (params?.cpf || '').replace(/\D/g, '');
+        const renach = (params?.renach || '').trim();
+        if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+        if (!renach) return res.status(400).json({ error: 'Número do RENACH é obrigatório.' });
+        form.set('cpf', cpf);
+        form.set('renach', renach);
+        break;
+      }
+      case 'dc_cnh_pr': {
+        const cpf = (params?.cpf || '').replace(/\D/g, '');
+        const cnh = (params?.cnh || '').trim();
+        const data_validade_cnh = (params?.data_validade_cnh || '').trim();
+        if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+        if (!cnh) return res.status(400).json({ error: 'Número da CNH é obrigatório.' });
+        if (!data_validade_cnh) return res.status(400).json({ error: 'Data de validade da CNH é obrigatória.' });
+        form.set('cpf', cpf);
+        form.set('cnh', cnh);
+        form.set('data_validade_cnh', data_validade_cnh);
+        break;
+      }
+      case 'dc_cnh_se': {
+        const cnh = (params?.cnh || '').trim();
+        const registro = (params?.registro || '').trim();
+        const data_nascimento = (params?.data_nascimento || '').trim();
+        if (!cnh) return res.status(400).json({ error: 'Número da CNH é obrigatório.' });
+        if (!registro) return res.status(400).json({ error: 'Registro é obrigatório.' });
+        if (!data_nascimento) return res.status(400).json({ error: 'Data de nascimento é obrigatória.' });
+        form.set('cnh', cnh);
+        form.set('registro', registro);
+        form.set('data_nascimento', data_nascimento);
+        break;
+      }
+      case 'dc_cnh_cpf_nascimento': {
+        const cpf = (params?.cpf || '').replace(/\D/g, '');
+        const data_nascimento = (params?.data_nascimento || '').trim();
+        if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+        if (!data_nascimento) return res.status(400).json({ error: 'Data de nascimento é obrigatória.' });
+        form.set('cpf', cpf);
+        form.set('data_nascimento', data_nascimento);
         break;
       }
       default:

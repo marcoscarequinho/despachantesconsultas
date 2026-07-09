@@ -1918,6 +1918,15 @@ function inputTypeLabelV2(t) {
     dc_debito_renavam:'Renavam',
     dc_cpf:            'CPF',
     dc_cnpj:           'CNPJ',
+    dc_cnh_nome_cpf:      'Nome + CPF',
+    dc_cnh_al:            'CPF + Nascimento + Município + UF',
+    dc_cnh_cpf_formulario:'CPF + Formulário',
+    dc_cnh_only:          'CNH',
+    dc_cnh_cpf_cnh:       'CPF + CNH',
+    dc_cnh_cpf_renach:    'CPF + Renach',
+    dc_cnh_pr:            'CPF + CNH + Validade da CNH',
+    dc_cnh_se:            'CNH + Registro + Nascimento',
+    dc_cnh_cpf_nascimento:'CPF + Nascimento',
   };
   return labels[t] || '';
 }
@@ -1930,6 +1939,7 @@ function buildCategoryGridV2() {
     'Débitos por Estado':  { icon:'🏛️', color:'bg-teal-50 border-teal-200' },
     'Consultar Crédito':   { icon:'💳', color:'bg-purple-50 border-purple-200' },
     'Divida Ativa':        { icon:'⚖️', color:'bg-amber-50 border-amber-200' },
+    'CNH':                 { icon:'🪪', color:'bg-rose-50 border-rose-200' },
   };
 
   document.getElementById('category-grid-v2').innerHTML = cats.map(cat => {
@@ -2059,6 +2069,49 @@ function renderFormFieldsV2(inputType) {
     dc_debito_renavam: field('renavam', 'Renavam', 'text', '12345678901'),
     dc_cpf:  field('cpf', 'CPF', 'text', '000.000.000-00'),
     dc_cnpj: field('cnpj', 'CNPJ', 'text', '00.000.000/0001-00'),
+    dc_cnh_nome_cpf: `
+      ${field('nome', 'Nome Completo', 'text', 'Nome do condutor')}
+      ${field('cpf', 'CPF', 'text', '000.000.000-00')}`,
+    dc_cnh_al: `
+      ${field('cpf', 'CPF', 'text', '000.000.000-00')}
+      <div class="grid grid-cols-3 gap-3">
+        ${field('data_nascimento', 'Data Nascimento', 'text', 'DD/MM/AAAA')}
+        ${field('cod_municipio_nascimento', 'Cód. Município Nasc.', 'text', '1234')}
+        ${field('uf_nascimento', 'UF Nascimento', 'text', 'AL', true, 'maxlength="2"')}
+      </div>`,
+    dc_cnh_cpf_formulario: `
+      <div class="grid grid-cols-2 gap-3">
+        ${field('cpf', 'CPF', 'text', '000.000.000-00')}
+        ${field('formulario', 'Formulário', 'text', '1234567890')}
+      </div>`,
+    dc_cnh_only: field('cnh', 'Número da CNH', 'text', '12345678901'),
+    dc_cnh_cpf_cnh: `
+      <div class="grid grid-cols-2 gap-3">
+        ${field('cpf', 'CPF', 'text', '000.000.000-00')}
+        ${field('cnh', 'Número da CNH', 'text', '12345678901')}
+      </div>`,
+    dc_cnh_cpf_renach: `
+      <div class="grid grid-cols-2 gap-3">
+        ${field('cpf', 'CPF', 'text', '000.000.000-00')}
+        ${field('renach', 'RENACH', 'text', '1234567890')}
+      </div>`,
+    dc_cnh_pr: `
+      ${field('cpf', 'CPF', 'text', '000.000.000-00')}
+      <div class="grid grid-cols-2 gap-3">
+        ${field('cnh', 'Número da CNH', 'text', '12345678901')}
+        ${field('data_validade_cnh', 'Validade da CNH', 'text', 'DD/MM/AAAA')}
+      </div>`,
+    dc_cnh_se: `
+      ${field('cnh', 'Número da CNH', 'text', '12345678901')}
+      <div class="grid grid-cols-2 gap-3">
+        ${field('registro', 'Registro', 'text', '1234567890')}
+        ${field('data_nascimento', 'Data Nascimento', 'text', 'DD/MM/AAAA')}
+      </div>`,
+    dc_cnh_cpf_nascimento: `
+      <div class="grid grid-cols-2 gap-3">
+        ${field('cpf', 'CPF', 'text', '000.000.000-00')}
+        ${field('data_nascimento', 'Data Nascimento', 'text', 'DD/MM/AAAA')}
+      </div>`,
   };
 
   document.getElementById('form-fields-v2').innerHTML =
@@ -2082,6 +2135,15 @@ function buildParamsV2(inputType) {
   if (inputType === 'dc_debito_renavam') return { renavam: g('renavam') };
   if (inputType === 'dc_cpf')  return { cpf: g('cpf') };
   if (inputType === 'dc_cnpj') return { cnpj: g('cnpj') };
+  if (inputType === 'dc_cnh_nome_cpf') return { nome: g('nome'), cpf: g('cpf') };
+  if (inputType === 'dc_cnh_al') return { cpf: g('cpf'), data_nascimento: g('data_nascimento'), cod_municipio_nascimento: g('cod_municipio_nascimento'), uf_nascimento: g('uf_nascimento') };
+  if (inputType === 'dc_cnh_cpf_formulario') return { cpf: g('cpf'), formulario: g('formulario') };
+  if (inputType === 'dc_cnh_only') return { cnh: g('cnh') };
+  if (inputType === 'dc_cnh_cpf_cnh') return { cpf: g('cpf'), cnh: g('cnh') };
+  if (inputType === 'dc_cnh_cpf_renach') return { cpf: g('cpf'), renach: g('renach') };
+  if (inputType === 'dc_cnh_pr') return { cpf: g('cpf'), cnh: g('cnh'), data_validade_cnh: g('data_validade_cnh') };
+  if (inputType === 'dc_cnh_se') return { cnh: g('cnh'), registro: g('registro'), data_nascimento: g('data_nascimento') };
+  if (inputType === 'dc_cnh_cpf_nascimento') return { cpf: g('cpf'), data_nascimento: g('data_nascimento') };
   return {};
 }
 
@@ -2147,6 +2209,51 @@ function validateParamsV2(inputType, p) {
   if (inputType === 'dc_cnpj') {
     const c = p.cnpj.replace(/\D/g, '');
     if (c.length !== 14) return 'CNPJ inválido. Deve ter 14 dígitos.';
+  }
+  if (inputType === 'dc_cnh_nome_cpf') {
+    if (!p.nome) return 'Informe o nome completo.';
+    const c = p.cpf.replace(/\D/g, '');
+    if (c.length !== 11) return 'CPF inválido. Deve ter 11 dígitos.';
+  }
+  if (inputType === 'dc_cnh_al') {
+    const c = p.cpf.replace(/\D/g, '');
+    if (c.length !== 11) return 'CPF inválido. Deve ter 11 dígitos.';
+    if (!p.data_nascimento) return 'Informe a data de nascimento.';
+    if (!p.cod_municipio_nascimento) return 'Informe o código do município de nascimento.';
+    if (!p.uf_nascimento) return 'Informe a UF de nascimento.';
+  }
+  if (inputType === 'dc_cnh_cpf_formulario') {
+    const c = p.cpf.replace(/\D/g, '');
+    if (c.length !== 11) return 'CPF inválido. Deve ter 11 dígitos.';
+    if (!p.formulario) return 'Informe o número do formulário.';
+  }
+  if (inputType === 'dc_cnh_only' && !p.cnh)
+    return 'Informe o número da CNH.';
+  if (inputType === 'dc_cnh_cpf_cnh') {
+    const c = p.cpf.replace(/\D/g, '');
+    if (c.length !== 11) return 'CPF inválido. Deve ter 11 dígitos.';
+    if (!p.cnh) return 'Informe o número da CNH.';
+  }
+  if (inputType === 'dc_cnh_cpf_renach') {
+    const c = p.cpf.replace(/\D/g, '');
+    if (c.length !== 11) return 'CPF inválido. Deve ter 11 dígitos.';
+    if (!p.renach) return 'Informe o número do RENACH.';
+  }
+  if (inputType === 'dc_cnh_pr') {
+    const c = p.cpf.replace(/\D/g, '');
+    if (c.length !== 11) return 'CPF inválido. Deve ter 11 dígitos.';
+    if (!p.cnh) return 'Informe o número da CNH.';
+    if (!p.data_validade_cnh) return 'Informe a data de validade da CNH.';
+  }
+  if (inputType === 'dc_cnh_se') {
+    if (!p.cnh) return 'Informe o número da CNH.';
+    if (!p.registro) return 'Informe o registro.';
+    if (!p.data_nascimento) return 'Informe a data de nascimento.';
+  }
+  if (inputType === 'dc_cnh_cpf_nascimento') {
+    const c = p.cpf.replace(/\D/g, '');
+    if (c.length !== 11) return 'CPF inválido. Deve ter 11 dígitos.';
+    if (!p.data_nascimento) return 'Informe a data de nascimento.';
   }
   return null;
 }
