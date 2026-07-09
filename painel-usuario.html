@@ -1932,6 +1932,8 @@ function inputTypeLabelV2(t) {
     dc_qrcode:            'Imagem QRCode (base64)',
     dc_sintegra:          'CNPJ/IE + Tipo + UF',
     dc_nfe:               'Chave da NFe',
+    dc_comunicado_venda:          'Dados do Veículo, Vendedor, Comprador e Venda',
+    dc_cancelar_comunicado_venda: 'Placa + Renavam + Nº Transação + Motivo',
   };
   return labels[t] || '';
 }
@@ -1947,6 +1949,7 @@ function buildCategoryGridV2() {
     'CNH':                 { icon:'🪪', color:'bg-rose-50 border-rose-200' },
     'Cadastros':           { icon:'🗂️', color:'bg-indigo-50 border-indigo-200' },
     'Orgãos':              { icon:'🏢', color:'bg-cyan-50 border-cyan-200' },
+    'Comunicação de Venda':{ icon:'📤', color:'bg-emerald-50 border-emerald-200' },
   };
 
   document.getElementById('category-grid-v2').innerHTML = cats.map(cat => {
@@ -2153,6 +2156,72 @@ function renderFormFieldsV2(inputType) {
           <option value="true">Sim</option>
         </select>
       </div>`,
+    dc_comunicado_venda: `
+      <div class="font-semibold text-gray-700 mt-2">Veículo</div>
+      <div class="grid grid-cols-2 gap-3">
+        ${field('veiculo.placa', 'Placa', 'text', 'ABC1234')}
+        ${field('veiculo.renavam', 'Renavam', 'text', '12345678901')}
+      </div>
+      <div class="grid grid-cols-3 gap-3">
+        ${field('veiculo.ano_fabricacao', 'Ano Fabricação', 'text', '2020', false)}
+        ${field('veiculo.ano_modelo', 'Ano Modelo', 'text', '2021', false)}
+        ${field('veiculo.uf', 'UF do Veículo', 'text', 'SP', true, 'maxlength="2"')}
+      </div>
+      <div class="grid grid-cols-3 gap-3">
+        ${field('veiculo.numero_crv', 'Número CRV', 'text', '', false)}
+        ${field('veiculo.data_emissao_crv', 'Data Emissão CRV', 'text', 'DD/MM/AAAA', false)}
+        ${field('veiculo.n_via_crv', 'Nº Via CRV', 'text', '', false)}
+      </div>
+      ${field('veiculo.cod_seguranca_crv', 'Código de Segurança CRV', 'text', '', false)}
+
+      <div class="font-semibold text-gray-700 mt-2">Vendedor</div>
+      <div class="grid grid-cols-2 gap-3">
+        ${field('vendedor.nome', 'Nome do Vendedor', 'text', '')}
+        ${field('vendedor.documento', 'CPF/CNPJ do Vendedor', 'text', '000.000.000-00')}
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        ${field('vendedor.cidade', 'Cidade do Vendedor', 'text', '', false)}
+        ${field('vendedor.uf', 'UF do Vendedor', 'text', 'SP', false, 'maxlength="2"')}
+      </div>
+
+      <div class="font-semibold text-gray-700 mt-2">Comprador</div>
+      <div class="grid grid-cols-2 gap-3">
+        ${field('comprador.nome', 'Nome do Comprador', 'text', '')}
+        ${field('comprador.documento', 'CPF/CNPJ do Comprador', 'text', '000.000.000-00')}
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        ${field('comprador.endereco.cep', 'CEP', 'text', '00000-000', false)}
+        ${field('comprador.endereco.logradouro', 'Logradouro', 'text', '', false)}
+      </div>
+      <div class="grid grid-cols-3 gap-3">
+        ${field('comprador.endereco.numero', 'Número', 'text', '', false)}
+        ${field('comprador.endereco.bairro', 'Bairro', 'text', '', false)}
+        ${field('comprador.endereco.complemento', 'Complemento', 'text', '', false)}
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        ${field('comprador.endereco.cidade', 'Cidade', 'text', '', false)}
+        ${field('comprador.endereco.uf', 'UF', 'text', 'SP', false, 'maxlength="2"')}
+      </div>
+
+      <div class="font-semibold text-gray-700 mt-2">Venda</div>
+      <div class="grid grid-cols-2 gap-3">
+        ${field('venda.data', 'Data da Venda', 'text', 'DD/MM/AAAA')}
+        ${field('venda.valor', 'Valor da Venda', 'text', '0,00')}
+      </div>
+      <div>
+        <label class="label">Comprovante (PDF Base64 do ATPV-e e/ou CRV frente e verso) <span class="text-red-500">*</span></label>
+        <textarea id="f2-comprovante" class="input-field" rows="4" placeholder="Cole aqui o conteúdo base64 do comprovante" required></textarea>
+      </div>`,
+    dc_cancelar_comunicado_venda: `
+      <div class="grid grid-cols-2 gap-3">
+        ${field('placa', 'Placa', 'text', 'ABC1234')}
+        ${field('renavam', 'Renavam', 'text', '12345678901')}
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        ${field('numero_crv', 'Número CRV', 'text', '', false)}
+        ${field('num_transacao', 'Número da Transação', 'text', '')}
+      </div>
+      ${field('motivo_cancelamento', 'Motivo do Cancelamento', 'text', '')}`,
   };
 
   document.getElementById('form-fields-v2').innerHTML =
@@ -2190,6 +2259,27 @@ function buildParamsV2(inputType) {
   if (inputType === 'dc_qrcode') return { image_base64: g('image_base64'), verify_signature: g('verify_signature') || '1' };
   if (inputType === 'dc_sintegra') return { cnpj_ie: g('cnpj_ie'), tipo: g('tipo'), uf: g('uf') };
   if (inputType === 'dc_nfe') return { chave: g('chave'), baixarBoletos: g('baixarBoletos') };
+  if (inputType === 'dc_comunicado_venda') {
+    return {
+      'veiculo.placa': g('veiculo.placa'), 'veiculo.renavam': g('veiculo.renavam'),
+      'veiculo.ano_fabricacao': g('veiculo.ano_fabricacao'), 'veiculo.ano_modelo': g('veiculo.ano_modelo'),
+      'veiculo.numero_crv': g('veiculo.numero_crv'), 'veiculo.data_emissao_crv': g('veiculo.data_emissao_crv'),
+      'veiculo.n_via_crv': g('veiculo.n_via_crv'), 'veiculo.cod_seguranca_crv': g('veiculo.cod_seguranca_crv'),
+      'veiculo.uf': g('veiculo.uf'),
+      'vendedor.nome': g('vendedor.nome'), 'vendedor.documento': g('vendedor.documento'),
+      'vendedor.cidade': g('vendedor.cidade'), 'vendedor.uf': g('vendedor.uf'),
+      'comprador.nome': g('comprador.nome'), 'comprador.documento': g('comprador.documento'),
+      'comprador.endereco.cep': g('comprador.endereco.cep'), 'comprador.endereco.logradouro': g('comprador.endereco.logradouro'),
+      'comprador.endereco.numero': g('comprador.endereco.numero'), 'comprador.endereco.bairro': g('comprador.endereco.bairro'),
+      'comprador.endereco.complemento': g('comprador.endereco.complemento'), 'comprador.endereco.uf': g('comprador.endereco.uf'),
+      'comprador.endereco.cidade': g('comprador.endereco.cidade'),
+      'venda.data': g('venda.data'), 'venda.valor': g('venda.valor'),
+      comprovante: g('comprovante'),
+    };
+  }
+  if (inputType === 'dc_cancelar_comunicado_venda') {
+    return { placa: g('placa'), renavam: g('renavam'), numero_crv: g('numero_crv'), num_transacao: g('num_transacao'), motivo_cancelamento: g('motivo_cancelamento') };
+  }
   return {};
 }
 
@@ -2317,6 +2407,28 @@ function validateParamsV2(inputType, p) {
   }
   if (inputType === 'dc_nfe' && !p.chave)
     return 'Informe a chave de acesso da NFe.';
+  if (inputType === 'dc_comunicado_venda') {
+    if (p['veiculo.placa'].length < 7) return 'Placa inválida. Informe no formato ABC1D23.';
+    const r = p['veiculo.renavam'].replace(/\D/g, '');
+    if (r.length < 9 || r.length > 11) return 'Renavam inválido. Deve ter entre 9 e 11 dígitos.';
+    if (p['veiculo.uf'].length !== 2) return 'UF do veículo é obrigatória e deve ter 2 letras.';
+    if (!p['vendedor.nome']) return 'Informe o nome do vendedor.';
+    const vd = p['vendedor.documento'].replace(/\D/g, '');
+    if (vd.length !== 11 && vd.length !== 14) return 'Documento do vendedor inválido. Informe CPF ou CNPJ.';
+    if (!p['comprador.nome']) return 'Informe o nome do comprador.';
+    const cd = p['comprador.documento'].replace(/\D/g, '');
+    if (cd.length !== 11 && cd.length !== 14) return 'Documento do comprador inválido. Informe CPF ou CNPJ.';
+    if (!p['venda.data']) return 'Informe a data da venda.';
+    if (!p['venda.valor']) return 'Informe o valor da venda.';
+    if (!p.comprovante) return 'Informe o comprovante em base64.';
+  }
+  if (inputType === 'dc_cancelar_comunicado_venda') {
+    if (p.placa.length < 7) return 'Placa inválida. Informe no formato ABC1D23.';
+    const r = p.renavam.replace(/\D/g, '');
+    if (r.length < 9 || r.length > 11) return 'Renavam inválido. Deve ter entre 9 e 11 dígitos.';
+    if (!p.num_transacao) return 'Informe o número da transação.';
+    if (!p.motivo_cancelamento) return 'Informe o motivo do cancelamento.';
+  }
   return null;
 }
 

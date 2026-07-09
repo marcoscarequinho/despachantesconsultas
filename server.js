@@ -341,6 +341,10 @@ const SERVICES_V2 = [
   { id:'dc-orgaos-situacao-cpf',    name:'Situação do CPF na Receita Federal', group:'Orgãos', basePrice:0.383, inputType:'dc_cnh_cpf_nascimento', icon:'🏢', dcPath:'/pessoas/situacao' },
   { id:'dc-orgaos-situacao-cnpj',   name:'Situação do CNPJ na Receita Federal', group:'Orgãos', basePrice:0.391, inputType:'dc_cnpj',           icon:'🏢', dcPath:'/empresas/situacao' },
   { id:'dc-orgaos-mandados-cnj',    name:'Mandados de Prisão (CNJ)',       group:'Orgãos', basePrice:0.382, inputType:'dc_cpf',                icon:'🏢', dcPath:'/orgaos/mandados_cnj' },
+
+  // ── Comunicação de Venda — preços com o mesmo MARKUP (40%) do resto do sistema ──
+  { id:'dc-comunicado-venda',           name:'Comunicação de Venda',           group:'Comunicação de Venda', basePrice:39.063, inputType:'dc_comunicado_venda',           icon:'📤', dcPath:'/veiculos/comunicado_venda_v2' },
+  { id:'dc-comunicado-venda-cancelar',  name:'Cancelar Comunicação de Venda',  group:'Comunicação de Venda', basePrice:0.000,  inputType:'dc_cancelar_comunicado_venda',  icon:'📤', dcPath:'/veiculos/cancelar_comunicado_venda_v2' },
 ];
 
 // Conexão com o banco Neon
@@ -1818,6 +1822,72 @@ app.post('/api/query-v2', requireAuth, async (req, res) => {
         if (!chave) return res.status(400).json({ error: 'Chave da NFe é obrigatória.' });
         form.set('chave', chave);
         if (baixarBoletos) form.set('baixarBoletos', baixarBoletos);
+        break;
+      }
+      case 'dc_comunicado_venda': {
+        const placa = (params?.['veiculo.placa'] || '').trim();
+        const renavam = (params?.['veiculo.renavam'] || '').replace(/\D/g, '');
+        const veiculoUf = (params?.['veiculo.uf'] || '').trim().toUpperCase();
+        const vendedorNome = (params?.['vendedor.nome'] || '').trim();
+        const vendedorDocumento = (params?.['vendedor.documento'] || '').replace(/\D/g, '');
+        const compradorNome = (params?.['comprador.nome'] || '').trim();
+        const compradorDocumento = (params?.['comprador.documento'] || '').replace(/\D/g, '');
+        const vendaData = (params?.['venda.data'] || '').trim();
+        const vendaValor = (params?.['venda.valor'] || '').trim();
+        const comprovante = (params?.comprovante || '').trim();
+        if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+        if (renavam.length < 9 || renavam.length > 11) return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+        if (veiculoUf.length !== 2) return res.status(400).json({ error: 'UF do veículo é obrigatória e deve ter 2 letras.' });
+        if (!vendedorNome) return res.status(400).json({ error: 'Nome do vendedor é obrigatório.' });
+        if (vendedorDocumento.length !== 11 && vendedorDocumento.length !== 14) return res.status(400).json({ error: 'Documento do vendedor inválido. Informe CPF ou CNPJ.' });
+        if (!compradorNome) return res.status(400).json({ error: 'Nome do comprador é obrigatório.' });
+        if (compradorDocumento.length !== 11 && compradorDocumento.length !== 14) return res.status(400).json({ error: 'Documento do comprador inválido. Informe CPF ou CNPJ.' });
+        if (!vendaData) return res.status(400).json({ error: 'Data da venda é obrigatória.' });
+        if (!vendaValor) return res.status(400).json({ error: 'Valor da venda é obrigatório.' });
+        if (!comprovante) return res.status(400).json({ error: 'Comprovante (PDF Base64) é obrigatório.' });
+
+        form.set('veiculo[placa]', placa);
+        form.set('veiculo[renavam]', renavam);
+        form.set('veiculo[ano_fabricacao]', (params?.['veiculo.ano_fabricacao'] || '').trim());
+        form.set('veiculo[ano_modelo]', (params?.['veiculo.ano_modelo'] || '').trim());
+        form.set('veiculo[numero_crv]', (params?.['veiculo.numero_crv'] || '').trim());
+        form.set('veiculo[data_emissao_crv]', (params?.['veiculo.data_emissao_crv'] || '').trim());
+        form.set('veiculo[n_via_crv]', (params?.['veiculo.n_via_crv'] || '').trim());
+        form.set('veiculo[cod_seguranca_crv]', (params?.['veiculo.cod_seguranca_crv'] || '').trim());
+        form.set('veiculo[uf]', veiculoUf);
+        form.set('vendedor[nome]', vendedorNome);
+        form.set('vendedor[documento]', vendedorDocumento);
+        form.set('vendedor[cidade]', (params?.['vendedor.cidade'] || '').trim());
+        form.set('vendedor[uf]', (params?.['vendedor.uf'] || '').trim().toUpperCase());
+        form.set('comprador[nome]', compradorNome);
+        form.set('comprador[documento]', compradorDocumento);
+        form.set('comprador[endereco][cep]', (params?.['comprador.endereco.cep'] || '').replace(/\D/g, ''));
+        form.set('comprador[endereco][logradouro]', (params?.['comprador.endereco.logradouro'] || '').trim());
+        form.set('comprador[endereco][numero]', (params?.['comprador.endereco.numero'] || '').trim());
+        form.set('comprador[endereco][bairro]', (params?.['comprador.endereco.bairro'] || '').trim());
+        form.set('comprador[endereco][complemento]', (params?.['comprador.endereco.complemento'] || '').trim());
+        form.set('comprador[endereco][uf]', (params?.['comprador.endereco.uf'] || '').trim().toUpperCase());
+        form.set('comprador[endereco][cidade]', (params?.['comprador.endereco.cidade'] || '').trim());
+        form.set('venda[data]', vendaData);
+        form.set('venda[valor]', vendaValor);
+        form.set('comprovante', comprovante);
+        break;
+      }
+      case 'dc_cancelar_comunicado_venda': {
+        const placa = (params?.placa || '').trim();
+        const renavam = (params?.renavam || '').replace(/\D/g, '');
+        const numero_crv = (params?.numero_crv || '').trim();
+        const num_transacao = (params?.num_transacao || '').trim();
+        const motivo_cancelamento = (params?.motivo_cancelamento || '').trim();
+        if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+        if (renavam.length < 9 || renavam.length > 11) return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+        if (!num_transacao) return res.status(400).json({ error: 'Número da transação é obrigatório.' });
+        if (!motivo_cancelamento) return res.status(400).json({ error: 'Motivo do cancelamento é obrigatório.' });
+        form.set('placa', placa);
+        form.set('renavam', renavam);
+        if (numero_crv) form.set('numero_crv', numero_crv);
+        form.set('num_transacao', num_transacao);
+        form.set('motivo_cancelamento', motivo_cancelamento);
         break;
       }
       default:
