@@ -20,6 +20,9 @@ const AUTOCRLV_KEY    = process.env.AUTOCRLV_KEY    || '';
 const PORTAL_DESP_KEY = process.env.PORTAL_DESP_KEY || '';
 const DATACUBE_API_URL = 'https://api.consultasdeveiculos.com';
 const DATACUBE_TOKEN   = process.env.DATACUBE_TOKEN || '';
+const INFOSIMPLES_API_URL = 'https://api.infosimples.com/api/v2/consultas';
+const INFOSIMPLES_TOKEN   = process.env.INFOSIMPLES_TOKEN || '';
+const INFOSIMPLES_MARKUP  = 1.70;
 const ZAPI_INSTANCE_ID   = process.env.ZAPI_INSTANCE_ID   || '';
 const ZAPI_TOKEN         = process.env.ZAPI_TOKEN         || '';
 const ZAPI_CLIENT_TOKEN  = process.env.ZAPI_CLIENT_TOKEN  || '';
@@ -343,6 +346,18 @@ const SERVICES_V2 = [
   { id:'dc-comunicado-venda',           name:'Comunicação de Venda',           group:'Comunicação de Venda', basePrice:39.063, inputType:'dc_comunicado_venda',           icon:'📤', dcPath:'/veiculos/comunicado_venda_v2' },
   { id:'dc-comunicado-venda-cancelar',  name:'Cancelar Comunicação de Venda',  group:'Comunicação de Venda', basePrice:0.000,  inputType:'dc_cancelar_comunicado_venda',  icon:'📤', dcPath:'/veiculos/cancelar_comunicado_venda_v2' },
 ];
+
+// ── SERVICES_V3 — API Infosimples (api.infosimples.com) ───────────────────────
+// Catálogo gerado a partir do OpenAPI da Infosimples cruzado com a tabela de
+// preços (866 consultas, tag "Consultas" — os 22 endpoints de OCR/leitura de
+// imagem, tag "Imagens", ficaram de fora por não terem preço divulgado na
+// página de preços). basePrice = custo real pago à Infosimples (tier atual
+// R$0,30/consulta + adicional por consulta, quando houver); o preço final ao
+// cliente aplica INFOSIMPLES_MARKUP (70%). Exposto no painel na aba
+// "Infosimples Nova Consulta" (rota /api/query-v3). Catálogo isolado de
+// SERVICES/SERVICES_V2 — nunca toca em MANUAL_SERVICE_IDS nem nas integrações
+// chekaki/autocrlv/Datacube.
+const SERVICES_V3 = require('./data/infosimples-services.json');
 
 // Conexão com o banco Neon
 const pool = new Pool({
@@ -966,6 +981,16 @@ app.get('/api/services-v2', requireAuth, (req, res) => {
     services: SERVICES_V2.map(s => ({
       ...s,
       price: parseFloat((s.basePrice * (s.noMarkup ? 1 : MARKUP)).toFixed(2)),
+    })),
+  });
+});
+
+// ── GET /api/services-v3 (catálogo Infosimples — aba "Infosimples Nova Consulta") ──
+app.get('/api/services-v3', requireAuth, (req, res) => {
+  res.json({
+    services: SERVICES_V3.map(s => ({
+      ...s,
+      price: parseFloat((s.basePrice * INFOSIMPLES_MARKUP).toFixed(2)),
     })),
   });
 });
@@ -1897,6 +1922,77 @@ app.post('/api/query-v2', requireAuth, async (req, res) => {
     return res.json({ success: true, result: apiData.result ?? apiData, charged: price });
   } catch (err) {
     console.error('Erro em /api/query-v2:', err.message);
+    res.status(500).json({ error: 'Erro interno. Tente novamente.' });
+  }
+});
+
+// ── POST /api/query-v3 (API Infosimples — aba "Infosimples Nova Consulta") ────
+// Fluxo genérico e isolado dos demais /api/query*: os parâmetros de cada
+// consulta vêm do próprio catálogo (SERVICES_V3, gerado a partir do OpenAPI da
+// Infosimples), então a validação aqui é só "campo obrigatório preenchido" —
+// não existe um switch por inputType como em SERVICES_V2/Datacube porque a
+// Infosimples já declara nome/obrigatoriedade de cada parâmetro no spec.
+app.post('/api/query-v3', requireAuth, async (req, res) => {
+  const { serviceId, params } = req.body;
+  if (!serviceId) return res.status(400).json({ error: 'Serviço não informado.' });
+
+  const service = SERVICES_V3.find(s => s.id === serviceId);
+  if (!service) return res.status(400).json({ error: 'Serviço inválido.' });
+
+  const price = parseFloat((service.basePrice * INFOSIMPLES_MARKUP).toFixed(2));
+
+  try {
+    const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.user.id]);
+    const user = ur.rows[0];
+    if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+    if (parseFloat(user.credits) < price)
+      return res.status(400).json({
+        error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}`,
+      });
+
+    for (const p of service.params) {
+      const v = (params?.[p.name] ?? '').toString().trim();
+      if (p.required && !v) return res.status(400).json({ error: `Campo obrigatório: ${p.label}` });
+    }
+
+    const qs = new URLSearchParams({ token: INFOSIMPLES_TOKEN });
+    for (const p of service.params) {
+      const v = (params?.[p.name] ?? '').toString().trim();
+      if (v) qs.set(p.name, v);
+    }
+
+    let apiRes, apiData;
+    try {
+      apiRes = await fetch(`${INFOSIMPLES_API_URL}/${service.path}?${qs.toString()}`, { method: 'POST' });
+      apiData = await apiRes.json().catch(() => null);
+    } catch (e) {
+      console.error(`Erro na API Infosimples [${serviceId}]:`, e.message);
+      return res.status(502).json({ error: 'Erro ao consultar a API. Tente novamente.' });
+    }
+
+    if (!apiData || apiData.code !== 200) {
+      const errMsg = (apiData && (apiData.errors?.[0] || apiData.code_message)) || `Erro HTTP ${apiRes.status}.`;
+      console.error(`Erro API Infosimples [${serviceId}] code ${apiData?.code}: ${errMsg}`);
+      return res.status(apiRes.status && apiRes.status >= 400 ? apiRes.status : 502).json({ error: errMsg });
+    }
+
+    const result = Array.isArray(apiData.data) ? (apiData.data[0] ?? {}) : (apiData.data ?? {});
+    const label = `${service.group} — ${service.name}`;
+
+    await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
+    const txRow = await pool.query(
+      `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+      [req.user.id, price, `Consulta: ${label} (Infosimples)`]
+    );
+    await pool.query(
+      `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+       VALUES ($1,$2,$3,$4,'success',$5,$6,'json')`,
+      [req.user.id, service.id, label, JSON.stringify(params || {}), price, txRow.rows[0].id]
+    );
+
+    return res.json({ success: true, result, charged: price });
+  } catch (err) {
+    console.error('Erro em /api/query-v3:', err.message);
     res.status(500).json({ error: 'Erro interno. Tente novamente.' });
   }
 });

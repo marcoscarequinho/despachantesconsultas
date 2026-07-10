@@ -98,6 +98,13 @@
       </svg>
       Opção 2 Nova Consulta
     </div>
+    <div class="nav-item" data-section="query3" onclick="showSection('query3')">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+      </svg>
+      Infosimples Nova Consulta
+    </div>
     <a href="/recarga-pix"
       class="nav-item"
       style="color:#86efac;border:1px solid rgba(34,197,94,.4);background:rgba(20,83,45,.35);">
@@ -228,7 +235,7 @@
       </div>
 
       <!-- Quick actions -->
-      <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <button onclick="showSection('query')"
           class="card flex flex-col items-center gap-3 hover:shadow-md transition-shadow cursor-pointer border-2 border-transparent hover:border-orange-200">
           <div class="w-12 h-12 bg-orange-100 rounded-xl flex items-center justify-center text-2xl">🔍</div>
@@ -243,6 +250,14 @@
           <div class="text-center">
             <div class="font-semibold text-gray-800">Opção 2 Nova Consulta</div>
             <div class="text-xs text-gray-500 mt-0.5">Documentos e débitos via Datacube</div>
+          </div>
+        </button>
+        <button onclick="showSection('query3')"
+          class="card flex flex-col items-center gap-3 hover:shadow-md transition-shadow cursor-pointer border-2 border-transparent hover:border-indigo-200">
+          <div class="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center text-2xl">🗂️</div>
+          <div class="text-center">
+            <div class="font-semibold text-gray-800">Infosimples Nova Consulta</div>
+            <div class="text-xs text-gray-500 mt-0.5">866 consultas via API Infosimples</div>
           </div>
         </button>
         <button onclick="showSection('history')"
@@ -513,6 +528,115 @@
             🖼️ Baixar PNG
           </button>
           <button onclick="resetFormV2()" class="btn-secondary w-full justify-center">
+            🔄 Nova Consulta
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── INFOSIMPLES NOVA CONSULTA (API Infosimples) ─────────────────────── -->
+    <section id="section-query3" class="dash-section hidden space-y-5">
+
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Infosimples Nova Consulta</h2>
+        <p class="text-sm text-gray-500">866 consultas via API Infosimples, organizadas por órgão/categoria</p>
+      </div>
+
+      <!-- Saldo disponível -->
+      <div class="card bg-gradient-to-br from-orange-50 to-white border border-orange-200 flex items-center gap-4">
+        <div class="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center text-xl flex-shrink-0">💳</div>
+        <div>
+          <div class="text-sm text-gray-600">Saldo disponível</div>
+          <div id="query3-credits" class="text-2xl font-bold text-orange-600">R$ 0,00</div>
+        </div>
+        <div class="ml-auto text-xs text-gray-400">Mesmo saldo da aba Nova Consulta</div>
+      </div>
+
+      <!-- Seleção de categoria -->
+      <div class="card">
+        <div class="flex items-center justify-between mb-4 gap-3 flex-wrap">
+          <h3 class="font-semibold text-gray-800">Categoria do Serviço</h3>
+          <input id="category-filter-v3" type="text" placeholder="🔍 Buscar categoria..."
+            class="input-field max-w-[220px]" oninput="filterCategoryGridV3()">
+        </div>
+        <div id="category-grid-v3" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 max-h-[420px] overflow-y-auto pr-1"></div>
+      </div>
+
+      <!-- Seleção de serviço -->
+      <div id="service-selector-wrap-v3" class="card hidden">
+        <h3 class="font-semibold text-gray-800 mb-3">Selecione o Serviço</h3>
+        <input id="service-filter-v3" type="text" placeholder="🔍 Buscar serviço..."
+          class="input-field mb-3" oninput="filterServiceListV3()">
+        <div class="grid sm:grid-cols-2 gap-2 max-h-[420px] overflow-y-auto pr-1" id="service-list-v3"></div>
+      </div>
+
+      <!-- Formulário dinâmico -->
+      <div id="query-form-wrap-v3" class="card hidden">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h3 id="form-service-name-v3" class="font-semibold text-gray-800"></h3>
+            <div class="flex items-center gap-2 mt-1">
+              <span class="text-xs text-gray-500">Custo:</span>
+              <span id="form-service-price-v3" class="price-tag"></span>
+            </div>
+          </div>
+          <button onclick="resetFormV3()" class="text-xs text-gray-500 hover:text-gray-700">✕ Cancelar</button>
+        </div>
+
+        <form id="query-form-v3" onsubmit="submitQueryV3(event)" class="space-y-4">
+          <div id="form-fields-v3" class="space-y-4"></div>
+
+          <div id="form-error-v3"
+            class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm flex gap-2">
+            <span class="flex-shrink-0">⚠️</span>
+            <span id="form-error-msg-v3"></span>
+          </div>
+
+          <button id="query-submit-v3" type="submit" class="btn-primary w-full justify-center py-3">
+            <span id="query-submit-text-v3">Realizar Consulta</span>
+            <svg id="query-spinner-v3" class="hidden w-4 h-4 spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+            </svg>
+          </button>
+        </form>
+      </div>
+
+      <!-- Resultado -->
+      <div id="query-result-wrap-v3" class="hidden space-y-4">
+        <div class="result-card p-5">
+          <div class="flex items-center gap-3 mb-4">
+            <div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-xl">✅</div>
+            <div>
+              <div class="font-bold text-green-800">Consulta Concluída</div>
+              <div id="result-service-name-v3" class="text-sm text-green-700"></div>
+            </div>
+            <div class="ml-auto text-right">
+              <div class="text-xs text-gray-500">Debitado</div>
+              <div id="result-charged-v3" class="font-bold text-red-500 text-sm"></div>
+            </div>
+          </div>
+
+          <div id="result-fields-v3" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4"></div>
+
+          <details class="mt-2">
+            <summary class="text-xs text-gray-500 cursor-pointer hover:text-gray-700">Ver JSON completo</summary>
+            <pre id="result-json-raw-v3"
+              class="mt-2 bg-gray-900 text-green-400 text-xs p-4 rounded-lg overflow-x-auto max-h-80 overflow-y-auto"></pre>
+          </details>
+        </div>
+
+        <!-- Preview automático da imagem gerada -->
+        <div id="result-png-wrap-v3" class="hidden result-card p-4 text-center space-y-2">
+          <p class="text-xs text-gray-500">Imagem gerada automaticamente — toque e segure (ou clique com o botão direito) para salvar</p>
+          <img id="result-png-img-v3" class="mx-auto rounded-lg border border-gray-200 max-w-full" alt="Imagem da consulta">
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <button onclick="downloadResultV3PNG()" class="btn-secondary w-full justify-center">
+            🖼️ Baixar PNG
+          </button>
+          <button onclick="resetFormV3()" class="btn-secondary w-full justify-center">
             🔄 Nova Consulta
           </button>
         </div>
@@ -814,6 +938,7 @@ const sectionTitles = {
   affiliate: 'Indicações',
   query:    'Nova Consulta',
   query2:   'Opção 2 Nova Consulta',
+  query3:   'Infosimples Nova Consulta',
   history:  'Histórico',
   prices:   'Tabela de Preços',
   profile:  'Perfil',
@@ -824,6 +949,11 @@ let allServicesV2 = [];
 let selectedSvcV2 = null;
 let selectedCatV2 = null;
 let lastResultV2  = null;
+
+let allServicesV3 = [];
+let selectedSvcV3 = null;
+let selectedCatV3 = null;
+let lastResultV3  = null;
 
 // ── Formatação ─────────────────────────────────────────────────────────────────
 const fmt = v =>
@@ -869,16 +999,19 @@ function showSection(id) {
 // ── Inicialização ──────────────────────────────────────────────────────────────
 async function init() {
   try {
-    const [meRes, svcRes, svcRes2] = await Promise.all([
+    const [meRes, svcRes, svcRes2, svcRes3] = await Promise.all([
       fetch('/api/auth/me'),
       fetch('/api/services'),
       fetch('/api/services-v2'),
+      fetch('/api/services-v3'),
     ]);
     if (!meRes.ok) { window.location.href = '/entrar'; return; }
     currentUser = await meRes.json();
     allServices   = (await svcRes.json()).services  || [];
     allServicesV2 = (await svcRes2.json()).services || [];
+    allServicesV3 = (await svcRes3.json()).services || [];
     buildCategoryGridV2();
+    buildCategoryGridV3();
 
     const initial = currentUser.name ? currentUser.name.charAt(0).toUpperCase() : '?';
     document.getElementById('user-avatar').textContent   = initial;
@@ -930,6 +1063,7 @@ async function loadStats() {
     document.getElementById('stat-total-spent').textContent   = fmt(d.total_spent);
     document.getElementById('query-credits').textContent      = fmt(d.credits);
     document.getElementById('query2-credits').textContent     = fmt(d.credits);
+    document.getElementById('query3-credits').textContent     = fmt(d.credits);
     document.getElementById('header-credits').textContent     = fmt(d.credits);
   } catch {}
 }
@@ -1866,6 +2000,10 @@ function flattenObj(obj, prefix, depth) {
   });
 }
 
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
 // ── Opção 2 Nova Consulta (API Datacube) ────────────────────────────────────────
 // Fluxo completo à parte do "Nova Consulta" acima: estado (allServicesV2,
 // selectedSvcV2), elementos DOM com sufixo "-v2" e endpoint /api/query-v2 —
@@ -2670,6 +2808,320 @@ async function downloadResultV2PNG() {
   // Mobile (iOS/Android) costuma ignorar o atributo "download" em blobs de
   // imagem e só abre a imagem numa aba — usamos a Web Share API para
   // acionar a folha nativa de "Salvar imagem" quando disponível.
+  const file = new File([blob], filename, { type: 'image/png' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: filename });
+      return;
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+    }
+  }
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// ── Infosimples Nova Consulta (API Infosimples) ─────────────────────────────────
+// Terceiro fluxo de consulta, isolado dos dois anteriores: estado
+// (allServicesV3, selectedSvcV3), elementos DOM com sufixo "-v3" e endpoint
+// /api/query-v3. Ao contrário de SERVICES_V2/Datacube, o catálogo aqui tem 866
+// serviços gerados a partir do OpenAPI da Infosimples, então o formulário é
+// construído dinamicamente a partir de svc.params (nome/label/obrigatório) em
+// vez de um switch por inputType.
+function buildCategoryGridV3(filter = '') {
+  const f = filter.toLowerCase().trim();
+  const groupIcon = {};
+  const groupCount = {};
+  allServicesV3.forEach(s => {
+    if (!groupIcon[s.group]) groupIcon[s.group] = s.icon;
+    groupCount[s.group] = (groupCount[s.group] || 0) + 1;
+  });
+  const cats = Object.keys(groupIcon)
+    .filter(c => !f || c.toLowerCase().includes(f))
+    .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+  document.getElementById('category-grid-v3').innerHTML = cats.map(cat => `
+    <div class="service-cat" data-cat="${escapeHtml(cat)}" onclick='selectCategoryV3(${JSON.stringify(cat)})'>
+      <div class="text-2xl mb-1">${groupIcon[cat]}</div>
+      <div class="font-semibold text-gray-800 text-xs leading-tight">${escapeHtml(cat)}</div>
+      <div class="text-xs text-gray-400 mt-0.5">${groupCount[cat]} serviço(s)</div>
+    </div>`).join('')
+    || '<p class="text-sm text-gray-400 col-span-full text-center py-4">Nenhuma categoria encontrada.</p>';
+}
+
+function filterCategoryGridV3() {
+  buildCategoryGridV3(document.getElementById('category-filter-v3').value);
+}
+
+function selectCategoryV3(cat) {
+  selectedCatV3 = cat;
+  document.querySelectorAll('#category-grid-v3 .service-cat').forEach(el => {
+    el.classList.toggle('selected', el.dataset.cat === cat);
+  });
+  const filterEl = document.getElementById('service-filter-v3');
+  if (filterEl) filterEl.value = '';
+  renderServiceListV3();
+  document.getElementById('service-selector-wrap-v3').classList.remove('hidden');
+  document.getElementById('query-form-wrap-v3').classList.add('hidden');
+  document.getElementById('query-result-wrap-v3').classList.add('hidden');
+  setTimeout(() => {
+    const el = document.getElementById('service-selector-wrap-v3');
+    const header = document.querySelector('header');
+    const offset = (header ? header.offsetHeight : 0) + 16;
+    const top = el.getBoundingClientRect().top + window.scrollY - offset;
+    window.scrollTo({ top, behavior: 'smooth' });
+  }, 50);
+}
+
+function renderServiceListV3(filter = '') {
+  const f = filter.toLowerCase().trim();
+  const svcs = allServicesV3.filter(s =>
+    s.group === selectedCatV3 && (!f || s.name.toLowerCase().includes(f)));
+  const renderBtn = s => `
+    <button type="button"
+      onclick='selectServiceV3(${JSON.stringify(s.id)})'
+      class="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-orange-300 hover:bg-orange-50 text-left transition-all">
+      <span class="text-xl flex-shrink-0">${s.icon}</span>
+      <div class="min-w-0 flex-1">
+        <div class="font-medium text-gray-800 text-sm">${escapeHtml(s.name)}</div>
+        <div class="text-xs text-gray-400 mt-0.5">${s.params.length} campo(s)</div>
+      </div>
+      <div class="price-tag text-sm flex-shrink-0">${fmt(s.price)}</div>
+    </button>`;
+  document.getElementById('service-list-v3').innerHTML = svcs.map(renderBtn).join('')
+    || '<p class="text-sm text-gray-400 col-span-2 text-center py-4">Nenhum serviço encontrado.</p>';
+}
+
+function filterServiceListV3() {
+  renderServiceListV3(document.getElementById('service-filter-v3').value);
+}
+
+function selectServiceV3(id) {
+  const svc = allServicesV3.find(s => s.id === id);
+  if (!svc) return;
+  selectedSvcV3 = svc;
+  document.getElementById('form-service-name-v3').textContent = `${svc.icon} ${svc.group} / ${svc.name}`;
+  document.getElementById('form-service-price-v3').textContent = fmt(svc.price);
+  renderFormFieldsV3(svc);
+  document.getElementById('query-form-wrap-v3').classList.remove('hidden');
+  document.getElementById('query-result-wrap-v3').classList.add('hidden');
+  document.getElementById('form-error-v3').classList.add('hidden');
+  document.getElementById('query-form-wrap-v3').scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
+
+function renderFormFieldsV3(svc) {
+  const field = p => `
+    <div>
+      <label class="label">${escapeHtml(p.label)}${p.required ? ' <span class="text-red-500">*</span>' : ''}</label>
+      <input id="f3-${escapeHtml(p.name)}" type="text" class="input-field" ${p.required ? 'required' : ''}>
+      ${p.description ? `<p class="text-xs text-gray-400 mt-1">${escapeHtml(p.description)}</p>` : ''}
+    </div>`;
+  document.getElementById('form-fields-v3').innerHTML = svc.params.map(field).join('');
+}
+
+function buildParamsV3(svc) {
+  const params = {};
+  svc.params.forEach(p => {
+    params[p.name] = (document.getElementById('f3-' + p.name)?.value || '').trim();
+  });
+  return params;
+}
+
+function validateParamsV3(svc, p) {
+  for (const param of svc.params) {
+    if (param.required && !p[param.name]) return `Campo obrigatório: ${param.label}`;
+  }
+  return null;
+}
+
+function resetFormV3(showCats = true) {
+  selectedSvcV3 = null;
+  document.getElementById('query-form-wrap-v3').classList.add('hidden');
+  document.getElementById('query-result-wrap-v3').classList.add('hidden');
+  document.getElementById('form-error-v3').classList.add('hidden');
+  document.getElementById('query-form-v3').reset();
+  if (showCats) {
+    document.getElementById('service-selector-wrap-v3').classList.add('hidden');
+    document.querySelectorAll('#category-grid-v3 .service-cat').forEach(el => el.classList.remove('selected'));
+  }
+}
+
+function setQueryLoadingV3(on) {
+  document.getElementById('query-submit-v3').disabled = on;
+  document.getElementById('query-submit-text-v3').textContent = on ? 'Processando...' : 'Realizar Consulta';
+  document.getElementById('query-spinner-v3').classList.toggle('hidden', !on);
+}
+
+function showFormErrorV3(msg) {
+  document.getElementById('form-error-msg-v3').textContent = msg;
+  document.getElementById('form-error-v3').classList.remove('hidden');
+}
+
+async function submitQueryV3(e) {
+  e.preventDefault();
+  if (!selectedSvcV3) return;
+
+  document.getElementById('form-error-v3').classList.add('hidden');
+
+  const params = buildParamsV3(selectedSvcV3);
+  const validationError = validateParamsV3(selectedSvcV3, params);
+  if (validationError) { showFormErrorV3(validationError); return; }
+
+  setQueryLoadingV3(true);
+  try {
+    const res = await fetch('/api/query-v3', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serviceId: selectedSvcV3.id, params }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showFormErrorV3(data.error || 'Erro ao realizar consulta.');
+      return;
+    }
+    showJsonResultV3(data, selectedSvcV3, params);
+    await Promise.all([loadStats(), loadQueries()]);
+  } catch {
+    showFormErrorV3('Erro de conexão. Verifique sua internet e tente novamente.');
+  } finally {
+    setQueryLoadingV3(false);
+  }
+}
+
+function showJsonResultV3(data, svc, params) {
+  document.getElementById('query-form-wrap-v3').classList.add('hidden');
+  document.getElementById('query-result-wrap-v3').classList.remove('hidden');
+  document.getElementById('result-service-name-v3').textContent = `${svc.group} / ${svc.name}`;
+  document.getElementById('result-charged-v3').textContent = '-' + fmt(data.charged);
+
+  const result = data.result || {};
+  const fields = flattenObj(result, '', 3);
+  document.getElementById('result-fields-v3').innerHTML = fields.slice(0, 60).map(([k, v]) => `
+    <div class="result-field bg-white rounded-lg p-3 border border-gray-100">
+      <span class="result-label">${escapeHtml(k)}</span>
+      <span class="result-value">${escapeHtml(v)}</span>
+    </div>`).join('');
+
+  document.getElementById('result-json-raw-v3').textContent = JSON.stringify(result, null, 2);
+  document.getElementById('query-result-wrap-v3').scrollIntoView({ behavior:'smooth' });
+  toast('Consulta concluída com sucesso!');
+
+  lastResultV3 = { svc, result, charged: data.charged, params: params || {}, ts: new Date() };
+  renderResultV3PNGPreview();
+}
+
+function renderResultV3PNGPreview() {
+  if (!lastResultV3) return;
+  const canvas = buildResultV3Canvas(lastResultV3);
+  const img = document.getElementById('result-png-img-v3');
+  img.src = canvas.toDataURL('image/png');
+  document.getElementById('result-png-wrap-v3').classList.remove('hidden');
+}
+
+function buildResultV3Canvas({ svc, result, charged, params, ts }) {
+  const title = `${svc.group} / ${svc.name}`;
+  const fields = flattenObj(result, '', 3);
+  const inputSummary = Object.entries(params)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join(' · ');
+
+  const width = 1750;
+  const padding = 32;
+  const rowHeight = 30;
+  const headerHeight = 96 + (inputSummary ? 18 : 0);
+  const footerHeight = 40;
+  const height = headerHeight + fields.length * rowHeight + footerHeight + padding * 2;
+
+  const scale = 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = width * scale;
+  canvas.height = height * scale;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(scale, scale);
+
+  const fitText = (text, maxWidth) => {
+    text = String(text ?? '');
+    if (ctx.measureText(text).width <= maxWidth) return text;
+    while (text.length > 0 && ctx.measureText(text + '…').width > maxWidth) text = text.slice(0, -1);
+    return text + '…';
+  };
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+
+  let y = padding;
+  ctx.fillStyle = '#111827';
+  ctx.font = 'bold 20px Arial';
+  ctx.fillText(fitText(title, width - padding * 2), padding, y + 18);
+  y += 34;
+
+  ctx.fillStyle = '#6b7280';
+  ctx.font = '12px Arial';
+  ctx.fillText(`Consulta em: ${ts.toLocaleString('pt-BR')}`, padding, y);
+  y += 16;
+  if (inputSummary) {
+    ctx.fillText(fitText(`Parâmetros: ${inputSummary}`, width - padding * 2), padding, y);
+    y += 16;
+  }
+  ctx.fillText(`Valor debitado: ${fmt(charged)}`, padding, y);
+  y += 20;
+
+  ctx.strokeStyle = '#e5e7eb';
+  ctx.beginPath();
+  ctx.moveTo(padding, y);
+  ctx.lineTo(width - padding, y);
+  ctx.stroke();
+  y += 8;
+
+  const colSplit = padding + (width - padding * 2) * 0.38;
+  const keyMaxWidth = colSplit - padding - 20;
+  const valueMaxWidth = width - padding - 10 - colSplit;
+
+  fields.forEach(([k, v], i) => {
+    const rowY = y + i * rowHeight;
+    if (i % 2 === 0) {
+      ctx.fillStyle = '#f9fafb';
+      ctx.fillRect(padding, rowY, width - padding * 2, rowHeight);
+    }
+
+    ctx.fillStyle = '#374151';
+    ctx.font = 'bold 11px Arial';
+    ctx.fillText(fitText(k.toUpperCase(), keyMaxWidth), padding + 10, rowY + rowHeight / 2 + 4);
+
+    ctx.fillStyle = '#111827';
+    ctx.font = '13px Arial';
+    ctx.fillText(fitText(v, valueMaxWidth), colSplit + 10, rowY + rowHeight / 2 + 4);
+
+    ctx.strokeStyle = '#e5e7eb';
+    ctx.beginPath();
+    ctx.moveTo(padding, rowY + rowHeight);
+    ctx.lineTo(width - padding, rowY + rowHeight);
+    ctx.stroke();
+  });
+
+  y += fields.length * rowHeight + 20;
+  ctx.fillStyle = '#9ca3af';
+  ctx.font = '11px Arial';
+  ctx.fillText('DESPACHANTES CONSULTAS — Infosimples Nova Consulta', padding, y);
+
+  return canvas;
+}
+
+async function downloadResultV3PNG() {
+  if (!lastResultV3) return;
+  const canvas = buildResultV3Canvas(lastResultV3);
+  const dataUrl = canvas.toDataURL('image/png');
+  const filename = `${lastResultV3.svc.group}_${lastResultV3.svc.name}_consulta.png`.replace(/[^\w\-.]+/g, '_');
+  const blob = dataURLToBlob(dataUrl);
+
   const file = new File([blob], filename, { type: 'image/png' });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
