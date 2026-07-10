@@ -502,9 +502,12 @@
           </details>
         </div>
 
-        <div class="grid grid-cols-2 gap-3">
+        <div class="grid grid-cols-3 gap-3">
           <button onclick="printResultV2()" class="btn-secondary w-full justify-center">
             🖨️ Imprimir Consulta
+          </button>
+          <button onclick="downloadResultV2PNG()" class="btn-secondary w-full justify-center">
+            🖼️ Baixar PNG
           </button>
           <button onclick="resetFormV2()" class="btn-secondary w-full justify-center">
             🔄 Nova Consulta
@@ -2587,6 +2590,109 @@ function printResultV2() {
   win.focus();
   win.onload = () => win.print();
   setTimeout(() => win.print(), 300);
+}
+
+// Desenha os dados da última consulta em um <canvas> e baixa como PNG —
+// mesma informação da impressão, sem depender de libs externas.
+function downloadResultV2PNG() {
+  if (!lastResultV2) return;
+  const { svc, result, charged, params, ts } = lastResultV2;
+  const fields = flattenObj(result, '', 3);
+  const inputSummary = Object.entries(params)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join(' · ');
+
+  const width = 800;
+  const padding = 32;
+  const rowHeight = 30;
+  const headerHeight = 96 + (inputSummary ? 18 : 0);
+  const footerHeight = 40;
+  const height = headerHeight + fields.length * rowHeight + footerHeight + padding * 2;
+
+  const scale = 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = width * scale;
+  canvas.height = height * scale;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(scale, scale);
+
+  const fitText = (text, maxWidth) => {
+    text = String(text ?? '');
+    if (ctx.measureText(text).width <= maxWidth) return text;
+    while (text.length > 0 && ctx.measureText(text + '…').width > maxWidth) text = text.slice(0, -1);
+    return text + '…';
+  };
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+
+  let y = padding;
+  ctx.fillStyle = '#111827';
+  ctx.font = 'bold 20px Arial';
+  ctx.fillText(fitText(svc.name, width - padding * 2), padding, y + 18);
+  y += 34;
+
+  ctx.fillStyle = '#6b7280';
+  ctx.font = '12px Arial';
+  ctx.fillText(`Consulta em: ${ts.toLocaleString('pt-BR')}`, padding, y);
+  y += 16;
+  if (inputSummary) {
+    ctx.fillText(fitText(`Parâmetros: ${inputSummary}`, width - padding * 2), padding, y);
+    y += 16;
+  }
+  ctx.fillText(`Valor debitado: ${fmt(charged)}`, padding, y);
+  y += 20;
+
+  ctx.strokeStyle = '#e5e7eb';
+  ctx.beginPath();
+  ctx.moveTo(padding, y);
+  ctx.lineTo(width - padding, y);
+  ctx.stroke();
+  y += 8;
+
+  const colSplit = padding + (width - padding * 2) * 0.38;
+  const keyMaxWidth = colSplit - padding - 20;
+  const valueMaxWidth = width - padding - 10 - colSplit;
+
+  fields.forEach(([k, v], i) => {
+    const rowY = y + i * rowHeight;
+    if (i % 2 === 0) {
+      ctx.fillStyle = '#f9fafb';
+      ctx.fillRect(padding, rowY, width - padding * 2, rowHeight);
+    }
+
+    ctx.fillStyle = '#374151';
+    ctx.font = 'bold 11px Arial';
+    ctx.fillText(fitText(k.toUpperCase(), keyMaxWidth), padding + 10, rowY + rowHeight / 2 + 4);
+
+    ctx.fillStyle = '#111827';
+    ctx.font = '13px Arial';
+    ctx.fillText(fitText(v, valueMaxWidth), colSplit + 10, rowY + rowHeight / 2 + 4);
+
+    ctx.strokeStyle = '#e5e7eb';
+    ctx.beginPath();
+    ctx.moveTo(padding, rowY + rowHeight);
+    ctx.lineTo(width - padding, rowY + rowHeight);
+    ctx.stroke();
+  });
+
+  y += fields.length * rowHeight + 20;
+  ctx.fillStyle = '#9ca3af';
+  ctx.font = '11px Arial';
+  ctx.fillText('DESPACHANTES CONSULTAS — Opção 2 Nova Consulta (Datacube)', padding, y);
+
+  canvas.toBlob(blob => {
+    if (!blob) { toast('Não foi possível gerar a imagem.', 'error'); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${svc.name.replace(/[^\w\-]+/g, '_')}_consulta.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 'image/png');
 }
 
 function escapeHtml(s) {
