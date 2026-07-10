@@ -502,10 +502,7 @@
           </details>
         </div>
 
-        <div class="grid grid-cols-3 gap-3">
-          <button onclick="printResultV2()" class="btn-secondary w-full justify-center">
-            🖨️ Imprimir Consulta
-          </button>
+        <div class="grid grid-cols-2 gap-3">
           <button onclick="downloadResultV2PNG()" class="btn-secondary w-full justify-center">
             🖼️ Baixar PNG
           </button>
@@ -2541,57 +2538,6 @@ function showJsonResultV2(data, svc, params) {
   lastResultV2 = { svc, result, charged: data.charged, params: params || {}, ts: new Date() };
 }
 
-// Abre uma janela limpa (sem sidebar/menu) só com os dados da consulta e chama
-// o print do navegador — o usuário escolhe "Salvar como PDF" ou impressora física.
-function printResultV2() {
-  if (!lastResultV2) return;
-  const { svc, result, charged, params, ts } = lastResultV2;
-  const fields = flattenObj(result, '', 3);
-  const inputSummary = Object.entries(params)
-    .filter(([, v]) => v)
-    .map(([k, v]) => `${k}: ${v}`)
-    .join(' · ');
-
-  const rows = fields.map(([k, v]) => `
-    <tr><td>${escapeHtml(k)}</td><td>${escapeHtml(v)}</td></tr>`).join('');
-
-  const win = window.open('', '_blank', 'width=800,height=900');
-  if (!win) { toast('Habilite pop-ups para imprimir.', 'error'); return; }
-  win.document.write(`
-    <!DOCTYPE html>
-    <html lang="pt-BR">
-    <head>
-      <meta charset="UTF-8">
-      <title>${escapeHtml(svc.name)} — Consulta</title>
-      <style>
-        body { font-family: Arial, Helvetica, sans-serif; color:#111827; padding:32px; }
-        h1 { font-size:18px; margin:0 0 4px; }
-        .meta { color:#6b7280; font-size:12px; margin-bottom:20px; }
-        .meta span { display:block; }
-        table { width:100%; border-collapse:collapse; font-size:13px; }
-        td { padding:8px 10px; border-bottom:1px solid #e5e7eb; vertical-align:top; }
-        td:first-child { font-weight:600; color:#374151; width:38%; text-transform:uppercase; font-size:11px; letter-spacing:.03em; }
-        .footer { margin-top:24px; font-size:11px; color:#9ca3af; }
-        @media print { body { padding:12mm; } }
-      </style>
-    </head>
-    <body>
-      <h1>${escapeHtml(svc.name)}</h1>
-      <div class="meta">
-        <span>Consulta em: ${ts.toLocaleString('pt-BR')}</span>
-        ${inputSummary ? `<span>Parâmetros: ${escapeHtml(inputSummary)}</span>` : ''}
-        <span>Valor debitado: ${fmt(charged)}</span>
-      </div>
-      <table><tbody>${rows}</tbody></table>
-      <div class="footer">DESPACHANTES CONSULTAS — Opção 2 Nova Consulta (Datacube)</div>
-    </body>
-    </html>`);
-  win.document.close();
-  win.focus();
-  win.onload = () => win.print();
-  setTimeout(() => win.print(), 300);
-}
-
 // Desenha os dados da última consulta em um <canvas> e baixa como PNG —
 // mesma informação da impressão, sem depender de libs externas.
 function downloadResultV2PNG() {
@@ -2693,10 +2639,6 @@ function downloadResultV2PNG() {
     a.remove();
     URL.revokeObjectURL(url);
   }, 'image/png');
-}
-
-function escapeHtml(s) {
-  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
 
 // ── Perfil ─────────────────────────────────────────────────────────────────────
