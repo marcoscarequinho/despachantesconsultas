@@ -502,6 +502,12 @@
           </details>
         </div>
 
+        <!-- Preview automático da imagem gerada -->
+        <div id="result-png-wrap-v2" class="hidden result-card p-4 text-center space-y-2">
+          <p class="text-xs text-gray-500">Imagem gerada automaticamente — toque e segure (ou clique com o botão direito) para salvar</p>
+          <img id="result-png-img-v2" class="mx-auto rounded-lg border border-gray-200 max-w-full" alt="Imagem da consulta">
+        </div>
+
         <div class="grid grid-cols-2 gap-3">
           <button onclick="downloadResultV2PNG()" class="btn-secondary w-full justify-center">
             🖼️ Baixar PNG
@@ -2536,13 +2542,24 @@ function showJsonResultV2(data, svc, params) {
   toast('Consulta concluída com sucesso!');
 
   lastResultV2 = { svc, result, charged: data.charged, params: params || {}, ts: new Date() };
+  renderResultV2PNGPreview();
 }
 
-// Desenha os dados da última consulta em um <canvas> e baixa como PNG —
-// mesma informação da impressão, sem depender de libs externas.
-function downloadResultV2PNG() {
+// Gera a imagem da última consulta e exibe automaticamente na tela —
+// no mobile o download via <a download>/Web Share nem sempre funciona,
+// então mostramos a imagem direto na página para o usuário salvar
+// com toque-e-segure (ou clique direito no desktop).
+function renderResultV2PNGPreview() {
   if (!lastResultV2) return;
-  const { svc, result, charged, params, ts } = lastResultV2;
+  const canvas = buildResultV2Canvas(lastResultV2);
+  const img = document.getElementById('result-png-img-v2');
+  img.src = canvas.toDataURL('image/png');
+  document.getElementById('result-png-wrap-v2').classList.remove('hidden');
+}
+
+// Desenha os dados da última consulta em um <canvas> — mesma informação da
+// impressão, sem depender de libs externas.
+function buildResultV2Canvas({ svc, result, charged, params, ts }) {
   const fields = flattenObj(result, '', 3);
   const inputSummary = Object.entries(params)
     .filter(([, v]) => v)
@@ -2628,32 +2645,49 @@ function downloadResultV2PNG() {
   ctx.font = '11px Arial';
   ctx.fillText('DESPACHANTES CONSULTAS — Opção 2 Nova Consulta (Datacube)', padding, y);
 
-  canvas.toBlob(async blob => {
-    if (!blob) { toast('Não foi possível gerar a imagem.', 'error'); return; }
-    const filename = `${svc.name.replace(/[^\w\-]+/g, '_')}_consulta.png`;
+  return canvas;
+}
 
-    // Mobile (iOS/Android) costuma ignorar o atributo "download" em blobs de
-    // imagem e só abre a imagem numa aba — usamos a Web Share API para
-    // acionar a folha nativa de "Salvar imagem" quando disponível.
-    const file = new File([blob], filename, { type: 'image/png' });
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      try {
-        await navigator.share({ files: [file], title: filename });
-        return;
-      } catch (err) {
-        if (err && err.name === 'AbortError') return;
-      }
+// canvas.toDataURL é síncrono (ao contrário de canvas.toBlob), o que evita
+// perder o "gesto do usuário" antes de chamar navigator.share — no iOS/Android
+// isso costuma ser a diferença entre a folha de compartilhar abrir ou não.
+function dataURLToBlob(dataUrl) {
+  const [header, base64] = dataUrl.split(',');
+  const mime = header.match(/:(.*?);/)[1];
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+async function downloadResultV2PNG() {
+  if (!lastResultV2) return;
+  const canvas = buildResultV2Canvas(lastResultV2);
+  const dataUrl = canvas.toDataURL('image/png');
+  const filename = `${lastResultV2.svc.name.replace(/[^\w\-]+/g, '_')}_consulta.png`;
+  const blob = dataURLToBlob(dataUrl);
+
+  // Mobile (iOS/Android) costuma ignorar o atributo "download" em blobs de
+  // imagem e só abre a imagem numa aba — usamos a Web Share API para
+  // acionar a folha nativa de "Salvar imagem" quando disponível.
+  const file = new File([blob], filename, { type: 'image/png' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: filename });
+      return;
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
     }
+  }
 
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  }, 'image/png');
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 // ── Perfil ─────────────────────────────────────────────────────────────────────
