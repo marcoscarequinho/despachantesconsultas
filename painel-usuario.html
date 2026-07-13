@@ -358,6 +358,8 @@
         </div>
 
         <form id="query-form" onsubmit="submitQuery(event)" class="space-y-4">
+          <div id="form-slow-note"
+            class="hidden bg-blue-50 border border-blue-200 text-blue-800 rounded-lg px-4 py-3 text-sm"></div>
           <div id="form-fields" class="space-y-4"></div>
 
           <div id="form-error"
@@ -1211,6 +1213,7 @@ function renderPrices() {
   const groupIcons = {
     'Consultas Básicas':       '🔍',
     'Débitos e Documentação':  '📋',
+    'Consulta Completa':       '🧾',
     'CRLV-e Digital':          '📄',
     'CRLV-e Agendado':         '⏳',
     'CRV':                     '🔐',
@@ -1307,6 +1310,7 @@ function buildCategoryGrid() {
   const catIcons = {
     'Consultas Básicas':       { icon:'🔍', color:'bg-blue-50 border-blue-200' },
     'Débitos e Documentação':  { icon:'💳', color:'bg-red-50 border-red-200' },
+    'Consulta Completa':       { icon:'🧾', color:'bg-orange-50 border-orange-200' },
     'CRLV-e Digital':          { icon:'📄', color:'bg-green-50 border-green-200' },
     'CRLV-e Agendado':         { icon:'⏳', color:'bg-amber-50 border-amber-200' },
     'CRV':                     { icon:'🔐', color:'bg-purple-50 border-purple-200' },
@@ -1387,6 +1391,9 @@ function selectService(svc) {
   selectedSvc = svc;
   document.getElementById('form-service-name').textContent = svc.icon + ' ' + svc.name;
   document.getElementById('form-service-price').textContent = fmt(svc.price);
+  const slowNote = document.getElementById('form-slow-note');
+  slowNote.classList.toggle('hidden', !svc.slowNote);
+  if (svc.slowNote) slowNote.textContent = svc.slowNote;
   renderFormFields(svc.inputType, svc);
   document.getElementById('query-form-wrap').classList.remove('hidden');
   document.getElementById('query-result-wrap').classList.add('hidden');

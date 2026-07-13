@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const path = require('path');
 const crypto = require('crypto');
+const { Agent } = require('undici');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -13,6 +14,10 @@ const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-inseguro';
 const CHAVE_ACESSO = process.env.CHAVE_ACESSO || '';
 const BASE_API_URL = 'https://chekaki.online';
 const MARKUP = 1.40;
+// Dispatcher dedicado para upstreams lentos (ex.: "Consulta Completa", que leva de 2 a
+// 5 min) — o dispatcher padrão do fetch nativo do Node tem headersTimeout/bodyTimeout
+// de 300s, insuficiente para essas respostas.
+const slowQueryDispatcher = new Agent({ headersTimeout: 420_000, bodyTimeout: 420_000 });
 const MP_ACCESS_TOKEN = (process.env.MP_ACCESS_TOKEN || '')
   .split('').filter(c => c.charCodeAt(0) <= 127).join('').trim();
 const MP_BASE = 'https://api.mercadopago.com';
@@ -142,6 +147,9 @@ const SERVICES = [
   { id:'consultar-atpve-v1',             name:'Reemissão ATPV-e (Placa)',     group:'Débitos e Documentação', basePrice:13.50, inputType:'placa_renavam', icon:'📄' },
   { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:25.00, inputType:'placa',        icon:'🔢' },
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa_renavam',icon:'📝' },
+  // ── Consulta Completa (laudo em PDF — upstream lento, 2 a 5 minutos) ──
+  { id:'consultar-completa', name:'EMISSÃO-BOLETO+MULTAS', group:'Consulta Completa', basePrice:20.00, inputType:'placa', icon:'🧾',
+    slowNote:'⏱ Esta consulta pode levar de 2 a 5 minutos para retornar o laudo completo do veículo. Aguarde nesta tela sem fechar ou atualizar a página.' },
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -1281,6 +1289,13 @@ app.post('/api/query', requireAuth, async (req, res) => {
     if (serviceId === 'consultar-cnh') {
       body = { cpf: (params?.cpfCnpj || '').replace(/\D/g, '') };
     }
+    // Consulta Completa (laudo em PDF) — endpoint dedicado, upstream lento (2 a 5 min)
+    if (serviceId === 'consultar-completa') {
+      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      apiUrl = 'https://www.chekaki.online/consultar-completa';
+      body   = { placa };
+    }
 
     // Débitos por Estado — serviço unificado com dropdown de UF
     if (serviceId === 'debito-uf') {
@@ -1324,6 +1339,9 @@ app.post('/api/query', requireAuth, async (req, res) => {
     }
     const fetchOpts = { method, headers: fetchHeaders };
     if (body !== null) fetchOpts.body = JSON.stringify(body);
+    // Consulta Completa: upstream leva de 2 a 5 min, acima do timeout padrão (300s) do
+    // dispatcher fetch do Node — usa um dispatcher dedicado com timeout maior.
+    if (serviceId === 'consultar-completa') fetchOpts.dispatcher = slowQueryDispatcher;
 
     const apiRes = await fetch(apiUrl, fetchOpts);
     const ct = apiRes.headers.get('content-type') || '';
@@ -1360,7 +1378,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
     }
 
     // serviços que retornam JSON com pdf_base64
-    const PDF_BASE64_SVCS = ['consultar-placa-crv', 'consultar-crv-v2', 'consulta-debitos-portal'];
+    const PDF_BASE64_SVCS = ['consultar-placa-crv', 'consultar-crv-v2', 'consulta-debitos-portal', 'consultar-completa'];
     let base64PdfBuf = null;
     if (PDF_BASE64_SVCS.includes(serviceId)) {
       let parsed;
