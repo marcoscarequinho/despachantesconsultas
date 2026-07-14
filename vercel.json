@@ -1,26 +1,13 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "server.js",
-      "use": "@vercel/node",
-      "config": {
-        "maxDuration": 800,
-        "includeFiles": [
-          "*.html",
-          "*.css",
-          "*.js",
-          "*.txt",
-          "*.xml",
-          "*.ico",
-          "*.png",
-          "!node_modules/**"
-        ]
-      }
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 800,
+      "includeFiles": "{*.html,*.css,*.js,*.txt,*.xml,*.ico,*.png}"
     }
-  ],
-  "routes": [
-    { "src": "/(.*)", "dest": "/server.js" }
+  },
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api/index.js" }
   ],
   "crons": [
     {
