@@ -1119,9 +1119,9 @@ function renderRecentQueries() {
             ? `<span class="badge-amber">⏳ Pendente</span>`
             : q.result_type === 'json' && q.service_id
               ? `<button type="button"
-                   onclick="requery(${JSON.stringify(q.service_id).replace(/"/g,"&quot;")}, ${JSON.stringify(q.params || '{}').replace(/"/g,"&quot;")})"
+                   onclick="viewSavedResult(${q.id}, ${JSON.stringify(q.service_id).replace(/"/g,"&quot;")}, ${JSON.stringify(q.params || '{}').replace(/"/g,"&quot;")})"
                    class="text-xs bg-green-600 hover:bg-green-700 text-white px-2 py-0.5 rounded font-medium">
-                   🔄 JSON
+                   👁️ Ver
                  </button>`
               : `<span class="badge-${q.result_type === 'pdf' ? 'blue' : 'green'}">${q.result_type.toUpperCase()}</span>`
         }
@@ -1188,9 +1188,9 @@ function renderHistoryTable() {
               ? `<span class="badge-amber">⏳ Pendente</span>`
             : q.result_type === 'json' && q.service_id
               ? `<button type="button"
-                   onclick="requery(${JSON.stringify(q.service_id).replace(/"/g,"&quot;")}, ${JSON.stringify(q.params || '{}').replace(/"/g,"&quot;")})"
+                   onclick="viewSavedResult(${q.id}, ${JSON.stringify(q.service_id).replace(/"/g,"&quot;")}, ${JSON.stringify(q.params || '{}').replace(/"/g,"&quot;")})"
                    class="inline-flex items-center gap-1 bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1 rounded font-semibold transition">
-                   🔄 JSON
+                   👁️ Ver
                  </button>`
               : `<span class="badge-${q.result_type === 'pdf' ? 'blue' : 'green'}">${q.result_type.toUpperCase()}</span>`
           }
@@ -3578,6 +3578,80 @@ function fecharPopupDebito() {
   el.style.transform = 'scale(.9)';
   setTimeout(() => el.remove(), 300);
 }
+
+// ── Modal "Ver Resultado" (histórico) ───────────────────────────────────────────
+let historyResultRequeryCtx = null;
+
+async function viewSavedResult(id, serviceId, paramsJson) {
+  const modal = document.getElementById('history-result-modal');
+  document.getElementById('history-result-title').textContent = 'Carregando…';
+  document.getElementById('history-result-meta').textContent = '';
+  document.getElementById('history-result-fields').innerHTML = '';
+  document.getElementById('history-result-raw').textContent = '';
+  historyResultRequeryCtx = { serviceId, paramsJson };
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+  try {
+    const r = await fetch(`/api/queries/${id}/result`);
+    const d = await r.json();
+    if (!r.ok || !d.result) {
+      document.getElementById('history-result-title').textContent = d.service_name || 'Resultado indisponível';
+      document.getElementById('history-result-meta').textContent =
+        d.error === 'Resultado não disponível para esta consulta.'
+          ? 'Esta consulta foi feita antes desse recurso existir — não há resultado salvo.'
+          : (d.error || 'Não foi possível carregar o resultado.');
+      return;
+    }
+    document.getElementById('history-result-title').textContent = d.service_name;
+    document.getElementById('history-result-meta').textContent = `${fmtDate(d.created_at)} · -${fmt(d.amount)}`;
+    const fields = flattenObj(d.result, '', 3);
+    document.getElementById('history-result-fields').innerHTML = fields.slice(0, 60).map(([k, v]) => `
+      <div class="result-field bg-gray-50 rounded-lg p-2.5 border border-gray-100">
+        <span class="result-label">${k}</span>
+        <span class="result-value">${v}</span>
+      </div>`).join('') || '<p class="text-sm text-gray-400 col-span-full">Sem campos para exibir.</p>';
+    document.getElementById('history-result-raw').textContent = JSON.stringify(d.result, null, 2);
+  } catch {
+    document.getElementById('history-result-title').textContent = 'Erro';
+    document.getElementById('history-result-meta').textContent = 'Erro de conexão ao buscar o resultado.';
+  }
+}
+
+function closeHistoryResultModal() {
+  const modal = document.getElementById('history-result-modal');
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+}
+
+function requeryFromModal() {
+  if (!historyResultRequeryCtx) return;
+  const ctx = historyResultRequeryCtx;
+  closeHistoryResultModal();
+  requery(ctx.serviceId, ctx.paramsJson);
+}
 </script>
+
+<div id="history-result-modal" class="fixed inset-0 z-[9999] hidden items-center justify-center p-4" style="background:rgba(0,0,0,.6);" onclick="if(event.target===this) closeHistoryResultModal()">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+      <div class="min-w-0">
+        <div id="history-result-title" class="font-bold text-gray-800 truncate"></div>
+        <div id="history-result-meta" class="text-xs text-gray-400 mt-0.5"></div>
+      </div>
+      <button onclick="closeHistoryResultModal()" class="text-gray-400 hover:text-gray-600 text-2xl leading-none flex-shrink-0 ml-3">&times;</button>
+    </div>
+    <div class="px-5 py-4 overflow-y-auto flex-1">
+      <div id="history-result-fields" class="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4"></div>
+      <details>
+        <summary class="text-xs text-gray-500 cursor-pointer select-none">Ver JSON bruto</summary>
+        <pre id="history-result-raw" class="text-xs bg-gray-50 rounded p-3 mt-2 overflow-x-auto whitespace-pre-wrap"></pre>
+      </details>
+    </div>
+    <div class="px-5 py-3 border-t border-gray-100 flex justify-end gap-2">
+      <button onclick="requeryFromModal()" class="text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded font-medium">🔄 Repetir Consulta</button>
+      <button onclick="closeHistoryResultModal()" class="text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded font-medium">Fechar</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>

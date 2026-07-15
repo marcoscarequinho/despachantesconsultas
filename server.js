@@ -429,6 +429,7 @@ async function initDB() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS asaas_customer_id VARCHAR(100);`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ip_address VARCHAR(45);`);
   await pool.query(`ALTER TABLE queries ADD COLUMN IF NOT EXISTS whatsapp_sent_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE queries ADD COLUMN IF NOT EXISTS result_data TEXT;`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pdf_cache (
       id         SERIAL PRIMARY KEY,
@@ -1057,6 +1058,31 @@ app.get('/api/queries', requireAuth, async (req, res) => {
   }
 });
 
+// ── GET /api/queries/:id/result ────────────────────────────────────────────────
+// Reexibe o JSON de uma consulta já paga sem refazer a chamada à API upstream
+// (que cobraria créditos de novo). Consultas feitas antes deste recurso existir
+// não têm result_data salvo — retorna 404 nesse caso.
+app.get('/api/queries/:id/result', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT service_name, amount, created_at, result_data FROM queries
+       WHERE id=$1 AND user_id=$2`,
+      [req.params.id, req.user.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Consulta não encontrada.' });
+    const row = r.rows[0];
+    if (!row.result_data) return res.status(404).json({ error: 'Resultado não disponível para esta consulta.', service_name: row.service_name });
+    res.json({
+      service_name: row.service_name,
+      amount: row.amount,
+      created_at: row.created_at,
+      result: JSON.parse(row.result_data),
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
 // ── GET /api/pdf/:token ───────────────────────────────────────────────────────
 app.get('/api/pdf/:token', requireAuth, async (req, res) => {
   try {
@@ -1465,12 +1491,16 @@ app.post('/api/query', requireAuth, async (req, res) => {
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
       [req.user.id, price, `Consulta: ${service.name}`]
     );
+    // Guarda o corpo JSON retornado (quando não é PDF/HTML) para o histórico poder
+    // reexibir o mesmo resultado depois, sem precisar refazer (e recobrar) a consulta.
+    const resultData = willBePdfOrHtml ? null : JSON.stringify(genericParseOk ? genericData : { resposta: bodyStr });
     const qRow = await pool.query(
-      `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
-       VALUES ($1,$2,$3,$4,'success',$5,$6,$7) RETURNING id`,
+      `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type, result_data)
+       VALUES ($1,$2,$3,$4,'success',$5,$6,$7,$8) RETURNING id`,
       [req.user.id, serviceId, service.name, JSON.stringify(params || {}),
        price, txRow.rows[0].id,
-       htmlBuf ? 'html' : (isRealPdf || base64PdfBuf) ? 'pdf' : 'json']
+       htmlBuf ? 'html' : (isRealPdf || base64PdfBuf) ? 'pdf' : 'json',
+       resultData]
     );
     await notifyAdminNewQuery(user, service, price, params);
 
@@ -1965,13 +1995,14 @@ app.post('/api/query-v2', requireAuth, async (req, res) => {
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
       [req.user.id, price, `Consulta: ${service.name} (Opção 2)`]
     );
+    const resultV2 = apiData.result ?? apiData;
     await pool.query(
-      `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
-       VALUES ($1,$2,$3,$4,'success',$5,$6,'json')`,
-      [req.user.id, service.id, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id]
+      `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type, result_data)
+       VALUES ($1,$2,$3,$4,'success',$5,$6,'json',$7)`,
+      [req.user.id, service.id, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id, JSON.stringify(resultV2)]
     );
 
-    return res.json({ success: true, result: apiData.result ?? apiData, charged: price });
+    return res.json({ success: true, result: resultV2, charged: price });
   } catch (err) {
     console.error('Erro em /api/query-v2:', err.message);
     res.status(500).json({ error: 'Erro interno. Tente novamente.' });
@@ -2037,9 +2068,9 @@ app.post('/api/query-v3', requireAuth, async (req, res) => {
       [req.user.id, price, `Consulta: ${label} (Infosimples)`]
     );
     await pool.query(
-      `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
-       VALUES ($1,$2,$3,$4,'success',$5,$6,'json')`,
-      [req.user.id, service.id, label, JSON.stringify(params || {}), price, txRow.rows[0].id]
+      `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type, result_data)
+       VALUES ($1,$2,$3,$4,'success',$5,$6,'json',$7)`,
+      [req.user.id, service.id, label, JSON.stringify(params || {}), price, txRow.rows[0].id, JSON.stringify(result)]
     );
 
     return res.json({ success: true, result, charged: price });
