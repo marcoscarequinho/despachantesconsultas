@@ -1222,13 +1222,19 @@ app.post('/api/query', requireAuth, async (req, res) => {
         ? { tipo_pessoa: 'J', cnpj: cDoc, nome: c.nome.trim().toUpperCase() }
         : { tipo_pessoa: 'F', cpf: cDoc, nome: c.nome.trim().toUpperCase() };
 
+      // O ViaCEP às vezes devolve bairro/logradouro com parênteses (ex.: "Paracatu
+      // (Morro Grande)"), caractere que não aparece em nenhum exemplo documentado
+      // pela API e que o backend de DETRAN rejeita com 422 mesmo com o resto do
+      // payload correto — removemos aqui antes de repassar.
+      const sanitizeAddr = s => (s || '').replace(/[()]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+
       body = {
         vendedor: vendedorPayload,
         comprador: {
           ...compradorPayload,
           endereco: {
-            cep, logradouro: end.logradouro || '', numero: end.numero || '',
-            bairro: end.bairro || '', complemento: end.complemento || '',
+            cep, logradouro: sanitizeAddr(end.logradouro), numero: end.numero || '',
+            bairro: sanitizeAddr(end.bairro), complemento: sanitizeAddr(end.complemento),
             cidade: cidadeComprador, uf: end.uf.trim().toUpperCase(),
           },
         },
