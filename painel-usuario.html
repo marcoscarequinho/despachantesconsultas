@@ -1459,6 +1459,10 @@ function renderFormFields(inputType, svc) {
     <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Veículo</div>
     ${placaField + renavamField}
     <div class="grid grid-cols-2 gap-3">
+      ${field('ano_fab','Ano Fabricação','text','2020',true,'inputmode="numeric" maxlength="4"')}
+      ${field('ano_mod','Ano Modelo','text','2021',true,'inputmode="numeric" maxlength="4"')}
+    </div>
+    <div class="grid grid-cols-2 gap-3">
       ${field('crv_numero','Número CRV','text','123456789012')}
       ${field('crv_codigo','Código Segurança','text','12345678901')}
       ${field('crv_via','Nº Via','text','1')}
@@ -1882,6 +1886,7 @@ function buildParams(inputType) {
                valor: g('venda_valor'), comprador_solicitante:'S', estado: g('venda_estado') },
       veiculo: {
         placa: g('placa'), renavam: g('renavam'),
+        ano_fabricacao: g('ano_fab'), ano_modelo: g('ano_mod'),
         crv: { numero: g('crv_numero'), codigo_seguranca: g('crv_codigo'),
                numero_via: g('crv_via'), data_emissao: g('crv_data'), uf_emissao: g('crv_uf') },
       },
@@ -1905,6 +1910,8 @@ function validateParams(inputType, p) {
     const vDoc = v.cpf || v.cnpj || '', cDoc = c.cpf || c.cnpj || '';
     if (veic.placa.length < 7)                     return 'Placa do veículo inválida. Informe no formato ABC1D23.';
     if (veic.renavam.length < 9 || veic.renavam.length > 11) return 'Renavam inválido. Deve ter entre 9 e 11 dígitos.';
+    if (!/^\d{4}$/.test(veic.ano_fabricacao))       return 'Ano de fabricação do veículo inválido. Use 4 dígitos.';
+    if (!/^\d{4}$/.test(veic.ano_modelo))            return 'Ano do modelo do veículo inválido. Use 4 dígitos.';
     if (vDoc.length !== 11 && vDoc.length !== 14)  return 'CPF/CNPJ do vendedor inválido. Informe 11 dígitos (CPF) ou 14 dígitos (CNPJ).';
     if (!v.nome)                                   return 'Informe o nome do vendedor.';
     if (cDoc.length !== 11 && cDoc.length !== 14)  return 'CPF/CNPJ do comprador inválido. Informe 11 dígitos (CPF) ou 14 dígitos (CNPJ).';

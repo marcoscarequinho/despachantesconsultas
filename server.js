@@ -1194,6 +1194,11 @@ app.post('/api/query', requireAuth, async (req, res) => {
       const numeroVia       = parseInt(crv.numero_via, 10);
       const cidadeComprador = parseInt(end.cidade, 10);
       const cidadeVenda     = parseInt(vda.cidade, 10);
+      // Não documentados em nenhum exemplo da API, mas exigidos pelo validador
+      // upstream — confirmado via log de erro real: campos "veiculo.ano_fabricacao"
+      // e "veiculo.ano_modelo" listados em details.campos de um HTTP 422.
+      const anoFabricacao = parseInt(veic.ano_fabricacao, 10);
+      const anoModelo      = parseInt(veic.ano_modelo, 10);
       const valorStr = String(vda.valor ?? '').trim();
       const valor    = valorStr.includes(',')
         ? parseFloat(valorStr.replace(/\./g, '').replace(',', '.'))
@@ -1201,6 +1206,8 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
       if (placa.length < 7)                          return res.status(400).json({ error: 'Placa do veículo inválida. Informe no formato ABC1D23.' });
       if (renavam.length < 9 || renavam.length > 11)  return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+      if (!Number.isInteger(anoFabricacao) || anoFabricacao < 1950) return res.status(400).json({ error: 'Ano de fabricação do veículo inválido.' });
+      if (!Number.isInteger(anoModelo) || anoModelo < 1950)          return res.status(400).json({ error: 'Ano do modelo do veículo inválido.' });
       if (vDoc.length !== 11 && vDoc.length !== 14)   return res.status(400).json({ error: 'CPF/CNPJ do vendedor inválido. Informe 11 dígitos (CPF) ou 14 dígitos (CNPJ).' });
       if (cDoc.length !== 11 && cDoc.length !== 14)   return res.status(400).json({ error: 'CPF/CNPJ do comprador inválido. Informe 11 dígitos (CPF) ou 14 dígitos (CNPJ).' });
       if (!v.nome?.trim())                            return res.status(400).json({ error: 'Informe o nome do vendedor.' });
@@ -1244,6 +1251,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
         },
         veiculo: {
           placa, renavam,
+          ano_fabricacao: anoFabricacao, ano_modelo: anoModelo,
           crv: {
             numero: crv.numero || '', codigo_seguranca: crv.codigo_seguranca || '',
             numero_via: numeroVia, data_emissao: crv.data_emissao,
