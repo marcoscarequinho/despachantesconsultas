@@ -1371,6 +1371,11 @@ app.post('/api/query', requireAuth, async (req, res) => {
           const errData = await apiRes.json().catch(() => null)
             || { error: await apiRes.text().catch(() => 'Sem resposta') };
           errMsg = extractApiErrorMsg(errData);
+          // DEBUG temporário — corpo bruto do erro upstream, para achar campos
+          // dentro de "details" que a mensagem extraída resume/oculta.
+          if (serviceId === 'inserir-comunicacao-venda') {
+            console.log(`[${serviceId}] raw error body:`, JSON.stringify(errData));
+          }
         } else {
           errMsg = `HTTP ${apiRes.status}`;
         }
