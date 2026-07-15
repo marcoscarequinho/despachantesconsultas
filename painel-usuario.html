@@ -1447,14 +1447,12 @@ function renderFormFields(inputType, svc) {
     </div>
     <div class="grid grid-cols-2 gap-3">
       ${field('c_bairro','Bairro','text','CENTRO')}
-      ${field('c_uf','UF','text','SP')}
+      ${field('c_uf','UF (referência, não enviado à API)','text','SP',false)}
     </div>
     <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Venda</div>
     <div class="grid grid-cols-2 gap-3">
       ${field('venda_data','Data da Venda','text','01/01/2025')}
       ${field('venda_valor','Valor (R$)','text','10000.00')}
-      ${field('venda_estado','Estado UF','text','SP')}
-      ${field('venda_cidade','Código IBGE Cidade','text','3550308')}
     </div>
     <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Veículo</div>
     ${placaField + renavamField}
@@ -1880,10 +1878,9 @@ function buildParams(inputType) {
       comprador: {
         ...comprador,
         endereco: { cep: cd(g('c_cep')), logradouro: g('c_logradouro'), numero: g('c_numero'),
-                    bairro: g('c_bairro'), complemento:'', cidade: g('c_cidade'), uf: g('c_uf') },
+                    bairro: g('c_bairro'), complemento:'', cidade: g('c_cidade') },
       },
-      venda: { cidade: g('venda_cidade'), data: g('venda_data'),
-               valor: g('venda_valor'), comprador_solicitante:'S', estado: g('venda_estado') },
+      venda: { data: g('venda_data'), valor: g('venda_valor'), comprador_solicitante:'S' },
       veiculo: {
         placa: g('placa'), renavam: g('renavam'),
         ano_fabricacao: g('ano_fab'), ano_modelo: g('ano_mod'),
@@ -1908,8 +1905,11 @@ function validateParams(inputType, p) {
   if (inputType === 'venda') {
     const v = p.vendedor, c = p.comprador, end = c.endereco, vda = p.venda, veic = p.veiculo, crv = veic.crv;
     const vDoc = v.cpf || v.cnpj || '', cDoc = c.cpf || c.cnpj || '';
-    if (veic.placa.length < 7)                     return 'Placa do veículo inválida. Informe no formato ABC1D23.';
-    if (veic.renavam.length < 9 || veic.renavam.length > 11) return 'Renavam inválido. Deve ter entre 9 e 11 dígitos.';
+    const renavamDigits = (veic.renavam || '').replace(/\D/g, '');
+    const numeroCrvDigits = (crv.numero || '').replace(/\D/g, '');
+    const codigoSegDigits = (crv.codigo_seguranca || '').replace(/\D/g, '');
+    if (veic.placa.replace(/[^A-Za-z0-9]/g, '').length !== 7) return 'Placa do veículo inválida. Deve ter 7 caracteres (sem hífen).';
+    if (renavamDigits.length < 9 || renavamDigits.length > 11) return 'Renavam inválido. Deve ter entre 9 e 11 dígitos.';
     if (!/^\d{4}$/.test(veic.ano_fabricacao))       return 'Ano de fabricação do veículo inválido. Use 4 dígitos.';
     if (!/^\d{4}$/.test(veic.ano_modelo))            return 'Ano do modelo do veículo inválido. Use 4 dígitos.';
     if (vDoc.length !== 11 && vDoc.length !== 14)  return 'CPF/CNPJ do vendedor inválido. Informe 11 dígitos (CPF) ou 14 dígitos (CNPJ).';
@@ -1918,16 +1918,13 @@ function validateParams(inputType, p) {
     if (!c.nome)                                   return 'Informe o nome do comprador.';
     if (end.cep.length !== 8)                      return 'CEP inválido. Deve ter 8 dígitos.';
     if (!end.logradouro)                           return 'Informe o logradouro do comprador.';
-    if (!end.numero)                               return 'Informe o número do endereço do comprador.';
+    if (!/^\d{1,6}$/.test((end.numero || '').replace(/\D/g, ''))) return 'Número do endereço do comprador inválido. Use só dígitos (máx. 6).';
     if (!end.bairro)                               return 'Informe o bairro do comprador.';
     if (!/^\d+$/.test(end.cidade))                 return 'Código IBGE da cidade do comprador inválido.';
-    if (end.uf.length !== 2)                       return 'UF do endereço do comprador inválida.';
-    if (!/^\d+$/.test(vda.cidade))                  return 'Código IBGE da cidade da venda inválido.';
     if (!/^\d{2}\/\d{2}\/\d{4}$/.test(vda.data))    return 'Data da venda inválida. Use o formato DD/MM/AAAA.';
     if (!vda.valor)                                return 'Informe o valor da venda.';
-    if (vda.estado.length !== 2)                    return 'UF da venda inválida.';
-    if (!crv.numero)                                return 'Informe o número do CRV.';
-    if (!crv.codigo_seguranca)                      return 'Informe o código de segurança do CRV.';
+    if (numeroCrvDigits.length < 9 || numeroCrvDigits.length > 12) return 'Número do CRV deve ter de 9 a 12 dígitos.';
+    if (codigoSegDigits.length !== 11)              return 'Código de segurança do CRV deve ter 11 dígitos.';
     if (!crv.numero_via)                            return 'Informe o número da via do CRV.';
     if (!/^\d{2}\/\d{2}\/\d{4}$/.test(crv.data_emissao)) return 'Data de emissão do CRV inválida. Use o formato DD/MM/AAAA.';
     if (crv.uf_emissao.length !== 2)                 return 'UF de emissão do CRV inválida.';
@@ -3357,7 +3354,6 @@ async function processarTextoAtpv(texto, setStatus, campos, posicoes) {
   set('c_uf',         data.c_uf,          'UF Comprador');
   set('venda_valor',  data.venda_valor,   'Valor');
   set('venda_data',   data.venda_data,    'Data Venda');
-  set('venda_estado', data.venda_estado,  'Estado');
 
   if (data.c_cep && data.c_cep.length === 8) autocompletarCep(data.c_cep);
 

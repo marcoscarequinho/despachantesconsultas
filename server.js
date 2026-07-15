@@ -1182,18 +1182,23 @@ app.post('/api/query', requireAuth, async (req, res) => {
       const veic = params?.veiculo   || {};
       const crv  = veic.crv          || {};
 
-      const placa    = (veic.placa   || '').toUpperCase().replace(/[\s-]/g, '');
-      const renavam  = (veic.renavam || '').replace(/\D/g, '');
-      // Aceita CPF (11 dígitos, pessoa física) ou CNPJ (14 dígitos, pessoa jurídica).
-      // A API não documenta um exemplo de payload PJ; o formato abaixo (tipo_pessoa 'J'
-      // + campo "cnpj" no lugar de "cpf", sem a chave "cpf") segue por simetria o único
-      // exemplo documentado (PF), que não inclui a chave "cnpj" quando ausente.
+      // Regras abaixo replicadas do próprio formulário do CHEKAKI (montarPayloadDoFormulario
+      // / coletarErrosPayload em chekaki.online/comunicacao-venda), inspecionado após o
+      // upstream rejeitar payloads estruturalmente corretos — a documentação da API não
+      // cobre normalizações (padding) nem alguns campos exigidos.
+      const placa    = (veic.placa   || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const renavam  = (veic.renavam || '').replace(/\D/g, '').padStart(11, '0');
+      // Aceita CPF (11 dígitos, pessoa física) ou CNPJ (14 dígitos, pessoa jurídica) —
+      // confirmado no formulário real: chave computada 'cpf'/'cnpj' conforme tipo_pessoa.
       const vDoc     = (v.cpf || v.cnpj || '').replace(/\D/g, '');
       const cDoc     = (c.cpf || c.cnpj || '').replace(/\D/g, '');
       const cep      = (end.cep || '').replace(/\D/g, '');
+      const numeroResidencia = (end.numero || '').replace(/\D/g, '');
+      const codigoSeguranca  = (crv.codigo_seguranca || '').replace(/\D/g, '');
+      const numeroCrvRaw = (crv.numero || '').replace(/\D/g, '');
+      const numeroCrv = (numeroCrvRaw.length >= 9 && numeroCrvRaw.length <= 12) ? numeroCrvRaw.padStart(12, '0') : numeroCrvRaw;
       const numeroVia       = parseInt(crv.numero_via, 10);
       const cidadeComprador = parseInt(end.cidade, 10);
-      const cidadeVenda     = parseInt(vda.cidade, 10);
       // Não documentados em nenhum exemplo da API, mas exigidos pelo validador
       // upstream — confirmado via log de erro real: campos "veiculo.ano_fabricacao"
       // e "veiculo.ano_modelo" listados em details.campos de um HTTP 422.
@@ -1204,8 +1209,8 @@ app.post('/api/query', requireAuth, async (req, res) => {
         ? parseFloat(valorStr.replace(/\./g, '').replace(',', '.'))
         : parseFloat(valorStr);
 
-      if (placa.length < 7)                          return res.status(400).json({ error: 'Placa do veículo inválida. Informe no formato ABC1D23.' });
-      if (renavam.length < 9 || renavam.length > 11)  return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+      if (placa.length !== 7)                        return res.status(400).json({ error: 'Placa do veículo inválida. Deve ter 7 caracteres (sem hífen).' });
+      if (renavam.length !== 11)                      return res.status(400).json({ error: 'Renavam inválido. Deve ter até 11 dígitos.' });
       if (!Number.isInteger(anoFabricacao) || anoFabricacao < 1950) return res.status(400).json({ error: 'Ano de fabricação do veículo inválido.' });
       if (!Number.isInteger(anoModelo) || anoModelo < 1950)          return res.status(400).json({ error: 'Ano do modelo do veículo inválido.' });
       if (vDoc.length !== 11 && vDoc.length !== 14)   return res.status(400).json({ error: 'CPF/CNPJ do vendedor inválido. Informe 11 dígitos (CPF) ou 14 dígitos (CNPJ).' });
@@ -1213,13 +1218,13 @@ app.post('/api/query', requireAuth, async (req, res) => {
       if (!v.nome?.trim())                            return res.status(400).json({ error: 'Informe o nome do vendedor.' });
       if (!c.nome?.trim())                            return res.status(400).json({ error: 'Informe o nome do comprador.' });
       if (cep.length !== 8)                            return res.status(400).json({ error: 'CEP inválido. Deve ter 8 dígitos.' });
-      if (!end.uf || end.uf.trim().length !== 2)      return res.status(400).json({ error: 'UF do endereço do comprador inválida.' });
-      if (!vda.estado || vda.estado.trim().length !== 2) return res.status(400).json({ error: 'UF da venda inválida.' });
-      if (Number.isNaN(cidadeComprador))              return res.status(400).json({ error: 'Código IBGE da cidade do comprador inválido.' });
-      if (Number.isNaN(cidadeVenda))                   return res.status(400).json({ error: 'Código IBGE da cidade da venda inválido.' });
+      if (!numeroResidencia || numeroResidencia.length > 6) return res.status(400).json({ error: 'Número do endereço do comprador inválido. Use só dígitos (máx. 6).' });
+      if (Number.isNaN(cidadeComprador) || cidadeComprador <= 0) return res.status(400).json({ error: 'Código IBGE da cidade do comprador inválido.' });
       if (Number.isNaN(valor) || valor <= 0)          return res.status(400).json({ error: 'Valor da venda inválido.' });
       if (!/^\d{2}\/\d{2}\/\d{4}$/.test(vda.data || '')) return res.status(400).json({ error: 'Data da venda inválida. Use o formato DD/MM/AAAA.' });
       if (!Number.isInteger(numeroVia) || numeroVia < 1) return res.status(400).json({ error: 'Número da via do CRV inválido.' });
+      if (numeroCrvRaw.length < 9 || numeroCrvRaw.length > 12) return res.status(400).json({ error: 'Número do CRV deve ter de 9 a 12 dígitos.' });
+      if (codigoSeguranca.length !== 11)              return res.status(400).json({ error: 'Código de segurança do CRV deve ter 11 dígitos.' });
       if (!/^\d{2}\/\d{2}\/\d{4}$/.test(crv.data_emissao || '')) return res.status(400).json({ error: 'Data de emissão do CRV inválida. Use o formato DD/MM/AAAA.' });
 
       const vendedorPayload = vDoc.length === 14
@@ -1230,30 +1235,28 @@ app.post('/api/query', requireAuth, async (req, res) => {
         : { tipo_pessoa: 'F', cpf: cDoc, nome: c.nome.trim().toUpperCase() };
 
       // O ViaCEP às vezes devolve bairro/logradouro com parênteses (ex.: "Paracatu
-      // (Morro Grande)"), caractere que não aparece em nenhum exemplo documentado
-      // pela API e que o backend de DETRAN rejeita com 422 mesmo com o resto do
-      // payload correto — removemos aqui antes de repassar.
-      const sanitizeAddr = s => (s || '').replace(/[()]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+      // (Morro Grande)"); removemos e uppercase para bater com o formulário real.
+      const sanitizeAddr = s => (s || '').replace(/[()]/g, ' ').replace(/\s{2,}/g, ' ').trim().toUpperCase();
 
       body = {
         vendedor: vendedorPayload,
         comprador: {
           ...compradorPayload,
           endereco: {
-            cep, logradouro: sanitizeAddr(end.logradouro), numero: end.numero || '',
+            cep, logradouro: sanitizeAddr(end.logradouro), numero: numeroResidencia,
             bairro: sanitizeAddr(end.bairro), complemento: sanitizeAddr(end.complemento),
-            cidade: cidadeComprador, uf: end.uf.trim().toUpperCase(),
+            cidade: cidadeComprador,
           },
         },
         venda: {
-          cidade: cidadeVenda, data: vda.data, valor,
-          comprador_solicitante: 'S', estado: vda.estado.trim().toUpperCase(),
+          cidade: cidadeComprador, data: vda.data, valor,
+          comprador_solicitante: 'S',
         },
         veiculo: {
           placa, renavam,
           ano_fabricacao: anoFabricacao, ano_modelo: anoModelo,
           crv: {
-            numero: crv.numero || '', codigo_seguranca: crv.codigo_seguranca || '',
+            numero: numeroCrv, codigo_seguranca: codigoSeguranca,
             numero_via: numeroVia, data_emissao: crv.data_emissao,
             uf_emissao: (crv.uf_emissao || '').trim().toUpperCase(),
           },
