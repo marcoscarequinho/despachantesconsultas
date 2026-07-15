@@ -1290,18 +1290,50 @@ function quickSelect(serviceId) {
   selectService(svc);
 }
 
+// Consultas no histórico podem ter sido feitas em qualquer uma das 3 abas (Nova
+// Consulta / Opção 2 / Opção 3), cada uma com sua própria lista de serviços e
+// prefixo de campo (f-/f2-/f3-) — por isso procura nas três antes de desistir,
+// em vez de assumir sempre a v1 (o que fazia o clique "sumir" silenciosamente
+// para serviços de Opção 2/3, parecendo só redirecionar para Nova Consulta).
 function requery(serviceId, paramsJson) {
-  quickSelect(serviceId);
-  try {
-    const params = JSON.parse(paramsJson);
-    // cpfCnpj param maps to field f-cpfcnpj
-    const fieldMap = { cpfCnpj: 'cpfcnpj' };
+  let params = {};
+  try { params = JSON.parse(paramsJson); } catch {}
+  const fillFields = (prefix, fieldMap = {}) => {
     Object.entries(params).forEach(([k, v]) => {
-      const fieldId = fieldMap[k] || k;
-      const el = document.getElementById('f-' + fieldId);
+      if (typeof v !== 'string' && typeof v !== 'number') return;
+      const el = document.getElementById(prefix + (fieldMap[k] || k));
       if (el) el.value = v;
     });
-  } catch {}
+  };
+
+  const svc1 = allServices.find(s => s.id === serviceId);
+  if (svc1) {
+    quickSelect(serviceId);
+    fillFields('f-', { cpfCnpj: 'cpfcnpj' });
+    return;
+  }
+
+  const svc2 = allServicesV2.find(s => s.id === serviceId);
+  if (svc2) {
+    showSection('query2');
+    selectedCatV2 = svc2.group;
+    renderServiceListV2();
+    selectServiceV2(svc2);
+    fillFields('f2-');
+    return;
+  }
+
+  const svc3 = allServicesV3.find(s => s.id === serviceId);
+  if (svc3) {
+    showSection('query3');
+    selectedCatV3 = svc3.group;
+    renderServiceListV3();
+    selectServiceV3(serviceId);
+    fillFields('f3-');
+    return;
+  }
+
+  alert('Este serviço não está mais disponível para nova consulta.');
 }
 
 // ── Nova Consulta ──────────────────────────────────────────────────────────────
