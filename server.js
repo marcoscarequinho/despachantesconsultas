@@ -1184,8 +1184,12 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
       const placa    = (veic.placa   || '').toUpperCase().replace(/[\s-]/g, '');
       const renavam  = (veic.renavam || '').replace(/\D/g, '');
-      const vCpf     = (v.cpf || '').replace(/\D/g, '');
-      const cCpf     = (c.cpf || '').replace(/\D/g, '');
+      // Aceita CPF (11 dígitos, pessoa física) ou CNPJ (14 dígitos, pessoa jurídica).
+      // A API não documenta um exemplo de payload PJ; o formato abaixo (tipo_pessoa 'J'
+      // + campo "cnpj" no lugar de "cpf", sem a chave "cpf") segue por simetria o único
+      // exemplo documentado (PF), que não inclui a chave "cnpj" quando ausente.
+      const vDoc     = (v.cpf || v.cnpj || '').replace(/\D/g, '');
+      const cDoc     = (c.cpf || c.cnpj || '').replace(/\D/g, '');
       const cep      = (end.cep || '').replace(/\D/g, '');
       const numeroVia       = parseInt(crv.numero_via, 10);
       const cidadeComprador = parseInt(end.cidade, 10);
@@ -1197,8 +1201,8 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
       if (placa.length < 7)                          return res.status(400).json({ error: 'Placa do veículo inválida. Informe no formato ABC1D23.' });
       if (renavam.length < 9 || renavam.length > 11)  return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
-      if (vCpf.length !== 11)                         return res.status(400).json({ error: 'CPF do vendedor inválido. Deve ter 11 dígitos.' });
-      if (cCpf.length !== 11)                         return res.status(400).json({ error: 'CPF do comprador inválido. Deve ter 11 dígitos.' });
+      if (vDoc.length !== 11 && vDoc.length !== 14)   return res.status(400).json({ error: 'CPF/CNPJ do vendedor inválido. Informe 11 dígitos (CPF) ou 14 dígitos (CNPJ).' });
+      if (cDoc.length !== 11 && cDoc.length !== 14)   return res.status(400).json({ error: 'CPF/CNPJ do comprador inválido. Informe 11 dígitos (CPF) ou 14 dígitos (CNPJ).' });
       if (!v.nome?.trim())                            return res.status(400).json({ error: 'Informe o nome do vendedor.' });
       if (!c.nome?.trim())                            return res.status(400).json({ error: 'Informe o nome do comprador.' });
       if (cep.length !== 8)                            return res.status(400).json({ error: 'CEP inválido. Deve ter 8 dígitos.' });
@@ -1211,10 +1215,17 @@ app.post('/api/query', requireAuth, async (req, res) => {
       if (!Number.isInteger(numeroVia) || numeroVia < 1) return res.status(400).json({ error: 'Número da via do CRV inválido.' });
       if (!/^\d{2}\/\d{2}\/\d{4}$/.test(crv.data_emissao || '')) return res.status(400).json({ error: 'Data de emissão do CRV inválida. Use o formato DD/MM/AAAA.' });
 
+      const vendedorPayload = vDoc.length === 14
+        ? { tipo_pessoa: 'J', cnpj: vDoc, nome: v.nome.trim().toUpperCase() }
+        : { tipo_pessoa: 'F', cpf: vDoc, nome: v.nome.trim().toUpperCase() };
+      const compradorPayload = cDoc.length === 14
+        ? { tipo_pessoa: 'J', cnpj: cDoc, nome: c.nome.trim().toUpperCase() }
+        : { tipo_pessoa: 'F', cpf: cDoc, nome: c.nome.trim().toUpperCase() };
+
       body = {
-        vendedor: { tipo_pessoa: 'F', cpf: vCpf, cnpj: '', nome: v.nome.trim().toUpperCase() },
+        vendedor: vendedorPayload,
         comprador: {
-          tipo_pessoa: 'F', cpf: cCpf, cnpj: '', nome: c.nome.trim().toUpperCase(),
+          ...compradorPayload,
           endereco: {
             cep, logradouro: end.logradouro || '', numero: end.numero || '',
             bairro: end.bairro || '', complemento: end.complemento || '',
@@ -1236,10 +1247,11 @@ app.post('/api/query', requireAuth, async (req, res) => {
       };
       // DEBUG temporário — remover após diagnosticar o erro "Campos obrigatórios
       // ausentes ou inválidos." reportado pela API upstream (CPFs mascarados).
+      const maskDoc = p => ({ ...p, ...(p.cpf ? { cpf: p.cpf.replace(/\d(?=\d{4})/g, '*') } : { cnpj: p.cnpj.replace(/\d(?=\d{4})/g, '*') }) });
       console.log('[inserir-comunicacao-venda] payload:', JSON.stringify({
         ...body,
-        vendedor:  { ...body.vendedor,  cpf: body.vendedor.cpf.replace(/\d(?=\d{4})/g, '*') },
-        comprador: { ...body.comprador, cpf: body.comprador.cpf.replace(/\d(?=\d{4})/g, '*') },
+        vendedor:  maskDoc(body.vendedor),
+        comprador: maskDoc(body.comprador),
       }));
     }
     // Cancelar comunicação de venda — a API exige id e id_motivo_cancelamento como número

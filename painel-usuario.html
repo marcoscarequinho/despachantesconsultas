@@ -1425,14 +1425,16 @@ function renderFormFields(inputType, svc) {
       <p id="atpv-import-status" class="text-xs mt-2 hidden"></p>
     </div>
     <div class="font-semibold text-gray-700 text-sm mb-2">Vendedor</div>
+    <p class="text-xs text-gray-500 -mt-1 mb-2">Informe CPF (pessoa física) ou CNPJ (pessoa jurídica) — o tipo é detectado automaticamente pela quantidade de dígitos.</p>
     <div class="grid grid-cols-2 gap-3">
-      ${field('v_cpf','CPF Vendedor','text','12345678900')}
-      ${field('v_nome','Nome Vendedor','text','NOME COMPLETO')}
+      ${field('v_cpf','CPF/CNPJ Vendedor','text','000.000.000-00 ou CNPJ')}
+      ${field('v_nome','Nome Vendedor','text','NOME COMPLETO / RAZÃO SOCIAL')}
     </div>
     <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Comprador</div>
+    <p class="text-xs text-gray-500 -mt-1 mb-2">Informe CPF (pessoa física) ou CNPJ (pessoa jurídica) — o tipo é detectado automaticamente pela quantidade de dígitos.</p>
     <div class="grid grid-cols-2 gap-3">
-      ${field('c_cpf','CPF Comprador','text','12345678900')}
-      ${field('c_nome','Nome Comprador','text','NOME COMPLETO')}
+      ${field('c_cpf','CPF/CNPJ Comprador','text','000.000.000-00 ou CNPJ')}
+      ${field('c_nome','Nome Comprador','text','NOME COMPLETO / RAZÃO SOCIAL')}
     </div>
     <div class="grid grid-cols-2 gap-3">
       ${field('c_cep','CEP (8 dígitos)','text','01001000',true,'inputmode="numeric" maxlength="8"')}
@@ -1674,13 +1676,23 @@ function renderFormFields(inputType, svc) {
       this.value = this.value.replace(/\D/g, '').slice(0, 11);
     });
   }
-  // Máscara CPF (aplica em qualquer campo de CPF: cpf, v_cpf, c_cpf)
-  ['cpf', 'v_cpf', 'c_cpf'].forEach(id => {
+  // Máscara CPF (campo genérico "cpf", sempre pessoa física)
+  const cpfOnlyEl = document.getElementById('f-cpf');
+  if (cpfOnlyEl) {
+    cpfOnlyEl.addEventListener('input', function() {
+      const d = this.value.replace(/\D/g, '').slice(0, 11);
+      this.value = d.replace(/(\d{3})(\d{3})(\d{3})(\d{1,2})/, '$1.$2.$3-$4');
+    });
+  }
+  // Máscara CPF/CNPJ (vendedor/comprador do Comunicado de Venda podem ser PJ)
+  ['v_cpf', 'c_cpf'].forEach(id => {
     const el = document.getElementById('f-' + id);
     if (el) {
       el.addEventListener('input', function() {
-        const d = this.value.replace(/\D/g, '').slice(0, 11);
-        this.value = d.replace(/(\d{3})(\d{3})(\d{3})(\d{1,2})/, '$1.$2.$3-$4');
+        const d = this.value.replace(/\D/g, '').slice(0, 14);
+        this.value = d.length > 11
+          ? d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{1,2})/, '$1.$2.$3/$4-$5')
+          : d.replace(/(\d{3})(\d{3})(\d{3})(\d{1,2})/, '$1.$2.$3-$4');
       });
     }
   });
@@ -1854,11 +1866,15 @@ function buildParams(inputType) {
     return result;
   }
 
-  if (inputType === 'venda')
+  if (inputType === 'venda') {
+    const vDoc = cd(g('v_cpf'));
+    const cDoc = cd(g('c_cpf'));
+    const vendedor  = vDoc.length === 14 ? { tipo_pessoa:'J', cnpj: vDoc, nome: g('v_nome') } : { tipo_pessoa:'F', cpf: vDoc, nome: g('v_nome') };
+    const comprador = cDoc.length === 14 ? { tipo_pessoa:'J', cnpj: cDoc, nome: g('c_nome') } : { tipo_pessoa:'F', cpf: cDoc, nome: g('c_nome') };
     return {
-      vendedor: { tipo_pessoa:'F', cpf: cd(g('v_cpf')), cnpj:'', nome: g('v_nome') },
+      vendedor,
       comprador: {
-        tipo_pessoa:'F', cpf: cd(g('c_cpf')), cnpj:'', nome: g('c_nome'),
+        ...comprador,
         endereco: { cep: cd(g('c_cep')), logradouro: g('c_logradouro'), numero: g('c_numero'),
                     bairro: g('c_bairro'), complemento:'', cidade: g('c_cidade'), uf: g('c_uf') },
       },
@@ -1870,6 +1886,7 @@ function buildParams(inputType) {
                numero_via: g('crv_via'), data_emissao: g('crv_data'), uf_emissao: g('crv_uf') },
       },
     };
+  }
 
   return {};
 }
@@ -1885,11 +1902,12 @@ function validateParams(inputType, p) {
   }
   if (inputType === 'venda') {
     const v = p.vendedor, c = p.comprador, end = c.endereco, vda = p.venda, veic = p.veiculo, crv = veic.crv;
+    const vDoc = v.cpf || v.cnpj || '', cDoc = c.cpf || c.cnpj || '';
     if (veic.placa.length < 7)                     return 'Placa do veículo inválida. Informe no formato ABC1D23.';
     if (veic.renavam.length < 9 || veic.renavam.length > 11) return 'Renavam inválido. Deve ter entre 9 e 11 dígitos.';
-    if (v.cpf.length !== 11)                       return 'CPF do vendedor inválido. Deve ter 11 dígitos.';
+    if (vDoc.length !== 11 && vDoc.length !== 14)  return 'CPF/CNPJ do vendedor inválido. Informe 11 dígitos (CPF) ou 14 dígitos (CNPJ).';
     if (!v.nome)                                   return 'Informe o nome do vendedor.';
-    if (c.cpf.length !== 11)                       return 'CPF do comprador inválido. Deve ter 11 dígitos.';
+    if (cDoc.length !== 11 && cDoc.length !== 14)  return 'CPF/CNPJ do comprador inválido. Informe 11 dígitos (CPF) ou 14 dígitos (CNPJ).';
     if (!c.nome)                                   return 'Informe o nome do comprador.';
     if (end.cep.length !== 8)                      return 'CEP inválido. Deve ter 8 dígitos.';
     if (!end.logradouro)                           return 'Informe o logradouro do comprador.';
