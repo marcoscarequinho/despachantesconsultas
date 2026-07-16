@@ -185,6 +185,8 @@ const SERVICES = [
   { id:'valida-crv',         name:'Valida CRV',                 group:'CRV', basePrice:0.00,  inputType:'valida_crv', icon:'✅' },
   // ── Análise de Crédito ──
   { id:'consultar-spc', name:'Consulta SPC/Crédito', group:'Análise de Crédito', basePrice:15.00, inputType:'cpfcnpj', icon:'📊' },
+  // ── Óbito ──
+  { id:'consultar-placa-obito', name:'Consulta Óbito Placa', group:'Óbito', basePrice:5.00, inputType:'placa', icon:'⚰️' },
   // ── Comunicação de Venda ──
   { id:'inserir-comunicacao-venda',   name:'Inserir Comunicação Venda',     group:'Comunicação Venda', basePrice:23.50, inputType:'venda',          icon:'📝' },
   { id:'cancelar-comunicacao-venda',  name:'Cancelar Comunicação Venda',    group:'Comunicação Venda', basePrice:8.00,  inputType:'cancelar_venda', icon:'❌' },
@@ -1313,6 +1315,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       'base-nacional':            'base-nacional',
       'consultar-gravame':        'consultar-gravame',
       'consultar-licenciamento':  'consultar-licenciamento',
+      'consultar-placa-obito':    'consultar-placa-obito',
     };
     if (PORTAL_PLACA_MAP[serviceId]) {
       const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
