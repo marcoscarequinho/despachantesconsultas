@@ -2977,15 +2977,21 @@ Precisa puxar a capivara do carro ou emitir a ATPV-e? Aqui é vapt-vupt:
 
 🔎 Nossos Serviços:
 
-Galera, minha plataforma está com preços melhores do que a TDI, cod segurança 9,10, reemissão de ATPVE 18,90, CRLV-e do Rio 14,00, reemissão CRVL-e Rio 90,00, o kit de códigos da ATPVE quando tem comunicação de venda, 35,00.
+🛑Numero do CRV Antigo, das UFs: RJ, SP, MG, CE, ES, BA, RN, PE, PB, e outros, total de 21 UFs veja em seu painel🛑
+
+Galera, minha plataforma está com preços melhores do que a TDI, cod segurança 9,10, reemissão de ATPVE 18,90, CRLV-e do Rio 14,00, reemissão CRVL-e Rio 110,00, o kit de códigos da ATPVE quando tem comunicação de venda, 35,00.
 Olá! Quero te indicar a plataforma DESPACHANTES CONSULTAS — consultas veiculares e CRLV-e digital para profissionais.
 
 🎁 Cadastre-se pelo meu link e ganhe R$ 10,00 de crédito grátis para usar na plataforma!
 
 👉 https://www.despachantesconsultas.com.br/cadastrar?ref=MARCOTSN0
 
-✅ Sem mensalidade. Pague só pelo que usar.`;
+✅ Sem mensalidade. Pague só pelo que usar`;
 
+// Envia broadcast apenas para grupos — envio para contatos individuais foi
+// desativado por estar sendo denunciado como spam no WhatsApp.
+// Grupos vêm da Z-API com isGroup:true e phone no formato "<id>-group"
+// (não usam o sufixo "@g.us" do protocolo interno do WhatsApp).
 async function fetchZApiDestinations() {
   const headers = ZAPI_CLIENT_TOKEN ? { 'Client-Token': ZAPI_CLIENT_TOKEN } : {};
   const base = `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}`;
@@ -2998,60 +3004,29 @@ async function fetchZApiDestinations() {
     }
   }
 
-  const [contactsRes, chatsRes] = await Promise.all([
-    fetch(`${base}/contacts`,                  { headers }),
-    fetch(`${base}/chats?page=1&pageSize=500`, { headers }),
-  ]);
-
-  // Chave = ID único; valor = phone string pronto para envio
+  // Chave = ID único; valor = ID de grupo pronto para envio
   const destinations = new Map();
 
-  if (contactsRes.ok) {
-    const data = await contactsRes.json().catch(() => []);
-    const list = Array.isArray(data) ? data : (data.value || data.contacts || []);
-    list.forEach(c => {
-      const p = String(c.phone || '').replace(/\D/g, '');
-      if (p.length >= 10) destinations.set(p, p);
-    });
-    console.log(`📋 Contatos individuais: ${destinations.size}`);
-  } else {
-    console.warn('⚠️  Z-API /contacts falhou:', contactsRes.status);
-  }
-
-  const before = destinations.size;
-
-  if (chatsRes.ok) {
+  for (let page = 1; page <= 5; page++) {
+    const chatsRes = await fetch(`${base}/chats?page=${page}&pageSize=500`, { headers });
+    if (!chatsRes.ok) { console.warn('⚠️  Z-API /chats falhou:', chatsRes.status); break; }
     const data = await chatsRes.json().catch(() => []);
     const list = Array.isArray(data) ? data : (data.value || data.chats || []);
     list.forEach(c => {
-      const rawId = String(c.id || c.phone || '');
-      if (!rawId) return;
-      if (rawId.includes('@g.us')) {
-        // Grupo: preservar ID com @g.us para entrega correta
-        destinations.set(rawId, rawId);
-      } else {
-        const p = rawId.replace(/\D/g, '');
-        if (p.length >= 10 && !destinations.has(p)) destinations.set(p, p);
-      }
+      const phone = String(c.phone || '');
+      if (c.isGroup === true && phone) destinations.set(phone, phone);
     });
-    console.log(`📋 Grupos/chats adicionados: ${destinations.size - before}`);
-  } else {
-    console.warn('⚠️  Z-API /chats falhou:', chatsRes.status);
+    if (list.length < 500) break;
   }
+  console.log(`📋 Grupos: ${destinations.size}`);
 
   return [...destinations.values()];
 }
 
-// Envio para broadcast — trata individualmente números e IDs de grupo (@g.us)
+// Envio para broadcast — sempre para IDs de grupo ("<id>-group")
 async function sendBroadcastMessage(dest, message) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !dest) return;
-  let phone;
-  if (String(dest).includes('@g.us')) {
-    phone = dest; // grupo: usa ID completo
-  } else {
-    const digits = String(dest).replace(/\D/g, '');
-    phone = digits.startsWith('55') ? digits : `55${digits}`;
-  }
+  const phone = String(dest);
   try {
     const r = await fetch(
       `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/send-text`,
@@ -3076,7 +3051,7 @@ async function sendBroadcastMessage(dest, message) {
 async function runWhatsAppBroadcast() {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN) throw new Error('Z-API não configurada');
   const dests = await fetchZApiDestinations();
-  console.log(`📢 Broadcast: ${dests.length} destinos (contatos + grupos)`);
+  console.log(`📢 Broadcast: ${dests.length} grupos`);
   let sent = 0, failed = 0;
   for (const dest of dests) {
     try {
