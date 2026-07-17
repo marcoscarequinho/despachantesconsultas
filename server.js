@@ -2450,6 +2450,54 @@ app.post('/api/pix/criar', requireAuth, async (req, res) => {
   }
 });
 
+// ── Crédito de pagamento PIX aprovado — ponto único usado por /status, /webhook
+// e pelo cron de reconciliação. O passo que credita o usuário é uma única
+// UPDATE ... WHERE credited=false, cujo lock de linha do Postgres garante que
+// só uma chamada concorrente (polling do front + webhook do Mercado Pago
+// chegando ao mesmo tempo, ou webhook duplicado) realmente credita — as demais
+// veem 0 linhas afetadas e não fazem nada. Isso elimina a corrida que causava
+// depósito duplicado.
+async function creditPixPaymentIfApproved(gatewayId) {
+  const mp = await mpReq('GET', `/v1/payments/${gatewayId}`);
+
+  if (mp.status !== 'approved') {
+    await pool.query(
+      'UPDATE pix_payments SET status=$1 WHERE gateway_id=$2 AND credited=false',
+      [mp.status, gatewayId]
+    );
+    return { credited: false, status: mp.status };
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const upd = await client.query(
+      `UPDATE pix_payments SET status='approved', credited=true
+       WHERE gateway_id=$1 AND credited=false RETURNING id, user_id, value`,
+      [gatewayId]
+    );
+    if (upd.rows.length === 0) {
+      // Já creditado por outra chamada concorrente (ou pagamento desconhecido) — não repete.
+      await client.query('ROLLBACK');
+      const existing = await pool.query('SELECT value FROM pix_payments WHERE gateway_id=$1', [gatewayId]);
+      return { credited: true, status: 'approved', alreadyCredited: true, value: existing.rows[0] ? parseFloat(existing.rows[0].value) : null };
+    }
+    const p = upd.rows[0];
+    await client.query('UPDATE users SET credits = credits + $1 WHERE id=$2', [p.value, p.user_id]);
+    await client.query(
+      `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'deposit',$2,$3)`,
+      [p.user_id, p.value, `Recarga PIX — R$ ${parseFloat(p.value).toFixed(2).replace('.', ',')}`]
+    );
+    await client.query('COMMIT');
+    return { credited: true, status: 'approved', value: parseFloat(p.value) };
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 // ── GET /api/pix/status/:paymentId ────────────────────────────────────────────
 app.get('/api/pix/status/:paymentId', requireAuth, async (req, res) => {
   try {
@@ -2463,30 +2511,10 @@ app.get('/api/pix/status/:paymentId', requireAuth, async (req, res) => {
 
     if (p.credited) return res.json({ status: 'RECEIVED', credited: true, value: parseFloat(p.value) });
 
-    const mp = await mpReq('GET', `/v1/payments/${paymentId}`);
+    const result = await creditPixPaymentIfApproved(paymentId);
+    if (result.credited) return res.json({ status: 'RECEIVED', credited: true, value: result.value });
 
-    if (mp.status === 'approved') {
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        await client.query('UPDATE users SET credits = credits + $1 WHERE id=$2', [p.value, p.user_id]);
-        await client.query(
-          `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'deposit',$2,$3)`,
-          [p.user_id, p.value, `Recarga PIX — R$ ${parseFloat(p.value).toFixed(2).replace('.', ',')}`]
-        );
-        await client.query('UPDATE pix_payments SET status=$1, credited=true WHERE id=$2', [mp.status, p.id]);
-        await client.query('COMMIT');
-      } catch (e) {
-        await client.query('ROLLBACK');
-        throw e;
-      } finally {
-        client.release();
-      }
-      return res.json({ status: 'RECEIVED', credited: true, value: parseFloat(p.value) });
-    }
-
-    await pool.query('UPDATE pix_payments SET status=$1 WHERE id=$2', [mp.status, p.id]);
-    res.json({ status: mp.status, credited: false });
+    res.json({ status: result.status, credited: false });
   } catch (err) {
     console.error('Erro PIX status:', err.message);
     res.status(500).json({ error: 'Erro ao verificar pagamento.' });
@@ -2504,34 +2532,61 @@ app.post('/api/pix/webhook', async (req, res) => {
   if (type !== 'payment' || !paymentId) return;
 
   try {
-    const pr = await pool.query(
-      'SELECT * FROM pix_payments WHERE gateway_id=$1 AND credited=false',
-      [String(paymentId)]
-    );
-    if (!pr.rows.length) return;
-    const p = pr.rows[0];
-
-    const mp = await mpReq('GET', `/v1/payments/${paymentId}`);
-    if (mp.status !== 'approved') return;
-
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query('UPDATE users SET credits = credits + $1 WHERE id=$2', [p.value, p.user_id]);
-      await client.query(
-        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'deposit',$2,$3)`,
-        [p.user_id, p.value, `Recarga PIX — R$ ${parseFloat(p.value).toFixed(2).replace('.', ',')}`]
-      );
-      await client.query('UPDATE pix_payments SET status=$1, credited=true WHERE id=$2', [mp.status, p.id]);
-      await client.query('COMMIT');
-    } catch (e) {
-      await client.query('ROLLBACK');
-      console.error('Webhook PIX rollback:', e.message);
-    } finally {
-      client.release();
-    }
+    const exists = await pool.query('SELECT 1 FROM pix_payments WHERE gateway_id=$1', [String(paymentId)]);
+    if (!exists.rows.length) return;
+    await creditPixPaymentIfApproved(String(paymentId));
   } catch (err) {
     console.error('Webhook PIX erro:', err.message);
+  }
+});
+
+// ── Cron: reconcilia PIX pendentes que o webhook não confirmou ───────────────
+// Rede de segurança para quando o webhook do Mercado Pago falha ou nunca chega
+// (e o usuário fecha a página antes do polling confirmar) — sem isso, o
+// depósito fica pago no Mercado Pago mas nunca creditado na plataforma.
+async function runPixReconcile() {
+  const { rows: pendentes } = await pool.query(
+    `SELECT gateway_id FROM pix_payments
+     WHERE credited=false AND created_at > NOW() - INTERVAL '2 days'
+     ORDER BY created_at ASC LIMIT 200`
+  );
+  let checked = 0, credited = 0;
+  for (const row of pendentes) {
+    checked++;
+    try {
+      const result = await creditPixPaymentIfApproved(row.gateway_id);
+      if (result.credited && !result.alreadyCredited) credited++;
+    } catch (e) {
+      console.error(`Erro ao reconciliar PIX ${row.gateway_id}:`, e.message);
+    }
+  }
+  console.log(`✅ Reconciliação PIX: ${checked} verificados, ${credited} creditados`);
+  return { checked, credited, pending: pendentes.length };
+}
+
+// ── GET /api/cron/pix-reconcile (Vercel Cron) ─────────────────────────────────
+app.get('/api/cron/pix-reconcile', async (req, res) => {
+  const secret = process.env.CRON_SECRET || '';
+  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const result = await runPixReconcile();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Erro no cron pix-reconcile:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/admin/pix-reconcile (teste manual pelo admin) ──────────────────
+app.post('/api/admin/pix-reconcile', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const result = await runPixReconcile();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Erro no pix-reconcile manual:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 

@@ -17,6 +17,10 @@
     {
       "path": "/api/cron/crlv-agendado-status",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/pix-reconcile",
+      "schedule": "*/10 * * * *"
     }
   ]
 }
