@@ -1275,7 +1275,7 @@ function inputTypeLabel(t) {
     id_get:              'Entrada: ID da Comunicação (GET)',
     debito_doc:          'Entrada: Placa + Renavam + CPF/Documento',
     debito_chassi:       'Entrada: Placa + Renavam + Chassi',
-    debito_uf_select:    'Entrada: Placa + Renavam + Estado',
+    debito_renavam:      'Entrada: Renavam',
   };
   return map[t] || t;
 }
@@ -1635,56 +1635,14 @@ function renderFormFields(inputType, svc) {
     venda: vendaBody,
 
     debito_doc: placaField + renavamField +
-      field('documento', 'CPF do Proprietário', 'text', '000.000.000-00') +
-      `<p class="text-xs text-blue-600 mt-1">ℹ️ Informe o CPF do proprietário do veículo.</p>`,
+      field('documento', 'CPF ou CNPJ do Proprietário', 'text', '000.000.000-00') +
+      `<p class="text-xs text-blue-600 mt-1">ℹ️ Informe o CPF ou CNPJ do proprietário do veículo.</p>`,
 
     debito_chassi: placaField + renavamField +
       field('chassi', 'Chassi (17 caracteres)', 'text', '9BWZZZ377VT004251') +
       `<p class="text-xs text-amber-600 mt-1">⚠️ Informe o chassi exatamente como consta no documento (17 caracteres, sem espaços).</p>`,
 
-    debito_uf_select: placaField + renavamField + `
-      <div>
-        <label class="label">Estado (UF) <span class="text-red-500">*</span></label>
-        <select id="f-uf" class="input-field" required onchange="onDebitoUfChange(this.value)">
-          <option value="">Selecione o estado...</option>
-          <option value="ac">AC — Acre</option>
-          <option value="al">AL — Alagoas</option>
-          <option value="am">AM — Amazonas</option>
-          <option value="ap">AP — Amapá</option>
-          <option value="ba">BA — Bahia</option>
-          <option value="ce">CE — Ceará</option>
-          <option value="df">DF — Distrito Federal</option>
-          <option value="es">ES — Espírito Santo</option>
-          <option value="go">GO — Goiás</option>
-          <option value="ma">MA — Maranhão</option>
-          <option value="mg">MG — Minas Gerais</option>
-          <option value="mt">MT — Mato Grosso</option>
-          <option value="pa">PA — Pará</option>
-          <option value="pb">PB — Paraíba</option>
-          <option value="pe">PE — Pernambuco</option>
-          <option value="pi">PI — Piauí</option>
-          <option value="pr">PR — Paraná</option>
-          <option value="rj">RJ — Rio de Janeiro</option>
-          <option value="rn">RN — Rio Grande do Norte</option>
-          <option value="ro">RO — Rondônia</option>
-          <option value="rr">RR — Roraima</option>
-          <option value="rs">RS — Rio Grande do Sul</option>
-          <option value="sc">SC — Santa Catarina</option>
-          <option value="se">SE — Sergipe</option>
-          <option value="sp">SP — São Paulo</option>
-          <option value="to">TO — Tocantins</option>
-        </select>
-      </div>
-      <div id="f-documento-wrap" class="hidden">
-        <label class="label">CPF do Proprietário <span class="text-red-500">*</span></label>
-        <input id="f-documento" type="text" placeholder="000.000.000-00" class="input-field">
-        <p class="text-xs text-blue-600 mt-1">ℹ️ Obrigatório para a UF selecionada.</p>
-      </div>
-      <div id="f-chassi-wrap" class="hidden">
-        <label class="label">Chassi (17 caracteres) <span class="text-red-500">*</span></label>
-        <input id="f-chassi" type="text" placeholder="9BWZZZ377VT004251" class="input-field" maxlength="17">
-        <p class="text-xs text-amber-600 mt-1">⚠️ Obrigatório para Santa Catarina (SC).</p>
-      </div>`,
+    debito_renavam: renavamField,
   };
 
   wrap.innerHTML = templates[inputType] || placaField;
@@ -1765,21 +1723,6 @@ async function autocompletarCep(cep) {
   } catch {
     setStatus('⚠️ Erro ao buscar CEP. Preencha manualmente.', 'text-amber-600');
   }
-}
-
-function onDebitoUfChange(uf) {
-  const docUfs    = ['ce','ma','mt','pb','rj','ro','to'];
-  const chassiUfs = ['sc'];
-  const docWrap    = document.getElementById('f-documento-wrap');
-  const chassiWrap = document.getElementById('f-chassi-wrap');
-  const docEl      = document.getElementById('f-documento');
-  const chassiEl   = document.getElementById('f-chassi');
-  const showDoc    = docUfs.includes(uf);
-  const showChassi = chassiUfs.includes(uf);
-  docWrap?.classList.toggle('hidden', !showDoc);
-  chassiWrap?.classList.toggle('hidden', !showChassi);
-  if (docEl)    docEl.required    = showDoc;
-  if (chassiEl) chassiEl.required = showChassi;
 }
 
 function resetForm(showCats = true) {
@@ -1892,14 +1835,8 @@ function buildParams(inputType) {
   if (inputType === 'debito_chassi')
     return { placa: g('placa'), renavam: g('renavam'), chassi: g('chassi') };
 
-  if (inputType === 'debito_uf_select') {
-    const result = { placa: g('placa'), renavam: g('renavam'), uf: g('uf') };
-    const doc    = g('documento');
-    const chassi = g('chassi');
-    if (doc)    result.documento = cd(doc);
-    if (chassi) result.chassi   = chassi.toUpperCase();
-    return result;
-  }
+  if (inputType === 'debito_renavam')
+    return { renavam: g('renavam') };
 
   if (inputType === 'venda') {
     const vDoc = cd(g('v_cpf'));
@@ -2112,7 +2049,6 @@ function buildCategoryGridV2() {
   const cats = [...new Set(allServicesV2.map(s => s.group))];
   const catIcons = {
     'Documentos':          { icon:'📄', color:'bg-blue-50 border-blue-200' },
-    'Débitos por Estado':  { icon:'🏛️', color:'bg-teal-50 border-teal-200' },
     'Consultar Crédito':   { icon:'💳', color:'bg-purple-50 border-purple-200' },
     'Divida Ativa':        { icon:'⚖️', color:'bg-amber-50 border-amber-200' },
     'CNH':                 { icon:'🪪', color:'bg-rose-50 border-rose-200' },

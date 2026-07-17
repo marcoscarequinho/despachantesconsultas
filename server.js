@@ -7,6 +7,7 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 const crypto = require('crypto');
 const { Agent } = require('undici');
+const PDFDocument = require('pdfkit');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -194,8 +195,35 @@ const SERVICES = [
   { id:'com-venda-desbloquear',       name:'Desbloquear Comunicação Venda', group:'Comunicação Venda', basePrice:5.00,  inputType:'placa',          icon:'🔓' },
   { id:'com-venda-por-id',            name:'Consultar Comunicação por ID',  group:'Comunicação Venda', basePrice:3.00,  inputType:'id_get',         icon:'🔍' },
   { id:'motivos-cancelamento',        name:'Motivos de Cancelamento',       group:'Comunicação Venda', basePrice:3.00,  inputType:'protocolo_get',  icon:'📋' },
-  // ── Débitos por Estado (autocrlv.com.br) ──
-  { id:'debito-uf', name:'Débitos Veiculares por Estado', group:'Débitos por Estado', basePrice:1.786, inputType:'debito_uf_select', icon:'🏛️' },
+  // ── Débitos por Estado (API Datacube — api.consultasdeveiculos.com) ──────────
+  // Valor fixo de R$3,00 por consulta (noMarkup:true). A API retorna JSON (não
+  // PDF pronto); o servidor monta o PDF do relatório a partir do JSON antes de
+  // entregar ao cliente (ver buildDebitoPdfBuffer).
+  { id:'dc-debito-ac',    name:'Débitos - Acre',                   group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'placa_renavam', icon:'🏛️', dcPath:'/debitos/ac' },
+  { id:'dc-debito-al',    name:'Débitos - Alagoas',                group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'placa_renavam', icon:'🏛️', dcPath:'/debitos/al' },
+  { id:'dc-debito-ap',    name:'Débitos - Amapá',                  group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'placa_renavam', icon:'🏛️', dcPath:'/debitos/ap' },
+  { id:'dc-debito-am',    name:'Débitos - Amazonas',               group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'placa_renavam', icon:'🏛️', dcPath:'/debitos/am' },
+  { id:'dc-debito-ce',    name:'Débitos - Ceará',                  group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'debito_doc',    icon:'🏛️', dcPath:'/debitos/ce' },
+  { id:'dc-debito-df',    name:'Débitos - Distrito Federal',       group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'placa_renavam', icon:'🏛️', dcPath:'/debitos/df' },
+  { id:'dc-debito-es',    name:'Débitos - Espírito Santo',         group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'placa_renavam', icon:'🏛️', dcPath:'/debitos/es' },
+  { id:'dc-debito-go',    name:'Débitos - Goiás',                  group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'placa_renavam', icon:'🏛️', dcPath:'/debitos/go' },
+  { id:'dc-debito-ma',    name:'Débitos - Maranhão',               group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'debito_doc',    icon:'🏛️', dcPath:'/debitos/ma' },
+  { id:'dc-debito-mt',    name:'Débitos - Mato Grosso',            group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'debito_doc',    icon:'🏛️', dcPath:'/debitos/mt' },
+  { id:'dc-debito-ms',    name:'Débitos - Mato Grosso do Sul',     group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'debito_doc',    icon:'🏛️', dcPath:'/debitos/ms' },
+  { id:'dc-debito-mg',    name:'Débitos - Minas Gerais',           group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'placa_renavam', icon:'🏛️', dcPath:'/debitos/mg-simples' },
+  { id:'dc-debito-pa',    name:'Débitos - Pará',                   group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'placa_renavam', icon:'🏛️', dcPath:'/debitos/pa' },
+  { id:'dc-debito-pb',    name:'Débitos - Paraíba',                group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'debito_doc',    icon:'🏛️', dcPath:'/debitos/pb' },
+  { id:'dc-debito-pr',    name:'Débitos - Paraná',                 group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'debito_renavam',icon:'🏛️', dcPath:'/debitos/pr' },
+  { id:'dc-debito-pi',    name:'Débitos - Piauí',                  group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'placa_renavam', icon:'🏛️', dcPath:'/debitos/pi' },
+  { id:'dc-debito-rj',    name:'Débitos - Rio de Janeiro',         group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'debito_doc',    icon:'🏛️', dcPath:'/debitos/rj' },
+  { id:'dc-debito-rn',    name:'Débitos - Rio Grande do Norte',    group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'placa_renavam', icon:'🏛️', dcPath:'/debitos/rn' },
+  { id:'dc-debito-rs',    name:'Débitos - Rio Grande do Sul',      group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'placa_renavam', icon:'🏛️', dcPath:'/debitos/rs-v2' },
+  { id:'dc-debito-ro',    name:'Débitos - Rondônia',               group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'debito_doc',    icon:'🏛️', dcPath:'/debitos/ro' },
+  { id:'dc-debito-rr',    name:'Débitos - Roraima',                group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'placa_renavam', icon:'🏛️', dcPath:'/debitos/rr' },
+  { id:'dc-debito-sc',    name:'Débitos - Santa Catarina',         group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'debito_chassi', icon:'🏛️', dcPath:'/debitos/sc' },
+  { id:'dc-debito-sc-v2', name:'Débitos - Santa Catarina V2',      group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'placa_renavam', icon:'🏛️', dcPath:'/debitos/sc-v2' },
+  { id:'dc-debito-sp',    name:'Débitos - São Paulo',              group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'placa_renavam', icon:'🏛️', dcPath:'/debitos/sp' },
+  { id:'dc-debito-to',    name:'Débitos - Tocantins',              group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'debito_doc',    icon:'🏛️', dcPath:'/debitos/to' },
   // ── Número CRV (Apenas antigos) — processamento manual (entrega via upload no admin) ──
   { id:'crv-antigo-rio', name:'Consulta CRV antigo Rio', group:'Número CRV (Apenas antigos)', basePrice:500.00, inputType:'placa', icon:'📁', uf:'rj', noMarkup:true },
   { id:'crv-antigo-ce', name:'Consulta CRV antigo CE', group:'Número CRV (Apenas antigos)', basePrice:55.00,  inputType:'placa', icon:'📁', uf:'ce' },
@@ -231,8 +259,7 @@ const MANUAL_SERVICE_IDS  = [...SERVICES.filter(s => s.group === MANUAL_UPLOAD_G
 // Catálogo completamente separado do SERVICES/autocrlv/chekaki acima. Preços em
 // basePrice são o custo cobrado pela Datacube na faixa "De 0 - 10.000" da tabela
 // de valores; o preço final ao cliente aplica o mesmo MARKUP (40%) do restante
-// do sistema, exceto quando noMarkup:true (ex.: categoria "Débitos por Estado",
-// vendida a valor fixo de R$3,00). Exposto no painel na aba "Opção 2 Nova
+// do sistema, exceto quando noMarkup:true. Exposto no painel na aba "Opção 2 Nova
 // Consulta" (rota /api/query-v2).
 const SERVICES_V2 = [
   { id:'dc-agregados',              name:'Agregados',                               group:'Documentos', basePrice:0.380,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/agregados' },
@@ -275,33 +302,6 @@ const SERVICES_V2 = [
   { id:'dc-veiculos-doc-v3',        name:'Veículos por Documento V3',               group:'Documentos', basePrice:8.984,  inputType:'dc_documento',  icon:'🚗', dcPath:'/pessoas/veiculos_v3' },
   { id:'dc-historico-proprietario', name:'Histórico de Proprietários',              group:'Documentos', basePrice:7.813,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/historico-proprietario' },
   { id:'dc-roubo-furto-simples',    name:'Roubo e Furto Simples',                   group:'Documentos', basePrice:6.250,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/roubo_furto_simples' },
-
-  // ── Débitos por Estado — valor fixo R$3,00, sem markup ───────────────────────
-  { id:'dc-debito-ac',    name:'Débitos - Acre',                   group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/ac' },
-  { id:'dc-debito-al',    name:'Débitos - Alagoas',                group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/al' },
-  { id:'dc-debito-ap',    name:'Débitos - Amapá',                  group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/ap' },
-  { id:'dc-debito-am',    name:'Débitos - Amazonas',               group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/am' },
-  { id:'dc-debito-ce',    name:'Débitos - Ceará',                  group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_doc',     icon:'🏛️', dcPath:'/debitos/ce' },
-  { id:'dc-debito-df',    name:'Débitos - Distrito Federal',       group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/df' },
-  { id:'dc-debito-es',    name:'Débitos - Espírito Santo',         group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/es' },
-  { id:'dc-debito-go',    name:'Débitos - Goiás',                  group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/go' },
-  { id:'dc-debito-ma',    name:'Débitos - Maranhão',               group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_doc',     icon:'🏛️', dcPath:'/debitos/ma' },
-  { id:'dc-debito-mt',    name:'Débitos - Mato Grosso',            group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_doc',     icon:'🏛️', dcPath:'/debitos/mt' },
-  { id:'dc-debito-ms',    name:'Débitos - Mato Grosso do Sul',     group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_doc',     icon:'🏛️', dcPath:'/debitos/ms' },
-  { id:'dc-debito-mg',    name:'Débitos - Minas Gerais',           group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/mg-simples' },
-  { id:'dc-debito-pa',    name:'Débitos - Pará',                   group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/pa' },
-  { id:'dc-debito-pb',    name:'Débitos - Paraíba',                group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_doc',     icon:'🏛️', dcPath:'/debitos/pb' },
-  { id:'dc-debito-pr',    name:'Débitos - Paraná',                 group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_renavam', icon:'🏛️', dcPath:'/debitos/pr' },
-  { id:'dc-debito-pi',    name:'Débitos - Piauí',                  group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/pi' },
-  { id:'dc-debito-rj',    name:'Débitos - Rio de Janeiro',         group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_doc',     icon:'🏛️', dcPath:'/debitos/rj' },
-  { id:'dc-debito-rn',    name:'Débitos - Rio Grande do Norte',    group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/rn' },
-  { id:'dc-debito-rs',    name:'Débitos - Rio Grande do Sul',      group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/rs-v2' },
-  { id:'dc-debito-ro',    name:'Débitos - Rondônia',               group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_doc',     icon:'🏛️', dcPath:'/debitos/ro' },
-  { id:'dc-debito-rr',    name:'Débitos - Roraima',                group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/rr' },
-  { id:'dc-debito-sc',    name:'Débitos - Santa Catarina',         group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_chassi',  icon:'🏛️', dcPath:'/debitos/sc' },
-  { id:'dc-debito-sc-v2', name:'Débitos - Santa Catarina V2',      group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/sc-v2' },
-  { id:'dc-debito-sp',    name:'Débitos - São Paulo',              group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito',         icon:'🏛️', dcPath:'/debitos/sp' },
-  { id:'dc-debito-to',    name:'Débitos - Tocantins',              group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'dc_debito_doc',     icon:'🏛️', dcPath:'/debitos/to' },
 
   // ── Consultar Crédito — preços com o mesmo MARKUP (40%) do resto do sistema ──
   { id:'dc-credito-completa-pf',    name:'Crédito Completa PF',    group:'Consultar Crédito', basePrice:36.281, inputType:'dc_cpf',       icon:'💳', dcPath:'/credito/credito-completa-pf' },
@@ -1115,6 +1115,136 @@ function extractApiErrorMsg(data) {
   return msg || JSON.stringify(data);
 }
 
+// ── Geração de PDF — Débitos por Estado (Datacube retorna JSON, não PDF pronto) ──
+// O relatório é montado dinamicamente a partir das chaves presentes no JSON, pois
+// o formato varia por estado (ex.: RJ tem campos de multa diferentes de SC/SP).
+function fmtMoneyBRL(v) {
+  const n = Number(v);
+  return 'R$ ' + (Number.isFinite(n) ? n : 0).toFixed(2).replace('.', ',');
+}
+
+function humanizeKey(k) {
+  return String(k)
+    .replace(/_/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/^./, c => c.toUpperCase());
+}
+
+function pdfSectionTitle(doc, text) {
+  doc.moveDown(0.6);
+  doc.fontSize(13).fillColor('#1e40af').font('Helvetica-Bold').text(text);
+  doc.moveDown(0.2);
+  doc.strokeColor('#e5e7eb').lineWidth(1)
+    .moveTo(doc.x, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).stroke();
+  doc.moveDown(0.3);
+  doc.fillColor('#111827').font('Helvetica').fontSize(10);
+}
+
+function pdfKeyValue(doc, obj, skipKeys = []) {
+  if (!obj || typeof obj !== 'object') return;
+  Object.entries(obj).forEach(([k, v]) => {
+    if (skipKeys.includes(k) || v === null || v === undefined || v === '' || typeof v === 'object') return;
+    doc.font('Helvetica-Bold').text(humanizeKey(k) + ': ', { continued: true }).font('Helvetica').text(String(v));
+  });
+}
+
+function pdfItemList(doc, items) {
+  if (!Array.isArray(items) || items.length === 0) {
+    doc.fillColor('#6b7280').text('Nenhum registro encontrado.');
+    doc.fillColor('#111827');
+    return;
+  }
+  items.forEach((item, idx) => {
+    if (idx > 0) doc.moveDown(0.3);
+    if (item && typeof item === 'object') {
+      Object.entries(item).forEach(([k, v]) => {
+        if (v === null || v === undefined || v === '' || typeof v === 'object') return;
+        const isMoney = /valor|total|honorarios|debitos$/i.test(k) && typeof v === 'number';
+        doc.font('Helvetica-Bold').text(`${humanizeKey(k)}: `, { continued: true })
+          .font('Helvetica').text(isMoney ? fmtMoneyBRL(v) : String(v));
+      });
+    } else {
+      doc.text(String(item));
+    }
+    if (idx < items.length - 1) {
+      doc.moveDown(0.1);
+      doc.strokeColor('#f3f4f6').moveTo(doc.x, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).stroke();
+      doc.moveDown(0.1);
+    }
+  });
+}
+
+function buildDebitoPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+
+      doc.fontSize(18).fillColor('#1e40af').font('Helvetica-Bold').text('MC Despachadoria Consultas');
+      doc.fontSize(12).fillColor('#374151').font('Helvetica').text(service.name);
+      doc.fontSize(9).fillColor('#6b7280').text(`Gerado em ${new Date().toLocaleString('pt-BR')}`);
+      doc.moveDown(0.5);
+      doc.strokeColor('#1e40af').lineWidth(2)
+        .moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).stroke();
+
+      const veiculo = data?.veiculo || {};
+      pdfSectionTitle(doc, '🚗 Dados do Veículo');
+      if (Object.keys(veiculo).length) {
+        pdfKeyValue(doc, veiculo);
+      } else {
+        doc.font('Helvetica-Bold').text('Placa: ', { continued: true }).font('Helvetica').text(params?.placa || '-');
+        doc.font('Helvetica-Bold').text('Renavam: ', { continued: true }).font('Helvetica').text(params?.renavam || '-');
+      }
+
+      pdfSectionTitle(doc, '💰 IPVA');
+      pdfItemList(doc, data?.ipvas);
+
+      pdfSectionTitle(doc, '🩺 DPVAT');
+      if (data?.dpvats_obs) {
+        doc.fillColor('#6b7280').text(`Indisponível: ${data.dpvats_obs}`);
+        doc.fillColor('#111827');
+      } else {
+        pdfItemList(doc, data?.dpvats);
+      }
+
+      pdfSectionTitle(doc, '🚦 Multas');
+      pdfItemList(doc, data?.multas);
+
+      pdfSectionTitle(doc, '📄 Licenciamento');
+      pdfItemList(doc, data?.licenciamentos);
+
+      pdfSectionTitle(doc, '⚖️ Dívida Ativa');
+      const dividaAtiva = data?.dividaativa;
+      if (Array.isArray(dividaAtiva)) {
+        pdfItemList(doc, dividaAtiva);
+      } else if (dividaAtiva && typeof dividaAtiva === 'object') {
+        pdfItemList(doc, dividaAtiva.debitos);
+        if (dividaAtiva.total !== undefined) {
+          doc.moveDown(0.2);
+          doc.font('Helvetica-Bold').text('Total Dívida Ativa: ', { continued: true })
+            .font('Helvetica').text(fmtMoneyBRL(dividaAtiva.total));
+        }
+      } else {
+        doc.fillColor('#6b7280').text('Nenhum registro encontrado.');
+        doc.fillColor('#111827');
+      }
+
+      doc.moveDown(1);
+      doc.fontSize(8).fillColor('#9ca3af')
+        .text('Documento gerado eletronicamente pela MC Despachadoria Consultas com base nos dados retornados pela API consultada. Não substitui documento oficial do órgão de trânsito.', {
+          align: 'center',
+        });
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── POST /api/query ───────────────────────────────────────────────────────────
 app.post('/api/query', requireAuth, async (req, res) => {
   const { serviceId, params } = req.body;
@@ -1354,39 +1484,36 @@ app.post('/api/query', requireAuth, async (req, res) => {
       body   = { placa };
     }
 
-    // Débitos por Estado — serviço unificado com dropdown de UF
-    if (serviceId === 'debito-uf') {
-      const uf      = (params?.uf || '').toLowerCase().replace(/\s/g, '');
+    // Débitos por Estado — API Datacube (form-urlencoded, retorna JSON que vira PDF)
+    const isDcDebito = serviceId.startsWith('dc-debito-');
+    if (isDcDebito) {
       const placa   = (params?.placa   || '').toUpperCase().replace(/[\s-]/g, '');
       const renavam = (params?.renavam || '').replace(/\D/g, '');
-      if (!uf)                                      return res.status(400).json({ error: 'Selecione o estado (UF).' });
-      if (placa.length < 7)                         return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
-      if (renavam.length < 9 || renavam.length > 11) return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
-      const qp = new URLSearchParams({ endpoint:`debitos_${uf}_pdf`, require_api_key:'1', chaveAcesso:AUTOCRLV_KEY, placa, renavam });
-      if (params?.documento) qp.set('documento', (params.documento||'').replace(/\D/g,''));
-      if (params?.chassi)    qp.set('chassi',    (params.chassi||'').toUpperCase());
-      apiUrl = `https://autocrlv.com.br/cliente/api.php?${qp.toString()}`;
-      method = 'GET';
-      body   = null;
-    }
-
-    // Débitos por Estado — autocrlv.com.br (GET, auth via query param)
-    const DEBITO_UF_SVCS = ['debito-ac','debito-al','debito-am','debito-ap','debito-ce','debito-df','debito-es','debito-ma','debito-mg','debito-mt','debito-pa','debito-pb','debito-pi','debito-pr','debito-rj','debito-rn','debito-ro','debito-sc','debito-sp'];
-    if (DEBITO_UF_SVCS.includes(serviceId)) {
-      const uf      = service.uf;
-      const placa   = (params?.placa   || '').toUpperCase().replace(/[\s-]/g, '');
-      const renavam = (params?.renavam || '').replace(/\D/g, '');
-      const qp = new URLSearchParams({ endpoint:`debitos_${uf}_pdf`, require_api_key:'1', chaveAcesso:AUTOCRLV_KEY, placa, renavam });
-      if (params?.documento) qp.set('documento', (params.documento||'').replace(/\D/g,''));
-      if (params?.chassi)    qp.set('chassi',    (params.chassi||'').toUpperCase());
-      apiUrl = `https://autocrlv.com.br/cliente/api.php?${qp.toString()}`;
-      method = 'GET';
-      body   = null;
+      if (service.inputType !== 'debito_renavam' && placa.length < 7)
+        return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      if (renavam.length < 9 || renavam.length > 11)
+        return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+      const form = new URLSearchParams({ auth_token: DATACUBE_TOKEN, renavam });
+      if (service.inputType !== 'debito_renavam') form.set('placa', placa);
+      if (service.inputType === 'debito_doc') {
+        const documento = (params?.documento || '').replace(/\D/g, '');
+        if (documento.length !== 11 && documento.length !== 14)
+          return res.status(400).json({ error: 'Documento inválido. Informe CPF ou CNPJ.' });
+        form.set('documento', documento);
+      }
+      if (service.inputType === 'debito_chassi') {
+        const chassi = (params?.chassi || '').toUpperCase().replace(/\s/g, '');
+        if (chassi.length !== 17) return res.status(400).json({ error: 'Chassi deve ter exatamente 17 caracteres.' });
+        form.set('chassi', chassi);
+      }
+      apiUrl = `${DATACUBE_API_URL}${service.dcPath}`;
+      method = 'POST';
+      body   = form;
     }
 
     let fetchHeaders;
-    if (DEBITO_UF_SVCS.includes(serviceId) || serviceId === 'debito-uf') {
-      fetchHeaders = {};
+    if (isDcDebito) {
+      fetchHeaders = { 'Content-Type': 'application/x-www-form-urlencoded' };
     } else if (apiUrl.startsWith('https://autocrlv.com.br/cliente/api_integracao_crlv_agendado')) {
       fetchHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AUTOCRLV_KEY}` };
     } else if (PORTAL_PLACA_MAP[serviceId]) {
@@ -1395,7 +1522,11 @@ app.post('/api/query', requireAuth, async (req, res) => {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO };
     }
     const fetchOpts = { method, headers: fetchHeaders };
-    if (body !== null) fetchOpts.body = JSON.stringify(body);
+    if (isDcDebito) {
+      fetchOpts.body = body.toString();
+    } else if (body !== null) {
+      fetchOpts.body = JSON.stringify(body);
+    }
     // Consulta Completa: upstream leva de 2 a 5 min, acima do timeout padrão (300s) do
     // dispatcher fetch do Node — usa um dispatcher dedicado com timeout maior.
     if (serviceId === 'consultar-completa') fetchOpts.dispatcher = slowQueryDispatcher;
@@ -1428,15 +1559,23 @@ app.post('/api/query', requireAuth, async (req, res) => {
     const bodyStr    = bodyBuffer.toString('utf8');
     const isRealPdf  = bodyBuffer.slice(0, 4).toString() === '%PDF';
 
-    // Débitos por estado: valida PDF antes de debitar
-    if ((DEBITO_UF_SVCS.includes(serviceId) || serviceId === 'debito-uf') && !isRealPdf) {
-      let errMsg = 'Resposta inválida da API de débitos.';
+    // Débitos por Estado (Datacube): valida o JSON e monta o PDF do relatório antes
+    // de debitar — a API não devolve PDF pronto, então geramos um a partir do JSON.
+    let dcDebitoPdfBuf = null;
+    if (isDcDebito) {
+      let parsed;
+      try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
+      if (!parsed || parsed.status === false) {
+        const errMsg = parsed ? extractApiErrorMsg(parsed) : 'Resposta inválida da API de débitos.';
+        console.error(`[${serviceId}] erro Datacube: ${errMsg}`);
+        return res.status(422).json({ error: errMsg });
+      }
       try {
-        const p = JSON.parse(bodyStr);
-        errMsg = extractApiErrorMsg(p);
-      } catch { errMsg = bodyStr.slice(0, 300) || errMsg; }
-      console.error(`[${serviceId}] esperava PDF, recebeu: ${errMsg}`);
-      return res.status(422).json({ error: errMsg });
+        dcDebitoPdfBuf = await buildDebitoPdfBuffer(service, parsed.result ?? parsed, params);
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+      }
     }
 
     // serviços que retornam JSON com pdf_base64
@@ -1460,7 +1599,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
     // Serviços genéricos (não-PDF, não-HTML): recusa cobrar se a API não retornou
     // nenhum dado relevante (corpo vazio, JSON vazio/nulo ou com indicador de falha).
     let genericData = null, genericParseOk = false;
-    const willBePdfOrHtml = isRealPdf || base64PdfBuf || htmlBuf;
+    const willBePdfOrHtml = isRealPdf || base64PdfBuf || htmlBuf || dcDebitoPdfBuf;
     if (!willBePdfOrHtml) {
       const trimmed = bodyStr.trim();
       if (!trimmed) {
@@ -1501,13 +1640,13 @@ app.post('/api/query', requireAuth, async (req, res) => {
        VALUES ($1,$2,$3,$4,'success',$5,$6,$7,$8) RETURNING id`,
       [req.user.id, serviceId, service.name, JSON.stringify(params || {}),
        price, txRow.rows[0].id,
-       htmlBuf ? 'html' : (isRealPdf || base64PdfBuf) ? 'pdf' : 'json',
+       htmlBuf ? 'html' : (isRealPdf || base64PdfBuf || dcDebitoPdfBuf) ? 'pdf' : 'json',
        resultData]
     );
     await notifyAdminNewQuery(user, service, price, params);
 
     // ── Envia PDF + salva no cache por 7 dias ────────────────────────────────
-    const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null);
+    const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null) || dcDebitoPdfBuf;
     if (pdfToSend || htmlBuf) {
       const dataToCache = pdfToSend || htmlBuf;
       const token       = crypto.randomBytes(32).toString('hex');
