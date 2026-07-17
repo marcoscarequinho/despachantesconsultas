@@ -1116,8 +1116,11 @@ function extractApiErrorMsg(data) {
 }
 
 // ── Geração de PDF — Débitos por Estado (Datacube retorna JSON, não PDF pronto) ──
-// O relatório é montado dinamicamente a partir das chaves presentes no JSON, pois
-// o formato varia por estado (ex.: RJ tem campos de multa diferentes de SC/SP).
+// Reproduz o layout do relatório que a própria Datacube gera (barras de seção em
+// azul, tabela de campos com bordas, "Nada consta" para campos vazios), trocando
+// a logo/marca deles pela da MC Despachadoria. O formato varia por estado (ex.:
+// RJ tem campos de multa diferentes de SC/SP), então cada registro é desenhado
+// como uma grade genérica de todos os campos retornados, na ordem em que vêm.
 function fmtMoneyBRL(v) {
   const n = Number(v);
   return 'R$ ' + (Number.isFinite(n) ? n : 0).toFixed(2).replace('.', ',');
@@ -1130,48 +1133,167 @@ function humanizeKey(k) {
     .replace(/^./, c => c.toUpperCase());
 }
 
-function pdfSectionTitle(doc, text) {
-  doc.moveDown(0.6);
-  doc.fontSize(13).fillColor('#1e40af').font('Helvetica-Bold').text(text);
-  doc.moveDown(0.2);
-  doc.strokeColor('#e5e7eb').lineWidth(1)
-    .moveTo(doc.x, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).stroke();
-  doc.moveDown(0.3);
+function maskPlacaDisplay(p) {
+  const c = (p || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return c.length === 7 ? `${c.slice(0, 3)}-${c.slice(3)}` : (p || '-');
+}
+
+function maskDocDisplay(d) {
+  const digits = (d || '').replace(/\D/g, '');
+  if (digits.length === 11) return digits.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+  if (digits.length === 14) return digits.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5');
+  return d || '-';
+}
+
+function pdfContentBox(doc) {
+  const left = doc.page.margins.left;
+  const width = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  return { left, width };
+}
+
+// Evita barras/títulos "órfãos" no fim da página — força quebra antes se não
+// houver espaço para a barra e pelo menos uma linha de conteúdo.
+function pdfEnsureSpace(doc, neededHeight) {
+  const bottom = doc.page.height - doc.page.margins.bottom;
+  if (doc.y + neededHeight > bottom) doc.addPage();
+}
+
+// Barra de seção principal (ex.: "MULTAS", "VEÍCULO") — fundo azul cheio, texto
+// branco centralizado, no mesmo espírito do relatório da Datacube.
+function pdfBar(doc, text, opts = {}) {
+  const { bg = '#1e40af', color = '#ffffff', size = 10.5, align = 'center' } = opts;
+  pdfEnsureSpace(doc, 30);
+  const { left, width } = pdfContentBox(doc);
+  const barY = doc.y;
+  const barH = 22;
+  doc.rect(left, barY, width, barH).fill(bg);
+  doc.fillColor(color).font('Helvetica-Bold').fontSize(size)
+    .text(text, left + 10, barY + 6, { width: width - 20, align });
+  doc.y = barY + barH + 8;
   doc.fillColor('#111827').font('Helvetica').fontSize(10);
 }
 
-function pdfKeyValue(doc, obj, skipKeys = []) {
-  if (!obj || typeof obj !== 'object') return;
-  Object.entries(obj).forEach(([k, v]) => {
-    if (skipKeys.includes(k) || v === null || v === undefined || v === '' || typeof v === 'object') return;
-    doc.font('Helvetica-Bold').text(humanizeKey(k) + ': ', { continued: true }).font('Helvetica').text(String(v));
+// Barra menor usada para identificar cada registro dentro de uma lista
+// (ex.: "Multas - 1", "Licenciamentos - 2").
+function pdfSubBar(doc, text) {
+  pdfEnsureSpace(doc, 24);
+  const { left, width } = pdfContentBox(doc);
+  const barY = doc.y;
+  const barH = 18;
+  doc.rect(left, barY, width, barH).fill('#dbeafe');
+  doc.fillColor('#1e40af').font('Helvetica-Bold').fontSize(9.5)
+    .text(text, left + 8, barY + 4, { width: width - 16 });
+  doc.y = barY + barH + 4;
+  doc.fillColor('#111827').font('Helvetica').fontSize(10);
+}
+
+function pdfEmptyNotice(doc, text = 'Nenhum registro encontrado.') {
+  doc.fillColor('#9ca3af').fontSize(9.5).font('Helvetica-Oblique').text(text);
+  doc.fillColor('#111827').font('Helvetica').fontSize(10);
+  doc.moveDown(0.4);
+}
+
+function pdfNoteLine(doc, text) {
+  doc.fillColor('#6b7280').fontSize(9.5).text(text);
+  doc.fillColor('#111827').fontSize(10);
+  doc.moveDown(0.4);
+}
+
+// Tabela de 2 colunas com bordas (rótulo em negrito + valor abaixo, célula com
+// contorno) — usada tanto para "Dados do Veículo" quanto para os campos de cada
+// registro de multa/IPVA/licenciamento/dívida ativa.
+function pdfFieldGrid(doc, pairs) {
+  if (!pairs.length) return;
+  const { left, width } = pdfContentBox(doc);
+  const colWidth = width / 2;
+  const padX = 8, padTop = 6, padBottom = 6, labelGap = 2;
+  const labelSize = 8.5, valueSize = 9;
+
+  for (let i = 0; i < pairs.length; i += 2) {
+    const [l1, v1] = pairs[i];
+    const p2 = pairs[i + 1];
+    const innerWidth = colWidth - padX * 2;
+
+    doc.font('Helvetica-Bold').fontSize(labelSize);
+    const labelH1 = doc.heightOfString(l1 + ':', { width: innerWidth });
+    doc.font('Helvetica').fontSize(valueSize);
+    const valueH1 = doc.heightOfString(String(v1), { width: innerWidth });
+    let cellH1 = labelH1 + labelGap + valueH1;
+
+    let cellH2 = 0;
+    if (p2) {
+      doc.font('Helvetica-Bold').fontSize(labelSize);
+      const labelH2 = doc.heightOfString(p2[0] + ':', { width: innerWidth });
+      doc.font('Helvetica').fontSize(valueSize);
+      const valueH2 = doc.heightOfString(String(p2[1]), { width: innerWidth });
+      cellH2 = labelH2 + labelGap + valueH2;
+    }
+
+    const rowH = Math.max(cellH1, cellH2) + padTop + padBottom;
+    pdfEnsureSpace(doc, rowH + 2);
+    const rowY = doc.y;
+
+    doc.strokeColor('#e5e7eb').lineWidth(0.75).rect(left, rowY, width, rowH).stroke();
+    if (p2) doc.moveTo(left + colWidth, rowY).lineTo(left + colWidth, rowY + rowH).stroke();
+
+    doc.font('Helvetica-Bold').fontSize(labelSize).fillColor('#111827')
+      .text(l1 + ':', left + padX, rowY + padTop, { width: innerWidth });
+    doc.font('Helvetica').fontSize(valueSize).fillColor('#374151')
+      .text(String(v1), left + padX, doc.y + labelGap, { width: innerWidth });
+
+    if (p2) {
+      doc.font('Helvetica-Bold').fontSize(labelSize).fillColor('#111827')
+        .text(p2[0] + ':', left + colWidth + padX, rowY + padTop, { width: innerWidth });
+      doc.font('Helvetica').fontSize(valueSize).fillColor('#374151')
+        .text(String(p2[1]), left + colWidth + padX, doc.y + labelGap, { width: innerWidth });
+    }
+
+    doc.y = rowY + rowH;
+    doc.fillColor('#111827').font('Helvetica').fontSize(10);
+  }
+}
+
+// Converte um registro (multa/IPVA/licenciamento/...) em pares [rótulo, valor],
+// preenchendo campos vazios com "Nada consta" — igual ao relatório da Datacube,
+// em vez de simplesmente omitir o campo.
+function itemToPairs(item) {
+  return Object.entries(item || {})
+    .filter(([, v]) => typeof v !== 'object')
+    .map(([k, v]) => [humanizeKey(k), (v === null || v === undefined || v === '') ? 'Nada consta' : String(v)]);
+}
+
+function pdfDebtSection(doc, items, groupLabel) {
+  if (!Array.isArray(items) || items.length === 0) { pdfEmptyNotice(doc); return; }
+  items.forEach((item, idx) => {
+    pdfSubBar(doc, `${groupLabel} - ${idx + 1}`);
+    pdfFieldGrid(doc, itemToPairs(item));
+    doc.moveDown(0.35);
   });
 }
 
-function pdfItemList(doc, items) {
-  if (!Array.isArray(items) || items.length === 0) {
-    doc.fillColor('#6b7280').text('Nenhum registro encontrado.');
-    doc.fillColor('#111827');
-    return;
+function pickNum(item, keys) {
+  for (const k of keys) if (typeof item?.[k] === 'number') return item[k];
+  return undefined;
+}
+
+function sumNumField(items, keys) {
+  if (!Array.isArray(items)) return 0;
+  return items.reduce((acc, it) => acc + (pickNum(it, keys) || 0), 0);
+}
+
+function computeTotalDebitos(data) {
+  let total = 0;
+  total += sumNumField(data?.ipvas, ['valor']);
+  total += sumNumField(data?.multas, ['valor']);
+  total += sumNumField(data?.licenciamentos, ['valor']);
+  total += sumNumField(data?.dpvats, ['valor']);
+  const da = data?.dividaativa;
+  if (Array.isArray(da)) {
+    total += sumNumField(da, ['total', 'valor', 'debitos']);
+  } else if (da && typeof da === 'object') {
+    total += typeof da.total === 'number' ? da.total : sumNumField(da.debitos, ['valor']);
   }
-  items.forEach((item, idx) => {
-    if (idx > 0) doc.moveDown(0.3);
-    if (item && typeof item === 'object') {
-      Object.entries(item).forEach(([k, v]) => {
-        if (v === null || v === undefined || v === '' || typeof v === 'object') return;
-        const isMoney = /valor|total|honorarios|debitos$/i.test(k) && typeof v === 'number';
-        doc.font('Helvetica-Bold').text(`${humanizeKey(k)}: `, { continued: true })
-          .font('Helvetica').text(isMoney ? fmtMoneyBRL(v) : String(v));
-      });
-    } else {
-      doc.text(String(item));
-    }
-    if (idx < items.length - 1) {
-      doc.moveDown(0.1);
-      doc.strokeColor('#f3f4f6').moveTo(doc.x, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).stroke();
-      doc.moveDown(0.1);
-    }
-  });
+  return total;
 }
 
 function buildDebitoPdfBuffer(service, data, params) {
@@ -1182,61 +1304,86 @@ function buildDebitoPdfBuffer(service, data, params) {
       doc.on('data', c => chunks.push(c));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
+      const { left, width } = pdfContentBox(doc);
+      const now = new Date();
 
-      doc.fontSize(18).fillColor('#1e40af').font('Helvetica-Bold').text('MC Despachadoria Consultas');
-      doc.fontSize(12).fillColor('#374151').font('Helvetica').text(service.name);
-      doc.fontSize(9).fillColor('#6b7280').text(`Gerado em ${new Date().toLocaleString('pt-BR')}`);
-      doc.moveDown(0.5);
-      doc.strokeColor('#1e40af').lineWidth(2)
-        .moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).stroke();
+      // Cabeçalho / marca MC Despachadoria
+      doc.fontSize(18).fillColor('#1e40af').font('Helvetica-Bold')
+        .text('MC Despachadoria Consultas', { align: 'center' });
+      doc.fontSize(8.5).fillColor('#6b7280').font('Helvetica')
+        .text(`Gerado em ${now.toLocaleString('pt-BR')}`, { align: 'center' });
+      doc.moveDown(0.6);
 
-      const veiculo = data?.veiculo || {};
-      pdfSectionTitle(doc, '🚗 Dados do Veículo');
-      if (Object.keys(veiculo).length) {
-        pdfKeyValue(doc, veiculo);
-      } else {
-        doc.font('Helvetica-Bold').text('Placa: ', { continued: true }).font('Helvetica').text(params?.placa || '-');
-        doc.font('Helvetica-Bold').text('Renavam: ', { continued: true }).font('Helvetica').text(params?.renavam || '-');
-      }
+      const ufName = (service.name || '').replace(/^Débitos\s*-\s*/i, '');
+      doc.fontSize(15).fillColor('#111827').font('Helvetica-Bold')
+        .text(`DÉBITOS - ${ufName.toUpperCase()}`, { align: 'center' });
+      doc.moveDown(0.7);
+      doc.fillColor('#111827').font('Helvetica').fontSize(10);
 
-      pdfSectionTitle(doc, '💰 IPVA');
-      pdfItemList(doc, data?.ipvas);
+      // Dados da consulta (o que foi enviado nesta consulta)
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      const consultaPairs = [
+        ['Placa', maskPlacaDisplay(params?.placa)],
+        ['Renavam', params?.renavam || '-'],
+      ];
+      if (params?.documento) consultaPairs.push(['Documento', maskDocDisplay(params.documento)]);
+      if (params?.chassi) consultaPairs.push(['Chassi', params.chassi]);
+      pdfFieldGrid(doc, consultaPairs);
+      doc.moveDown(0.4);
 
-      pdfSectionTitle(doc, '🩺 DPVAT');
-      if (data?.dpvats_obs) {
-        doc.fillColor('#6b7280').text(`Indisponível: ${data.dpvats_obs}`);
-        doc.fillColor('#111827');
-      } else {
-        pdfItemList(doc, data?.dpvats);
-      }
+      // Veículo
+      pdfBar(doc, 'VEÍCULO');
+      const veicPairs = itemToPairs(data?.veiculo);
+      if (veicPairs.length) pdfFieldGrid(doc, veicPairs);
+      else pdfEmptyNotice(doc, 'Sem dados adicionais do veículo.');
+      doc.moveDown(0.4);
 
-      pdfSectionTitle(doc, '🚦 Multas');
-      pdfItemList(doc, data?.multas);
+      // Resumo — total estimado de débitos (destaque em laranja, cor de alerta da marca)
+      const total = computeTotalDebitos(data);
+      pdfEnsureSpace(doc, 36);
+      const boxY = doc.y;
+      const boxH = 28;
+      doc.rect(left, boxY, width, boxH).fill('#f97316');
+      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9.5)
+        .text('TOTAL ESTIMADO DE DÉBITOS', left + 12, boxY + 9);
+      doc.fontSize(13).text(fmtMoneyBRL(total), left, boxY + 7, { width: width - 12, align: 'right' });
+      doc.y = boxY + boxH + 4;
+      doc.fillColor('#9ca3af').fontSize(7).font('Helvetica-Oblique')
+        .text('Soma dos valores encontrados nesta consulta — pode não refletir juros, descontos ou acréscimos legais atualizados.', left, doc.y, { width });
+      doc.fillColor('#111827').font('Helvetica').fontSize(10);
+      doc.moveDown(0.4);
 
-      pdfSectionTitle(doc, '📄 Licenciamento');
-      pdfItemList(doc, data?.licenciamentos);
+      // Multas, Dpvats, Dívida Ativa, Ipvas, Licenciamentos — mesma ordem do JSON
+      // retornado pela Datacube (e do relatório oficial deles).
+      pdfBar(doc, 'MULTAS');
+      pdfDebtSection(doc, data?.multas, 'Multas');
 
-      pdfSectionTitle(doc, '⚖️ Dívida Ativa');
+      pdfBar(doc, 'DPVATS');
+      if (data?.dpvats_obs) pdfNoteLine(doc, `Indisponível: ${data.dpvats_obs}`);
+      else pdfDebtSection(doc, data?.dpvats, 'Dpvats');
+
+      pdfBar(doc, 'DÍVIDA ATIVA');
       const dividaAtiva = data?.dividaativa;
       if (Array.isArray(dividaAtiva)) {
-        pdfItemList(doc, dividaAtiva);
-      } else if (dividaAtiva && typeof dividaAtiva === 'object') {
-        pdfItemList(doc, dividaAtiva.debitos);
-        if (dividaAtiva.total !== undefined) {
-          doc.moveDown(0.2);
-          doc.font('Helvetica-Bold').text('Total Dívida Ativa: ', { continued: true })
-            .font('Helvetica').text(fmtMoneyBRL(dividaAtiva.total));
-        }
+        pdfDebtSection(doc, dividaAtiva, 'Dívida Ativa');
+      } else if (dividaAtiva && typeof dividaAtiva === 'object' && Object.keys(dividaAtiva).length) {
+        pdfDebtSection(doc, dividaAtiva.debitos, 'Dívida Ativa');
       } else {
-        doc.fillColor('#6b7280').text('Nenhum registro encontrado.');
-        doc.fillColor('#111827');
+        pdfEmptyNotice(doc);
       }
 
-      doc.moveDown(1);
-      doc.fontSize(8).fillColor('#9ca3af')
-        .text('Documento gerado eletronicamente pela MC Despachadoria Consultas com base nos dados retornados pela API consultada. Não substitui documento oficial do órgão de trânsito.', {
-          align: 'center',
-        });
+      pdfBar(doc, 'IPVAS');
+      pdfDebtSection(doc, data?.ipvas, 'Ipvas');
+
+      pdfBar(doc, 'LICENCIAMENTOS');
+      pdfDebtSection(doc, data?.licenciamentos, 'Licenciamentos');
+
+      // Rodapé — data da consulta + aviso de confidencialidade/responsabilidade
+      pdfEnsureSpace(doc, 90);
+      pdfBar(doc, `Data da consulta: ${now.toLocaleString('pt-BR')}`, { bg: '#dbeafe', color: '#1e40af', size: 9.5 });
+      doc.fontSize(7.5).fillColor('#374151').font('Helvetica-Bold').text('* Importante', left, doc.y, { width });
+      doc.font('Helvetica').fillColor('#6b7280')
+        .text('As informações aqui contidas são de caráter estritamente confidencial. Nosso sistema disponibiliza tais informações apenas para análise, não tendo nenhuma responsabilidade ou ingerência pelas inclusões errôneas nos bancos de dados, pois tais inserções são realizadas pelos orgãos responsáveis. Desta forma, o REQUERENTE assume toda e qualquer responsabilidade sobre a utilização das informações.', left, doc.y, { width });
 
       doc.end();
     } catch (e) {

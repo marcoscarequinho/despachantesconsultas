@@ -1655,6 +1655,14 @@ function renderFormFields(inputType, svc) {
       </div>`);
   }
 
+  if (svc && svc.group === 'Débitos por Estado') {
+    wrap.insertAdjacentHTML('afterbegin', `
+      <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 mb-2">
+        ⚠️ <strong>Confira a UF antes de consultar:</strong> essa consulta é cobrada mesmo se a placa não for
+        encontrada no estado selecionado. Certifique-se de que o veículo está registrado em <strong>${svc.name.replace('Débitos - ', '')}</strong> antes de prosseguir.
+      </div>`);
+  }
+
   // Máscara de placa
   const placaEl = document.getElementById('f-placa');
   if (placaEl) {
