@@ -1199,6 +1199,30 @@ function pdfNoteLine(doc, text) {
   doc.moveDown(0.4);
 }
 
+// Cabeçalho padrão (marca MC Despachadoria + título) usado por todos os relatórios
+// PDF gerados a partir de JSON da Datacube.
+function pdfReportHeader(doc, title, now) {
+  doc.fontSize(18).fillColor('#1e40af').font('Helvetica-Bold')
+    .text('MC Despachadoria Consultas', { align: 'center' });
+  doc.fontSize(8.5).fillColor('#6b7280').font('Helvetica')
+    .text(`Gerado em ${now.toLocaleString('pt-BR')}`, { align: 'center' });
+  doc.moveDown(0.6);
+  doc.fontSize(15).fillColor('#111827').font('Helvetica-Bold')
+    .text(title, { align: 'center' });
+  doc.moveDown(0.7);
+  doc.fillColor('#111827').font('Helvetica').fontSize(10);
+}
+
+// Rodapé padrão (data da consulta + aviso de confidencialidade/responsabilidade).
+function pdfReportFooter(doc, now) {
+  const { left, width } = pdfContentBox(doc);
+  pdfEnsureSpace(doc, 90);
+  pdfBar(doc, `Data da consulta: ${now.toLocaleString('pt-BR')}`, { bg: '#dbeafe', color: '#1e40af', size: 9.5 });
+  doc.fontSize(7.5).fillColor('#374151').font('Helvetica-Bold').text('* Importante', left, doc.y, { width });
+  doc.font('Helvetica').fillColor('#6b7280')
+    .text('As informações aqui contidas são de caráter estritamente confidencial. Nosso sistema disponibiliza tais informações apenas para análise, não tendo nenhuma responsabilidade ou ingerência pelas inclusões errôneas nos bancos de dados, pois tais inserções são realizadas pelos orgãos responsáveis. Desta forma, o REQUERENTE assume toda e qualquer responsabilidade sobre a utilização das informações.', left, doc.y, { width });
+}
+
 // Tabela de 2 colunas com bordas (rótulo em negrito + valor abaixo, célula com
 // contorno) — usada tanto para "Dados do Veículo" quanto para os campos de cada
 // registro de multa/IPVA/licenciamento/dívida ativa.
@@ -1307,18 +1331,8 @@ function buildDebitoPdfBuffer(service, data, params) {
       const { left, width } = pdfContentBox(doc);
       const now = new Date();
 
-      // Cabeçalho / marca MC Despachadoria
-      doc.fontSize(18).fillColor('#1e40af').font('Helvetica-Bold')
-        .text('MC Despachadoria Consultas', { align: 'center' });
-      doc.fontSize(8.5).fillColor('#6b7280').font('Helvetica')
-        .text(`Gerado em ${now.toLocaleString('pt-BR')}`, { align: 'center' });
-      doc.moveDown(0.6);
-
       const ufName = (service.name || '').replace(/^Débitos\s*-\s*/i, '');
-      doc.fontSize(15).fillColor('#111827').font('Helvetica-Bold')
-        .text(`DÉBITOS - ${ufName.toUpperCase()}`, { align: 'center' });
-      doc.moveDown(0.7);
-      doc.fillColor('#111827').font('Helvetica').fontSize(10);
+      pdfReportHeader(doc, `DÉBITOS - ${ufName.toUpperCase()}`, now);
 
       // Dados da consulta (o que foi enviado nesta consulta)
       pdfBar(doc, 'DADOS DA CONSULTA');
@@ -1378,12 +1392,39 @@ function buildDebitoPdfBuffer(service, data, params) {
       pdfBar(doc, 'LICENCIAMENTOS');
       pdfDebtSection(doc, data?.licenciamentos, 'Licenciamentos');
 
-      // Rodapé — data da consulta + aviso de confidencialidade/responsabilidade
-      pdfEnsureSpace(doc, 90);
-      pdfBar(doc, `Data da consulta: ${now.toLocaleString('pt-BR')}`, { bg: '#dbeafe', color: '#1e40af', size: 9.5 });
-      doc.fontSize(7.5).fillColor('#374151').font('Helvetica-Bold').text('* Importante', left, doc.y, { width });
-      doc.font('Helvetica').fillColor('#6b7280')
-        .text('As informações aqui contidas são de caráter estritamente confidencial. Nosso sistema disponibiliza tais informações apenas para análise, não tendo nenhuma responsabilidade ou ingerência pelas inclusões errôneas nos bancos de dados, pois tais inserções são realizadas pelos orgãos responsáveis. Desta forma, o REQUERENTE assume toda e qualquer responsabilidade sobre a utilização das informações.', left, doc.y, { width });
+      pdfReportFooter(doc, now);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+// ── Geração de PDF — Decodificação de Motor (Datacube retorna JSON, não PDF pronto) ──
+function buildMotorPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+
+      pdfReportHeader(doc, 'DECODIFICAÇÃO DE MOTOR', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Motor', params?.motor || '-']]);
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'RESULTADO');
+      const pairs = itemToPairs(data);
+      if (pairs.length) pdfFieldGrid(doc, pairs);
+      else pdfEmptyNotice(doc, 'Nenhum dado retornado para esse motor.');
+      doc.moveDown(0.4);
+
+      pdfReportFooter(doc, now);
 
       doc.end();
     } catch (e) {
@@ -1721,6 +1762,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
     // negócio (ex.: "Motor não encontrado"), sinalizando falha via status:false — não
     // pelos campos genéricos success/erro que o restante do sistema já reconhece.
     let dcDebitoPdfBuf = null;
+    let dcMotorPdfBuf = null;
     if (isDatacubeForm) {
       let parsed;
       try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
@@ -1738,9 +1780,13 @@ app.post('/api/query', requireAuth, async (req, res) => {
           console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
           return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
         }
-      } else {
-        // Demais serviços Datacube: exibe só o "result", sem o envelope status/paid.
-        bodyStr = JSON.stringify(parsed.result ?? parsed);
+      } else if (serviceId === 'dc-decodificar-motor') {
+        try {
+          dcMotorPdfBuf = await buildMotorPdfBuffer(service, parsed.result ?? parsed, params);
+        } catch (e) {
+          console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+        }
       }
     }
 
@@ -1765,7 +1811,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
     // Serviços genéricos (não-PDF, não-HTML): recusa cobrar se a API não retornou
     // nenhum dado relevante (corpo vazio, JSON vazio/nulo ou com indicador de falha).
     let genericData = null, genericParseOk = false;
-    const willBePdfOrHtml = isRealPdf || base64PdfBuf || htmlBuf || dcDebitoPdfBuf;
+    const willBePdfOrHtml = isRealPdf || base64PdfBuf || htmlBuf || dcDebitoPdfBuf || dcMotorPdfBuf;
     if (!willBePdfOrHtml) {
       const trimmed = bodyStr.trim();
       if (!trimmed) {
@@ -1806,13 +1852,13 @@ app.post('/api/query', requireAuth, async (req, res) => {
        VALUES ($1,$2,$3,$4,'success',$5,$6,$7,$8) RETURNING id`,
       [req.user.id, serviceId, service.name, JSON.stringify(params || {}),
        price, txRow.rows[0].id,
-       htmlBuf ? 'html' : (isRealPdf || base64PdfBuf || dcDebitoPdfBuf) ? 'pdf' : 'json',
+       htmlBuf ? 'html' : (isRealPdf || base64PdfBuf || dcDebitoPdfBuf || dcMotorPdfBuf) ? 'pdf' : 'json',
        resultData]
     );
     await notifyAdminNewQuery(user, service, price, params);
 
     // ── Envia PDF + salva no cache por 7 dias ────────────────────────────────
-    const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null) || dcDebitoPdfBuf;
+    const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null) || dcDebitoPdfBuf || dcMotorPdfBuf;
     if (pdfToSend || htmlBuf) {
       const dataToCache = pdfToSend || htmlBuf;
       const token       = crypto.randomBytes(32).toString('hex');
