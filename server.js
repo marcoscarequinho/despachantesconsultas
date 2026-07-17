@@ -136,6 +136,8 @@ const SERVICES = [
   { id:'consultar-foto-leilao',  name:'Foto Leilão',                group:'Consultas Básicas', basePrice:10.00,  inputType:'placa',       icon:'📸' },
   { id:'consultar-chassi-v2',    name:'Consulta Chassi',            group:'Consultas Básicas', basePrice:7.50,   inputType:'chassi',      icon:'🔑' },
   { id:'consultar-cnh',          name:'Consultar CNH',              group:'Consultas Básicas', basePrice:11.43,  inputType:'cpfcnpj',     icon:'🪪' },
+  // API Datacube (form-urlencoded) — valor fixo de R$3,00, ver bloco dc-decodificar-motor em /api/query.
+  { id:'dc-decodificar-motor',   name:'Decodificação de Motor',     group:'Consultas Básicas', basePrice:3.00,   noMarkup:true, inputType:'motor', icon:'🔧', dcPath:'/veiculos/decodificar-motor' },
   // ── Débitos e Documentação ──
   { id:'consulta-debitos-portal',          name:'Consulta de Débitos',          group:'Débitos e Documentação', basePrice:1.0714, inputType:'placa',       icon:'💳' },
   { id:'consultar-debito-boletos-json',   name:'Emissão de boleto + Multas',   group:'Débitos e Documentação', basePrice:20.00, inputType:'placa',        icon:'🧾' },
@@ -277,7 +279,6 @@ const SERVICES_V2 = [
   { id:'dc-renainf',                name:'Renainf',                                 group:'Documentos', basePrice:3.594,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renainf' },
   { id:'dc-informacao-por-renavam', name:'Informações por Renavam',                 group:'Documentos', basePrice:0.375,  inputType:'dc_renavam',    icon:'🚗', dcPath:'/veiculos/informacao-por-renavam' },
   { id:'dc-decodificar-chassi',     name:'Decodificação de Chassi',                 group:'Documentos', basePrice:0.359,  inputType:'dc_chassi',     icon:'🚗', dcPath:'/veiculos/decodificar-chassi' },
-  { id:'dc-decodificar-motor',      name:'Decodificação de Motor',                  group:'Documentos', basePrice:0.359,  inputType:'dc_motor',      icon:'🚗', dcPath:'/veiculos/decodificar-motor' },
   { id:'dc-cronotacografo',         name:'Cronotacógrafo',                          group:'Documentos', basePrice:0.738,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/cronotacografo' },
   { id:'dc-gravames-v2',            name:'Gravames V2',                             group:'Documentos', basePrice:3.594,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/gravames-v2' },
   { id:'dc-gravames-v3',            name:'Gravames V3',                             group:'Documentos', basePrice:3.091,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/gravames-v3' },
@@ -1657,8 +1658,19 @@ app.post('/api/query', requireAuth, async (req, res) => {
       body   = form;
     }
 
+    // Decodificação de Motor — API Datacube (form-urlencoded, retorna JSON simples)
+    if (serviceId === 'dc-decodificar-motor') {
+      const motor = (params?.motor || '').toUpperCase().replace(/\s/g, '');
+      if (!motor) return res.status(400).json({ error: 'Informe o número do motor.' });
+      apiUrl = `${DATACUBE_API_URL}${service.dcPath}`;
+      method = 'POST';
+      body   = new URLSearchParams({ auth_token: DATACUBE_TOKEN, motor });
+    }
+
+    const isDatacubeForm = isDcDebito || serviceId === 'dc-decodificar-motor';
+
     let fetchHeaders;
-    if (isDcDebito) {
+    if (isDatacubeForm) {
       fetchHeaders = { 'Content-Type': 'application/x-www-form-urlencoded' };
     } else if (apiUrl.startsWith('https://autocrlv.com.br/cliente/api_integracao_crlv_agendado')) {
       fetchHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AUTOCRLV_KEY}` };
@@ -1668,7 +1680,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO };
     }
     const fetchOpts = { method, headers: fetchHeaders };
-    if (isDcDebito) {
+    if (isDatacubeForm) {
       fetchOpts.body = body.toString();
     } else if (body !== null) {
       fetchOpts.body = JSON.stringify(body);
@@ -1702,25 +1714,33 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
     // Lê o corpo uma única vez
     const bodyBuffer = Buffer.from(await apiRes.arrayBuffer());
-    const bodyStr    = bodyBuffer.toString('utf8');
+    let   bodyStr    = bodyBuffer.toString('utf8');
     const isRealPdf  = bodyBuffer.slice(0, 4).toString() === '%PDF';
 
-    // Débitos por Estado (Datacube): valida o JSON e monta o PDF do relatório antes
-    // de debitar — a API não devolve PDF pronto, então geramos um a partir do JSON.
+    // Serviços Datacube (form-urlencoded): a API retorna HTTP 200 mesmo em erro de
+    // negócio (ex.: "Motor não encontrado"), sinalizando falha via status:false — não
+    // pelos campos genéricos success/erro que o restante do sistema já reconhece.
     let dcDebitoPdfBuf = null;
-    if (isDcDebito) {
+    if (isDatacubeForm) {
       let parsed;
       try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
       if (!parsed || parsed.status === false) {
-        const errMsg = parsed ? extractApiErrorMsg(parsed) : 'Resposta inválida da API de débitos.';
+        const errMsg = parsed ? extractApiErrorMsg(parsed) : 'Resposta inválida da API.';
         console.error(`[${serviceId}] erro Datacube: ${errMsg}`);
         return res.status(422).json({ error: errMsg });
       }
-      try {
-        dcDebitoPdfBuf = await buildDebitoPdfBuffer(service, parsed.result ?? parsed, params);
-      } catch (e) {
-        console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
-        return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+      if (isDcDebito) {
+        // Débitos por Estado: monta o PDF do relatório a partir do JSON — a API não
+        // devolve PDF pronto.
+        try {
+          dcDebitoPdfBuf = await buildDebitoPdfBuffer(service, parsed.result ?? parsed, params);
+        } catch (e) {
+          console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+        }
+      } else {
+        // Demais serviços Datacube: exibe só o "result", sem o envelope status/paid.
+        bodyStr = JSON.stringify(parsed.result ?? parsed);
       }
     }
 
