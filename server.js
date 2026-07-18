@@ -3637,8 +3637,9 @@ app.get('/api/admin/intencao-venda/:queryId/file/:slot', requireAuth, requireSup
     if (!file?.data) return res.status(404).json({ error: 'Arquivo não encontrado.' });
 
     const buf = Buffer.from(file.data, 'base64');
+    const disposition = req.query.download ? 'attachment' : 'inline';
     res.set('Content-Type', file.type || 'application/octet-stream');
-    res.set('Content-Disposition', `attachment; filename="${(file.name || slot).replace(/"/g, '')}"`);
+    res.set('Content-Disposition', `${disposition}; filename="${(file.name || slot).replace(/"/g, '')}"`);
     res.send(buf);
   } catch (err) {
     console.error('Erro ao baixar documento de intenção de venda:', err.message);

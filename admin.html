@@ -1283,8 +1283,12 @@ function renderIntencaoVenda(uf) {
 
       <div class="flex flex-wrap gap-2">
         ${INTENCAO_SLOTS.map(s => `
-          <a href="/api/admin/intencao-venda/${q.id}/file/${s.slot}" target="_blank"
-             class="btn-ghost text-xs border border-gray-200">${s.icon} ${s.label}</a>`).join('')}
+          <span class="inline-flex rounded-lg border border-gray-200 overflow-hidden">
+            <a href="/api/admin/intencao-venda/${q.id}/file/${s.slot}" target="_blank"
+               class="btn-ghost text-xs !rounded-none" title="Visualizar">${s.icon} ${s.label}</a>
+            <a href="/api/admin/intencao-venda/${q.id}/file/${s.slot}?download=1" download
+               class="btn-ghost text-xs !rounded-none border-l border-gray-200 px-2" title="Baixar">⬇️</a>
+          </span>`).join('')}
       </div>
 
       <div class="bg-gray-50 rounded-lg p-3">
