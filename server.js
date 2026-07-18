@@ -236,8 +236,8 @@ const SERVICES = [
   { id:'dc-dividaativa-rj', name:'Dívida Ativa - Rio de Janeiro',   group:'Divida Ativa', basePrice:3.00, noMarkup:true, inputType:'debito_renavam', icon:'⚖️', dcPath:'/dividaativa/rj' },
   // ── CNH (API Datacube — api.consultasdeveiculos.com) ─────────────────────────
   // Valor fixo de R$4,00 por consulta (noMarkup:true). Mesmo fluxo Datacube form-
-  // urlencoded acima, mas devolvida como JSON genérico (não há um formato de
-  // relatório único entre os estados para valer a pena montar PDF).
+  // urlencoded acima; o PDF é montado a partir do JSON retornado (ver
+  // buildCnhPdfBuffer) — campos de "Dados da Consulta" variam por UF.
   { id:'dc-cnh-ac', name:'CNH - Acre',                 group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_nome_cpf',       icon:'🪪', dcPath:'/cnh/ac-completa' },
   { id:'dc-cnh-al', name:'CNH - Alagoas',               group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_al',             icon:'🪪', dcPath:'/cnh/al-completa' },
   { id:'dc-cnh-ce', name:'CNH - Ceará',                 group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_cpf_formulario', icon:'🪪', dcPath:'/cnh/ce-completa' },
@@ -1521,6 +1521,49 @@ function buildMotorPdfBuffer(service, data, params) {
   });
 }
 
+// ── Geração de PDF — CNH (Datacube retorna JSON, não PDF pronto) ───────────────
+function buildCnhPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+
+      const ufName = (service.name || '').replace(/^CNH\s*-\s*/i, '');
+      pdfReportHeader(doc, `CNH - ${ufName.toUpperCase()}`, now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      const fieldLabels = {
+        nome: 'Nome', cpf: 'CPF', cnh: 'Número da CNH', renach: 'RENACH',
+        formulario: 'Formulário', registro: 'Registro',
+        data_nascimento: 'Data de Nascimento', data_validade_cnh: 'Validade da CNH',
+        cod_municipio_nascimento: 'Cód. Município de Nascimento', uf_nascimento: 'UF de Nascimento',
+      };
+      const consultaPairs = Object.entries(fieldLabels)
+        .filter(([k]) => params?.[k])
+        .map(([k, label]) => [label, params[k]]);
+      if (consultaPairs.length) pdfFieldGrid(doc, consultaPairs);
+      else pdfEmptyNotice(doc, 'Nenhum dado informado.');
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'RESULTADO');
+      const pairs = itemToPairs(data);
+      if (pairs.length) pdfFieldGrid(doc, pairs);
+      else pdfEmptyNotice(doc, 'Nenhum dado retornado para essa consulta.');
+      doc.moveDown(0.4);
+
+      pdfReportFooter(doc, now);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── POST /api/query ───────────────────────────────────────────────────────────
 app.post('/api/query', requireAuth, async (req, res) => {
   const { serviceId, params } = req.body;
@@ -2020,10 +2063,15 @@ app.post('/api/query', requireAuth, async (req, res) => {
           return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
         }
       } else if (isDcCnh) {
-        // CNH: sem relatório em PDF (cada UF devolve um formato próprio) — desembrulha
-        // o campo "result" da Datacube antes do parse genérico abaixo, para não vazar
-        // o wrapper {status, result} pro cliente/histórico.
-        bodyStr = JSON.stringify(parsed.result ?? parsed);
+        // CNH: monta o PDF do relatório a partir do JSON — cada UF tem campos
+        // próprios, então o corpo do relatório é genérico (mesmo padrão visual do
+        // relatório de Débitos por Estado).
+        try {
+          dcDebitoPdfBuf = await buildCnhPdfBuffer(service, parsed.result ?? parsed, params);
+        } catch (e) {
+          console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+        }
       }
     }
 
