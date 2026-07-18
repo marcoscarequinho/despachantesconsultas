@@ -234,6 +234,23 @@ const SERVICES = [
   { id:'dc-dividaativa-sp', name:'Dívida Ativa - São Paulo',        group:'Divida Ativa', basePrice:3.00, noMarkup:true, inputType:'debito_renavam', icon:'⚖️', dcPath:'/dividaativa/sp' },
   { id:'dc-dividaativa-df', name:'Dívida Ativa - Distrito Federal', group:'Divida Ativa', basePrice:3.00, noMarkup:true, inputType:'placa_renavam',  icon:'⚖️', dcPath:'/dividaativa/df' },
   { id:'dc-dividaativa-rj', name:'Dívida Ativa - Rio de Janeiro',   group:'Divida Ativa', basePrice:3.00, noMarkup:true, inputType:'debito_renavam', icon:'⚖️', dcPath:'/dividaativa/rj' },
+  // ── CNH (API Datacube — api.consultasdeveiculos.com) ─────────────────────────
+  // Valor fixo de R$4,00 por consulta (noMarkup:true). Mesmo fluxo Datacube form-
+  // urlencoded acima, mas devolvida como JSON genérico (não há um formato de
+  // relatório único entre os estados para valer a pena montar PDF).
+  { id:'dc-cnh-ac', name:'CNH - Acre',                 group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_nome_cpf',       icon:'🪪', dcPath:'/cnh/ac-completa' },
+  { id:'dc-cnh-al', name:'CNH - Alagoas',               group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_al',             icon:'🪪', dcPath:'/cnh/al-completa' },
+  { id:'dc-cnh-ce', name:'CNH - Ceará',                 group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_cpf_formulario', icon:'🪪', dcPath:'/cnh/ce-completa' },
+  { id:'dc-cnh-go', name:'CNH - Goiás',                 group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_only',           icon:'🪪', dcPath:'/cnh/go-completa' },
+  { id:'dc-cnh-ma', name:'CNH - Maranhão',              group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_cpf_cnh',        icon:'🪪', dcPath:'/cnh/ma-completa' },
+  { id:'dc-cnh-mt', name:'CNH - Mato Grosso',           group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_cpf_renach',     icon:'🪪', dcPath:'/cnh/mt-completa' },
+  { id:'dc-cnh-ms', name:'CNH - Mato Grosso do Sul',    group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_cpf_cnh',        icon:'🪪', dcPath:'/cnh/ms-completa' },
+  { id:'dc-cnh-pa', name:'CNH - Pará',                  group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_cpf_cnh',        icon:'🪪', dcPath:'/cnh/pa-completa' },
+  { id:'dc-cnh-pr', name:'CNH - Paraná',                group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_pr',             icon:'🪪', dcPath:'/cnh/pr-completa' },
+  { id:'dc-cnh-rj', name:'CNH - Rio de Janeiro',        group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_cpf_cnh',        icon:'🪪', dcPath:'/cnh/rj-completa' },
+  { id:'dc-cnh-rn', name:'CNH - Rio Grande do Norte',   group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_cpf_cnh',        icon:'🪪', dcPath:'/cnh/rn-completa' },
+  { id:'dc-cnh-se', name:'CNH - Sergipe',               group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_se',             icon:'🪪', dcPath:'/cnh/se-completa' },
+  { id:'dc-cnh-to', name:'CNH - Tocantins',             group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_cpf_nascimento', icon:'🪪', dcPath:'/cnh/to-completa' },
   // ── Número CRV (Apenas antigos) — processamento manual (entrega via upload no admin) ──
   { id:'crv-antigo-rio', name:'Consulta CRV antigo Rio', group:'Número CRV (Apenas antigos)', basePrice:500.00, inputType:'placa', icon:'📁', uf:'rj', noMarkup:true },
   { id:'crv-antigo-ce', name:'Consulta CRV antigo CE', group:'Número CRV (Apenas antigos)', basePrice:55.00,  inputType:'placa', icon:'📁', uf:'ce' },
@@ -324,21 +341,6 @@ const SERVICES_V2 = [
   { id:'dc-restricao-score-pj',     name:'Restrição Score PJ',     group:'Consultar Crédito', basePrice:33.594, inputType:'dc_cnpj',      icon:'💳', dcPath:'/credito/restricao-score-pj' },
   { id:'dc-localizacao-score',      name:'Localização Score',      group:'Consultar Crédito', basePrice:8.594,  inputType:'dc_documento', icon:'💳', dcPath:'/credito/localizacao-score' },
   { id:'dc-endividamento-bancario', name:'Endividamento Bancário', group:'Consultar Crédito', basePrice:7.031,  inputType:'dc_documento', icon:'💳', dcPath:'/credito/endividamento-bancario' },
-
-  // ── CNH — preços com o mesmo MARKUP (40%) do resto do sistema ───────────────
-  { id:'dc-cnh-ac', name:'CNH - Acre',                 group:'CNH', basePrice:0.498, inputType:'dc_cnh_nome_cpf',      icon:'🪪', dcPath:'/cnh/ac-completa' },
-  { id:'dc-cnh-al', name:'CNH - Alagoas',               group:'CNH', basePrice:0.567, inputType:'dc_cnh_al',            icon:'🪪', dcPath:'/cnh/al-completa' },
-  { id:'dc-cnh-ce', name:'CNH - Ceará',                 group:'CNH', basePrice:0.498, inputType:'dc_cnh_cpf_formulario',icon:'🪪', dcPath:'/cnh/ce-completa' },
-  { id:'dc-cnh-go', name:'CNH - Goiás',                 group:'CNH', basePrice:0.498, inputType:'dc_cnh_only',          icon:'🪪', dcPath:'/cnh/go-completa' },
-  { id:'dc-cnh-ma', name:'CNH - Maranhão',              group:'CNH', basePrice:0.498, inputType:'dc_cnh_cpf_cnh',       icon:'🪪', dcPath:'/cnh/ma-completa' },
-  { id:'dc-cnh-mt', name:'CNH - Mato Grosso',           group:'CNH', basePrice:0.828, inputType:'dc_cnh_cpf_renach',    icon:'🪪', dcPath:'/cnh/mt-completa' },
-  { id:'dc-cnh-ms', name:'CNH - Mato Grosso do Sul',    group:'CNH', basePrice:0.498, inputType:'dc_cnh_cpf_cnh',       icon:'🪪', dcPath:'/cnh/ms-completa' },
-  { id:'dc-cnh-pa', name:'CNH - Pará',                  group:'CNH', basePrice:0.783, inputType:'dc_cnh_cpf_cnh',       icon:'🪪', dcPath:'/cnh/pa-completa' },
-  { id:'dc-cnh-pr', name:'CNH - Paraná',                group:'CNH', basePrice:0.744, inputType:'dc_cnh_pr',            icon:'🪪', dcPath:'/cnh/pr-completa' },
-  { id:'dc-cnh-rj', name:'CNH - Rio de Janeiro',        group:'CNH', basePrice:0.498, inputType:'dc_cnh_cpf_cnh',       icon:'🪪', dcPath:'/cnh/rj-completa' },
-  { id:'dc-cnh-rn', name:'CNH - Rio Grande do Norte',   group:'CNH', basePrice:0.498, inputType:'dc_cnh_cpf_cnh',       icon:'🪪', dcPath:'/cnh/rn-completa' },
-  { id:'dc-cnh-se', name:'CNH - Sergipe',               group:'CNH', basePrice:0.498, inputType:'dc_cnh_se',            icon:'🪪', dcPath:'/cnh/se-completa' },
-  { id:'dc-cnh-to', name:'CNH - Tocantins',             group:'CNH', basePrice:0.588, inputType:'dc_cnh_cpf_nascimento',icon:'🪪', dcPath:'/cnh/to-completa' },
 
   // ── Cadastros — preços com o mesmo MARKUP (40%) do resto do sistema ─────────
   { id:'dc-cadastro-empresas-cpf',    name:'Empresas do CPF',           group:'Cadastros', basePrice:0.313, inputType:'dc_cpf',      icon:'🗂️', dcPath:'/pessoas/empresas' },
@@ -1825,7 +1827,111 @@ app.post('/api/query', requireAuth, async (req, res) => {
       body   = new URLSearchParams({ auth_token: DATACUBE_TOKEN, motor });
     }
 
-    const isDatacubeForm = isDcDebito || isDcDividaAtiva || serviceId === 'dc-decodificar-motor';
+    // CNH — API Datacube (form-urlencoded, retorna JSON genérico — sem PDF, cada UF
+    // tem um formato de retorno próprio e não vale a pena montar um relatório único)
+    const isDcCnh = serviceId.startsWith('dc-cnh-');
+    if (isDcCnh) {
+      const form = new URLSearchParams({ auth_token: DATACUBE_TOKEN });
+      switch (service.inputType) {
+        case 'cnh_nome_cpf': {
+          const nome = (params?.nome || '').trim();
+          const cpf = (params?.cpf || '').replace(/\D/g, '');
+          if (!nome) return res.status(400).json({ error: 'Nome é obrigatório.' });
+          if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+          form.set('nome', nome);
+          form.set('cpf', cpf);
+          break;
+        }
+        case 'cnh_al': {
+          const cpf = (params?.cpf || '').replace(/\D/g, '');
+          const data_nascimento = (params?.data_nascimento || '').trim();
+          const cod_municipio_nascimento = (params?.cod_municipio_nascimento || '').trim();
+          const uf_nascimento = (params?.uf_nascimento || '').trim();
+          if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+          if (!data_nascimento) return res.status(400).json({ error: 'Data de nascimento é obrigatória.' });
+          if (!cod_municipio_nascimento) return res.status(400).json({ error: 'Código do município de nascimento é obrigatório.' });
+          if (!uf_nascimento) return res.status(400).json({ error: 'UF de nascimento é obrigatória.' });
+          form.set('cpf', cpf);
+          form.set('data_nascimento', data_nascimento);
+          form.set('cod_municipio_nascimento', cod_municipio_nascimento);
+          form.set('uf_nascimento', uf_nascimento);
+          break;
+        }
+        case 'cnh_cpf_formulario': {
+          const cpf = (params?.cpf || '').replace(/\D/g, '');
+          const formulario = (params?.formulario || '').trim();
+          if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+          if (!formulario) return res.status(400).json({ error: 'Número do formulário é obrigatório.' });
+          form.set('cpf', cpf);
+          form.set('formulario', formulario);
+          break;
+        }
+        case 'cnh_only': {
+          const cnh = (params?.cnh || '').trim();
+          if (!cnh) return res.status(400).json({ error: 'Número da CNH é obrigatório.' });
+          form.set('cnh', cnh);
+          break;
+        }
+        case 'cnh_cpf_cnh': {
+          const cpf = (params?.cpf || '').replace(/\D/g, '');
+          const cnh = (params?.cnh || '').trim();
+          if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+          if (!cnh) return res.status(400).json({ error: 'Número da CNH é obrigatório.' });
+          form.set('cpf', cpf);
+          form.set('cnh', cnh);
+          break;
+        }
+        case 'cnh_cpf_renach': {
+          const cpf = (params?.cpf || '').replace(/\D/g, '');
+          const renach = (params?.renach || '').trim();
+          if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+          if (!renach) return res.status(400).json({ error: 'Número do RENACH é obrigatório.' });
+          form.set('cpf', cpf);
+          form.set('renach', renach);
+          break;
+        }
+        case 'cnh_pr': {
+          const cpf = (params?.cpf || '').replace(/\D/g, '');
+          const cnh = (params?.cnh || '').trim();
+          const data_validade_cnh = (params?.data_validade_cnh || '').trim();
+          if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+          if (!cnh) return res.status(400).json({ error: 'Número da CNH é obrigatório.' });
+          if (!data_validade_cnh) return res.status(400).json({ error: 'Data de validade da CNH é obrigatória.' });
+          form.set('cpf', cpf);
+          form.set('cnh', cnh);
+          form.set('data_validade_cnh', data_validade_cnh);
+          break;
+        }
+        case 'cnh_se': {
+          const cnh = (params?.cnh || '').trim();
+          const registro = (params?.registro || '').trim();
+          const data_nascimento = (params?.data_nascimento || '').trim();
+          if (!cnh) return res.status(400).json({ error: 'Número da CNH é obrigatório.' });
+          if (!registro) return res.status(400).json({ error: 'Registro é obrigatório.' });
+          if (!data_nascimento) return res.status(400).json({ error: 'Data de nascimento é obrigatória.' });
+          form.set('cnh', cnh);
+          form.set('registro', registro);
+          form.set('data_nascimento', data_nascimento);
+          break;
+        }
+        case 'cnh_cpf_nascimento': {
+          const cpf = (params?.cpf || '').replace(/\D/g, '');
+          const data_nascimento = (params?.data_nascimento || '').trim();
+          if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+          if (!data_nascimento) return res.status(400).json({ error: 'Data de nascimento é obrigatória.' });
+          form.set('cpf', cpf);
+          form.set('data_nascimento', data_nascimento);
+          break;
+        }
+        default:
+          return res.status(400).json({ error: 'Tipo de entrada não suportado.' });
+      }
+      apiUrl = `${DATACUBE_API_URL}${service.dcPath}`;
+      method = 'POST';
+      body   = form;
+    }
+
+    const isDatacubeForm = isDcDebito || isDcDividaAtiva || isDcCnh || serviceId === 'dc-decodificar-motor';
 
     let fetchHeaders;
     if (isDatacubeForm) {
@@ -1913,6 +2019,11 @@ app.post('/api/query', requireAuth, async (req, res) => {
           console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
           return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
         }
+      } else if (isDcCnh) {
+        // CNH: sem relatório em PDF (cada UF devolve um formato próprio) — desembrulha
+        // o campo "result" da Datacube antes do parse genérico abaixo, para não vazar
+        // o wrapper {status, result} pro cliente/histórico.
+        bodyStr = JSON.stringify(parsed.result ?? parsed);
       }
     }
 

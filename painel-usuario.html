@@ -1463,6 +1463,7 @@ function renderPrices() {
     'Comunicação Venda':       '📝',
     'Débitos por Estado':      '🏛️',
     'Divida Ativa':            '⚖️',
+    'CNH':                     '🪪',
   };
 
   document.getElementById('prices-content').innerHTML = Object.entries(groups).map(([group, svcs]) => `
@@ -1519,6 +1520,15 @@ function inputTypeLabel(t) {
     debito_doc:          'Entrada: Placa + Renavam + CPF/Documento',
     debito_chassi:       'Entrada: Placa + Renavam + Chassi',
     debito_renavam:      'Entrada: Renavam',
+    cnh_nome_cpf:        'Entrada: Nome + CPF',
+    cnh_al:              'Entrada: CPF + Nascimento + Município + UF',
+    cnh_cpf_formulario:  'Entrada: CPF + Formulário',
+    cnh_only:            'Entrada: CNH',
+    cnh_cpf_cnh:         'Entrada: CPF + CNH',
+    cnh_cpf_renach:      'Entrada: CPF + Renach',
+    cnh_pr:              'Entrada: CPF + CNH + Validade da CNH',
+    cnh_se:              'Entrada: CNH + Registro + Nascimento',
+    cnh_cpf_nascimento:  'Entrada: CPF + Nascimento',
   };
   return map[t] || t;
 }
@@ -1594,6 +1604,7 @@ function buildCategoryGrid() {
     'Comunicação Venda':       { icon:'📝', color:'bg-pink-50 border-pink-200' },
     'Débitos por Estado':      { icon:'🏛️', color:'bg-teal-50 border-teal-200' },
     'Divida Ativa':            { icon:'⚖️', color:'bg-rose-50 border-rose-200' },
+    'CNH':                     { icon:'🪪', color:'bg-cyan-50 border-cyan-200' },
     'Número CRV (Apenas antigos)': { icon:'📁', color:'bg-indigo-50 border-indigo-200' },
   };
 
@@ -1887,6 +1898,50 @@ function renderFormFields(inputType, svc) {
       `<p class="text-xs text-amber-600 mt-1">⚠️ Informe o chassi exatamente como consta no documento (17 caracteres, sem espaços).</p>`,
 
     debito_renavam: renavamField,
+
+    cnh_nome_cpf: `
+      ${field('nome', 'Nome Completo', 'text', 'Nome do condutor')}
+      ${field('cpf', 'CPF', 'text', '000.000.000-00')}`,
+    cnh_al: `
+      ${field('cpf', 'CPF', 'text', '000.000.000-00')}
+      <div class="grid grid-cols-3 gap-3">
+        ${field('data_nascimento', 'Data Nascimento', 'text', 'DD/MM/AAAA')}
+        ${field('cod_municipio_nascimento', 'Cód. Município Nasc.', 'text', '1234')}
+        ${field('uf_nascimento', 'UF Nascimento', 'text', 'AL', true, 'maxlength="2"')}
+      </div>`,
+    cnh_cpf_formulario: `
+      <div class="grid grid-cols-2 gap-3">
+        ${field('cpf', 'CPF', 'text', '000.000.000-00')}
+        ${field('formulario', 'Formulário', 'text', '1234567890')}
+      </div>`,
+    cnh_only: field('cnh', 'Número da CNH', 'text', '12345678901'),
+    cnh_cpf_cnh: `
+      <div class="grid grid-cols-2 gap-3">
+        ${field('cpf', 'CPF', 'text', '000.000.000-00')}
+        ${field('cnh', 'Número da CNH', 'text', '12345678901')}
+      </div>`,
+    cnh_cpf_renach: `
+      <div class="grid grid-cols-2 gap-3">
+        ${field('cpf', 'CPF', 'text', '000.000.000-00')}
+        ${field('renach', 'RENACH', 'text', '1234567890')}
+      </div>`,
+    cnh_pr: `
+      ${field('cpf', 'CPF', 'text', '000.000.000-00')}
+      <div class="grid grid-cols-2 gap-3">
+        ${field('cnh', 'Número da CNH', 'text', '12345678901')}
+        ${field('data_validade_cnh', 'Validade da CNH', 'text', 'DD/MM/AAAA')}
+      </div>`,
+    cnh_se: `
+      ${field('cnh', 'Número da CNH', 'text', '12345678901')}
+      <div class="grid grid-cols-2 gap-3">
+        ${field('registro', 'Registro', 'text', '1234567890')}
+        ${field('data_nascimento', 'Data Nascimento', 'text', 'DD/MM/AAAA')}
+      </div>`,
+    cnh_cpf_nascimento: `
+      <div class="grid grid-cols-2 gap-3">
+        ${field('cpf', 'CPF', 'text', '000.000.000-00')}
+        ${field('data_nascimento', 'Data Nascimento', 'text', 'DD/MM/AAAA')}
+      </div>`,
   };
 
   wrap.innerHTML = templates[inputType] || placaField;
@@ -2089,6 +2144,16 @@ function buildParams(inputType) {
 
   if (inputType === 'debito_renavam')
     return { renavam: g('renavam') };
+
+  if (inputType === 'cnh_nome_cpf') return { nome: g('nome'), cpf: g('cpf') };
+  if (inputType === 'cnh_al') return { cpf: g('cpf'), data_nascimento: g('data_nascimento'), cod_municipio_nascimento: g('cod_municipio_nascimento'), uf_nascimento: g('uf_nascimento') };
+  if (inputType === 'cnh_cpf_formulario') return { cpf: g('cpf'), formulario: g('formulario') };
+  if (inputType === 'cnh_only') return { cnh: g('cnh') };
+  if (inputType === 'cnh_cpf_cnh') return { cpf: g('cpf'), cnh: g('cnh') };
+  if (inputType === 'cnh_cpf_renach') return { cpf: g('cpf'), renach: g('renach') };
+  if (inputType === 'cnh_pr') return { cpf: g('cpf'), cnh: g('cnh'), data_validade_cnh: g('data_validade_cnh') };
+  if (inputType === 'cnh_se') return { cnh: g('cnh'), registro: g('registro'), data_nascimento: g('data_nascimento') };
+  if (inputType === 'cnh_cpf_nascimento') return { cpf: g('cpf'), data_nascimento: g('data_nascimento') };
 
   if (inputType === 'venda') {
     const vDoc = cd(g('v_cpf'));
@@ -2302,7 +2367,6 @@ function buildCategoryGridV2() {
   const catIcons = {
     'Documentos':          { icon:'📄', color:'bg-blue-50 border-blue-200' },
     'Consultar Crédito':   { icon:'💳', color:'bg-purple-50 border-purple-200' },
-    'CNH':                 { icon:'🪪', color:'bg-rose-50 border-rose-200' },
     'Cadastros':           { icon:'🗂️', color:'bg-indigo-50 border-indigo-200' },
     'Orgãos':              { icon:'🏢', color:'bg-cyan-50 border-cyan-200' },
     'Comunicação de Venda':{ icon:'📤', color:'bg-emerald-50 border-emerald-200' },
