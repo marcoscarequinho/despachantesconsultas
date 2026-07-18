@@ -85,6 +85,14 @@
       <span class="text-lg">📁</span> Pedidos Manuais
       <span id="manual-pending-badge" class="ml-auto hidden bg-red-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-full"></span>
     </div>
+    <div class="nav-item" data-section="intencao-rj" onclick="showSection('intencao-rj')">
+      <span class="text-lg">🟢</span> Intenção de Venda RJ
+      <span id="intencao-rj-pending-badge" class="ml-auto hidden bg-red-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-full"></span>
+    </div>
+    <div class="nav-item" data-section="intencao-mg" onclick="showSection('intencao-mg')">
+      <span class="text-lg">🔵</span> Intenção de Venda MG
+      <span id="intencao-mg-pending-badge" class="ml-auto hidden bg-red-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-full"></span>
+    </div>
   </nav>
 
   <div class="p-3 border-t border-gray-700 space-y-1">
@@ -358,6 +366,28 @@
       </div>
     </section>
 
+    <!-- ── INTENÇÃO DE VENDA RJ ─────────────────────────────────────────────── -->
+    <section id="section-intencao-rj" class="admin-section hidden space-y-4">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Intenção de Venda RJ</h2>
+        <p class="text-sm text-gray-500">Documentos enviados pelos usuários para a categoria "Intenção de Venda RJ" — baixe os arquivos, veja o endereço e converse pelo WhatsApp.</p>
+      </div>
+      <div id="intencao-rj-list" class="space-y-4">
+        <div class="card space-y-2"><div class="skeleton"></div><div class="skeleton"></div></div>
+      </div>
+    </section>
+
+    <!-- ── INTENÇÃO DE VENDA MG ─────────────────────────────────────────────── -->
+    <section id="section-intencao-mg" class="admin-section hidden space-y-4">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Intenção de Venda MG</h2>
+        <p class="text-sm text-gray-500">Documentos enviados pelos usuários para a categoria "Intenção de Venda MG" — baixe os arquivos, veja o endereço e converse pelo WhatsApp.</p>
+      </div>
+      <div id="intencao-mg-list" class="space-y-4">
+        <div class="card space-y-2"><div class="skeleton"></div><div class="skeleton"></div></div>
+      </div>
+    </section>
+
   </main>
 </div>
 
@@ -563,7 +593,7 @@ const fmt = v => 'R$ ' + parseFloat(v||0).toLocaleString('pt-BR',{minimumFractio
 const fmtDate = s => { const d=new Date(s); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
 
 let allUsers = [], allTx = [], allQueries = [], allServices = [], allManualQueries = [];
-const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais' };
+const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'intencao-rj':'Intenção de Venda RJ', 'intencao-mg':'Intenção de Venda MG' };
 
 function toast(msg, type='success') {
   const el = document.getElementById('toast');
@@ -590,6 +620,8 @@ function showSection(id) {
   if (id === 'queries'  && !allQueries.length)  loadQueries();
   if (id === 'services' && !allServices.length) loadServices();
   if (id === 'manual')  loadManualQueries();
+  if (id === 'intencao-rj') loadIntencaoVenda('rj');
+  if (id === 'intencao-mg') loadIntencaoVenda('mg');
 }
 
 function refreshCurrentSection() {
@@ -602,6 +634,8 @@ function refreshCurrentSection() {
   if (id === 'queries')   { allQueries = []; loadQueries(); }
   if (id === 'services')  { allServices = []; loadServices(); }
   if (id === 'manual')    loadManualQueries();
+  if (id === 'intencao-rj') loadIntencaoVenda('rj');
+  if (id === 'intencao-mg') loadIntencaoVenda('mg');
 }
 
 function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
@@ -613,7 +647,7 @@ async function init() {
     if (!r.ok) { window.location.href = '/entrar'; return; }
     const user = await r.json();
     if (user.email !== 'contato@mygmail.com.br') { window.location.href = '/painel'; return; }
-    await Promise.all([loadStats(), loadUsers(), loadManualQueries()]);
+    await Promise.all([loadStats(), loadUsers(), loadManualQueries(), loadIntencaoVenda('rj'), loadIntencaoVenda('mg')]);
   } catch { window.location.href = '/entrar'; }
 }
 
@@ -1135,7 +1169,7 @@ async function resendWhatsapp(id, btn) {
     if (!r.ok) { toast(d.error || 'Erro ao reenviar.'); btn.disabled = false; btn.textContent = original; return; }
     toast('Reenviado pelo WhatsApp!');
     allManualQueries = [];
-    loadManualQueries();
+    refreshCurrentSection();
   } catch {
     toast('Erro de conexão.');
     btn.disabled = false; btn.textContent = original;
@@ -1176,7 +1210,7 @@ function submitManualUpload() {
       toast('Documento enviado! Cliente notificado.');
       closeModal('modal-manual-upload');
       allManualQueries = [];
-      loadManualQueries();
+      refreshCurrentSection();
     } catch {
       errEl.textContent = 'Erro de conexão.'; errEl.classList.remove('hidden');
     } finally {
@@ -1184,6 +1218,150 @@ function submitManualUpload() {
     }
   };
   reader.readAsDataURL(file);
+}
+
+// ── Intenção de Venda (ATPVE) — RJ / MG ───────────────────────────────────────
+const allIntencao = { rj: [], mg: [] };
+const INTENCAO_SLOTS = [
+  { slot: 'atpve',          label: 'ATPVE',                     icon: '📄' },
+  { slot: 'cod_seguranca',  label: 'Cód. Segurança',            icon: '🔐' },
+  { slot: 'doc_vendedor',   label: 'RG/CPF/CNH Vendedor',       icon: '🪪' },
+  { slot: 'doc_comprador',  label: 'RG/CPF/CNH Comprador',      icon: '🪪' },
+];
+
+async function loadIntencaoVenda(uf) {
+  try {
+    const r = await fetch(`/api/admin/intencao-venda/${uf}`);
+    if (!r.ok) return;
+    const d = await r.json();
+    allIntencao[uf] = d.queries || [];
+    renderIntencaoVenda(uf);
+    const pending = allIntencao[uf].filter(q => q.status === 'pendente').length;
+    const badge = document.getElementById(`intencao-${uf}-pending-badge`);
+    badge.textContent = pending;
+    badge.classList.toggle('hidden', !pending);
+  } catch {}
+}
+
+function renderIntencaoVenda(uf) {
+  const list = allIntencao[uf];
+  const wrap = document.getElementById(`intencao-${uf}-list`);
+  if (!list.length) {
+    wrap.innerHTML = `<div class="card text-center py-10 text-gray-400">Nenhum pedido de Intenção de Venda ${uf.toUpperCase()} ainda.</div>`;
+    return;
+  }
+  wrap.innerHTML = list.map(q => {
+    let endereco = '—';
+    try { endereco = JSON.parse(q.params || '{}').endereco || '—'; } catch {}
+    const pendente = q.status === 'pendente';
+    let whatsappStatus = '';
+    if (!pendente) {
+      if (q.whatsapp_sent_at) {
+        whatsappStatus = `<div class="text-xs text-green-600 mt-1">✅ WhatsApp enviado</div>`;
+      } else if (!q.user_phone) {
+        whatsappStatus = `<div class="text-xs text-gray-400 mt-1">— sem telefone</div>`;
+      } else {
+        whatsappStatus = `<div class="text-xs text-red-500 mt-1">⚠️ Não enviado</div>
+          <button onclick="resendWhatsapp(${q.id}, this)" class="text-xs text-blue-600 hover:underline mt-0.5">🔁 Reenviar</button>`;
+      }
+    }
+    return `
+    <div class="card space-y-4">
+      <div class="flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <div class="font-semibold text-gray-800">${q.user_name}</div>
+          <div class="text-xs text-gray-400">${q.user_email}${q.user_phone ? ' • ' + q.user_phone : ''}</div>
+          <div class="text-xs text-gray-400 mt-0.5">${fmtDate(q.created_at)}</div>
+        </div>
+        <div class="text-right">
+          ${intencaoBadge(pendente)}
+          ${whatsappStatus}
+          <div class="font-bold text-orange-500 text-sm mt-1">${fmt(q.amount)}</div>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap gap-2">
+        ${INTENCAO_SLOTS.map(s => `
+          <a href="/api/admin/intencao-venda/${q.id}/file/${s.slot}" target="_blank"
+             class="btn-ghost text-xs border border-gray-200">${s.icon} ${s.label}</a>`).join('')}
+      </div>
+
+      <div class="bg-gray-50 rounded-lg p-3">
+        <div class="text-xs font-semibold text-gray-500 uppercase mb-1">Endereço com CEP</div>
+        <div class="text-sm text-gray-700 whitespace-pre-wrap">${endereco}</div>
+      </div>
+
+      ${pendente ? `
+        <button onclick="openManualUpload(${q.id}, ${JSON.stringify(q.user_name + ' — ' + q.service_name).replace(/"/g,'&quot;')})"
+          class="action-btn bg-blue-600 hover:bg-blue-700 text-white">📤 Enviar PDF final</button>
+      ` : ''}
+
+      <div class="border-t border-gray-100 pt-3">
+        <div class="text-xs font-semibold text-gray-500 uppercase mb-2">Conversa com o usuário (WhatsApp)</div>
+        <div id="intencao-chat-${q.id}" class="space-y-1 max-h-40 overflow-y-auto text-sm mb-2 bg-gray-50 rounded-lg p-2">
+          <div class="text-xs text-gray-400">Carregando mensagens...</div>
+        </div>
+        <div class="flex gap-2">
+          <input id="intencao-chat-input-${q.id}" type="text" class="input-field text-sm"
+            placeholder="${q.user_phone ? 'Mensagem para o WhatsApp do usuário...' : 'Usuário sem telefone cadastrado'}"
+            ${q.user_phone ? '' : 'disabled'}
+            onkeydown="if(event.key==='Enter'){event.preventDefault();sendIntencaoMessage('${uf}', ${q.id});}">
+          <button onclick="sendIntencaoMessage('${uf}', ${q.id})" class="btn-primary text-xs" ${q.user_phone ? '' : 'disabled'}>Enviar</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  list.forEach(q => loadIntencaoMessages(q.id));
+}
+
+const intencaoBadge = pendente => `<span class="${pendente ? 'badge-amber' : 'badge-green'}">${pendente ? '⏳ Pendente' : '✅ Concluído'}</span>`;
+
+async function loadIntencaoMessages(queryId) {
+  try {
+    const r = await fetch(`/api/admin/intencao-venda/${queryId}/messages`);
+    if (!r.ok) return;
+    const d = await r.json();
+    renderIntencaoMessages(queryId, d.messages || []);
+  } catch {}
+}
+
+function renderIntencaoMessages(queryId, messages) {
+  const el = document.getElementById(`intencao-chat-${queryId}`);
+  if (!el) return;
+  if (!messages.length) {
+    el.innerHTML = `<div class="text-xs text-gray-400">Nenhuma mensagem enviada ainda.</div>`;
+    return;
+  }
+  el.innerHTML = messages.map(m => `
+    <div class="bg-white border border-gray-100 rounded px-2 py-1">
+      <div class="text-gray-700">${m.message}</div>
+      <div class="text-xs text-gray-400">${fmtDate(m.created_at)}</div>
+    </div>`).join('');
+  el.scrollTop = el.scrollHeight;
+}
+
+async function sendIntencaoMessage(uf, queryId) {
+  const input = document.getElementById(`intencao-chat-input-${queryId}`);
+  const message = input.value.trim();
+  if (!message) return;
+  input.disabled = true;
+  try {
+    const r = await fetch(`/api/admin/intencao-venda/${queryId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message }),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Erro ao enviar mensagem.', 'error'); return; }
+    input.value = '';
+    await loadIntencaoMessages(queryId);
+  } catch {
+    toast('Erro de conexão.', 'error');
+  } finally {
+    input.disabled = false;
+    input.focus();
+  }
 }
 
 // Fecha modal ao clicar no backdrop

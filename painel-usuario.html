@@ -105,6 +105,13 @@
       </svg>
       Infosimples Nova Consulta
     </div>
+    <div class="nav-item" data-section="intencao" onclick="showSection('intencao')">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+      </svg>
+      Intenção de Venda (ATPVE)
+    </div>
     <a href="/recarga-pix"
       class="nav-item"
       style="color:#86efac;border:1px solid rgba(34,197,94,.4);background:rgba(20,83,45,.35);">
@@ -250,6 +257,14 @@
           <div class="text-center">
             <div class="font-semibold text-gray-800">Opção 2 Nova Consulta</div>
             <div class="text-xs text-gray-500 mt-0.5">Documentos e débitos via Datacube</div>
+          </div>
+        </button>
+        <button onclick="showSection('intencao')"
+          class="card flex flex-col items-center gap-3 hover:shadow-md transition-shadow cursor-pointer border-2 border-transparent hover:border-pink-200">
+          <div class="w-12 h-12 bg-pink-100 rounded-xl flex items-center justify-center text-2xl">📝</div>
+          <div class="text-center">
+            <div class="font-semibold text-gray-800">Intenção de Venda (ATPVE)</div>
+            <div class="text-xs text-gray-500 mt-0.5">Envio de documentos — RJ e MG</div>
           </div>
         </button>
         <button onclick="showSection('query3')"
@@ -645,6 +660,103 @@
       </div>
     </section>
 
+    <!-- ── INTENÇÃO DE VENDA (ATPVE) ───────────────────────────────────── -->
+    <section id="section-intencao" class="dash-section hidden space-y-5">
+
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Intenção de Venda (ATPVE)</h2>
+        <p class="text-sm text-gray-500">Envie os documentos e o endereço com CEP — nossa equipe processa manualmente e devolve o documento final aqui no seu painel</p>
+      </div>
+
+      <!-- Saldo disponível -->
+      <div class="card bg-gradient-to-br from-orange-50 to-white border border-orange-200 flex items-center gap-4">
+        <div class="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center text-xl flex-shrink-0">💳</div>
+        <div>
+          <div class="text-sm text-gray-600">Saldo disponível</div>
+          <div id="intencao-credits" class="text-2xl font-bold text-orange-600">R$ 0,00</div>
+        </div>
+        <div class="ml-auto text-xs text-gray-400">Mesmo saldo da aba Nova Consulta</div>
+      </div>
+
+      <!-- Seleção de categoria -->
+      <div id="intencao-category-wrap" class="card">
+        <h3 class="font-semibold text-gray-800 mb-4">Selecione o Estado</h3>
+        <div id="intencao-category-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-3"></div>
+      </div>
+
+      <!-- Formulário -->
+      <div id="intencao-form-wrap" class="card hidden">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h3 id="intencao-form-name" class="font-semibold text-gray-800"></h3>
+            <div class="flex items-center gap-2 mt-1">
+              <span class="text-xs text-gray-500">Custo:</span>
+              <span id="intencao-form-price" class="price-tag"></span>
+            </div>
+          </div>
+          <button onclick="resetIntencaoForm()" class="text-xs text-gray-500 hover:text-gray-700">✕ Cancelar</button>
+        </div>
+
+        <form id="intencao-form" onsubmit="submitIntencao(event)" class="space-y-4">
+          <div class="grid sm:grid-cols-2 gap-4">
+            <div>
+              <label class="label">ATPVE <span class="text-red-500">*</span></label>
+              <input type="file" id="intencao-file-atpve" class="input-field" accept="application/pdf,image/*" onchange="handleIntencaoFile('atpve', this)">
+              <div id="intencao-file-atpve-status" class="text-xs text-gray-500 mt-1"></div>
+            </div>
+            <div>
+              <label class="label">Código de Segurança <span class="text-red-500">*</span></label>
+              <input type="file" id="intencao-file-cod_seguranca" class="input-field" accept="application/pdf,image/*" onchange="handleIntencaoFile('cod_seguranca', this)">
+              <div id="intencao-file-cod_seguranca-status" class="text-xs text-gray-500 mt-1"></div>
+            </div>
+            <div>
+              <label class="label">RG/CPF ou CNH: Vendedor <span class="text-red-500">*</span></label>
+              <input type="file" id="intencao-file-doc_vendedor" class="input-field" accept="application/pdf,image/*" onchange="handleIntencaoFile('doc_vendedor', this)">
+              <div id="intencao-file-doc_vendedor-status" class="text-xs text-gray-500 mt-1"></div>
+            </div>
+            <div>
+              <label class="label">RG/CPF ou CNH: Comprador <span class="text-red-500">*</span></label>
+              <input type="file" id="intencao-file-doc_comprador" class="input-field" accept="application/pdf,image/*" onchange="handleIntencaoFile('doc_comprador', this)">
+              <div id="intencao-file-doc_comprador-status" class="text-xs text-gray-500 mt-1"></div>
+            </div>
+          </div>
+
+          <div>
+            <label class="label">Endereço com CEP <span class="text-red-500">*</span></label>
+            <textarea id="intencao-endereco" rows="3" class="input-field" placeholder="Rua, número, bairro, cidade/UF, CEP" required></textarea>
+          </div>
+
+          <div id="intencao-form-error"
+            class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm flex gap-2">
+            <span class="flex-shrink-0">⚠️</span>
+            <span id="intencao-form-error-msg"></span>
+          </div>
+
+          <button id="intencao-submit-btn" type="submit" class="btn-primary w-full justify-center py-3">
+            <span id="intencao-submit-text">Enviar Pedido</span>
+            <svg id="intencao-spinner" class="hidden w-4 h-4 spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+            </svg>
+          </button>
+        </form>
+      </div>
+
+      <!-- Resultado -->
+      <div id="intencao-result-wrap" class="hidden result-card p-5">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-xl">✅</div>
+          <div>
+            <div class="font-bold text-green-800">Pedido Enviado</div>
+            <div id="intencao-result-msg" class="text-sm text-green-700"></div>
+          </div>
+        </div>
+        <button onclick="resetIntencaoForm()" class="btn-secondary w-full justify-center mt-4">
+          🔄 Novo Pedido
+        </button>
+      </div>
+    </section>
+
     <!-- ── HISTÓRICO ───────────────────────────────────────────────────── -->
     <section id="section-history" class="dash-section hidden space-y-5">
 
@@ -941,6 +1053,7 @@ const sectionTitles = {
   query:    'Nova Consulta',
   query2:   'Opção 2 Nova Consulta',
   query3:   'Infosimples Nova Consulta',
+  intencao: 'Intenção de Venda (ATPVE)',
   history:  'Histórico',
   prices:   'Tabela de Preços',
   profile:  'Perfil',
@@ -1029,6 +1142,7 @@ async function init() {
       document.getElementById('nav-superadmin').classList.remove('hidden');
 
     buildCategoryGrid();
+    buildIntencaoCategoryGrid();
     renderServiceListV2();
     await Promise.all([loadStats(), loadQueries()]);
     showBannerCrvAntigo();
@@ -1066,8 +1180,125 @@ async function loadStats() {
     document.getElementById('query-credits').textContent      = fmt(d.credits);
     document.getElementById('query2-credits').textContent     = fmt(d.credits);
     document.getElementById('query3-credits').textContent     = fmt(d.credits);
+    document.getElementById('intencao-credits').textContent   = fmt(d.credits);
     document.getElementById('header-credits').textContent     = fmt(d.credits);
   } catch {}
+}
+
+// ── Intenção de Venda (ATPVE) ────────────────────────────────────────────────
+let selectedIntencaoSvc = null;
+let intencaoFiles = { atpve: null, cod_seguranca: null, doc_vendedor: null, doc_comprador: null };
+const INTENCAO_ICONS = { 'intencao-venda-rj': '🟢', 'intencao-venda-mg': '🔵' };
+
+function buildIntencaoCategoryGrid() {
+  const svcs = allServices.filter(s => s.group === 'Intenção de Venda (ATPVE)');
+  document.getElementById('intencao-category-grid').innerHTML = svcs.map(s => `
+    <div class="service-cat" onclick="selectIntencaoCategory(${JSON.stringify(s).replace(/"/g,"&quot;")}, this)">
+      <div class="text-2xl mb-1">${INTENCAO_ICONS[s.id] || s.icon}</div>
+      <div class="font-semibold text-gray-800 text-sm leading-tight">${s.name}</div>
+      <div class="text-xs text-gray-400 mt-0.5">${fmt(s.price)}</div>
+    </div>`).join('');
+}
+
+function selectIntencaoCategory(svc, cardEl) {
+  if (typeof svc === 'string') svc = JSON.parse(svc);
+  selectedIntencaoSvc = svc;
+  document.querySelectorAll('#intencao-category-grid .service-cat').forEach(el => el.classList.remove('selected'));
+  cardEl?.classList.add('selected');
+  document.getElementById('intencao-form-name').textContent  = svc.name;
+  document.getElementById('intencao-form-price').textContent = fmt(svc.price);
+  document.getElementById('intencao-form-wrap').classList.remove('hidden');
+  document.getElementById('intencao-result-wrap').classList.add('hidden');
+  setTimeout(() => {
+    const el = document.getElementById('intencao-form-wrap');
+    const header = document.querySelector('header');
+    const offset = (header ? header.offsetHeight : 0) + 16;
+    const top = el.getBoundingClientRect().top + window.scrollY - offset;
+    window.scrollTo({ top, behavior: 'smooth' });
+  }, 50);
+}
+
+function handleIntencaoFile(slot, inputEl) {
+  const statusEl = document.getElementById(`intencao-file-${slot}-status`);
+  const file = inputEl.files[0];
+  if (!file) { intencaoFiles[slot] = null; statusEl.textContent = ''; return; }
+  if (file.size > 8 * 1024 * 1024) {
+    statusEl.innerHTML = `<span class="text-red-500">Arquivo muito grande (máx. 8MB). Tire a foto com menor resolução ou compacte o PDF.</span>`;
+    intencaoFiles[slot] = null;
+    inputEl.value = '';
+    return;
+  }
+  statusEl.textContent = 'Lendo arquivo...';
+  const reader = new FileReader();
+  reader.onload = () => {
+    intencaoFiles[slot] = { name: file.name, type: file.type || 'application/octet-stream', data: reader.result.split(',')[1] };
+    statusEl.innerHTML = `<span class="text-green-600">✅ ${file.name}</span>`;
+  };
+  reader.onerror = () => { statusEl.textContent = 'Erro ao ler arquivo.'; intencaoFiles[slot] = null; };
+  reader.readAsDataURL(file);
+}
+
+function resetIntencaoForm(showCats = true) {
+  selectedIntencaoSvc = null;
+  intencaoFiles = { atpve: null, cod_seguranca: null, doc_vendedor: null, doc_comprador: null };
+  document.getElementById('intencao-form').reset();
+  ['atpve','cod_seguranca','doc_vendedor','doc_comprador'].forEach(slot => {
+    document.getElementById(`intencao-file-${slot}-status`).textContent = '';
+  });
+  document.getElementById('intencao-form-error').classList.add('hidden');
+  document.getElementById('intencao-form-wrap').classList.add('hidden');
+  document.getElementById('intencao-result-wrap').classList.add('hidden');
+  document.querySelectorAll('#intencao-category-grid .service-cat').forEach(el => el.classList.remove('selected'));
+  if (showCats) document.getElementById('intencao-category-wrap').classList.remove('hidden');
+}
+
+async function submitIntencao(e) {
+  e.preventDefault();
+  const errEl    = document.getElementById('intencao-form-error');
+  const errMsgEl = document.getElementById('intencao-form-error-msg');
+  errEl.classList.add('hidden');
+
+  const endereco = document.getElementById('intencao-endereco').value.trim();
+  const missing = Object.entries(intencaoFiles).filter(([, v]) => !v).map(([k]) => k);
+  if (missing.length) {
+    errMsgEl.textContent = 'Envie os 4 documentos obrigatórios.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  if (!endereco) {
+    errMsgEl.textContent = 'Informe o endereço com CEP.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+
+  const btn = document.getElementById('intencao-submit-btn');
+  const btnText = document.getElementById('intencao-submit-text');
+  const spinner = document.getElementById('intencao-spinner');
+  btn.disabled = true; btnText.textContent = 'Enviando...'; spinner.classList.remove('hidden');
+
+  try {
+    const r = await fetch('/api/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serviceId: selectedIntencaoSvc.id, params: { endereco, files: intencaoFiles } }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      errMsgEl.textContent = d.error || 'Erro ao enviar pedido.';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    document.getElementById('intencao-form-wrap').classList.add('hidden');
+    document.getElementById('intencao-category-wrap').classList.add('hidden');
+    document.getElementById('intencao-result-msg').textContent = d.result?.status || 'Pedido registrado com sucesso!';
+    document.getElementById('intencao-result-wrap').classList.remove('hidden');
+    await Promise.all([loadStats(), loadQueries()]);
+  } catch {
+    errMsgEl.textContent = 'Erro de conexão. Tente novamente.';
+    errEl.classList.remove('hidden');
+  } finally {
+    btn.disabled = false; btnText.textContent = 'Enviar Pedido'; spinner.classList.add('hidden');
+  }
 }
 
 // ── Consultas ──────────────────────────────────────────────────────────────────
@@ -1206,6 +1437,7 @@ function filterHistory() { renderHistoryTable(); }
 function renderPrices() {
   const groups = {};
   allServices.forEach(s => {
+    if (s.group === 'Intenção de Venda (ATPVE)') return;
     if (!groups[s.group]) groups[s.group] = [];
     groups[s.group].push(s);
   });
@@ -1338,7 +1570,7 @@ function requery(serviceId, paramsJson) {
 
 // ── Nova Consulta ──────────────────────────────────────────────────────────────
 function buildCategoryGrid() {
-  const cats = [...new Set(allServices.map(s => s.group))].filter(c => c !== 'CRLV-e Agendado');
+  const cats = [...new Set(allServices.map(s => s.group))].filter(c => c !== 'CRLV-e Agendado' && c !== 'Intenção de Venda (ATPVE)');
   const catIcons = {
     'Consultas Básicas':       { icon:'🔍', color:'bg-blue-50 border-blue-200' },
     'Débitos e Documentação':  { icon:'💳', color:'bg-red-50 border-red-200' },

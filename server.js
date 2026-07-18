@@ -36,7 +36,7 @@ const WEBHOOK_BASE_URL   = (process.env.WEBHOOK_BASE_URL  || '').replace(/\/$/, 
 const ADMIN_PHONE        = process.env.ADMIN_PHONE        || '';
 
 async function sendWhatsApp(phone, message) {
-  if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !phone) return;
+  if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !phone) return false;
   const digits = phone.replace(/\D/g, '');
   const formatted = digits.startsWith('55') ? digits : `55${digits}`;
   try {
@@ -52,10 +52,12 @@ async function sendWhatsApp(phone, message) {
       }
     );
     const d = await r.json().catch(() => ({}));
-    if (!r.ok) console.error(`Z-API erro [${formatted}]:`, JSON.stringify(d));
-    else console.log(`✅ WhatsApp enviado para ${formatted}`);
+    if (!r.ok) { console.error(`Z-API erro [${formatted}]:`, JSON.stringify(d)); return false; }
+    console.log(`✅ WhatsApp enviado para ${formatted}`);
+    return true;
   } catch (err) {
     console.error('Erro ao enviar WhatsApp:', err.message);
+    return false;
   }
 }
 
@@ -248,13 +250,18 @@ const SERVICES = [
   { id:'crv-antigo-se', name:'Consulta CRV antigo SE', group:'Número CRV (Apenas antigos)', basePrice:448.00, inputType:'placa', icon:'📁', uf:'se', noMarkup:true },
   { id:'crv-antigo-to', name:'Consulta CRV antigo TO', group:'Número CRV (Apenas antigos)', basePrice:350.00, inputType:'placa', icon:'📁', uf:'to', noMarkup:true },
   { id:'crv-antigo-sc', name:'Consulta CRV antigo SC', group:'Número CRV (Apenas antigos)', basePrice:600.00, inputType:'placa', icon:'📁', uf:'sc', noMarkup:true },
+  // ── Intenção de Venda (ATPVE) — processamento manual: cliente envia os 4 documentos +
+  // endereço com CEP, admin baixa tudo em página dedicada e devolve o PDF final por upload ──
+  { id:'intencao-venda-rj', name:'Intenção de Venda RJ', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'intencao_venda', icon:'📝', uf:'rj' },
+  { id:'intencao-venda-mg', name:'Intenção de Venda MG', group:'Intenção de Venda (ATPVE)', basePrice:50.00, noMarkup:true, inputType:'intencao_venda', icon:'📝', uf:'mg' },
 ];
 
 // Serviços desta categoria (mais a Reemissão CRLV-e RJ) não retornam resultado na hora:
 // o pedido fica pendente até o super admin subir o PDF manualmente (ver
 // /api/admin/manual-queries).
 const MANUAL_UPLOAD_GROUP = 'Número CRV (Apenas antigos)';
-const MANUAL_SERVICE_IDS  = [...SERVICES.filter(s => s.group === MANUAL_UPLOAD_GROUP).map(s => s.id), 'crlv-agendado-rj-reemissao'];
+const INTENCAO_VENDA_SERVICE_IDS = ['intencao-venda-rj', 'intencao-venda-mg'];
+const MANUAL_SERVICE_IDS  = [...SERVICES.filter(s => s.group === MANUAL_UPLOAD_GROUP).map(s => s.id), 'crlv-agendado-rj-reemissao', ...INTENCAO_VENDA_SERVICE_IDS];
 
 // ── SERVICES_V2 — API Datacube (api.consultasdeveiculos.com) ──────────────────
 // Catálogo completamente separado do SERVICES/autocrlv/chekaki acima. Preços em
@@ -501,12 +508,30 @@ async function initDB() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intencao_venda_files (
+      id         SERIAL PRIMARY KEY,
+      query_id   INTEGER UNIQUE REFERENCES queries(id) ON DELETE CASCADE,
+      files      JSONB NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS query_messages (
+      id         SERIAL PRIMARY KEY,
+      query_id   INTEGER REFERENCES queries(id) ON DELETE CASCADE,
+      message    TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
   console.log('✅ Tabelas prontas');
 }
 
 // ── Middlewares ──────────────────────────────────────────────────────────────
-app.use(express.json({ limit: '20mb' }));
-app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+// Limite elevado para acomodar o envio de Intenção de Venda (4 documentos em base64
+// numa única requisição — fotos de RG/CNH tiradas do celular somam bem mais que 1 PDF).
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname), { etag: false, lastModified: false, setHeaders: (res) => res.set('Cache-Control', 'no-store') }));
 
@@ -1441,6 +1466,16 @@ app.post('/api/query', requireAuth, async (req, res) => {
   const service = SERVICES.find(s => s.id === serviceId);
   if (!service) return res.status(400).json({ error: 'Serviço inválido.' });
 
+  if (INTENCAO_VENDA_SERVICE_IDS.includes(serviceId)) {
+    const files = params?.files || {};
+    const required = ['atpve', 'cod_seguranca', 'doc_vendedor', 'doc_comprador'];
+    const missing = required.filter(k => !files[k]?.data);
+    if (missing.length)
+      return res.status(400).json({ error: 'Envie os 4 documentos obrigatórios: ATPVE, Código de Segurança, RG/CPF/CNH do Vendedor e do Comprador.' });
+    if (!params?.endereco || !String(params.endereco).trim())
+      return res.status(400).json({ error: 'Informe o endereço com CEP.' });
+  }
+
   const price = parseFloat((service.basePrice * (service.noMarkup ? 1 : MARKUP)).toFixed(2));
 
   try {
@@ -1456,16 +1491,35 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
     // ── Serviços manuais (upload de arquivo pelo super admin — resultado não vem na hora) ──
     if (MANUAL_SERVICE_IDS.includes(serviceId)) {
+      const isIntencaoVenda = INTENCAO_VENDA_SERVICE_IDS.includes(serviceId);
+      // Para Intenção de Venda os 4 documentos ficam em intencao_venda_files (tabela à parte);
+      // queries.params guarda só o endereço, para não carregar base64 pesado em toda listagem.
+      const storedParams = isIntencaoVenda ? { endereco: String(params.endereco).trim() } : (params || {});
+
       await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
       const txRow = await pool.query(
         `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
         [req.user.id, price, `Consulta: ${service.name}`]
       );
-      await pool.query(
+      const qRow = await pool.query(
         `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
-         VALUES ($1,$2,$3,$4,'pendente',$5,$6,'pdf')`,
-        [req.user.id, serviceId, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id]
+         VALUES ($1,$2,$3,$4,'pendente',$5,$6,'pdf') RETURNING id`,
+        [req.user.id, serviceId, service.name, JSON.stringify(storedParams), price, txRow.rows[0].id]
       );
+
+      if (isIntencaoVenda) {
+        const f = params.files;
+        await pool.query(
+          `INSERT INTO intencao_venda_files (query_id, files) VALUES ($1,$2)`,
+          [qRow.rows[0].id, JSON.stringify({
+            atpve:          f.atpve,
+            cod_seguranca:  f.cod_seguranca,
+            doc_vendedor:   f.doc_vendedor,
+            doc_comprador:  f.doc_comprador,
+          })]
+        );
+      }
+
       await notifyAdminNewQuery(user, service, price, params);
       return res.json({
         success: true,
@@ -3313,6 +3367,90 @@ app.post('/api/admin/manual-queries/:id/resend-whatsapp', requireAuth, requireSu
     res.json({ success: true });
   } catch (err) {
     console.error('Erro no reenvio manual de WhatsApp:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── ADMIN: GET /api/admin/intencao-venda/:uf (fila de "Intenção de Venda RJ/MG") ──
+app.get('/api/admin/intencao-venda/:uf', requireAuth, requireSuperAdmin, async (req, res) => {
+  const uf = String(req.params.uf || '').toLowerCase();
+  const serviceId = `intencao-venda-${uf}`;
+  if (!INTENCAO_VENDA_SERVICE_IDS.includes(serviceId))
+    return res.status(400).json({ error: 'UF inválida.' });
+  try {
+    const r = await pool.query(
+      `SELECT q.id, q.service_id, q.service_name, q.params, q.amount, q.status, q.created_at, q.whatsapp_sent_at,
+              u.id AS user_id, u.name AS user_name, u.email AS user_email, u.phone AS user_phone
+       FROM queries q JOIN users u ON u.id = q.user_id
+       WHERE q.service_id = $1
+       ORDER BY (q.status = 'pendente') DESC, q.created_at DESC
+       LIMIT 300`,
+      [serviceId]
+    );
+    res.json({ queries: r.rows });
+  } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ── ADMIN: GET /api/admin/intencao-venda/:queryId/file/:slot (baixar 1 documento) ──
+const INTENCAO_VENDA_SLOTS = ['atpve', 'cod_seguranca', 'doc_vendedor', 'doc_comprador'];
+app.get('/api/admin/intencao-venda/:queryId/file/:slot', requireAuth, requireSuperAdmin, async (req, res) => {
+  const { queryId, slot } = req.params;
+  if (!INTENCAO_VENDA_SLOTS.includes(slot)) return res.status(400).json({ error: 'Documento inválido.' });
+  try {
+    const qr = await pool.query(`SELECT service_id FROM queries WHERE id=$1`, [queryId]);
+    if (!qr.rows.length || !INTENCAO_VENDA_SERVICE_IDS.includes(qr.rows[0].service_id))
+      return res.status(404).json({ error: 'Pedido não encontrado.' });
+
+    const fr = await pool.query(`SELECT files FROM intencao_venda_files WHERE query_id=$1`, [queryId]);
+    const file = fr.rows[0]?.files?.[slot];
+    if (!file?.data) return res.status(404).json({ error: 'Arquivo não encontrado.' });
+
+    const buf = Buffer.from(file.data, 'base64');
+    res.set('Content-Type', file.type || 'application/octet-stream');
+    res.set('Content-Disposition', `attachment; filename="${(file.name || slot).replace(/"/g, '')}"`);
+    res.send(buf);
+  } catch (err) {
+    console.error('Erro ao baixar documento de intenção de venda:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── ADMIN: GET /api/admin/intencao-venda/:queryId/messages (histórico do chat) ──
+app.get('/api/admin/intencao-venda/:queryId/messages', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, message, created_at FROM query_messages WHERE query_id=$1 ORDER BY created_at ASC`,
+      [req.params.queryId]
+    );
+    res.json({ messages: r.rows });
+  } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ── ADMIN: POST /api/admin/intencao-venda/:queryId/messages (enviar msg pro WhatsApp do usuário) ──
+app.post('/api/admin/intencao-venda/:queryId/messages', requireAuth, requireSuperAdmin, async (req, res) => {
+  const message = String(req.body?.message || '').trim();
+  if (!message) return res.status(400).json({ error: 'Digite uma mensagem.' });
+  try {
+    const qr = await pool.query(
+      `SELECT q.id, q.service_id, u.phone
+       FROM queries q JOIN users u ON u.id = q.user_id WHERE q.id=$1`,
+      [req.params.queryId]
+    );
+    if (!qr.rows.length || !INTENCAO_VENDA_SERVICE_IDS.includes(qr.rows[0].service_id))
+      return res.status(404).json({ error: 'Pedido não encontrado.' });
+    const query = qr.rows[0];
+    if (!query.phone) return res.status(400).json({ error: 'Usuário sem telefone cadastrado.' });
+
+    const whatsappSent = await sendWhatsApp(query.phone, message).catch(() => false);
+    if (!whatsappSent) return res.status(502).json({ error: 'Falha ao enviar pelo WhatsApp. Tente novamente.' });
+
+    const mr = await pool.query(
+      `INSERT INTO query_messages (query_id, message) VALUES ($1,$2) RETURNING id, message, created_at`,
+      [query.id, message]
+    );
+    res.json({ success: true, message: mr.rows[0] });
+  } catch (err) {
+    console.error('Erro ao enviar mensagem de intenção de venda:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
   }
 });
