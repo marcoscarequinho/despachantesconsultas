@@ -722,8 +722,15 @@
           </div>
 
           <div>
-            <label class="label">Endereço com CEP <span class="text-red-500">*</span></label>
-            <textarea id="intencao-endereco" rows="3" class="input-field" placeholder="Rua, número, bairro, cidade/UF, CEP" required></textarea>
+            <label class="label">Endereço Com CEP e Valor do Veículo <span class="text-red-500">*</span></label>
+            <textarea id="intencao-endereco" rows="3" class="input-field" placeholder="Rua, número, bairro, cidade/UF, CEP e valor do veículo" required></textarea>
+          </div>
+
+          <div>
+            <label class="label">Contrato Social (Opcional)</label>
+            <input type="file" id="intencao-file-contrato_social" class="input-field" accept="application/pdf,image/*" onchange="handleIntencaoFile('contrato_social', this)">
+            <div id="intencao-file-contrato_social-status" class="text-xs text-gray-500 mt-1"></div>
+            <div class="text-xs text-gray-400 mt-1">Contrato Social só em caso da intenção for para Empresa.</div>
           </div>
 
           <div id="intencao-form-error"
@@ -1187,7 +1194,8 @@ async function loadStats() {
 
 // ── Intenção de Venda (ATPVE) ────────────────────────────────────────────────
 let selectedIntencaoSvc = null;
-let intencaoFiles = { atpve: null, cod_seguranca: null, doc_vendedor: null, doc_comprador: null };
+let intencaoFiles = { atpve: null, cod_seguranca: null, doc_vendedor: null, doc_comprador: null, contrato_social: null };
+const INTENCAO_REQUIRED_SLOTS = ['atpve', 'cod_seguranca', 'doc_vendedor', 'doc_comprador'];
 const INTENCAO_ICONS = { 'intencao-venda-rj': '🟢', 'intencao-venda-mg': '🔵' };
 
 function buildIntencaoCategoryGrid() {
@@ -1240,9 +1248,9 @@ function handleIntencaoFile(slot, inputEl) {
 
 function resetIntencaoForm(showCats = true) {
   selectedIntencaoSvc = null;
-  intencaoFiles = { atpve: null, cod_seguranca: null, doc_vendedor: null, doc_comprador: null };
+  intencaoFiles = { atpve: null, cod_seguranca: null, doc_vendedor: null, doc_comprador: null, contrato_social: null };
   document.getElementById('intencao-form').reset();
-  ['atpve','cod_seguranca','doc_vendedor','doc_comprador'].forEach(slot => {
+  ['atpve','cod_seguranca','doc_vendedor','doc_comprador','contrato_social'].forEach(slot => {
     document.getElementById(`intencao-file-${slot}-status`).textContent = '';
   });
   document.getElementById('intencao-form-error').classList.add('hidden');
@@ -1259,14 +1267,14 @@ async function submitIntencao(e) {
   errEl.classList.add('hidden');
 
   const endereco = document.getElementById('intencao-endereco').value.trim();
-  const missing = Object.entries(intencaoFiles).filter(([, v]) => !v).map(([k]) => k);
+  const missing = INTENCAO_REQUIRED_SLOTS.filter(k => !intencaoFiles[k]);
   if (missing.length) {
     errMsgEl.textContent = 'Envie os 4 documentos obrigatórios.';
     errEl.classList.remove('hidden');
     return;
   }
   if (!endereco) {
-    errMsgEl.textContent = 'Informe o endereço com CEP.';
+    errMsgEl.textContent = 'Informe o endereço com CEP e o valor do veículo.';
     errEl.classList.remove('hidden');
     return;
   }

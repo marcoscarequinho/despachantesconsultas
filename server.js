@@ -1512,10 +1512,11 @@ app.post('/api/query', requireAuth, async (req, res) => {
         await pool.query(
           `INSERT INTO intencao_venda_files (query_id, files) VALUES ($1,$2)`,
           [qRow.rows[0].id, JSON.stringify({
-            atpve:          f.atpve,
-            cod_seguranca:  f.cod_seguranca,
-            doc_vendedor:   f.doc_vendedor,
-            doc_comprador:  f.doc_comprador,
+            atpve:            f.atpve,
+            cod_seguranca:    f.cod_seguranca,
+            doc_vendedor:     f.doc_vendedor,
+            doc_comprador:    f.doc_comprador,
+            contrato_social:  f.contrato_social || null,
           })]
         );
       }
@@ -3392,7 +3393,7 @@ app.get('/api/admin/intencao-venda/:uf', requireAuth, requireSuperAdmin, async (
 });
 
 // ── ADMIN: GET /api/admin/intencao-venda/:queryId/file/:slot (baixar 1 documento) ──
-const INTENCAO_VENDA_SLOTS = ['atpve', 'cod_seguranca', 'doc_vendedor', 'doc_comprador'];
+const INTENCAO_VENDA_SLOTS = ['atpve', 'cod_seguranca', 'doc_vendedor', 'doc_comprador', 'contrato_social'];
 app.get('/api/admin/intencao-venda/:queryId/file/:slot', requireAuth, requireSuperAdmin, async (req, res) => {
   const { queryId, slot } = req.params;
   if (!INTENCAO_VENDA_SLOTS.includes(slot)) return res.status(400).json({ error: 'Documento inválido.' });

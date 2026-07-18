@@ -1227,6 +1227,7 @@ const INTENCAO_SLOTS = [
   { slot: 'cod_seguranca',  label: 'Cód. Segurança',            icon: '🔐' },
   { slot: 'doc_vendedor',   label: 'RG/CPF/CNH Vendedor',       icon: '🪪' },
   { slot: 'doc_comprador',  label: 'RG/CPF/CNH Comprador',      icon: '🪪' },
+  { slot: 'contrato_social', label: 'Contrato Social (opcional)', icon: '🏢' },
 ];
 
 async function loadIntencaoVenda(uf) {
@@ -1287,7 +1288,7 @@ function renderIntencaoVenda(uf) {
       </div>
 
       <div class="bg-gray-50 rounded-lg p-3">
-        <div class="text-xs font-semibold text-gray-500 uppercase mb-1">Endereço com CEP</div>
+        <div class="text-xs font-semibold text-gray-500 uppercase mb-1">Endereço Com CEP e Valor do Veículo</div>
         <div class="text-sm text-gray-700 whitespace-pre-wrap">${endereco}</div>
       </div>
 
