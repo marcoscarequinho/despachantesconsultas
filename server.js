@@ -227,6 +227,13 @@ const SERVICES = [
   { id:'dc-debito-sc-v2', name:'Débitos - Santa Catarina V2',      group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'placa_renavam', icon:'🏛️', dcPath:'/debitos/sc-v2' },
   { id:'dc-debito-sp',    name:'Débitos - São Paulo',              group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'placa_renavam', icon:'🏛️', dcPath:'/debitos/sp' },
   { id:'dc-debito-to',    name:'Débitos - Tocantins',              group:'Débitos por Estado', basePrice:3.00, noMarkup:true, inputType:'debito_doc',    icon:'🏛️', dcPath:'/debitos/to' },
+  // ── Dívida Ativa (API Datacube — api.consultasdeveiculos.com) ────────────────
+  // Valor fixo de R$3,00 por consulta (noMarkup:true). Mesmo fluxo Datacube form-
+  // urlencoded dos Débitos por Estado acima; o PDF é montado a partir do JSON
+  // retornado (ver buildDividaAtivaPdfBuffer).
+  { id:'dc-dividaativa-sp', name:'Dívida Ativa - São Paulo',        group:'Divida Ativa', basePrice:3.00, noMarkup:true, inputType:'debito_renavam', icon:'⚖️', dcPath:'/dividaativa/sp' },
+  { id:'dc-dividaativa-df', name:'Dívida Ativa - Distrito Federal', group:'Divida Ativa', basePrice:3.00, noMarkup:true, inputType:'placa_renavam',  icon:'⚖️', dcPath:'/dividaativa/df' },
+  { id:'dc-dividaativa-rj', name:'Dívida Ativa - Rio de Janeiro',   group:'Divida Ativa', basePrice:3.00, noMarkup:true, inputType:'debito_renavam', icon:'⚖️', dcPath:'/dividaativa/rj' },
   // ── Número CRV (Apenas antigos) — processamento manual (entrega via upload no admin) ──
   { id:'crv-antigo-rio', name:'Consulta CRV antigo Rio', group:'Número CRV (Apenas antigos)', basePrice:500.00, inputType:'placa', icon:'📁', uf:'rj', noMarkup:true },
   { id:'crv-antigo-ce', name:'Consulta CRV antigo CE', group:'Número CRV (Apenas antigos)', basePrice:55.00,  inputType:'placa', icon:'📁', uf:'ce' },
@@ -317,11 +324,6 @@ const SERVICES_V2 = [
   { id:'dc-restricao-score-pj',     name:'Restrição Score PJ',     group:'Consultar Crédito', basePrice:33.594, inputType:'dc_cnpj',      icon:'💳', dcPath:'/credito/restricao-score-pj' },
   { id:'dc-localizacao-score',      name:'Localização Score',      group:'Consultar Crédito', basePrice:8.594,  inputType:'dc_documento', icon:'💳', dcPath:'/credito/localizacao-score' },
   { id:'dc-endividamento-bancario', name:'Endividamento Bancário', group:'Consultar Crédito', basePrice:7.031,  inputType:'dc_documento', icon:'💳', dcPath:'/credito/endividamento-bancario' },
-
-  // ── Divida Ativa — preços com o mesmo MARKUP (40%) do resto do sistema ──────
-  { id:'dc-dividaativa-sp', name:'Dívida Ativa - São Paulo',        group:'Divida Ativa', basePrice:0.392, inputType:'dc_renavam', icon:'⚖️', dcPath:'/dividaativa/sp' },
-  { id:'dc-dividaativa-df', name:'Dívida Ativa - Distrito Federal', group:'Divida Ativa', basePrice:0.377, inputType:'dc_debito',  icon:'⚖️', dcPath:'/dividaativa/df' },
-  { id:'dc-dividaativa-rj', name:'Dívida Ativa - Rio de Janeiro',   group:'Divida Ativa', basePrice:0.391, inputType:'dc_renavam', icon:'⚖️', dcPath:'/dividaativa/rj' },
 
   // ── CNH — preços com o mesmo MARKUP (40%) do resto do sistema ───────────────
   { id:'dc-cnh-ac', name:'CNH - Acre',                 group:'CNH', basePrice:0.498, inputType:'dc_cnh_nome_cpf',      icon:'🪪', dcPath:'/cnh/ac-completa' },
@@ -1426,6 +1428,65 @@ function buildDebitoPdfBuffer(service, data, params) {
   });
 }
 
+// ── Geração de PDF — Dívida Ativa (Datacube retorna JSON, não PDF pronto) ──────
+function buildDividaAtivaPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const { left, width } = pdfContentBox(doc);
+      const now = new Date();
+
+      const ufName = (service.name || '').replace(/^Dívida Ativa\s*-\s*/i, '');
+      pdfReportHeader(doc, `DÍVIDA ATIVA - ${ufName.toUpperCase()}`, now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      const consultaPairs = [];
+      if (params?.placa) consultaPairs.push(['Placa', maskPlacaDisplay(params.placa)]);
+      consultaPairs.push(['Renavam', params?.renavam || '-']);
+      pdfFieldGrid(doc, consultaPairs);
+      doc.moveDown(0.4);
+
+      const items = Array.isArray(data) ? data : (Array.isArray(data?.debitos) ? data.debitos : null);
+      const total = Array.isArray(items)
+        ? sumNumField(items, ['total', 'valor', 'debitos'])
+        : (typeof data?.total === 'number' ? data.total : 0);
+
+      pdfEnsureSpace(doc, 36);
+      const boxY = doc.y;
+      const boxH = 28;
+      doc.rect(left, boxY, width, boxH).fill('#f97316');
+      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9.5)
+        .text('TOTAL ESTIMADO DE DÍVIDA ATIVA', left + 12, boxY + 9);
+      doc.fontSize(13).text(fmtMoneyBRL(total), left, boxY + 7, { width: width - 12, align: 'right' });
+      doc.y = boxY + boxH + 4;
+      doc.fillColor('#9ca3af').fontSize(7).font('Helvetica-Oblique')
+        .text('Soma dos valores encontrados nesta consulta — pode não refletir juros, descontos ou acréscimos legais atualizados.', left, doc.y, { width });
+      doc.fillColor('#111827').font('Helvetica').fontSize(10);
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'DÉBITOS');
+      if (Array.isArray(items)) {
+        pdfDebtSection(doc, items, 'Débito');
+      } else {
+        const pairs = itemToPairs(data);
+        if (pairs.length) pdfFieldGrid(doc, pairs);
+        else pdfEmptyNotice(doc, 'Nenhum débito de dívida ativa encontrado.');
+      }
+      doc.moveDown(0.4);
+
+      pdfReportFooter(doc, now);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── Geração de PDF — Decodificação de Motor (Datacube retorna JSON, não PDF pronto) ──
 function buildMotorPdfBuffer(service, data, params) {
   return new Promise((resolve, reject) => {
@@ -1727,9 +1788,10 @@ app.post('/api/query', requireAuth, async (req, res) => {
       body   = { placa };
     }
 
-    // Débitos por Estado — API Datacube (form-urlencoded, retorna JSON que vira PDF)
+    // Débitos por Estado / Dívida Ativa — API Datacube (form-urlencoded, retorna JSON que vira PDF)
     const isDcDebito = serviceId.startsWith('dc-debito-');
-    if (isDcDebito) {
+    const isDcDividaAtiva = serviceId.startsWith('dc-dividaativa-');
+    if (isDcDebito || isDcDividaAtiva) {
       const placa   = (params?.placa   || '').toUpperCase().replace(/[\s-]/g, '');
       const renavam = (params?.renavam || '').replace(/\D/g, '');
       if (service.inputType !== 'debito_renavam' && placa.length < 7)
@@ -1763,7 +1825,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       body   = new URLSearchParams({ auth_token: DATACUBE_TOKEN, motor });
     }
 
-    const isDatacubeForm = isDcDebito || serviceId === 'dc-decodificar-motor';
+    const isDatacubeForm = isDcDebito || isDcDividaAtiva || serviceId === 'dc-decodificar-motor';
 
     let fetchHeaders;
     if (isDatacubeForm) {
@@ -1831,6 +1893,15 @@ app.post('/api/query', requireAuth, async (req, res) => {
         // devolve PDF pronto.
         try {
           dcDebitoPdfBuf = await buildDebitoPdfBuffer(service, parsed.result ?? parsed, params);
+        } catch (e) {
+          console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+        }
+      } else if (isDcDividaAtiva) {
+        // Dívida Ativa: mesmo princípio, mas a API devolve só os débitos de dívida
+        // ativa (sem multas/ipvas/licenciamentos), por isso usa um builder próprio.
+        try {
+          dcDebitoPdfBuf = await buildDividaAtivaPdfBuffer(service, parsed.result ?? parsed, params);
         } catch (e) {
           console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
           return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });

@@ -1462,6 +1462,7 @@ function renderPrices() {
     'Análise de Crédito':      '📊',
     'Comunicação Venda':       '📝',
     'Débitos por Estado':      '🏛️',
+    'Divida Ativa':            '⚖️',
   };
 
   document.getElementById('prices-content').innerHTML = Object.entries(groups).map(([group, svcs]) => `
@@ -1592,6 +1593,7 @@ function buildCategoryGrid() {
     'Óbito':                   { icon:'⚰️', color:'bg-slate-50 border-slate-200' },
     'Comunicação Venda':       { icon:'📝', color:'bg-pink-50 border-pink-200' },
     'Débitos por Estado':      { icon:'🏛️', color:'bg-teal-50 border-teal-200' },
+    'Divida Ativa':            { icon:'⚖️', color:'bg-rose-50 border-rose-200' },
     'Número CRV (Apenas antigos)': { icon:'📁', color:'bg-indigo-50 border-indigo-200' },
   };
 
@@ -2300,7 +2302,6 @@ function buildCategoryGridV2() {
   const catIcons = {
     'Documentos':          { icon:'📄', color:'bg-blue-50 border-blue-200' },
     'Consultar Crédito':   { icon:'💳', color:'bg-purple-50 border-purple-200' },
-    'Divida Ativa':        { icon:'⚖️', color:'bg-amber-50 border-amber-200' },
     'CNH':                 { icon:'🪪', color:'bg-rose-50 border-rose-200' },
     'Cadastros':           { icon:'🗂️', color:'bg-indigo-50 border-indigo-200' },
     'Orgãos':              { icon:'🏢', color:'bg-cyan-50 border-cyan-200' },
