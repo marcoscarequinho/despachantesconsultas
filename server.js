@@ -6,7 +6,6 @@ const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const path = require('path');
 const crypto = require('crypto');
-const { Agent } = require('undici');
 const PDFDocument = require('pdfkit');
 
 const app = express();
@@ -15,10 +14,6 @@ const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-inseguro';
 const CHAVE_ACESSO = process.env.CHAVE_ACESSO || '';
 const BASE_API_URL = 'https://chekaki.online';
 const MARKUP = 1.40;
-// Dispatcher dedicado para upstreams lentos (ex.: "Consulta Completa", que leva de 2 a
-// 5 min) — o dispatcher padrão do fetch nativo do Node tem headersTimeout/bodyTimeout
-// de 300s, insuficiente para essas respostas.
-const slowQueryDispatcher = new Agent({ headersTimeout: 420_000, bodyTimeout: 420_000 });
 const MP_ACCESS_TOKEN = (process.env.MP_ACCESS_TOKEN || '')
   .split('').filter(c => c.charCodeAt(0) <= 127).join('').trim();
 const MP_BASE = 'https://api.mercadopago.com';
@@ -142,7 +137,6 @@ const SERVICES = [
   { id:'dc-decodificar-motor',   name:'Decodificação de Motor',     group:'Consultas Básicas', basePrice:3.00,   noMarkup:true, inputType:'motor', icon:'🔧', dcPath:'/veiculos/decodificar-motor' },
   // ── Débitos e Documentação ──
   { id:'consulta-debitos-portal',          name:'Consulta de Débitos',          group:'Débitos e Documentação', basePrice:1.0714, inputType:'placa',       icon:'💳' },
-  { id:'consultar-debito-boletos-json',   name:'Emissão de boleto + Multas',   group:'Débitos e Documentação', basePrice:20.00, inputType:'placa',        icon:'🧾' },
   { id:'consultar-licenciamento',         name:'Licenciamento + BIN',          group:'Débitos e Documentação', basePrice:10.00, inputType:'placa',        icon:'📋' },
   { id:'consultar-gravame',               name:'Consulta Gravame',             group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa',        icon:'🏦' },
   { id:'consultar-historico-proprietario',name:'Histórico de Proprietários',   group:'Débitos e Documentação', basePrice:9.99,  inputType:'placa',        icon:'👥' },
@@ -151,9 +145,6 @@ const SERVICES = [
   { id:'consultar-atpve-v1',             name:'Reemissão ATPV-e (Placa)',     group:'Débitos e Documentação', basePrice:13.50, inputType:'placa_renavam', icon:'📄' },
   { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:25.00, inputType:'placa',        icon:'🔢' },
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa_renavam',icon:'📝' },
-  // ── Consulta Completa (laudo em PDF — upstream lento, 2 a 5 minutos) ──
-  { id:'consultar-completa', name:'EMISSÃO-BOLETO+MULTAS', group:'Consulta Completa', basePrice:20.00, inputType:'placa', icon:'🧾',
-    slowNote:'⏱ Esta consulta pode levar de 2 a 5 minutos para retornar o laudo completo do veículo. Aguarde nesta tela sem fechar ou atualizar a página.' },
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -283,6 +274,12 @@ const SERVICES = [
   // o PDF é montado a partir do JSON retornado (ver buildLeilaoPdfBuffer), no
   // mesmo padrão visual do relatório de Débitos por Estado.
   { id:'dc-leilao', name:'Leilão', group:'Consulta Completa', basePrice:30.00, noMarkup:true, inputType:'placa', icon:'🚗', dcPath:'/veiculos/leilao' },
+  // ── Veículo 0km (API Datacube — api.consultasdeveiculos.com) ─────────────────
+  // Movido da Opção 2 (grupo Documentos) para o grupo Consulta Completa, valor
+  // fixo de R$12,00 (noMarkup:true). Mesmo fluxo Datacube form-urlencoded acima;
+  // o PDF é montado a partir do JSON retornado (ver buildConsulta0kmPdfBuffer),
+  // no mesmo padrão visual do relatório de Débitos por Estado.
+  { id:'dc-consulta-0km', name:'Veículo 0km', group:'Consulta Completa', basePrice:12.00, noMarkup:true, inputType:'chassi', icon:'🚗', dcPath:'/veiculos/consulta-0km' },
   // ── Número CRV (Apenas antigos) — processamento manual (entrega via upload no admin) ──
   { id:'crv-antigo-rio', name:'Consulta CRV antigo Rio', group:'Número CRV (Apenas antigos)', basePrice:500.00, inputType:'placa', icon:'📁', uf:'rj', noMarkup:true },
   { id:'crv-antigo-ce', name:'Consulta CRV antigo CE', group:'Número CRV (Apenas antigos)', basePrice:55.00,  inputType:'placa', icon:'📁', uf:'ce' },
@@ -333,7 +330,6 @@ const SERVICES_V2 = [
   { id:'dc-bin-estadual',           name:'Base Estadual (BIN)',                     group:'Documentos', basePrice:2.214,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/bin-estadual' },
   { id:'dc-base-nacional-v2',       name:'Base Nacional V2',                        group:'Documentos', basePrice:2.203,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/base-nacional-v2' },
   { id:'dc-informacao-basica',      name:'Informação Básica',                       group:'Documentos', basePrice:0.359,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/informacao-basica' },
-  { id:'dc-consulta-0km',           name:'Veículo 0km',                             group:'Documentos', basePrice:6.486,  inputType:'dc_chassi',     icon:'🚗', dcPath:'/veiculos/consulta-0km' },
   { id:'dc-informacao-basica-v2',   name:'Informação Básica V2',                    group:'Documentos', basePrice:0.391,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/informacao-basica-v2' },
   { id:'dc-proprietario-ano-lic',   name:'Proprietário / Ano Último Licenciamento', group:'Documentos', basePrice:1.006,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/proprietario-ano-licenciamento' },
   { id:'dc-proprietario-atual',     name:'Proprietário Atual',                      group:'Documentos', basePrice:1.266,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/proprietario-atual' },
@@ -1795,6 +1791,38 @@ function buildLeilaoPdfBuffer(service, data, params) {
   });
 }
 
+// ── Geração de PDF — Veículo 0km (Datacube retorna JSON, não PDF pronto) ───────
+function buildConsulta0kmPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+
+      pdfReportHeader(doc, 'VEÍCULO 0KM', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Chassi', params?.chassi || '-']]);
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'RESULTADO');
+      const pairs = itemToPairs(data);
+      if (pairs.length) pdfFieldGrid(doc, pairs);
+      else pdfEmptyNotice(doc, 'Nenhum dado retornado para essa consulta.');
+      doc.moveDown(0.4);
+
+      pdfReportFooter(doc, now);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── POST /api/query ───────────────────────────────────────────────────────────
 app.post('/api/query', requireAuth, async (req, res) => {
   const { serviceId, params } = req.body;
@@ -2056,14 +2084,6 @@ app.post('/api/query', requireAuth, async (req, res) => {
     if (serviceId === 'consultar-cnh') {
       body = { cpf: (params?.cpfCnpj || '').replace(/\D/g, '') };
     }
-    // Consulta Completa (laudo em PDF) — endpoint dedicado, upstream lento (2 a 5 min)
-    if (serviceId === 'consultar-completa') {
-      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
-      if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
-      apiUrl = 'https://www.chekaki.online/consultar-completa';
-      body   = { placa };
-    }
-
     // Débitos por Estado / Dívida Ativa — API Datacube (form-urlencoded, retorna JSON que vira PDF)
     const isDcDebito = serviceId.startsWith('dc-debito-');
     const isDcDividaAtiva = serviceId.startsWith('dc-dividaativa-');
@@ -2266,7 +2286,19 @@ app.post('/api/query', requireAuth, async (req, res) => {
       body   = new URLSearchParams({ auth_token: DATACUBE_TOKEN, placa });
     }
 
-    const isDatacubeForm = isDcDebito || isDcDividaAtiva || isDcCnh || isDcVeiculosDoc || isDcRouboFurto || isDcHistoricoProprietario || isDcHistoricoGravames || isDcLeilao || serviceId === 'dc-decodificar-motor';
+    // Veículo 0km — API Datacube (form-urlencoded; movido da Opção 2 para valor
+    // fixo de R$12,00, noMarkup:true). O PDF é montado a partir do JSON retornado
+    // (ver buildConsulta0kmPdfBuffer).
+    const isDcConsulta0km = serviceId === 'dc-consulta-0km';
+    if (isDcConsulta0km) {
+      const chassi = (params?.chassi || '').toUpperCase().replace(/\s/g, '');
+      if (chassi.length !== 17) return res.status(400).json({ error: 'Chassi deve ter exatamente 17 caracteres.' });
+      apiUrl = `${DATACUBE_API_URL}${service.dcPath}`;
+      method = 'POST';
+      body   = new URLSearchParams({ auth_token: DATACUBE_TOKEN, chassi });
+    }
+
+    const isDatacubeForm = isDcDebito || isDcDividaAtiva || isDcCnh || isDcVeiculosDoc || isDcRouboFurto || isDcHistoricoProprietario || isDcHistoricoGravames || isDcLeilao || isDcConsulta0km || serviceId === 'dc-decodificar-motor';
 
     let fetchHeaders;
     if (isDatacubeForm) {
@@ -2284,10 +2316,6 @@ app.post('/api/query', requireAuth, async (req, res) => {
     } else if (body !== null) {
       fetchOpts.body = JSON.stringify(body);
     }
-    // Consulta Completa: upstream leva de 2 a 5 min, acima do timeout padrão (300s) do
-    // dispatcher fetch do Node — usa um dispatcher dedicado com timeout maior.
-    if (serviceId === 'consultar-completa') fetchOpts.dispatcher = slowQueryDispatcher;
-
     const apiRes = await fetch(apiUrl, fetchOpts);
     const ct = apiRes.headers.get('content-type') || '';
 
@@ -2409,11 +2437,20 @@ app.post('/api/query', requireAuth, async (req, res) => {
           console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
           return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
         }
+      } else if (isDcConsulta0km) {
+        // Veículo 0km: monta o PDF do relatório a partir do JSON, no mesmo
+        // padrão visual do relatório de Débitos por Estado.
+        try {
+          dcDebitoPdfBuf = await buildConsulta0kmPdfBuffer(service, parsed.result ?? parsed, params);
+        } catch (e) {
+          console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+        }
       }
     }
 
     // serviços que retornam JSON com pdf_base64
-    const PDF_BASE64_SVCS = ['consultar-placa-crv', 'consultar-crv-v2', 'consulta-debitos-portal', 'consultar-completa'];
+    const PDF_BASE64_SVCS = ['consultar-placa-crv', 'consultar-crv-v2', 'consulta-debitos-portal'];
     let base64PdfBuf = null;
     if (PDF_BASE64_SVCS.includes(serviceId)) {
       let parsed;
