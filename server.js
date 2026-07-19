@@ -251,6 +251,12 @@ const SERVICES = [
   { id:'dc-cnh-rn', name:'CNH - Rio Grande do Norte',   group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_cpf_cnh',        icon:'🪪', dcPath:'/cnh/rn-completa' },
   { id:'dc-cnh-se', name:'CNH - Sergipe',               group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_se',             icon:'🪪', dcPath:'/cnh/se-completa' },
   { id:'dc-cnh-to', name:'CNH - Tocantins',             group:'CNH', basePrice:4.00, noMarkup:true, inputType:'cnh_cpf_nascimento', icon:'🪪', dcPath:'/cnh/to-completa' },
+  // ── Veículos por Documento (API Datacube — api.consultasdeveiculos.com) ──────
+  // Movido da Opção 2 (grupo Documentos) para o grupo Consulta Completa, valor
+  // fixo de R$14,00 (noMarkup:true). Mesmo fluxo Datacube form-urlencoded acima;
+  // o PDF é montado a partir do JSON retornado (ver buildVeiculosDocPdfBuffer),
+  // no mesmo padrão visual do relatório de Débitos por Estado.
+  { id:'dc-veiculos-doc', name:'Veículos por Documento (CPF/CNPJ)', group:'Consulta Completa', basePrice:14.00, noMarkup:true, inputType:'veiculos_documento', icon:'🚗', dcPath:'/pessoas/veiculos' },
   // ── Número CRV (Apenas antigos) — processamento manual (entrega via upload no admin) ──
   { id:'crv-antigo-rio', name:'Consulta CRV antigo Rio', group:'Número CRV (Apenas antigos)', basePrice:500.00, inputType:'placa', icon:'📁', uf:'rj', noMarkup:true },
   { id:'crv-antigo-ce', name:'Consulta CRV antigo CE', group:'Número CRV (Apenas antigos)', basePrice:55.00,  inputType:'placa', icon:'📁', uf:'ce' },
@@ -328,7 +334,6 @@ const SERVICES_V2 = [
   { id:'dc-renajud-v3',             name:'Renajud V3',                              group:'Documentos', basePrice:3.047,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renajud-v3' },
   { id:'dc-renajud-v4',             name:'Renajud V4',                              group:'Documentos', basePrice:2.791,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renajud-v4' },
   { id:'dc-csv',                    name:'Certificado de Segurança Veicular (CSV)', group:'Documentos', basePrice:4.314,  inputType:'dc_csv',        icon:'🚗', dcPath:'/veiculos/csv' },
-  { id:'dc-veiculos-doc',           name:'Veículos por Documento (CPF/CNPJ)',       group:'Documentos', basePrice:7.188,  inputType:'dc_documento',  icon:'🚗', dcPath:'/pessoas/veiculos' },
   { id:'dc-veiculos-doc-v2',        name:'Veículos por Documento V2',               group:'Documentos', basePrice:8.984,  inputType:'dc_documento',  icon:'🚗', dcPath:'/pessoas/veiculos_v2' },
   { id:'dc-veiculos-doc-v3',        name:'Veículos por Documento V3',               group:'Documentos', basePrice:8.984,  inputType:'dc_documento',  icon:'🚗', dcPath:'/pessoas/veiculos_v3' },
   { id:'dc-historico-proprietario', name:'Histórico de Proprietários',              group:'Documentos', basePrice:7.813,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/historico-proprietario' },
@@ -1564,6 +1569,47 @@ function buildCnhPdfBuffer(service, data, params) {
   });
 }
 
+// ── Geração de PDF — Veículos por Documento (Datacube retorna JSON, não PDF pronto) ──
+function buildVeiculosDocPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+
+      pdfReportHeader(doc, 'VEÍCULOS POR DOCUMENTO', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Documento', maskDocDisplay(params?.documento)]]);
+      doc.moveDown(0.4);
+
+      const items = Array.isArray(data) ? data
+        : Array.isArray(data?.veiculos) ? data.veiculos
+        : Array.isArray(data?.result)   ? data.result
+        : null;
+
+      pdfBar(doc, 'VEÍCULOS ENCONTRADOS');
+      if (Array.isArray(items)) {
+        pdfDebtSection(doc, items, 'Veículo');
+      } else {
+        const pairs = itemToPairs(data);
+        if (pairs.length) pdfFieldGrid(doc, pairs);
+        else pdfEmptyNotice(doc, 'Nenhum veículo encontrado para este documento.');
+      }
+      doc.moveDown(0.4);
+
+      pdfReportFooter(doc, now);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── POST /api/query ───────────────────────────────────────────────────────────
 app.post('/api/query', requireAuth, async (req, res) => {
   const { serviceId, params } = req.body;
@@ -1974,7 +2020,20 @@ app.post('/api/query', requireAuth, async (req, res) => {
       body   = form;
     }
 
-    const isDatacubeForm = isDcDebito || isDcDividaAtiva || isDcCnh || serviceId === 'dc-decodificar-motor';
+    // Veículos por Documento — API Datacube (form-urlencoded; movido da Opção 2 para
+    // valor fixo de R$14,00, noMarkup:true). O PDF é montado a partir do JSON
+    // retornado (ver buildVeiculosDocPdfBuffer).
+    const isDcVeiculosDoc = serviceId === 'dc-veiculos-doc';
+    if (isDcVeiculosDoc) {
+      const documento = (params?.documento || '').replace(/\D/g, '');
+      if (documento.length !== 11 && documento.length !== 14)
+        return res.status(400).json({ error: 'Documento inválido. Informe CPF (11 dígitos) ou CNPJ (14 dígitos).' });
+      apiUrl = `${DATACUBE_API_URL}${service.dcPath}`;
+      method = 'POST';
+      body   = new URLSearchParams({ auth_token: DATACUBE_TOKEN, documento });
+    }
+
+    const isDatacubeForm = isDcDebito || isDcDividaAtiva || isDcCnh || isDcVeiculosDoc || serviceId === 'dc-decodificar-motor';
 
     let fetchHeaders;
     if (isDatacubeForm) {
@@ -2068,6 +2127,15 @@ app.post('/api/query', requireAuth, async (req, res) => {
         // relatório de Débitos por Estado).
         try {
           dcDebitoPdfBuf = await buildCnhPdfBuffer(service, parsed.result ?? parsed, params);
+        } catch (e) {
+          console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+        }
+      } else if (isDcVeiculosDoc) {
+        // Veículos por Documento: monta o PDF do relatório a partir do JSON, no
+        // mesmo padrão visual do relatório de Débitos por Estado.
+        try {
+          dcDebitoPdfBuf = await buildVeiculosDocPdfBuffer(service, parsed.result ?? parsed, params);
         } catch (e) {
           console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
           return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });

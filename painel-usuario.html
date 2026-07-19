@@ -1529,6 +1529,7 @@ function inputTypeLabel(t) {
     cnh_pr:              'Entrada: CPF + CNH + Validade da CNH',
     cnh_se:              'Entrada: CNH + Registro + Nascimento',
     cnh_cpf_nascimento:  'Entrada: CPF + Nascimento',
+    veiculos_documento:  'Entrada: CPF/CNPJ',
   };
   return map[t] || t;
 }
@@ -1942,6 +1943,8 @@ function renderFormFields(inputType, svc) {
         ${field('cpf', 'CPF', 'text', '000.000.000-00')}
         ${field('data_nascimento', 'Data Nascimento', 'text', 'DD/MM/AAAA')}
       </div>`,
+
+    veiculos_documento: field('documento', 'CPF ou CNPJ', 'text', '000.000.000-00 ou 00.000.000/0001-00'),
   };
 
   wrap.innerHTML = templates[inputType] || placaField;
@@ -2154,6 +2157,8 @@ function buildParams(inputType) {
   if (inputType === 'cnh_pr') return { cpf: g('cpf'), cnh: g('cnh'), data_validade_cnh: g('data_validade_cnh') };
   if (inputType === 'cnh_se') return { cnh: g('cnh'), registro: g('registro'), data_nascimento: g('data_nascimento') };
   if (inputType === 'cnh_cpf_nascimento') return { cpf: g('cpf'), data_nascimento: g('data_nascimento') };
+
+  if (inputType === 'veiculos_documento') return { documento: cd(g('documento')) };
 
   if (inputType === 'venda') {
     const vDoc = cd(g('v_cpf'));
