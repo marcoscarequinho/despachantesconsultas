@@ -1352,6 +1352,40 @@ function pdfDebtSection(doc, items, groupLabel) {
   });
 }
 
+// Renderiza um objeto de resposta genérico da Datacube por completo, ao contrário
+// de "itemToPairs(data)" sozinho — que descarta silenciosamente qualquer campo
+// aninhado (ex.: um sub-objeto "veiculo" ou uma lista de "restrições"), fazendo o
+// relatório sair sem as informações do veículo quando a API aninha os dados sob
+// uma chave em vez de devolver tudo no nível raiz.
+function pdfRenderGenericObject(doc, data) {
+  if (!data || typeof data !== 'object') {
+    pdfEmptyNotice(doc, 'Nenhum dado retornado para essa consulta.');
+    return;
+  }
+  const scalarPairs = itemToPairs(data);
+  if (scalarPairs.length) pdfFieldGrid(doc, scalarPairs);
+
+  const nestedEntries = Object.entries(data).filter(([, v]) => v && typeof v === 'object');
+  if (!nestedEntries.length) {
+    if (!scalarPairs.length) pdfEmptyNotice(doc, 'Nenhum dado retornado para essa consulta.');
+    return;
+  }
+
+  nestedEntries.forEach(([key, value]) => {
+    if (scalarPairs.length) doc.moveDown(0.3);
+    pdfSubBar(doc, humanizeKey(key));
+    if (Array.isArray(value)) {
+      if (!value.length) { pdfEmptyNotice(doc); return; }
+      if (typeof value[0] === 'object') pdfDebtSection(doc, value, humanizeKey(key));
+      else pdfFieldGrid(doc, value.map((v, i) => [String(i + 1), String(v)]));
+    } else {
+      const pairs = itemToPairs(value);
+      if (pairs.length) pdfFieldGrid(doc, pairs);
+      else pdfEmptyNotice(doc);
+    }
+  });
+}
+
 function pickNum(item, keys) {
   for (const k of keys) if (typeof item?.[k] === 'number') return item[k];
   return undefined;
@@ -1618,9 +1652,7 @@ function buildVeiculosDocPdfBuffer(service, data, params) {
       if (Array.isArray(items)) {
         pdfDebtSection(doc, items, 'Veículo');
       } else {
-        const pairs = itemToPairs(data);
-        if (pairs.length) pdfFieldGrid(doc, pairs);
-        else pdfEmptyNotice(doc, 'Nenhum veículo encontrado para este documento.');
+        pdfRenderGenericObject(doc, data);
       }
       doc.moveDown(0.4);
 
@@ -1658,9 +1690,7 @@ function buildRouboFurtoPdfBuffer(service, data, params) {
       if (Array.isArray(items)) {
         pdfDebtSection(doc, items, 'Ocorrência');
       } else {
-        const pairs = itemToPairs(data);
-        if (pairs.length) pdfFieldGrid(doc, pairs);
-        else pdfEmptyNotice(doc, 'Nenhuma ocorrência de roubo/furto encontrada para esta placa.');
+        pdfRenderGenericObject(doc, data);
       }
       doc.moveDown(0.4);
 
@@ -1699,9 +1729,7 @@ function buildHistoricoProprietarioPdfBuffer(service, data, params) {
       if (Array.isArray(items)) {
         pdfDebtSection(doc, items, 'Proprietário');
       } else {
-        const pairs = itemToPairs(data);
-        if (pairs.length) pdfFieldGrid(doc, pairs);
-        else pdfEmptyNotice(doc, 'Nenhum histórico de proprietários encontrado para esta placa.');
+        pdfRenderGenericObject(doc, data);
       }
       doc.moveDown(0.4);
 
@@ -1740,9 +1768,7 @@ function buildHistoricoGravamesPdfBuffer(service, data, params) {
       if (Array.isArray(items)) {
         pdfDebtSection(doc, items, 'Gravame');
       } else {
-        const pairs = itemToPairs(data);
-        if (pairs.length) pdfFieldGrid(doc, pairs);
-        else pdfEmptyNotice(doc, 'Nenhum gravame encontrado para este chassi.');
+        pdfRenderGenericObject(doc, data);
       }
       doc.moveDown(0.4);
 
@@ -1781,9 +1807,7 @@ function buildLeilaoPdfBuffer(service, data, params) {
       if (Array.isArray(items)) {
         pdfDebtSection(doc, items, 'Leilão');
       } else {
-        const pairs = itemToPairs(data);
-        if (pairs.length) pdfFieldGrid(doc, pairs);
-        else pdfEmptyNotice(doc, 'Nenhum registro de leilão encontrado para esta placa.');
+        pdfRenderGenericObject(doc, data);
       }
       doc.moveDown(0.4);
 
@@ -1814,9 +1838,7 @@ function buildConsulta0kmPdfBuffer(service, data, params) {
       doc.moveDown(0.4);
 
       pdfBar(doc, 'RESULTADO');
-      const pairs = itemToPairs(data);
-      if (pairs.length) pdfFieldGrid(doc, pairs);
-      else pdfEmptyNotice(doc, 'Nenhum dado retornado para essa consulta.');
+      pdfRenderGenericObject(doc, data);
       doc.moveDown(0.4);
 
       pdfReportFooter(doc, now);
@@ -1846,9 +1868,7 @@ function buildBinEstadualPdfBuffer(service, data, params) {
       doc.moveDown(0.4);
 
       pdfBar(doc, 'RESULTADO');
-      const pairs = itemToPairs(data);
-      if (pairs.length) pdfFieldGrid(doc, pairs);
-      else pdfEmptyNotice(doc, 'Nenhum dado retornado para essa consulta.');
+      pdfRenderGenericObject(doc, data);
       doc.moveDown(0.4);
 
       pdfReportFooter(doc, now);
