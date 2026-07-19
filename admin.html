@@ -646,7 +646,7 @@ async function init() {
     const r = await fetch('/api/auth/me');
     if (!r.ok) { window.location.href = '/entrar'; return; }
     const user = await r.json();
-    if (user.email !== 'contato@mygmail.com.br') { window.location.href = '/painel'; return; }
+    if (!['contato@mygmail.com.br', 'contato@mcdetranrj.com'].includes(user.email)) { window.location.href = '/painel'; return; }
     await Promise.all([loadStats(), loadUsers(), loadManualQueries(), loadIntencaoVenda('rj'), loadIntencaoVenda('mg')]);
   } catch { window.location.href = '/entrar'; }
 }

@@ -1147,7 +1147,7 @@ async function init() {
     document.getElementById('profile-email').value       = currentUser.email || '';
     document.getElementById('profile-phone').value       = currentUser.phone || '';
 
-    if (currentUser.email === 'contato@mygmail.com.br')
+    if (['contato@mygmail.com.br', 'contato@mcdetranrj.com'].includes(currentUser.email))
       document.getElementById('nav-superadmin').classList.remove('hidden');
 
     buildCategoryGrid();
