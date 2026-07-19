@@ -277,6 +277,12 @@ const SERVICES = [
   // buildHistoricoGravamesPdfBuffer), no mesmo padrão visual do relatório de
   // Débitos por Estado.
   { id:'dc-historico-gravames', name:'Histórico de Gravames', group:'Consulta Completa', basePrice:8.00, noMarkup:true, inputType:'chassi', icon:'🚗', dcPath:'/veiculos/historico_gravames' },
+  // ── Leilão (API Datacube — api.consultasdeveiculos.com) ──────────────────────
+  // Movido da Opção 2 (grupo Documentos) para o grupo Consulta Completa, valor
+  // fixo de R$30,00 (noMarkup:true). Mesmo fluxo Datacube form-urlencoded acima;
+  // o PDF é montado a partir do JSON retornado (ver buildLeilaoPdfBuffer), no
+  // mesmo padrão visual do relatório de Débitos por Estado.
+  { id:'dc-leilao', name:'Leilão', group:'Consulta Completa', basePrice:30.00, noMarkup:true, inputType:'placa', icon:'🚗', dcPath:'/veiculos/leilao' },
   // ── Número CRV (Apenas antigos) — processamento manual (entrega via upload no admin) ──
   { id:'crv-antigo-rio', name:'Consulta CRV antigo Rio', group:'Número CRV (Apenas antigos)', basePrice:500.00, inputType:'placa', icon:'📁', uf:'rj', noMarkup:true },
   { id:'crv-antigo-ce', name:'Consulta CRV antigo CE', group:'Número CRV (Apenas antigos)', basePrice:55.00,  inputType:'placa', icon:'📁', uf:'ce' },
@@ -345,7 +351,6 @@ const SERVICES_V2 = [
   { id:'dc-recall',                 name:'Recall',                                  group:'Documentos', basePrice:0.391,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/recall' },
   { id:'dc-renavam',                name:'Renavam',                                 group:'Documentos', basePrice:0.853,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renavam' },
   { id:'dc-renavam-v2',             name:'Renavam V2',                              group:'Documentos', basePrice:0.234,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renavam-v2' },
-  { id:'dc-leilao',                 name:'Leilão',                                  group:'Documentos', basePrice:19.155, inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/leilao' },
   { id:'dc-indicio-roubo-furto',    name:'Indício de Roubo e Furto',                group:'Documentos', basePrice:0.375,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/indicio-roubo-furto' },
   { id:'dc-sinistro',               name:'Indício de Sinistro',                     group:'Documentos', basePrice:0.947,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/sinistro' },
   { id:'dc-historico-fipe',         name:'Histórico FIPE',                          group:'Documentos', basePrice:0.234,  inputType:'dc_fipe',       icon:'🚗', dcPath:'/veiculos/historico-fipe' },
@@ -1749,6 +1754,47 @@ function buildHistoricoGravamesPdfBuffer(service, data, params) {
   });
 }
 
+// ── Geração de PDF — Leilão (Datacube retorna JSON, não PDF pronto) ────────────
+function buildLeilaoPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+
+      pdfReportHeader(doc, 'LEILÃO', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Placa', maskPlacaDisplay(params?.placa)]]);
+      doc.moveDown(0.4);
+
+      const items = Array.isArray(data) ? data
+        : Array.isArray(data?.leiloes) ? data.leiloes
+        : Array.isArray(data?.result)  ? data.result
+        : null;
+
+      pdfBar(doc, 'RESULTADO');
+      if (Array.isArray(items)) {
+        pdfDebtSection(doc, items, 'Leilão');
+      } else {
+        const pairs = itemToPairs(data);
+        if (pairs.length) pdfFieldGrid(doc, pairs);
+        else pdfEmptyNotice(doc, 'Nenhum registro de leilão encontrado para esta placa.');
+      }
+      doc.moveDown(0.4);
+
+      pdfReportFooter(doc, now);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── POST /api/query ───────────────────────────────────────────────────────────
 app.post('/api/query', requireAuth, async (req, res) => {
   const { serviceId, params } = req.body;
@@ -2208,7 +2254,19 @@ app.post('/api/query', requireAuth, async (req, res) => {
       body   = new URLSearchParams({ auth_token: DATACUBE_TOKEN, chassi });
     }
 
-    const isDatacubeForm = isDcDebito || isDcDividaAtiva || isDcCnh || isDcVeiculosDoc || isDcRouboFurto || isDcHistoricoProprietario || isDcHistoricoGravames || serviceId === 'dc-decodificar-motor';
+    // Leilão — API Datacube (form-urlencoded; movido da Opção 2 para valor fixo
+    // de R$30,00, noMarkup:true). O PDF é montado a partir do JSON retornado (ver
+    // buildLeilaoPdfBuffer).
+    const isDcLeilao = serviceId === 'dc-leilao';
+    if (isDcLeilao) {
+      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      apiUrl = `${DATACUBE_API_URL}${service.dcPath}`;
+      method = 'POST';
+      body   = new URLSearchParams({ auth_token: DATACUBE_TOKEN, placa });
+    }
+
+    const isDatacubeForm = isDcDebito || isDcDividaAtiva || isDcCnh || isDcVeiculosDoc || isDcRouboFurto || isDcHistoricoProprietario || isDcHistoricoGravames || isDcLeilao || serviceId === 'dc-decodificar-motor';
 
     let fetchHeaders;
     if (isDatacubeForm) {
@@ -2338,6 +2396,15 @@ app.post('/api/query', requireAuth, async (req, res) => {
         // mesmo padrão visual do relatório de Débitos por Estado.
         try {
           dcDebitoPdfBuf = await buildHistoricoGravamesPdfBuffer(service, parsed.result ?? parsed, params);
+        } catch (e) {
+          console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+        }
+      } else if (isDcLeilao) {
+        // Leilão: monta o PDF do relatório a partir do JSON, no mesmo padrão
+        // visual do relatório de Débitos por Estado.
+        try {
+          dcDebitoPdfBuf = await buildLeilaoPdfBuffer(service, parsed.result ?? parsed, params);
         } catch (e) {
           console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
           return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
