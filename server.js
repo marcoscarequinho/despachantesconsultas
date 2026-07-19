@@ -280,6 +280,12 @@ const SERVICES = [
   // o PDF é montado a partir do JSON retornado (ver buildConsulta0kmPdfBuffer),
   // no mesmo padrão visual do relatório de Débitos por Estado.
   { id:'dc-consulta-0km', name:'Veículo 0km', group:'Consulta Completa', basePrice:12.00, noMarkup:true, inputType:'chassi', icon:'🚗', dcPath:'/veiculos/consulta-0km' },
+  // ── Base Estadual (BIN) (API Datacube — api.consultasdeveiculos.com) ─────────
+  // Movido da Opção 2 (grupo Documentos) para o grupo Consulta Completa, valor
+  // fixo de R$9,90 (noMarkup:true). Mesmo fluxo Datacube form-urlencoded acima;
+  // o PDF é montado a partir do JSON retornado (ver buildBinEstadualPdfBuffer),
+  // no mesmo padrão visual do relatório de Débitos por Estado.
+  { id:'dc-bin-estadual', name:'Base Estadual (BIN)', group:'Consulta Completa', basePrice:9.90, noMarkup:true, inputType:'placa', icon:'🚗', dcPath:'/veiculos/bin-estadual' },
   // ── Número CRV (Apenas antigos) — processamento manual (entrega via upload no admin) ──
   { id:'crv-antigo-rio', name:'Consulta CRV antigo Rio', group:'Número CRV (Apenas antigos)', basePrice:500.00, inputType:'placa', icon:'📁', uf:'rj', noMarkup:true },
   { id:'crv-antigo-ce', name:'Consulta CRV antigo CE', group:'Número CRV (Apenas antigos)', basePrice:55.00,  inputType:'placa', icon:'📁', uf:'ce' },
@@ -327,7 +333,6 @@ const SERVICES_V2 = [
   { id:'dc-agregados-v2',           name:'Agregados V2',                            group:'Documentos', basePrice:0.380,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/agregados_v2' },
   { id:'dc-bin-nacional',           name:'BIN Nacional',                            group:'Documentos', basePrice:2.214,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/bin-nacional' },
   { id:'dc-bin-nacional-v2',        name:'BIN Nacional V2',                         group:'Documentos', basePrice:2.214,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/bin-nacional-v2' },
-  { id:'dc-bin-estadual',           name:'Base Estadual (BIN)',                     group:'Documentos', basePrice:2.214,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/bin-estadual' },
   { id:'dc-base-nacional-v2',       name:'Base Nacional V2',                        group:'Documentos', basePrice:2.203,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/base-nacional-v2' },
   { id:'dc-informacao-basica',      name:'Informação Básica',                       group:'Documentos', basePrice:0.359,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/informacao-basica' },
   { id:'dc-informacao-basica-v2',   name:'Informação Básica V2',                    group:'Documentos', basePrice:0.391,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/informacao-basica-v2' },
@@ -1823,6 +1828,38 @@ function buildConsulta0kmPdfBuffer(service, data, params) {
   });
 }
 
+// ── Geração de PDF — Base Estadual / BIN (Datacube retorna JSON, não PDF pronto) ──
+function buildBinEstadualPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+
+      pdfReportHeader(doc, 'BASE ESTADUAL (BIN)', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Placa', maskPlacaDisplay(params?.placa)]]);
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'RESULTADO');
+      const pairs = itemToPairs(data);
+      if (pairs.length) pdfFieldGrid(doc, pairs);
+      else pdfEmptyNotice(doc, 'Nenhum dado retornado para essa consulta.');
+      doc.moveDown(0.4);
+
+      pdfReportFooter(doc, now);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── POST /api/query ───────────────────────────────────────────────────────────
 app.post('/api/query', requireAuth, async (req, res) => {
   const { serviceId, params } = req.body;
@@ -2298,7 +2335,19 @@ app.post('/api/query', requireAuth, async (req, res) => {
       body   = new URLSearchParams({ auth_token: DATACUBE_TOKEN, chassi });
     }
 
-    const isDatacubeForm = isDcDebito || isDcDividaAtiva || isDcCnh || isDcVeiculosDoc || isDcRouboFurto || isDcHistoricoProprietario || isDcHistoricoGravames || isDcLeilao || isDcConsulta0km || serviceId === 'dc-decodificar-motor';
+    // Base Estadual (BIN) — API Datacube (form-urlencoded; movido da Opção 2 para
+    // valor fixo de R$9,90, noMarkup:true). O PDF é montado a partir do JSON
+    // retornado (ver buildBinEstadualPdfBuffer).
+    const isDcBinEstadual = serviceId === 'dc-bin-estadual';
+    if (isDcBinEstadual) {
+      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      apiUrl = `${DATACUBE_API_URL}${service.dcPath}`;
+      method = 'POST';
+      body   = new URLSearchParams({ auth_token: DATACUBE_TOKEN, placa });
+    }
+
+    const isDatacubeForm = isDcDebito || isDcDividaAtiva || isDcCnh || isDcVeiculosDoc || isDcRouboFurto || isDcHistoricoProprietario || isDcHistoricoGravames || isDcLeilao || isDcConsulta0km || isDcBinEstadual || serviceId === 'dc-decodificar-motor';
 
     let fetchHeaders;
     if (isDatacubeForm) {
@@ -2442,6 +2491,15 @@ app.post('/api/query', requireAuth, async (req, res) => {
         // padrão visual do relatório de Débitos por Estado.
         try {
           dcDebitoPdfBuf = await buildConsulta0kmPdfBuffer(service, parsed.result ?? parsed, params);
+        } catch (e) {
+          console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+        }
+      } else if (isDcBinEstadual) {
+        // Base Estadual (BIN): monta o PDF do relatório a partir do JSON, no
+        // mesmo padrão visual do relatório de Débitos por Estado.
+        try {
+          dcDebitoPdfBuf = await buildBinEstadualPdfBuffer(service, parsed.result ?? parsed, params);
         } catch (e) {
           console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
           return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
