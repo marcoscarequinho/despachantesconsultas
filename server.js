@@ -604,12 +604,12 @@ function requireReseller(req, res, next) {
   next();
 }
 
-const SUPER_ADMIN_EMAIL = 'contato@mygmail.com.br';
+const SUPER_ADMIN_EMAILS = ['contato@mygmail.com.br', 'contato@mcdetranrj.com'];
 
 async function requireSuperAdmin(req, res, next) {
   try {
     const r = await pool.query('SELECT email FROM users WHERE id=$1', [req.user.id]);
-    if (!r.rows.length || r.rows[0].email !== SUPER_ADMIN_EMAIL)
+    if (!r.rows.length || !SUPER_ADMIN_EMAILS.includes(r.rows[0].email))
       return res.status(403).json({ error: 'Acesso restrito ao super administrador.' });
     next();
   } catch {
@@ -4188,7 +4188,7 @@ app.get('/painel/revendedor', requireAuth, (req, res) => {
 app.get('/admin', requireAuth, async (req, res) => {
   try {
     const r = await pool.query('SELECT email FROM users WHERE id=$1', [req.user.id]);
-    if (!r.rows.length || r.rows[0].email !== SUPER_ADMIN_EMAIL) return res.redirect('/painel');
+    if (!r.rows.length || !SUPER_ADMIN_EMAILS.includes(r.rows[0].email)) return res.redirect('/painel');
     noCache(res); res.sendFile(path.join(__dirname, 'admin.html'));
   } catch {
     res.redirect('/painel');
