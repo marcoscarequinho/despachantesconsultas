@@ -257,6 +257,26 @@ const SERVICES = [
   // o PDF é montado a partir do JSON retornado (ver buildVeiculosDocPdfBuffer),
   // no mesmo padrão visual do relatório de Débitos por Estado.
   { id:'dc-veiculos-doc', name:'Veículos por Documento (CPF/CNPJ)', group:'Consulta Completa', basePrice:14.00, noMarkup:true, inputType:'veiculos_documento', icon:'🚗', dcPath:'/pessoas/veiculos' },
+  // ── Roubo e Furto (API Datacube — api.consultasdeveiculos.com) ───────────────
+  // Movido da Opção 2 (grupo Documentos) para o grupo Consulta Completa, valor
+  // fixo de R$25,00 (noMarkup:true). Mesmo fluxo Datacube form-urlencoded acima;
+  // o PDF é montado a partir do JSON retornado (ver buildRouboFurtoPdfBuffer),
+  // no mesmo padrão visual do relatório de Débitos por Estado.
+  { id:'dc-roubo-furto', name:'Roubo e Furto', group:'Consulta Completa', basePrice:25.00, noMarkup:true, inputType:'placa', icon:'🚗', dcPath:'/veiculos/roubo_furto' },
+  // ── Histórico de Proprietários (API Datacube — api.consultasdeveiculos.com) ──
+  // Movido da Opção 2 (grupo Documentos) para o grupo Consulta Completa, valor
+  // fixo de R$15,00 (noMarkup:true). Mesmo fluxo Datacube form-urlencoded acima;
+  // o PDF é montado a partir do JSON retornado (ver
+  // buildHistoricoProprietarioPdfBuffer), no mesmo padrão visual do relatório de
+  // Débitos por Estado.
+  { id:'dc-historico-proprietario', name:'Histórico de Proprietários', group:'Consulta Completa', basePrice:15.00, noMarkup:true, inputType:'placa', icon:'🚗', dcPath:'/veiculos/historico-proprietario' },
+  // ── Histórico de Gravames (API Datacube — api.consultasdeveiculos.com) ───────
+  // Movido da Opção 2 (grupo Documentos) para o grupo Consulta Completa, valor
+  // fixo de R$8,00 (noMarkup:true). Mesmo fluxo Datacube form-urlencoded acima;
+  // o PDF é montado a partir do JSON retornado (ver
+  // buildHistoricoGravamesPdfBuffer), no mesmo padrão visual do relatório de
+  // Débitos por Estado.
+  { id:'dc-historico-gravames', name:'Histórico de Gravames', group:'Consulta Completa', basePrice:8.00, noMarkup:true, inputType:'chassi', icon:'🚗', dcPath:'/veiculos/historico_gravames' },
   // ── Número CRV (Apenas antigos) — processamento manual (entrega via upload no admin) ──
   { id:'crv-antigo-rio', name:'Consulta CRV antigo Rio', group:'Número CRV (Apenas antigos)', basePrice:500.00, inputType:'placa', icon:'📁', uf:'rj', noMarkup:true },
   { id:'crv-antigo-ce', name:'Consulta CRV antigo CE', group:'Número CRV (Apenas antigos)', basePrice:55.00,  inputType:'placa', icon:'📁', uf:'ce' },
@@ -319,7 +339,6 @@ const SERVICES_V2 = [
   { id:'dc-cronotacografo',         name:'Cronotacógrafo',                          group:'Documentos', basePrice:0.738,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/cronotacografo' },
   { id:'dc-gravames-v2',            name:'Gravames V2',                             group:'Documentos', basePrice:3.594,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/gravames-v2' },
   { id:'dc-gravames-v3',            name:'Gravames V3',                             group:'Documentos', basePrice:3.091,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/gravames-v3' },
-  { id:'dc-historico-gravames',     name:'Histórico de Gravames',                   group:'Documentos', basePrice:4.672,  inputType:'dc_chassi',     icon:'🚗', dcPath:'/veiculos/historico_gravames' },
   { id:'dc-uf-placa',               name:'UF da Placa',                             group:'Documentos', basePrice:0.281,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/uf-placa' },
   { id:'dc-marcas',                 name:'Marcas',                                  group:'Documentos', basePrice:0.230,  inputType:'dc_tipo',       icon:'🚗', dcPath:'/veiculos/marcas' },
   { id:'dc-modelos',                name:'Modelos',                                 group:'Documentos', basePrice:0.230,  inputType:'dc_tipo_marca', icon:'🚗', dcPath:'/veiculos/modelos' },
@@ -329,14 +348,12 @@ const SERVICES_V2 = [
   { id:'dc-leilao',                 name:'Leilão',                                  group:'Documentos', basePrice:19.155, inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/leilao' },
   { id:'dc-indicio-roubo-furto',    name:'Indício de Roubo e Furto',                group:'Documentos', basePrice:0.375,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/indicio-roubo-furto' },
   { id:'dc-sinistro',               name:'Indício de Sinistro',                     group:'Documentos', basePrice:0.947,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/sinistro' },
-  { id:'dc-roubo-furto',            name:'Roubo e Furto',                           group:'Documentos', basePrice:16.514, inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/roubo_furto' },
   { id:'dc-historico-fipe',         name:'Histórico FIPE',                          group:'Documentos', basePrice:0.234,  inputType:'dc_fipe',       icon:'🚗', dcPath:'/veiculos/historico-fipe' },
   { id:'dc-renajud-v3',             name:'Renajud V3',                              group:'Documentos', basePrice:3.047,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renajud-v3' },
   { id:'dc-renajud-v4',             name:'Renajud V4',                              group:'Documentos', basePrice:2.791,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/renajud-v4' },
   { id:'dc-csv',                    name:'Certificado de Segurança Veicular (CSV)', group:'Documentos', basePrice:4.314,  inputType:'dc_csv',        icon:'🚗', dcPath:'/veiculos/csv' },
   { id:'dc-veiculos-doc-v2',        name:'Veículos por Documento V2',               group:'Documentos', basePrice:8.984,  inputType:'dc_documento',  icon:'🚗', dcPath:'/pessoas/veiculos_v2' },
   { id:'dc-veiculos-doc-v3',        name:'Veículos por Documento V3',               group:'Documentos', basePrice:8.984,  inputType:'dc_documento',  icon:'🚗', dcPath:'/pessoas/veiculos_v3' },
-  { id:'dc-historico-proprietario', name:'Histórico de Proprietários',              group:'Documentos', basePrice:7.813,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/historico-proprietario' },
   { id:'dc-roubo-furto-simples',    name:'Roubo e Furto Simples',                   group:'Documentos', basePrice:6.250,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/roubo_furto_simples' },
 
   // ── Consultar Crédito — preços com o mesmo MARKUP (40%) do resto do sistema ──
@@ -1610,6 +1627,128 @@ function buildVeiculosDocPdfBuffer(service, data, params) {
   });
 }
 
+// ── Geração de PDF — Roubo e Furto (Datacube retorna JSON, não PDF pronto) ─────
+function buildRouboFurtoPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+
+      pdfReportHeader(doc, 'ROUBO E FURTO', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Placa', maskPlacaDisplay(params?.placa)]]);
+      doc.moveDown(0.4);
+
+      const items = Array.isArray(data) ? data
+        : Array.isArray(data?.ocorrencias) ? data.ocorrencias
+        : null;
+
+      pdfBar(doc, 'RESULTADO');
+      if (Array.isArray(items)) {
+        pdfDebtSection(doc, items, 'Ocorrência');
+      } else {
+        const pairs = itemToPairs(data);
+        if (pairs.length) pdfFieldGrid(doc, pairs);
+        else pdfEmptyNotice(doc, 'Nenhuma ocorrência de roubo/furto encontrada para esta placa.');
+      }
+      doc.moveDown(0.4);
+
+      pdfReportFooter(doc, now);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+// ── Geração de PDF — Histórico de Proprietários (Datacube retorna JSON, não PDF pronto) ──
+function buildHistoricoProprietarioPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+
+      pdfReportHeader(doc, 'HISTÓRICO DE PROPRIETÁRIOS', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Placa', maskPlacaDisplay(params?.placa)]]);
+      doc.moveDown(0.4);
+
+      const items = Array.isArray(data) ? data
+        : Array.isArray(data?.proprietarios) ? data.proprietarios
+        : Array.isArray(data?.historico)     ? data.historico
+        : null;
+
+      pdfBar(doc, 'PROPRIETÁRIOS');
+      if (Array.isArray(items)) {
+        pdfDebtSection(doc, items, 'Proprietário');
+      } else {
+        const pairs = itemToPairs(data);
+        if (pairs.length) pdfFieldGrid(doc, pairs);
+        else pdfEmptyNotice(doc, 'Nenhum histórico de proprietários encontrado para esta placa.');
+      }
+      doc.moveDown(0.4);
+
+      pdfReportFooter(doc, now);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+// ── Geração de PDF — Histórico de Gravames (Datacube retorna JSON, não PDF pronto) ──
+function buildHistoricoGravamesPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+
+      pdfReportHeader(doc, 'HISTÓRICO DE GRAVAMES', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Chassi', params?.chassi || '-']]);
+      doc.moveDown(0.4);
+
+      const items = Array.isArray(data) ? data
+        : Array.isArray(data?.gravames)  ? data.gravames
+        : Array.isArray(data?.historico) ? data.historico
+        : null;
+
+      pdfBar(doc, 'GRAVAMES');
+      if (Array.isArray(items)) {
+        pdfDebtSection(doc, items, 'Gravame');
+      } else {
+        const pairs = itemToPairs(data);
+        if (pairs.length) pdfFieldGrid(doc, pairs);
+        else pdfEmptyNotice(doc, 'Nenhum gravame encontrado para este chassi.');
+      }
+      doc.moveDown(0.4);
+
+      pdfReportFooter(doc, now);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── POST /api/query ───────────────────────────────────────────────────────────
 app.post('/api/query', requireAuth, async (req, res) => {
   const { serviceId, params } = req.body;
@@ -2033,7 +2172,43 @@ app.post('/api/query', requireAuth, async (req, res) => {
       body   = new URLSearchParams({ auth_token: DATACUBE_TOKEN, documento });
     }
 
-    const isDatacubeForm = isDcDebito || isDcDividaAtiva || isDcCnh || isDcVeiculosDoc || serviceId === 'dc-decodificar-motor';
+    // Roubo e Furto — API Datacube (form-urlencoded; movido da Opção 2 para valor
+    // fixo de R$25,00, noMarkup:true). O PDF é montado a partir do JSON retornado
+    // (ver buildRouboFurtoPdfBuffer).
+    const isDcRouboFurto = serviceId === 'dc-roubo-furto';
+    if (isDcRouboFurto) {
+      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      apiUrl = `${DATACUBE_API_URL}${service.dcPath}`;
+      method = 'POST';
+      body   = new URLSearchParams({ auth_token: DATACUBE_TOKEN, placa });
+    }
+
+    // Histórico de Proprietários — API Datacube (form-urlencoded; movido da Opção 2
+    // para valor fixo de R$15,00, noMarkup:true). O PDF é montado a partir do JSON
+    // retornado (ver buildHistoricoProprietarioPdfBuffer).
+    const isDcHistoricoProprietario = serviceId === 'dc-historico-proprietario';
+    if (isDcHistoricoProprietario) {
+      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      apiUrl = `${DATACUBE_API_URL}${service.dcPath}`;
+      method = 'POST';
+      body   = new URLSearchParams({ auth_token: DATACUBE_TOKEN, placa });
+    }
+
+    // Histórico de Gravames — API Datacube (form-urlencoded; movido da Opção 2
+    // para valor fixo de R$8,00, noMarkup:true). O PDF é montado a partir do JSON
+    // retornado (ver buildHistoricoGravamesPdfBuffer).
+    const isDcHistoricoGravames = serviceId === 'dc-historico-gravames';
+    if (isDcHistoricoGravames) {
+      const chassi = (params?.chassi || '').toUpperCase().replace(/\s/g, '');
+      if (chassi.length !== 17) return res.status(400).json({ error: 'Chassi deve ter exatamente 17 caracteres.' });
+      apiUrl = `${DATACUBE_API_URL}${service.dcPath}`;
+      method = 'POST';
+      body   = new URLSearchParams({ auth_token: DATACUBE_TOKEN, chassi });
+    }
+
+    const isDatacubeForm = isDcDebito || isDcDividaAtiva || isDcCnh || isDcVeiculosDoc || isDcRouboFurto || isDcHistoricoProprietario || isDcHistoricoGravames || serviceId === 'dc-decodificar-motor';
 
     let fetchHeaders;
     if (isDatacubeForm) {
@@ -2136,6 +2311,33 @@ app.post('/api/query', requireAuth, async (req, res) => {
         // mesmo padrão visual do relatório de Débitos por Estado.
         try {
           dcDebitoPdfBuf = await buildVeiculosDocPdfBuffer(service, parsed.result ?? parsed, params);
+        } catch (e) {
+          console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+        }
+      } else if (isDcRouboFurto) {
+        // Roubo e Furto: monta o PDF do relatório a partir do JSON, no mesmo
+        // padrão visual do relatório de Débitos por Estado.
+        try {
+          dcDebitoPdfBuf = await buildRouboFurtoPdfBuffer(service, parsed.result ?? parsed, params);
+        } catch (e) {
+          console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+        }
+      } else if (isDcHistoricoProprietario) {
+        // Histórico de Proprietários: monta o PDF do relatório a partir do JSON,
+        // no mesmo padrão visual do relatório de Débitos por Estado.
+        try {
+          dcDebitoPdfBuf = await buildHistoricoProprietarioPdfBuffer(service, parsed.result ?? parsed, params);
+        } catch (e) {
+          console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+        }
+      } else if (isDcHistoricoGravames) {
+        // Histórico de Gravames: monta o PDF do relatório a partir do JSON, no
+        // mesmo padrão visual do relatório de Débitos por Estado.
+        try {
+          dcDebitoPdfBuf = await buildHistoricoGravamesPdfBuffer(service, parsed.result ?? parsed, params);
         } catch (e) {
           console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
           return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
