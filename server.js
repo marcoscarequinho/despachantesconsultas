@@ -1880,6 +1880,49 @@ function buildBinEstadualPdfBuffer(service, data, params) {
   });
 }
 
+// ── Geração de PDF — Inserir Comunicação Venda (API retorna JSON, não PDF pronto) ──
+function buildComunicacaoVendaPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+
+      pdfReportHeader(doc, 'COMUNICAÇÃO DE VENDA', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      const veic = params?.veiculo  || {};
+      const v    = params?.vendedor || {};
+      const c    = params?.comprador || {};
+      const vda  = params?.venda    || {};
+      pdfFieldGrid(doc, [
+        ['Placa', maskPlacaDisplay(veic.placa)],
+        ['Renavam', veic.renavam || '-'],
+        ['Vendedor', v.nome || '-'],
+        ['CPF/CNPJ do Vendedor', maskDocDisplay(v.cpf || v.cnpj)],
+        ['Comprador', c.nome || '-'],
+        ['CPF/CNPJ do Comprador', maskDocDisplay(c.cpf || c.cnpj)],
+        ['Data da Venda', vda.data || '-'],
+        ['Valor da Venda', vda.valor ? String(vda.valor) : '-'],
+      ]);
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'RESULTADO');
+      pdfRenderGenericObject(doc, data);
+      doc.moveDown(0.4);
+
+      pdfReportFooter(doc, now);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── POST /api/query ───────────────────────────────────────────────────────────
 app.post('/api/query', requireAuth, async (req, res) => {
   const { serviceId, params } = req.body;
@@ -2573,6 +2616,19 @@ app.post('/api/query', requireAuth, async (req, res) => {
       }
     }
 
+    // Inserir Comunicação Venda: o retorno de sucesso deixa de ser exibido como
+    // JSON — monta o PDF do comprovante a partir do JSON retornado, no mesmo
+    // padrão visual do relatório de Débitos por Estado.
+    let vendaPdfBuf = null;
+    if (serviceId === 'inserir-comunicacao-venda' && !willBePdfOrHtml && genericParseOk) {
+      try {
+        vendaPdfBuf = await buildComunicacaoVendaPdfBuffer(service, genericData, params);
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF do comprovante:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF do comprovante.' });
+      }
+    }
+
     // ── Debita créditos somente após validar resposta ─────────────────────────
     await pool.query(
       'UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]
@@ -2583,19 +2639,19 @@ app.post('/api/query', requireAuth, async (req, res) => {
     );
     // Guarda o corpo JSON retornado (quando não é PDF/HTML) para o histórico poder
     // reexibir o mesmo resultado depois, sem precisar refazer (e recobrar) a consulta.
-    const resultData = willBePdfOrHtml ? null : JSON.stringify(genericParseOk ? genericData : { resposta: bodyStr });
+    const resultData = (willBePdfOrHtml || vendaPdfBuf) ? null : JSON.stringify(genericParseOk ? genericData : { resposta: bodyStr });
     const qRow = await pool.query(
       `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type, result_data)
        VALUES ($1,$2,$3,$4,'success',$5,$6,$7,$8) RETURNING id`,
       [req.user.id, serviceId, service.name, JSON.stringify(params || {}),
        price, txRow.rows[0].id,
-       htmlBuf ? 'html' : (isRealPdf || base64PdfBuf || dcDebitoPdfBuf || dcMotorPdfBuf) ? 'pdf' : 'json',
+       htmlBuf ? 'html' : (isRealPdf || base64PdfBuf || dcDebitoPdfBuf || dcMotorPdfBuf || vendaPdfBuf) ? 'pdf' : 'json',
        resultData]
     );
     await notifyAdminNewQuery(user, service, price, params);
 
     // ── Envia PDF + salva no cache por 7 dias ────────────────────────────────
-    const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null) || dcDebitoPdfBuf || dcMotorPdfBuf;
+    const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null) || dcDebitoPdfBuf || dcMotorPdfBuf || vendaPdfBuf;
     if (pdfToSend || htmlBuf) {
       const dataToCache = pdfToSend || htmlBuf;
       const token       = crypto.randomBytes(32).toString('hex');
