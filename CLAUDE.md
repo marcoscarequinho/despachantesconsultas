@@ -44,6 +44,12 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 5. PDFs/HTML são salvos em `pdf_cache` por 7 dias (token) — o histórico do painel rebaixa por esse token, sem recobrar.
 6. O front-end ([painel-usuario.html](painel-usuario.html) → `submitQuery`) decide pela `Content-Type`: `application/pdf` → download automático; JSON com `html_token` → abre `/api/html/:token`; senão renderiza JSON.
 
+## API externa (/api/v1 — chave de API)
+
+- Autenticação por chave `mcd_...` (header `X-API-Key` ou `Authorization: Bearer`), middleware `requireApiKey`. Só o SHA-256 fica na tabela `api_keys`; a chave completa aparece uma única vez na criação.
+- Chaves são criadas pelo admin (modelo contratual, sem self-service): `POST /api/admin/api-keys` (`user_id`, `label`), `GET /api/admin/api-keys`, `PUT /api/admin/api-keys/:id/toggle`.
+- Endpoints externos proxy para a Infosimples via `runExternalInfosimplesQuery` (parâmetros no corpo raiz, débito na conta dona da chave): `POST /api/v1/detran-mg/intencao-venda` e `POST /api/v1/detran-mg/atpve`.
+
 ## Convenções
 
 - Idioma do código, comentários, mensagens de erro e UI: **português (pt-BR)**. Valores em BRL (`fmtMoneyBRL`).

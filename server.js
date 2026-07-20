@@ -556,6 +556,18 @@ async function initDB() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id           SERIAL PRIMARY KEY,
+      user_id      INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      key_hash     VARCHAR(64) UNIQUE NOT NULL,
+      key_prefix   VARCHAR(12) NOT NULL,
+      label        VARCHAR(100),
+      active       BOOLEAN DEFAULT true,
+      last_used_at TIMESTAMPTZ,
+      created_at   TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
   console.log('✅ Tabelas prontas');
 }
 
@@ -613,6 +625,34 @@ async function requireSuperAdmin(req, res, next) {
       return res.status(403).json({ error: 'Acesso restrito ao super administrador.' });
     next();
   } catch {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+}
+
+// ── Autenticação por chave de API (clientes externos) ─────────────────────────
+// Só o SHA-256 da chave fica no banco — o valor completo ("mcd_..." + 48 hex) é
+// exibido uma única vez na criação, então vazamento do banco não expõe chaves.
+const hashApiKey = k => crypto.createHash('sha256').update(k).digest('hex');
+
+async function requireApiKey(req, res, next) {
+  const raw = (req.headers['x-api-key'] || (req.headers.authorization || '').replace(/^Bearer\s+/i, '')).trim();
+  if (!raw || !raw.startsWith('mcd_'))
+    return res.status(401).json({ error: 'Chave de API ausente. Envie no header X-API-Key ou Authorization: Bearer mcd_...' });
+  try {
+    const r = await pool.query(
+      `SELECT k.id AS key_id, u.id AS user_id, u.active, u.name, u.email
+         FROM api_keys k JOIN users u ON u.id = k.user_id
+        WHERE k.key_hash=$1 AND k.active=true`,
+      [hashApiKey(raw)]
+    );
+    if (!r.rows.length) return res.status(401).json({ error: 'Chave de API inválida ou revogada.' });
+    if (!r.rows[0].active) return res.status(403).json({ error: 'Conta bloqueada.' });
+    req.apiKey  = { id: r.rows[0].key_id };
+    req.apiUser = { id: r.rows[0].user_id, name: r.rows[0].name, email: r.rows[0].email };
+    pool.query('UPDATE api_keys SET last_used_at=NOW() WHERE id=$1', [r.rows[0].key_id]).catch(() => {});
+    next();
+  } catch (e) {
+    console.error('Erro em requireApiKey:', e.message);
     res.status(500).json({ error: 'Erro interno.' });
   }
 }
@@ -3223,6 +3263,141 @@ app.post('/api/query-v3', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Erro em /api/query-v3:', err.message);
     res.status(500).json({ error: 'Erro interno. Tente novamente.' });
+  }
+});
+
+// ── API externa /api/v1 (autenticada por chave de API) ────────────────────────
+// Executa um serviço do catálogo Infosimples em nome de um cliente externo:
+// mesma regra do /api/query-v3 (validar → consultar → só então debitar créditos
+// da conta dona da chave), mas os parâmetros vêm no corpo raiz da requisição —
+// não aninhados em "params" — para a integração do cliente ficar mais simples.
+async function runExternalInfosimplesQuery(req, res, serviceId) {
+  const service = SERVICES_V3.find(s => s.id === serviceId);
+  if (!service) return res.status(500).json({ error: 'Serviço não configurado.' });
+
+  const price  = parseFloat((service.basePrice * INFOSIMPLES_MARKUP).toFixed(2));
+  const params = req.body || {};
+
+  try {
+    const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.apiUser.id]);
+    const user = ur.rows[0];
+    if (!user || !user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+    if (parseFloat(user.credits) < price)
+      return res.status(402).json({
+        error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}`,
+      });
+
+    const faltando = service.params
+      .filter(p => p.required && !(params?.[p.name] ?? '').toString().trim())
+      .map(p => p.name);
+    if (faltando.length)
+      return res.status(400).json({ error: `Campos obrigatórios ausentes: ${faltando.join(', ')}` });
+
+    const qs = new URLSearchParams({ token: INFOSIMPLES_TOKEN });
+    for (const p of service.params) {
+      const v = (params?.[p.name] ?? '').toString().trim();
+      if (v) qs.set(p.name, v);
+    }
+
+    let apiRes, apiData;
+    try {
+      apiRes = await fetch(`${INFOSIMPLES_API_URL}/${service.path}?${qs.toString()}`, { method: 'POST' });
+      apiData = await apiRes.json().catch(() => null);
+    } catch (e) {
+      console.error(`Erro na API Infosimples [externo ${serviceId}]:`, e.message);
+      return res.status(502).json({ error: 'Erro ao consultar a API. Tente novamente.' });
+    }
+
+    if (!apiData || apiData.code !== 200) {
+      const errMsg = (apiData && (apiData.errors?.[0] || apiData.code_message)) || `Erro HTTP ${apiRes.status}.`;
+      console.error(`Erro API Infosimples [externo ${serviceId}] code ${apiData?.code}: ${errMsg}`);
+      return res.status(apiRes.status && apiRes.status >= 400 ? apiRes.status : 502).json({ error: errMsg });
+    }
+
+    const result = Array.isArray(apiData.data) ? (apiData.data[0] ?? {}) : (apiData.data ?? {});
+    const label  = `${service.group} — ${service.name}`;
+
+    await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.apiUser.id]);
+    const txRow = await pool.query(
+      `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+      [req.apiUser.id, price, `Consulta: ${label} (API externa)`]
+    );
+    const qRow = await pool.query(
+      `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type, result_data)
+       VALUES ($1,$2,$3,$4,'success',$5,$6,'json',$7) RETURNING id`,
+      [req.apiUser.id, service.id, label, JSON.stringify(params), price, txRow.rows[0].id, JSON.stringify(result)]
+    );
+
+    return res.json({ success: true, consulta_id: qRow.rows[0].id, servico: label, charged: price, result });
+  } catch (err) {
+    console.error(`Erro em API externa [${serviceId}]:`, err.message);
+    res.status(500).json({ error: 'Erro interno. Tente novamente.' });
+  }
+}
+
+// DETRAN/MG — Registrar Intenção de Venda de Veículo
+app.post('/api/v1/detran-mg/intencao-venda', requireApiKey, (req, res) =>
+  runExternalInfosimplesQuery(req, res, 'is-detran-mg-reg-intencao-venda'));
+
+// DETRAN/MG — Emitir ATPV-e
+app.post('/api/v1/detran-mg/atpve', requireApiKey, (req, res) =>
+  runExternalInfosimplesQuery(req, res, 'is-detran-mg-atpve'));
+
+// ── Gestão de chaves de API (admin) ───────────────────────────────────────────
+// A API é contratual (sem self-service, ver seção API da landing page): o admin
+// cria a chave já vinculada à conta do cliente que será debitada nas consultas.
+app.post('/api/admin/api-keys', requireAuth, requireSuperAdmin, async (req, res) => {
+  const userId = parseInt(req.body?.user_id, 10);
+  const label  = (req.body?.label || '').trim().slice(0, 100);
+  if (!Number.isInteger(userId) || userId <= 0)
+    return res.status(400).json({ error: 'Informe o user_id do cliente.' });
+  try {
+    const u = await pool.query('SELECT id, name, email FROM users WHERE id=$1', [userId]);
+    if (!u.rows.length) return res.status(404).json({ error: 'Usuário não encontrado.' });
+
+    const key = 'mcd_' + crypto.randomBytes(24).toString('hex');
+    const r = await pool.query(
+      `INSERT INTO api_keys (user_id, key_hash, key_prefix, label)
+       VALUES ($1,$2,$3,$4) RETURNING id, created_at`,
+      [userId, hashApiKey(key), key.slice(0, 12), label || null]
+    );
+    res.json({
+      success: true,
+      id: r.rows[0].id,
+      api_key: key,
+      user: u.rows[0],
+      aviso: 'Guarde esta chave agora: por segurança ela não poderá ser exibida novamente.',
+    });
+  } catch (e) {
+    console.error('Erro ao criar chave de API:', e.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+app.get('/api/admin/api-keys', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT k.id, k.key_prefix, k.label, k.active, k.last_used_at, k.created_at,
+             u.id AS user_id, u.name AS user_name, u.email AS user_email
+        FROM api_keys k JOIN users u ON u.id = k.user_id
+       ORDER BY k.created_at DESC
+    `);
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+app.put('/api/admin/api-keys/:id/toggle', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(
+      'UPDATE api_keys SET active = NOT active WHERE id=$1 RETURNING id, active',
+      [parseInt(req.params.id, 10)]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Chave não encontrada.' });
+    res.json({ success: true, active: r.rows[0].active });
+  } catch (e) {
+    res.status(500).json({ error: 'Erro interno.' });
   }
 });
 
