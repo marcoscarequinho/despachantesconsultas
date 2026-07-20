@@ -3583,6 +3583,17 @@ app.post('/api/admin/api-cobrancas/:id/cobrar', requireAuth, requireSuperAdmin, 
       `Escaneie o QR Code acima ou use o código copia e cola enviado na próxima mensagem.`,
     ].join('\n');
     const enviado = await sendWhatsAppImage(phone, txData.qr_code_base64, caption).catch(() => false);
+    // Mensagem de texto com a placa da cobrança — garante que a identificação
+    // chega por escrito mesmo se a legenda da imagem não for exibida; o código
+    // copia e cola vai sozinho na mensagem seguinte para facilitar a cópia.
+    const detalhes = [
+      ...(placa ? [`🔤 *Placa: ${placa}*`] : []),
+      `🧾 ${svcName}`,
+      `💰 Valor: ${fmtMoneyBRL(EXTERNAL_API_PRICE)}`,
+      ``,
+      `👇 Código PIX copia e cola:`,
+    ].join('\n');
+    await sendWhatsApp(phone, detalhes).catch(() => {});
     await sendWhatsApp(phone, txData.qr_code).catch(() => {});
 
     res.json({ success: true, whatsappEnviado: enviado });
