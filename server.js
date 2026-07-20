@@ -4564,6 +4564,9 @@ app.get('/cadastrar/revendedor', (req, res) => {
   noCache(res); res.sendFile(path.join(__dirname, 'cadastrar.html'));
 });
 app.get('/consulta-avulsa', (req, res) => {
+  // Página privada (link enviado a clientes específicos): o header reforça o
+  // noindex da meta tag para buscadores que só leem cabeçalhos.
+  res.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
   noCache(res); res.sendFile(path.join(__dirname, 'consulta-avulsa.html'));
 });
 app.get('/painel', requireAuth, (req, res) => {

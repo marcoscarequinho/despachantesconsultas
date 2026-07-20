@@ -3,6 +3,7 @@ Allow: /
 Disallow: /admin
 Disallow: /painel
 Disallow: /recarga-pix
+Disallow: /consulta-avulsa
 Disallow: /api/
 
 Sitemap: https://www.despachantesconsultas.com.br/sitemap.xml
