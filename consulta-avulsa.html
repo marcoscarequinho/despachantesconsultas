@@ -171,7 +171,7 @@ async function validarCodigo(codigoUrl) {
     const r = await fetch('/api/public/validar-codigo', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ codigo, pagina: 'avulsa' }),
+      body: JSON.stringify({ codigo }),
     });
     const d = await r.json();
     if (!r.ok) {

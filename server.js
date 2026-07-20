@@ -614,7 +614,6 @@ async function initDB() {
     );
   `);
   await pool.query(`ALTER TABLE public_orders ADD COLUMN IF NOT EXISTS access_code VARCHAR(20);`);
-  await pool.query(`ALTER TABLE public_orders ADD COLUMN IF NOT EXISTS phone VARCHAR(20);`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public_access_codes (
       id           SERIAL PRIMARY KEY,
@@ -626,7 +625,20 @@ async function initDB() {
       created_at   TIMESTAMPTZ DEFAULT NOW()
     );
   `);
-  await pool.query(`ALTER TABLE public_access_codes ADD COLUMN IF NOT EXISTS page VARCHAR(20) DEFAULT 'avulsa';`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS api_general_queries (
+      id                SERIAL PRIMARY KEY,
+      api_key_id        INTEGER REFERENCES api_keys(id) ON DELETE SET NULL,
+      service_id        VARCHAR(100) NOT NULL,
+      params            TEXT,
+      result_data       TEXT,
+      charge_phone      VARCHAR(20),
+      charge_gateway_id VARCHAR(100),
+      charge_status     VARCHAR(20) DEFAULT 'NONE',
+      charge_sent_at    TIMESTAMPTZ,
+      created_at        TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
   console.log('✅ Tabelas prontas');
 }
 
@@ -636,15 +648,13 @@ async function initDB() {
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
-// As páginas privadas não podem sair pelo servidor de estáticos (isso pularia a
-// validação do código de acesso) — redirecionam para as rotas controladas, que
-// exigem ?codigo=XXXXXX ativo. Registrado ANTES do express.static de propósito.
-for (const page of ['consulta-avulsa', 'consulta-whatsapp']) {
-  app.get(`/${page}.html`, (req, res) => {
-    const qs = req.originalUrl.split('?')[1];
-    res.redirect(`/${page}` + (qs ? '?' + qs : ''));
-  });
-}
+// A página avulsa não pode sair pelo servidor de estáticos (isso pularia a
+// validação do código de acesso) — redireciona para a rota controlada, que
+// exige ?codigo=XXXXXX ativo. Registrado ANTES do express.static de propósito.
+app.get('/consulta-avulsa.html', (req, res) => {
+  const qs = req.originalUrl.split('?')[1];
+  res.redirect('/consulta-avulsa' + (qs ? '?' + qs : ''));
+});
 app.use(express.static(path.join(__dirname), { etag: false, lastModified: false, setHeaders: (res) => res.set('Cache-Control', 'no-store') }));
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -702,22 +712,27 @@ async function requireSuperAdmin(req, res, next) {
 // exibido uma única vez na criação, então vazamento do banco não expõe chaves.
 const hashApiKey = k => crypto.createHash('sha256').update(k).digest('hex');
 
+// Dois tipos de chave: vinculada a um usuário (pré-paga, debita os créditos da
+// conta) ou GERAL (user_id NULL, pós-paga) — a consulta roda sem debitar
+// ninguém e fica registrada em api_general_queries para o admin cobrar depois
+// por WhatsApp na página Cobranças API.
 async function requireApiKey(req, res, next) {
   const raw = (req.headers['x-api-key'] || (req.headers.authorization || '').replace(/^Bearer\s+/i, '')).trim();
   if (!raw || !raw.startsWith('mcd_'))
     return res.status(401).json({ error: 'Chave de API ausente. Envie no header X-API-Key ou Authorization: Bearer mcd_...' });
   try {
     const r = await pool.query(
-      `SELECT k.id AS key_id, u.id AS user_id, u.active, u.name, u.email
-         FROM api_keys k JOIN users u ON u.id = k.user_id
+      `SELECT k.id AS key_id, k.label, u.id AS user_id, u.active, u.name, u.email
+         FROM api_keys k LEFT JOIN users u ON u.id = k.user_id
         WHERE k.key_hash=$1 AND k.active=true`,
       [hashApiKey(raw)]
     );
     if (!r.rows.length) return res.status(401).json({ error: 'Chave de API inválida ou revogada.' });
-    if (!r.rows[0].active) return res.status(403).json({ error: 'Conta bloqueada.' });
-    req.apiKey  = { id: r.rows[0].key_id };
-    req.apiUser = { id: r.rows[0].user_id, name: r.rows[0].name, email: r.rows[0].email };
-    pool.query('UPDATE api_keys SET last_used_at=NOW() WHERE id=$1', [r.rows[0].key_id]).catch(() => {});
+    const row = r.rows[0];
+    if (row.user_id && !row.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+    req.apiKey  = { id: row.key_id, label: row.label, general: !row.user_id };
+    req.apiUser = row.user_id ? { id: row.user_id, name: row.name, email: row.email } : null;
+    pool.query('UPDATE api_keys SET last_used_at=NOW() WHERE id=$1', [row.key_id]).catch(() => {});
     next();
   } catch (e) {
     console.error('Erro em requireApiKey:', e.message);
@@ -3349,15 +3364,18 @@ async function runExternalInfosimplesQuery(req, res, serviceId) {
 
   const price  = EXTERNAL_API_PRICE;
   const params = req.body || {};
+  const isGeneral = !req.apiUser; // chave geral (pós-paga): não debita créditos
 
   try {
-    const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.apiUser.id]);
-    const user = ur.rows[0];
-    if (!user || !user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
-    if (parseFloat(user.credits) < price)
-      return res.status(402).json({
-        error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}`,
-      });
+    if (!isGeneral) {
+      const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.apiUser.id]);
+      const user = ur.rows[0];
+      if (!user || !user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+      if (parseFloat(user.credits) < price)
+        return res.status(402).json({
+          error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}`,
+        });
+    }
 
     const faltando = service.params
       .filter(p => p.required && !(params?.[p.name] ?? '').toString().trim())
@@ -3389,6 +3407,17 @@ async function runExternalInfosimplesQuery(req, res, serviceId) {
     const result = Array.isArray(apiData.data) ? (apiData.data[0] ?? {}) : (apiData.data ?? {});
     const label  = `${service.group} — ${service.name}`;
 
+    // Chave geral: registra a consulta para a cobrança posterior (página
+    // Cobranças API do admin) e devolve o resultado sem debitar créditos.
+    if (isGeneral) {
+      const gRow = await pool.query(
+        `INSERT INTO api_general_queries (api_key_id, service_id, params, result_data)
+         VALUES ($1,$2,$3,$4) RETURNING id`,
+        [req.apiKey.id, service.id, JSON.stringify(params), JSON.stringify(result)]
+      );
+      return res.json({ success: true, consulta_id: gRow.rows[0].id, servico: label, result });
+    }
+
     await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.apiUser.id]);
     const txRow = await pool.query(
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
@@ -3419,25 +3448,36 @@ app.post('/api/v1/detran-mg/atpve', requireApiKey, (req, res) =>
 // A API é contratual (sem self-service, ver seção API da landing page): o admin
 // cria a chave já vinculada à conta do cliente que será debitada nas consultas.
 app.post('/api/admin/api-keys', requireAuth, requireSuperAdmin, async (req, res) => {
+  // Dois modos: com user_id (chave pré-paga, debita a conta do cliente) ou
+  // general:true (chave GERAL pós-paga, sem usuário — cobrança via WhatsApp
+  // na página Cobranças API).
+  const isGeneral = req.body?.general === true;
   const userId = parseInt(req.body?.user_id, 10);
   const label  = (req.body?.label || '').trim().slice(0, 100);
-  if (!Number.isInteger(userId) || userId <= 0)
-    return res.status(400).json({ error: 'Informe o user_id do cliente.' });
+  if (!isGeneral && (!Number.isInteger(userId) || userId <= 0))
+    return res.status(400).json({ error: 'Informe o user_id do cliente ou marque como chave geral.' });
+  if (isGeneral && !label)
+    return res.status(400).json({ error: 'Informe uma identificação para a chave geral.' });
   try {
-    const u = await pool.query('SELECT id, name, email FROM users WHERE id=$1', [userId]);
-    if (!u.rows.length) return res.status(404).json({ error: 'Usuário não encontrado.' });
+    let user = null;
+    if (!isGeneral) {
+      const u = await pool.query('SELECT id, name, email FROM users WHERE id=$1', [userId]);
+      if (!u.rows.length) return res.status(404).json({ error: 'Usuário não encontrado.' });
+      user = u.rows[0];
+    }
 
     const key = 'mcd_' + crypto.randomBytes(24).toString('hex');
     const r = await pool.query(
       `INSERT INTO api_keys (user_id, key_hash, key_prefix, label)
        VALUES ($1,$2,$3,$4) RETURNING id, created_at`,
-      [userId, hashApiKey(key), key.slice(0, 12), label || null]
+      [isGeneral ? null : userId, hashApiKey(key), key.slice(0, 12), label || null]
     );
     res.json({
       success: true,
       id: r.rows[0].id,
       api_key: key,
-      user: u.rows[0],
+      user,
+      general: isGeneral,
       aviso: 'Guarde esta chave agora: por segurança ela não poderá ser exibida novamente.',
     });
   } catch (e) {
@@ -3451,7 +3491,7 @@ app.get('/api/admin/api-keys', requireAuth, requireSuperAdmin, async (req, res) 
     const r = await pool.query(`
       SELECT k.id, k.key_prefix, k.label, k.active, k.last_used_at, k.created_at,
              u.id AS user_id, u.name AS user_name, u.email AS user_email
-        FROM api_keys k JOIN users u ON u.id = k.user_id
+        FROM api_keys k LEFT JOIN users u ON u.id = k.user_id
        ORDER BY k.created_at DESC
     `);
     res.json(r.rows);
@@ -3473,6 +3513,107 @@ app.put('/api/admin/api-keys/:id/toggle', requireAuth, requireSuperAdmin, async 
   }
 });
 
+// ── Cobranças API (consultas da chave geral, pós-pagas) ───────────────────────
+// Cada consulta feita com chave geral aparece aqui com a placa; o admin digita
+// o WhatsApp do cliente final e o sistema envia o PIX de R$ 5,00 (QR Code como
+// imagem + copia e cola como texto) referente àquela consulta específica.
+app.get('/api/admin/api-cobrancas', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT q.id, q.service_id, q.params, q.charge_phone, q.charge_status,
+             q.charge_sent_at, q.created_at, k.label AS key_label, k.key_prefix
+        FROM api_general_queries q
+        LEFT JOIN api_keys k ON k.id = q.api_key_id
+       ORDER BY q.created_at DESC LIMIT 500
+    `);
+    res.json(r.rows.map(q => {
+      let p = {};
+      try { p = JSON.parse(q.params || '{}'); } catch {}
+      return {
+        id: q.id, service_id: q.service_id, key_label: q.key_label, key_prefix: q.key_prefix,
+        placa: p.placa || null, renavam: p.renavam || null,
+        charge_phone: q.charge_phone, charge_status: q.charge_status,
+        charge_sent_at: q.charge_sent_at, created_at: q.created_at,
+      };
+    }));
+  } catch {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+app.post('/api/admin/api-cobrancas/:id/cobrar', requireAuth, requireSuperAdmin, async (req, res) => {
+  const id  = parseInt(req.params.id, 10);
+  let phone = (req.body?.telefone || '').replace(/\D/g, '');
+  try {
+    const qr = await pool.query('SELECT * FROM api_general_queries WHERE id=$1', [id]);
+    if (!qr.rows.length) return res.status(404).json({ error: 'Consulta não encontrada.' });
+    const q = qr.rows[0];
+    if (q.charge_status === 'PAID') return res.status(400).json({ error: 'Esta consulta já foi paga.' });
+    // Reenvio sem telefone no corpo: reutiliza o número da cobrança anterior.
+    if (!phone) phone = q.charge_phone || '';
+    if (phone.length < 10 || phone.length > 13)
+      return res.status(400).json({ error: 'Telefone inválido. Informe DDD + número (ex.: 22999951574).' });
+
+    let placa = '';
+    try { placa = (JSON.parse(q.params || '{}').placa || '').toUpperCase(); } catch {}
+    const svcName = SERVICES_V3.find(s => s.id === q.service_id)?.name || q.service_id;
+
+    const payment = await mpReq('POST', '/v1/payments', {
+      transaction_amount: EXTERNAL_API_PRICE,
+      description: `Consulta API — ${svcName}${placa ? ' ' + placa : ''}`,
+      payment_method_id: 'pix',
+      payer: { email: `cliente-${phone}@despachantesconsultas.com.br`, first_name: 'Cliente', last_name: 'API' },
+    }, { 'X-Idempotency-Key': crypto.randomUUID() });
+
+    const txData = payment.point_of_interaction?.transaction_data || {};
+    if (!txData.qr_code) throw new Error('Mercado Pago não retornou o QR Code PIX.');
+
+    await pool.query(
+      `UPDATE api_general_queries
+          SET charge_phone=$1, charge_gateway_id=$2, charge_status='PENDING', charge_sent_at=NOW()
+        WHERE id=$3`,
+      [phone, String(payment.id), id]
+    );
+
+    const caption = [
+      `💳 *PIX de ${fmtMoneyBRL(EXTERNAL_API_PRICE)} — MC Despachadoria*`,
+      `🧾 Serviço: ${svcName}`,
+      ...(placa ? [`🔤 Placa: ${placa}`] : []),
+      ``,
+      `Escaneie o QR Code acima ou use o código copia e cola enviado na próxima mensagem.`,
+    ].join('\n');
+    const enviado = await sendWhatsAppImage(phone, txData.qr_code_base64, caption).catch(() => false);
+    await sendWhatsApp(phone, txData.qr_code).catch(() => {});
+
+    res.json({ success: true, whatsappEnviado: enviado });
+  } catch (e) {
+    console.error('Erro ao cobrar consulta API:', e.message);
+    res.status(500).json({ error: e.message || 'Erro ao gerar a cobrança.' });
+  }
+});
+
+app.post('/api/admin/api-cobrancas/:id/verificar', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const qr = await pool.query('SELECT charge_status, charge_gateway_id FROM api_general_queries WHERE id=$1',
+      [parseInt(req.params.id, 10)]);
+    if (!qr.rows.length) return res.status(404).json({ error: 'Consulta não encontrada.' });
+    const q = qr.rows[0];
+    if (q.charge_status === 'PAID') return res.json({ status: 'PAID' });
+    if (!q.charge_gateway_id)      return res.json({ status: 'NONE' });
+
+    const mp = await mpReq('GET', `/v1/payments/${q.charge_gateway_id}`);
+    if (mp.status === 'approved') {
+      await pool.query(`UPDATE api_general_queries SET charge_status='PAID' WHERE id=$1`,
+        [parseInt(req.params.id, 10)]);
+      return res.json({ status: 'PAID' });
+    }
+    res.json({ status: 'PENDING', payment_status: mp.status });
+  } catch (e) {
+    console.error('Erro ao verificar cobrança API:', e.message);
+    res.status(500).json({ error: 'Erro ao verificar o pagamento.' });
+  }
+});
+
 // Lista os pedidos avulsos no admin — toda consulta paga por PIX fica registrada
 // em public_orders (placa, dados enviados, e-mail, pagamento e resultado), com o
 // nome do cliente resolvido pelo código de acesso usado.
@@ -3480,7 +3621,7 @@ app.get('/api/admin/public-orders', requireAuth, requireSuperAdmin, async (req, 
   try {
     const r = await pool.query(
       `SELECT o.id, o.token, o.service_id, o.params, o.amount, o.status, o.error_msg,
-              o.contact, o.phone, o.created_at, o.access_code, c.label AS client_label
+              o.contact, o.created_at, o.access_code, c.label AS client_label
          FROM public_orders o
          LEFT JOIN public_access_codes c ON c.code = o.access_code
         ORDER BY o.created_at DESC LIMIT 500`
@@ -3490,8 +3631,8 @@ app.get('/api/admin/public-orders', requireAuth, requireSuperAdmin, async (req, 
       try { p = JSON.parse(o.params || '{}'); } catch {}
       return {
         id: o.id, token: o.token, service_id: o.service_id, amount: o.amount,
-        status: o.status, error_msg: o.error_msg, contact: o.contact, phone: o.phone,
-        created_at: o.created_at, access_code: o.access_code, client_label: o.client_label,
+        status: o.status, error_msg: o.error_msg, contact: o.contact, created_at: o.created_at,
+        access_code: o.access_code, client_label: o.client_label,
         placa: p.placa || null, renavam: p.renavam || null,
       };
     }));
@@ -3513,21 +3654,19 @@ function generateAccessCode() {
 
 app.post('/api/admin/access-codes', requireAuth, requireSuperAdmin, async (req, res) => {
   const label = (req.body?.label || '').trim().slice(0, 100);
-  // 'avulsa' = página com QR na tela; 'whatsapp' = página que envia o PIX pelo WhatsApp.
-  const page  = ['avulsa', 'whatsapp'].includes(req.body?.page) ? req.body.page : 'avulsa';
   if (!label) return res.status(400).json({ error: 'Informe o nome do cliente.' });
   try {
     let code, inserted = null;
     for (let attempt = 0; attempt < 5 && !inserted; attempt++) {
       code = generateAccessCode();
       inserted = await pool.query(
-        `INSERT INTO public_access_codes (code, label, page) VALUES ($1,$2,$3)
+        `INSERT INTO public_access_codes (code, label) VALUES ($1,$2)
          ON CONFLICT (code) DO NOTHING RETURNING id`,
-        [code, label, page]
+        [code, label]
       ).then(r => r.rows[0] || null);
     }
     if (!inserted) return res.status(500).json({ error: 'Não foi possível gerar o código. Tente novamente.' });
-    res.json({ success: true, id: inserted.id, code, label, page });
+    res.json({ success: true, id: inserted.id, code, label });
   } catch (e) {
     console.error('Erro ao criar código de acesso:', e.message);
     res.status(500).json({ error: 'Erro interno.' });
@@ -3537,7 +3676,7 @@ app.post('/api/admin/access-codes', requireAuth, requireSuperAdmin, async (req, 
 app.get('/api/admin/access-codes', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT id, code, label, page, active, uses, last_used_at, created_at
+      `SELECT id, code, label, active, uses, last_used_at, created_at
          FROM public_access_codes ORDER BY created_at DESC`
     );
     res.json(r.rows);
@@ -3587,14 +3726,12 @@ async function callInfosimples(service, params) {
 // formulários. Não conta uso: o incremento acontece só na criação do pedido.
 app.post('/api/public/validar-codigo', async (req, res) => {
   const codigo = (req.body?.codigo || '').trim().toUpperCase();
-  const pagina = (req.body?.pagina || '').trim();
   if (!codigo) return res.status(400).json({ error: 'Informe o código de acesso.' });
   try {
     const r = await pool.query(
-      `SELECT label, page FROM public_access_codes WHERE code=$1 AND active=true`, [codigo]
+      'SELECT label FROM public_access_codes WHERE code=$1 AND active=true', [codigo]
     );
-    if (!r.rows.length || (pagina && r.rows[0].page !== pagina))
-      return res.status(401).json({ error: 'Código de acesso inválido ou desativado.' });
+    if (!r.rows.length) return res.status(401).json({ error: 'Código de acesso inválido ou desativado.' });
     res.json({ ok: true, cliente: r.rows[0].label });
   } catch {
     res.status(500).json({ error: 'Erro interno.' });
@@ -3602,7 +3739,7 @@ app.post('/api/public/validar-codigo', async (req, res) => {
 });
 
 app.post('/api/public/pedido', async (req, res) => {
-  const { servico, email, params, codigo, telefone } = req.body || {};
+  const { servico, email, params, codigo } = req.body || {};
   const serviceId = PUBLIC_PAY_SERVICES[servico];
   if (!serviceId) return res.status(400).json({ error: 'Serviço inválido.' });
   const service = SERVICES_V3.find(s => s.id === serviceId);
@@ -3616,18 +3753,9 @@ app.post('/api/public/pedido', async (req, res) => {
   ).catch(() => ({ rows: [] }));
   if (!ac.rows.length) return res.status(401).json({ error: 'Código de acesso inválido ou desativado.' });
 
-  // Fluxo WhatsApp (página /consulta-whatsapp): recebe o telefone do pagador e o
-  // PIX é enviado por mensagem. O Mercado Pago exige e-mail no payer, então sem
-  // e-mail informado usamos um endereço sintético derivado do telefone.
-  const phoneDigits = (telefone || '').replace(/\D/g, '');
-  if (telefone && (phoneDigits.length < 10 || phoneDigits.length > 13))
-    return res.status(400).json({ error: 'Telefone inválido. Informe DDD + número (ex.: 22999951574).' });
-
-  let mail = (email || '').trim().toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
-    if (!phoneDigits) return res.status(400).json({ error: 'Informe um e-mail válido para o pagamento.' });
-    mail = `cliente-${phoneDigits}@despachantesconsultas.com.br`;
-  }
+  const mail = (email || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail))
+    return res.status(400).json({ error: 'Informe um e-mail válido para o pagamento.' });
 
   const faltando = service.params
     .filter(p => p.required && !(params?.[p.name] ?? '').toString().trim())
@@ -3653,31 +3781,14 @@ app.post('/api/public/pedido', async (req, res) => {
 
     const token = crypto.randomBytes(32).toString('hex');
     await pool.query(
-      `INSERT INTO public_orders (token, service_id, params, amount, gateway_id, contact, access_code, phone)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [token, serviceId, JSON.stringify(params || {}), valor, String(payment.id), mail, accessCode, phoneDigits || null]
+      `INSERT INTO public_orders (token, service_id, params, amount, gateway_id, contact, access_code)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [token, serviceId, JSON.stringify(params || {}), valor, String(payment.id), mail, accessCode]
     );
     await pool.query(
       'UPDATE public_access_codes SET uses = uses + 1, last_used_at = NOW() WHERE id=$1',
       [ac.rows[0].id]
     ).catch(() => {});
-
-    // Envia o PIX pelo WhatsApp do pagador: QR Code como imagem e o copia e cola
-    // como texto separado (mensagem só com o código, fácil de copiar no celular).
-    let whatsappEnviado = false;
-    if (phoneDigits) {
-      const placa = (params?.placa || '').toUpperCase();
-      const caption = [
-        `💳 *PIX de ${fmtMoneyBRL(valor)} — MC Despachadoria*`,
-        `🧾 Serviço: ${service.name}`,
-        ...(placa ? [`🔤 Placa: ${placa}`] : []),
-        ``,
-        `Escaneie o QR Code acima ou use o código copia e cola enviado na próxima mensagem.`,
-        `A consulta é feita automaticamente assim que o pagamento for aprovado.`,
-      ].join('\n');
-      whatsappEnviado = await sendWhatsAppImage(phoneDigits, txData.qr_code_base64, caption).catch(() => false);
-      await sendWhatsApp(phoneDigits, txData.qr_code).catch(() => {});
-    }
 
     res.json({
       token,
@@ -3685,7 +3796,6 @@ app.post('/api/public/pedido', async (req, res) => {
       qrCode: txData.qr_code_base64,
       pixCopiaECola: txData.qr_code,
       expirationDate: payment.date_of_expiration,
-      whatsappEnviado,
     });
   } catch (err) {
     console.error('Erro ao criar pedido avulso:', err.message);
@@ -3722,17 +3832,6 @@ app.get('/api/public/pedido/:token', async (req, res) => {
       if (out.ok) {
         await pool.query(`UPDATE public_orders SET status='DONE', result_data=$1 WHERE id=$2`,
           [JSON.stringify(out.result), order.id]);
-        // Fluxo WhatsApp: avisa o pagador que a consulta foi concluída, com o
-        // link do documento quando o DETRAN retorna um (primeira URL do result).
-        if (order.phone) {
-          const urlMatch = JSON.stringify(out.result).match(/https?:\/\/[^\s"\\]+/);
-          const msg = [
-            `✅ *Pagamento confirmado — consulta concluída!*`,
-            `🧾 ${service.name}`,
-            ...(urlMatch ? [``, `📎 Documento: ${urlMatch[0]}`] : []),
-          ].join('\n');
-          await sendWhatsApp(order.phone, msg).catch(() => {});
-        }
         return res.json({ status: 'DONE', result: out.result });
       }
       await pool.query(`UPDATE public_orders SET status='ERROR', error_msg=$1 WHERE id=$2`, [out.errMsg, order.id]);
@@ -4748,21 +4847,19 @@ app.get('/cadastrar', (req, res) => {
 app.get('/cadastrar/revendedor', (req, res) => {
   noCache(res); res.sendFile(path.join(__dirname, 'cadastrar.html'));
 });
-// Páginas privadas: o link sem código foi revogado — só abrem com ?codigo=XXXXXX
-// de um cliente ativo E da página certa (validado no banco antes de servir o
-// HTML). Qualquer outra tentativa volta para a home, como se não existissem.
-async function servePrivatePage(req, res, page, file) {
+app.get('/consulta-avulsa', async (req, res) => {
+  // Página privada: o link sem código foi revogado — só abre com ?codigo=XXXXXX
+  // de um cliente ativo (validado no banco antes de servir o HTML). Qualquer
+  // outra tentativa volta para a home, como se a página não existisse.
   const codigo = (req.query.codigo || '').toString().trim().toUpperCase();
   if (!codigo) return res.redirect('/');
   const r = await pool.query(
-    'SELECT 1 FROM public_access_codes WHERE code=$1 AND active=true AND page=$2', [codigo, page]
+    'SELECT 1 FROM public_access_codes WHERE code=$1 AND active=true', [codigo]
   ).catch(() => ({ rows: [] }));
   if (!r.rows.length) return res.redirect('/');
   res.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
-  noCache(res); res.sendFile(path.join(__dirname, file));
-}
-app.get('/consulta-avulsa',   (req, res) => servePrivatePage(req, res, 'avulsa',   'consulta-avulsa.html'));
-app.get('/consulta-whatsapp', (req, res) => servePrivatePage(req, res, 'whatsapp', 'consulta-whatsapp.html'));
+  noCache(res); res.sendFile(path.join(__dirname, 'consulta-avulsa.html'));
+});
 app.get('/painel', requireAuth, (req, res) => {
   if (req.user.role === 'reseller' || req.user.role === 'admin')
     return res.redirect('/painel/revendedor');

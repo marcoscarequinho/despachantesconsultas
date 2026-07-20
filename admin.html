@@ -99,6 +99,9 @@
     <div class="nav-item" data-section="avulsas" onclick="showSection('avulsas')">
       <span class="text-lg">🧾</span> Consultas Avulsas
     </div>
+    <div class="nav-item" data-section="api-cobrancas" onclick="showSection('api-cobrancas')">
+      <span class="text-lg">💰</span> Cobranças API
+    </div>
   </nav>
 
   <div class="p-3 border-t border-gray-700 space-y-1">
@@ -403,8 +406,15 @@
 
       <div class="card space-y-4">
         <h3 class="font-semibold text-gray-800">➕ Gerar Nova Chave</h3>
-        <div class="grid md:grid-cols-3 gap-3">
+        <div class="grid md:grid-cols-4 gap-3">
           <div class="md:col-span-1">
+            <label class="label">Tipo de chave *</label>
+            <select id="ak-type" class="input-field" onchange="toggleApiKeyType()">
+              <option value="user">Cliente específico (pré-paga)</option>
+              <option value="general">Geral — pós-paga (cobrança por WhatsApp)</option>
+            </select>
+          </div>
+          <div class="md:col-span-1" id="ak-user-wrap">
             <label class="label">Cliente (conta debitada) *</label>
             <select id="ak-user" class="input-field"></select>
           </div>
@@ -416,6 +426,7 @@
             <button onclick="createApiKey()" id="ak-create-btn" class="btn-primary w-full">🔑 Gerar Chave</button>
           </div>
         </div>
+        <p class="text-xs text-gray-400">Chave <strong>geral</strong> não debita nenhuma conta: cada consulta feita com ela aparece na página <strong>💰 Cobranças API</strong>, onde você envia o PIX de R$ 5,00 pelo WhatsApp do cliente final.</p>
 
         <div id="ak-new-key-box" class="hidden p-4 bg-amber-50 border border-amber-300 rounded-lg space-y-2">
           <p class="text-sm font-semibold text-amber-800">⚠️ Copie a chave agora — por segurança ela não será exibida novamente:</p>
@@ -459,9 +470,8 @@
       <div class="card space-y-2 bg-amber-50 border border-amber-200">
         <h3 class="font-semibold text-amber-800">🔒 Acesso somente por link com código</h3>
         <p class="text-sm text-amber-700">
-          Existem duas páginas privadas, cada uma com seus próprios códigos: <strong>Consulta Avulsa</strong> (cliente paga com QR na tela)
-          e <strong>Consulta WhatsApp</strong> (o PIX é enviado para o WhatsApp do pagador). Links sem código são redirecionados para o site.
-          Use o botão <strong>🔗 Copiar Link</strong> na tabela abaixo para enviar o link certo de cada cliente.
+          O link sem código (<code>/consulta-avulsa</code>) foi revogado — quem abrir sem código é redirecionado para o site.
+          Cada cliente acessa apenas pelo link exclusivo dele: use o botão <strong>🔗 Copiar Link</strong> na tabela de códigos abaixo.
         </p>
       </div>
 
@@ -469,10 +479,6 @@
         <h3 class="font-semibold text-gray-800">🔐 Códigos de Acesso por Cliente</h3>
         <div class="flex flex-wrap gap-3">
           <input id="ac-label" type="text" class="input-field flex-1 min-w-48" placeholder="Nome do cliente (ex.: Loja XYZ)" maxlength="100" onkeydown="if(event.key==='Enter')createAccessCode()">
-          <select id="ac-page" class="input-field w-56">
-            <option value="avulsa">Página: Consulta Avulsa (QR na tela)</option>
-            <option value="whatsapp">Página: Consulta WhatsApp (PIX no zap)</option>
-          </select>
           <button onclick="createAccessCode()" id="ac-create-btn" class="btn-primary whitespace-nowrap">🔐 Gerar Código</button>
         </div>
         <div class="overflow-x-auto">
@@ -481,7 +487,6 @@
               <tr>
                 <th class="px-4 py-2 text-left font-semibold text-gray-600 text-xs">Código</th>
                 <th class="px-4 py-2 text-left font-semibold text-gray-600 text-xs">Cliente</th>
-                <th class="px-4 py-2 text-left font-semibold text-gray-600 text-xs">Página</th>
                 <th class="px-4 py-2 text-center font-semibold text-gray-600 text-xs">Consultas</th>
                 <th class="px-4 py-2 text-left font-semibold text-gray-600 text-xs hidden md:table-cell">Último Uso</th>
                 <th class="px-4 py-2 text-center font-semibold text-gray-600 text-xs">Status</th>
@@ -489,7 +494,7 @@
               </tr>
             </thead>
             <tbody id="access-codes-tbody" class="divide-y divide-gray-50">
-              <tr><td colspan="7" class="px-4 py-6 text-center text-gray-400 text-sm">Carregando...</td></tr>
+              <tr><td colspan="6" class="px-4 py-6 text-center text-gray-400 text-sm">Carregando...</td></tr>
             </tbody>
           </table>
         </div>
@@ -505,7 +510,7 @@
                 <th class="px-4 py-3 text-left font-semibold text-gray-600">Serviço</th>
                 <th class="px-4 py-3 text-left font-semibold text-gray-600">Placa</th>
                 <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">Renavam</th>
-                <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">Contato</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">E-mail</th>
                 <th class="px-4 py-3 text-right font-semibold text-gray-600">Valor</th>
                 <th class="px-4 py-3 text-center font-semibold text-gray-600">Status</th>
               </tr>
@@ -516,6 +521,35 @@
           </table>
         </div>
         <div id="avulsas-count" class="px-4 py-2 text-xs text-gray-400 border-t border-gray-100"></div>
+      </div>
+    </section>
+
+    <!-- ── COBRANÇAS API ────────────────────────────────────────────────────── -->
+    <section id="section-api-cobrancas" class="admin-section hidden space-y-4">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Cobranças API</h2>
+        <p class="text-sm text-gray-500">Placas consultadas pelas chaves de API <strong>gerais</strong> (pós-pagas). Digite o WhatsApp do cliente ao lado da placa e envie a cobrança PIX de R$ 5,00 — QR Code + copia e cola direto no zap.</p>
+      </div>
+
+      <div class="card p-0 overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Data</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">Chave</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Serviço</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Placa</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">Renavam</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Cobrança (R$ 5,00)</th>
+              </tr>
+            </thead>
+            <tbody id="api-cobrancas-tbody" class="divide-y divide-gray-50">
+              <tr><td colspan="6" class="px-4 py-8"><div class="space-y-2"><div class="skeleton"></div><div class="skeleton"></div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="api-cobrancas-count" class="px-4 py-2 text-xs text-gray-400 border-t border-gray-100"></div>
       </div>
     </section>
 
@@ -724,7 +758,7 @@ const fmt = v => 'R$ ' + parseFloat(v||0).toLocaleString('pt-BR',{minimumFractio
 const fmtDate = s => { const d=new Date(s); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
 
 let allUsers = [], allTx = [], allQueries = [], allServices = [], allManualQueries = [];
-const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'intencao-rj':'Intenção de Venda RJ', 'intencao-mg':'Intenção de Venda MG', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas' };
+const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'intencao-rj':'Intenção de Venda RJ', 'intencao-mg':'Intenção de Venda MG', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API' };
 
 function toast(msg, type='success') {
   const el = document.getElementById('toast');
@@ -755,6 +789,7 @@ function showSection(id) {
   if (id === 'intencao-mg') loadIntencaoVenda('mg');
   if (id === 'api-keys') loadApiKeys();
   if (id === 'avulsas') loadPublicOrders();
+  if (id === 'api-cobrancas') loadApiCharges();
 }
 
 function refreshCurrentSection() {
@@ -771,6 +806,7 @@ function refreshCurrentSection() {
   if (id === 'intencao-mg') loadIntencaoVenda('mg');
   if (id === 'api-keys')  loadApiKeys();
   if (id === 'avulsas')   loadPublicOrders();
+  if (id === 'api-cobrancas') loadApiCharges();
 }
 
 function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
@@ -823,8 +859,9 @@ function renderApiKeys(keys) {
       <td class="px-4 py-3">${k.id}</td>
       <td class="px-4 py-3"><code class="text-xs bg-gray-100 rounded px-2 py-1">${k.key_prefix}...</code></td>
       <td class="px-4 py-3">
-        <div class="font-medium text-gray-800">${k.user_name || '-'}</div>
-        <div class="text-xs text-gray-400">${k.user_email || ''}</div>
+        ${k.user_id
+          ? `<div class="font-medium text-gray-800">${k.user_name || '-'}</div><div class="text-xs text-gray-400">${k.user_email || ''}</div>`
+          : '<span class="text-xs font-semibold text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded-full">🌐 Geral (pós-paga)</span>'}
       </td>
       <td class="px-4 py-3 hidden md:table-cell text-gray-600">${k.label || '-'}</td>
       <td class="px-4 py-3 hidden md:table-cell text-xs text-gray-500">${k.last_used_at ? new Date(k.last_used_at).toLocaleString('pt-BR') : 'Nunca usada'}</td>
@@ -840,17 +877,24 @@ function renderApiKeys(keys) {
   document.getElementById('api-keys-count').textContent = `${keys.length} chave${keys.length > 1 ? 's' : ''}`;
 }
 
+function toggleApiKeyType() {
+  const general = document.getElementById('ak-type').value === 'general';
+  document.getElementById('ak-user-wrap').style.display = general ? 'none' : '';
+}
+
 async function createApiKey() {
-  const userId = document.getElementById('ak-user').value;
-  const label  = document.getElementById('ak-label').value.trim();
-  if (!userId) { toast('Selecione o cliente que será debitado.', 'error'); return; }
+  const general = document.getElementById('ak-type').value === 'general';
+  const userId  = document.getElementById('ak-user').value;
+  const label   = document.getElementById('ak-label').value.trim();
+  if (!general && !userId) { toast('Selecione o cliente que será debitado.', 'error'); return; }
+  if (general && !label)   { toast('Informe uma identificação para a chave geral.', 'error'); return; }
   const btn = document.getElementById('ak-create-btn');
   btn.disabled = true; btn.textContent = 'Gerando...';
   try {
     const r = await fetch('/api/admin/api-keys', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: parseInt(userId, 10), label }),
+      body: JSON.stringify(general ? { general: true, label } : { user_id: parseInt(userId, 10), label }),
     });
     const d = await r.json();
     if (!r.ok) { toast(d.error || 'Erro ao gerar chave.', 'error'); return; }
@@ -870,6 +914,89 @@ function copyNewApiKey() {
     .catch(() => toast('Não foi possível copiar. Selecione e copie manualmente.', 'error'));
 }
 
+// ── Cobranças API (chaves gerais, pós-pagas) ────────────────────────────────
+async function loadApiCharges() {
+  try {
+    const r = await fetch('/api/admin/api-cobrancas');
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      toast(err.error || 'Erro ao carregar cobranças da API.', 'error');
+      return;
+    }
+    renderApiCharges(await r.json());
+  } catch { toast('Erro de conexão ao carregar cobranças.', 'error'); }
+}
+
+function renderApiCharges(rows) {
+  const tbody = document.getElementById('api-cobrancas-tbody');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-gray-400">Nenhuma consulta feita com chave geral ainda. Gere uma chave do tipo "Geral" em Chaves de API.</td></tr>';
+    document.getElementById('api-cobrancas-count').textContent = '0 consultas';
+    return;
+  }
+  tbody.innerHTML = rows.map(q => `
+    <tr>
+      <td class="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">${new Date(q.created_at).toLocaleString('pt-BR')}</td>
+      <td class="px-4 py-3 hidden md:table-cell text-xs text-gray-500">${q.key_label || q.key_prefix || '-'}</td>
+      <td class="px-4 py-3">${AVULSA_SERVICE_NAMES[q.service_id] || q.service_id}</td>
+      <td class="px-4 py-3 font-mono font-semibold">${q.placa || '-'}</td>
+      <td class="px-4 py-3 hidden md:table-cell text-gray-600">${q.renavam || '-'}</td>
+      <td class="px-4 py-3">${renderChargeCell(q)}</td>
+    </tr>`).join('');
+  const pagas = rows.filter(q => q.charge_status === 'PAID').length;
+  document.getElementById('api-cobrancas-count').textContent =
+    `${rows.length} consulta${rows.length > 1 ? 's' : ''} — ${pagas} paga${pagas === 1 ? '' : 's'}`;
+}
+
+function renderChargeCell(q) {
+  if (q.charge_status === 'PAID')
+    return '<span class="text-xs font-semibold text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full">✅ Paga</span>'
+      + (q.charge_phone ? `<div class="text-xs text-gray-400 mt-1">📲 ${q.charge_phone}</div>` : '');
+  if (q.charge_status === 'PENDING')
+    return `
+      <div class="space-y-1">
+        <span class="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">PIX enviado — aguardando</span>
+        <div class="text-xs text-gray-400">📲 ${q.charge_phone || '-'}${q.charge_sent_at ? ' em ' + new Date(q.charge_sent_at).toLocaleString('pt-BR') : ''}</div>
+        <div class="flex gap-1">
+          <button onclick="verificarApiCharge(${q.id})" class="btn-ghost text-xs">🔄 Verificar</button>
+          <button onclick="cobrarApiQuery(${q.id}, this)" class="btn-ghost text-xs">📲 Reenviar</button>
+        </div>
+      </div>`;
+  return `
+    <div class="flex flex-wrap items-center gap-1">
+      <input id="charge-phone-${q.id}" type="tel" class="input-field w-36 text-xs py-1.5" placeholder="WhatsApp c/ DDD" maxlength="13">
+      <button onclick="cobrarApiQuery(${q.id}, this)" class="btn-primary text-xs py-1.5 px-2 whitespace-nowrap">📲 Cobrar R$ 5</button>
+    </div>`;
+}
+
+async function cobrarApiQuery(id, btn) {
+  const input = document.getElementById('charge-phone-' + id);
+  const telefone = input ? input.value.trim() : '';
+  if (input && !telefone) { toast('Digite o WhatsApp do cliente (DDD + número).', 'error'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Enviando...'; }
+  try {
+    const r = await fetch(`/api/admin/api-cobrancas/${id}/cobrar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(telefone ? { telefone } : {}),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Erro ao enviar a cobrança.', 'error'); return; }
+    toast(d.whatsappEnviado ? 'PIX enviado pelo WhatsApp!' : 'PIX gerado, mas o WhatsApp pode não ter sido entregue — verifique o número.', d.whatsappEnviado ? 'success' : 'error');
+    loadApiCharges();
+  } catch { toast('Erro de conexão ao enviar a cobrança.', 'error'); }
+}
+
+async function verificarApiCharge(id) {
+  try {
+    const r = await fetch(`/api/admin/api-cobrancas/${id}/verificar`, { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Erro ao verificar.', 'error'); return; }
+    if (d.status === 'PAID') { toast('Pagamento confirmado!'); loadApiCharges(); }
+    else toast('Ainda não pago (status: ' + (d.payment_status || d.status) + ').', 'error');
+  } catch { toast('Erro de conexão ao verificar.', 'error'); }
+}
+
 // ── Consultas Avulsas ───────────────────────────────────────────────────────
 const AVULSA_SERVICE_NAMES = {
   'is-detran-mg-atpve':              'ATPV-e MG',
@@ -882,12 +1009,8 @@ const AVULSA_STATUS_BADGES = {
   ERROR:   '<span class="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">Erro</span>',
 };
 
-// ── Códigos de acesso das páginas privadas ──────────────────────────────────
-const AVULSA_PAGE_LINKS = {
-  avulsa:   'https://www.despachantesconsultas.com.br/consulta-avulsa',
-  whatsapp: 'https://www.despachantesconsultas.com.br/consulta-whatsapp',
-};
-const AVULSA_PAGE_NAMES = { avulsa: 'Consulta Avulsa', whatsapp: 'Consulta WhatsApp' };
+// ── Códigos de acesso da página avulsa ──────────────────────────────────────
+const AVULSA_BASE_LINK = 'https://www.despachantesconsultas.com.br/consulta-avulsa';
 
 async function loadAccessCodes() {
   try {
@@ -904,16 +1027,13 @@ async function loadAccessCodes() {
 function renderAccessCodes(codes) {
   const tbody = document.getElementById('access-codes-tbody');
   if (!codes.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-6 text-center text-gray-400 text-sm">Nenhum código criado. Gere o primeiro acima — sem código ativo, ninguém consegue usar as páginas.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-center text-gray-400 text-sm">Nenhum código criado. Gere o primeiro acima — sem código ativo, ninguém consegue usar a página.</td></tr>';
     return;
   }
   tbody.innerHTML = codes.map(c => `
     <tr>
       <td class="px-4 py-2"><code class="text-sm font-bold bg-gray-100 rounded px-2 py-1">${c.code}</code></td>
       <td class="px-4 py-2 font-medium text-gray-800">${c.label}</td>
-      <td class="px-4 py-2 text-xs">${c.page === 'whatsapp'
-        ? '<span class="font-semibold text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full">📲 WhatsApp</span>'
-        : '<span class="font-semibold text-orange-700 bg-orange-50 border border-orange-200 px-2 py-0.5 rounded-full">🖥️ Avulsa</span>'}</td>
       <td class="px-4 py-2 text-center">${c.uses || 0}</td>
       <td class="px-4 py-2 hidden md:table-cell text-xs text-gray-500">${c.last_used_at ? new Date(c.last_used_at).toLocaleString('pt-BR') : 'Nunca usado'}</td>
       <td class="px-4 py-2 text-center">
@@ -922,7 +1042,7 @@ function renderAccessCodes(codes) {
           : '<span class="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">Desativado</span>'}
       </td>
       <td class="px-4 py-2 text-center whitespace-nowrap">
-        <button onclick="copyCodeLink('${c.code}', '${c.page || 'avulsa'}')" class="btn-ghost text-xs">🔗 Copiar Link</button>
+        <button onclick="copyCodeLink('${c.code}')" class="btn-ghost text-xs">🔗 Copiar Link</button>
         <button onclick="toggleAccessCode(${c.id}, ${c.active})" class="btn-ghost text-xs">${c.active ? '🚫 Desativar' : '✅ Reativar'}</button>
       </td>
     </tr>`).join('');
@@ -930,7 +1050,6 @@ function renderAccessCodes(codes) {
 
 async function createAccessCode() {
   const label = document.getElementById('ac-label').value.trim();
-  const page  = document.getElementById('ac-page').value;
   if (!label) { toast('Informe o nome do cliente.', 'error'); return; }
   const btn = document.getElementById('ac-create-btn');
   btn.disabled = true; btn.textContent = 'Gerando...';
@@ -938,21 +1057,20 @@ async function createAccessCode() {
     const r = await fetch('/api/admin/access-codes', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ label, page }),
+      body: JSON.stringify({ label }),
     });
     const d = await r.json();
     if (!r.ok) { toast(d.error || 'Erro ao gerar código.', 'error'); return; }
     document.getElementById('ac-label').value = '';
-    toast(`Código ${d.code} (${AVULSA_PAGE_NAMES[d.page]}) criado para ${d.label}. Use "Copiar Link" para enviar.`);
+    toast(`Código ${d.code} criado para ${d.label}. Use "Copiar Link" para enviar.`);
     loadAccessCodes();
   } catch { toast('Erro de conexão ao gerar código.', 'error'); }
   finally { btn.disabled = false; btn.textContent = '🔐 Gerar Código'; }
 }
 
-function copyCodeLink(code, page) {
-  const base = AVULSA_PAGE_LINKS[page] || AVULSA_PAGE_LINKS.avulsa;
-  navigator.clipboard.writeText(`${base}?codigo=${code}`)
-    .then(() => toast(`Link da página ${AVULSA_PAGE_NAMES[page] || 'Consulta Avulsa'} com o código ${code} copiado.`))
+function copyCodeLink(code) {
+  navigator.clipboard.writeText(`${AVULSA_BASE_LINK}?codigo=${code}`)
+    .then(() => toast(`Link com o código ${code} copiado — é só enviar ao cliente.`))
     .catch(() => toast('Não foi possível copiar. Selecione e copie manualmente.', 'error'));
 }
 
@@ -997,7 +1115,7 @@ function renderPublicOrders(orders) {
       <td class="px-4 py-3">${AVULSA_SERVICE_NAMES[o.service_id] || o.service_id}</td>
       <td class="px-4 py-3 font-mono font-semibold">${o.placa || '-'}</td>
       <td class="px-4 py-3 hidden md:table-cell text-gray-600">${o.renavam || '-'}</td>
-      <td class="px-4 py-3 hidden md:table-cell text-xs text-gray-500 break-all">${o.phone ? '📲 ' + o.phone : (o.contact || '-')}</td>
+      <td class="px-4 py-3 hidden md:table-cell text-xs text-gray-500 break-all">${o.contact || '-'}</td>
       <td class="px-4 py-3 text-right">${fmt(o.amount)}</td>
       <td class="px-4 py-3 text-center">
         ${AVULSA_STATUS_BADGES[o.status] || o.status}
