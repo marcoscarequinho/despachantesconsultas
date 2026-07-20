@@ -701,7 +701,7 @@
         <form id="intencao-form" onsubmit="submitIntencao(event)" class="space-y-4">
           <div class="grid sm:grid-cols-2 gap-4">
             <div>
-              <label class="label">CRLV-e do RJ e MG <span class="text-red-500">*</span></label>
+              <label class="label" id="intencao-file-atpve-label">CRLV-e <span class="text-red-500">*</span></label>
               <input type="file" id="intencao-file-atpve" class="input-field" accept="application/pdf,image/*" onchange="handleIntencaoFile('atpve', this)">
               <div id="intencao-file-atpve-status" class="text-xs text-gray-500 mt-1"></div>
             </div>
@@ -1217,6 +1217,9 @@ function selectIntencaoCategory(svc, cardEl) {
   cardEl?.classList.add('selected');
   document.getElementById('intencao-form-name').textContent  = svc.name;
   document.getElementById('intencao-form-price').textContent = fmt(svc.price);
+  document.getElementById('intencao-file-atpve-label').innerHTML = svc.id === 'intencao-venda-mg'
+    ? 'CRLV-e MG <span class="text-red-500">*</span>'
+    : 'CRLV-e RJ <span class="text-red-500">*</span>';
   document.getElementById('intencao-form-wrap').classList.remove('hidden');
   document.getElementById('intencao-result-wrap').classList.add('hidden');
   setTimeout(() => {
