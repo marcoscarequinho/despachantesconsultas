@@ -604,6 +604,13 @@ async function initDB() {
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
+// A página avulsa não pode sair pelo servidor de estáticos (isso pularia a
+// validação do código de acesso) — redireciona para a rota controlada, que
+// exige ?codigo=XXXXXX ativo. Registrado ANTES do express.static de propósito.
+app.get('/consulta-avulsa.html', (req, res) => {
+  const qs = req.originalUrl.split('?')[1];
+  res.redirect('/consulta-avulsa' + (qs ? '?' + qs : ''));
+});
 app.use(express.static(path.join(__dirname), { etag: false, lastModified: false, setHeaders: (res) => res.set('Cache-Control', 'no-store') }));
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -4665,9 +4672,16 @@ app.get('/cadastrar', (req, res) => {
 app.get('/cadastrar/revendedor', (req, res) => {
   noCache(res); res.sendFile(path.join(__dirname, 'cadastrar.html'));
 });
-app.get('/consulta-avulsa', (req, res) => {
-  // Página privada (link enviado a clientes específicos): o header reforça o
-  // noindex da meta tag para buscadores que só leem cabeçalhos.
+app.get('/consulta-avulsa', async (req, res) => {
+  // Página privada: o link sem código foi revogado — só abre com ?codigo=XXXXXX
+  // de um cliente ativo (validado no banco antes de servir o HTML). Qualquer
+  // outra tentativa volta para a home, como se a página não existisse.
+  const codigo = (req.query.codigo || '').toString().trim().toUpperCase();
+  if (!codigo) return res.redirect('/');
+  const r = await pool.query(
+    'SELECT 1 FROM public_access_codes WHERE code=$1 AND active=true', [codigo]
+  ).catch(() => ({ rows: [] }));
+  if (!r.rows.length) return res.redirect('/');
   res.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
   noCache(res); res.sendFile(path.join(__dirname, 'consulta-avulsa.html'));
 });

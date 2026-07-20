@@ -456,13 +456,12 @@
         <p class="text-sm text-gray-500">Consultas pagas por PIX na página avulsa (sem cadastro). Todas as placas consultadas ficam registradas aqui.</p>
       </div>
 
-      <div class="card space-y-2">
-        <h3 class="font-semibold text-gray-800">🔗 Link da página (envie apenas para clientes específicos)</h3>
-        <div class="flex flex-wrap items-center gap-2">
-          <code id="avulsa-link" class="text-sm bg-gray-100 border border-gray-200 rounded px-3 py-2 break-all flex-1 min-w-0">https://www.despachantesconsultas.com.br/consulta-avulsa</code>
-          <button onclick="copyAvulsaLink()" class="btn-primary text-xs py-2">📋 Copiar Link</button>
-        </div>
-        <p class="text-xs text-gray-400">A página não aparece em nenhum menu do site e exige código de acesso — envie o link com o código do cliente (botão na tabela abaixo).</p>
+      <div class="card space-y-2 bg-amber-50 border border-amber-200">
+        <h3 class="font-semibold text-amber-800">🔒 Acesso somente por link com código</h3>
+        <p class="text-sm text-amber-700">
+          O link sem código (<code>/consulta-avulsa</code>) foi revogado — quem abrir sem código é redirecionado para o site.
+          Cada cliente acessa apenas pelo link exclusivo dele: use o botão <strong>🔗 Copiar Link</strong> na tabela de códigos abaixo.
+        </p>
       </div>
 
       <div class="card space-y-4">
@@ -876,12 +875,6 @@ const AVULSA_STATUS_BADGES = {
   DONE:    '<span class="text-xs font-semibold text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full">Concluída</span>',
   ERROR:   '<span class="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">Erro</span>',
 };
-
-function copyAvulsaLink() {
-  navigator.clipboard.writeText(document.getElementById('avulsa-link').textContent.trim())
-    .then(() => toast('Link copiado para a área de transferência.'))
-    .catch(() => toast('Não foi possível copiar. Selecione e copie manualmente.', 'error'));
-}
 
 // ── Códigos de acesso da página avulsa ──────────────────────────────────────
 const AVULSA_BASE_LINK = 'https://www.despachantesconsultas.com.br/consulta-avulsa';
