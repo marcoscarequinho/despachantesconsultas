@@ -93,6 +93,9 @@
       <span class="text-lg">🔵</span> Intenção de Venda MG
       <span id="intencao-mg-pending-badge" class="ml-auto hidden bg-red-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-full"></span>
     </div>
+    <div class="nav-item" data-section="api-keys" onclick="showSection('api-keys')">
+      <span class="text-lg">🔑</span> Chaves de API
+    </div>
   </nav>
 
   <div class="p-3 border-t border-gray-700 space-y-1">
@@ -388,6 +391,61 @@
       </div>
     </section>
 
+    <!-- ── CHAVES DE API ────────────────────────────────────────────────────── -->
+    <section id="section-api-keys" class="admin-section hidden space-y-4">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Chaves de API</h2>
+        <p class="text-sm text-gray-500">Gere chaves para clientes externos consumirem a API (/api/v1). Cada consulta debita R$ 5,00 dos créditos da conta vinculada à chave.</p>
+      </div>
+
+      <div class="card space-y-4">
+        <h3 class="font-semibold text-gray-800">➕ Gerar Nova Chave</h3>
+        <div class="grid md:grid-cols-3 gap-3">
+          <div class="md:col-span-1">
+            <label class="label">Cliente (conta debitada) *</label>
+            <select id="ak-user" class="input-field"></select>
+          </div>
+          <div class="md:col-span-1">
+            <label class="label">Identificação da chave</label>
+            <input id="ak-label" type="text" class="input-field" placeholder="Ex.: Contrato Loja XYZ" maxlength="100">
+          </div>
+          <div class="md:col-span-1 flex items-end">
+            <button onclick="createApiKey()" id="ak-create-btn" class="btn-primary w-full">🔑 Gerar Chave</button>
+          </div>
+        </div>
+
+        <div id="ak-new-key-box" class="hidden p-4 bg-amber-50 border border-amber-300 rounded-lg space-y-2">
+          <p class="text-sm font-semibold text-amber-800">⚠️ Copie a chave agora — por segurança ela não será exibida novamente:</p>
+          <div class="flex flex-wrap items-center gap-2">
+            <code id="ak-new-key" class="text-sm bg-white border border-amber-200 rounded px-3 py-2 break-all flex-1 min-w-0"></code>
+            <button onclick="copyNewApiKey()" class="btn-primary text-xs py-2">📋 Copiar</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card p-0 overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">ID</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Prefixo</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Cliente</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">Identificação</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">Último Uso</th>
+                <th class="px-4 py-3 text-center font-semibold text-gray-600">Status</th>
+                <th class="px-4 py-3 text-center font-semibold text-gray-600">Ações</th>
+              </tr>
+            </thead>
+            <tbody id="api-keys-tbody" class="divide-y divide-gray-50">
+              <tr><td colspan="7" class="px-4 py-8"><div class="space-y-2"><div class="skeleton"></div><div class="skeleton"></div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="api-keys-count" class="px-4 py-2 text-xs text-gray-400 border-t border-gray-100"></div>
+      </div>
+    </section>
+
   </main>
 </div>
 
@@ -593,7 +651,7 @@ const fmt = v => 'R$ ' + parseFloat(v||0).toLocaleString('pt-BR',{minimumFractio
 const fmtDate = s => { const d=new Date(s); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
 
 let allUsers = [], allTx = [], allQueries = [], allServices = [], allManualQueries = [];
-const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'intencao-rj':'Intenção de Venda RJ', 'intencao-mg':'Intenção de Venda MG' };
+const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'intencao-rj':'Intenção de Venda RJ', 'intencao-mg':'Intenção de Venda MG', 'api-keys':'Chaves de API' };
 
 function toast(msg, type='success') {
   const el = document.getElementById('toast');
@@ -622,6 +680,7 @@ function showSection(id) {
   if (id === 'manual')  loadManualQueries();
   if (id === 'intencao-rj') loadIntencaoVenda('rj');
   if (id === 'intencao-mg') loadIntencaoVenda('mg');
+  if (id === 'api-keys') loadApiKeys();
 }
 
 function refreshCurrentSection() {
@@ -636,6 +695,7 @@ function refreshCurrentSection() {
   if (id === 'manual')    loadManualQueries();
   if (id === 'intencao-rj') loadIntencaoVenda('rj');
   if (id === 'intencao-mg') loadIntencaoVenda('mg');
+  if (id === 'api-keys')  loadApiKeys();
 }
 
 function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
@@ -654,6 +714,96 @@ async function init() {
 async function logout() {
   await fetch('/api/auth/logout', { method:'POST' });
   window.location.href = '/entrar';
+}
+
+// ── Chaves de API ───────────────────────────────────────────────────────────
+async function loadApiKeys() {
+  // Popula o select de clientes com os usuários já carregados no init
+  const sel = document.getElementById('ak-user');
+  if (!sel.options.length) {
+    if (!allUsers.length) await loadUsers();
+    sel.innerHTML = '<option value="">Selecione o cliente...</option>' +
+      allUsers.map(u => `<option value="${u.id}">#${u.id} — ${u.name} (${u.email})</option>`).join('');
+  }
+  try {
+    const r = await fetch('/api/admin/api-keys');
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      toast(err.error || 'Erro ao carregar chaves de API.', 'error');
+      return;
+    }
+    renderApiKeys(await r.json());
+  } catch { toast('Erro de conexão ao carregar chaves de API.', 'error'); }
+}
+
+function renderApiKeys(keys) {
+  const tbody = document.getElementById('api-keys-tbody');
+  if (!keys.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-gray-400">Nenhuma chave de API criada ainda.</td></tr>';
+    document.getElementById('api-keys-count').textContent = '0 chaves';
+    return;
+  }
+  tbody.innerHTML = keys.map(k => `
+    <tr>
+      <td class="px-4 py-3">${k.id}</td>
+      <td class="px-4 py-3"><code class="text-xs bg-gray-100 rounded px-2 py-1">${k.key_prefix}...</code></td>
+      <td class="px-4 py-3">
+        <div class="font-medium text-gray-800">${k.user_name || '-'}</div>
+        <div class="text-xs text-gray-400">${k.user_email || ''}</div>
+      </td>
+      <td class="px-4 py-3 hidden md:table-cell text-gray-600">${k.label || '-'}</td>
+      <td class="px-4 py-3 hidden md:table-cell text-xs text-gray-500">${k.last_used_at ? new Date(k.last_used_at).toLocaleString('pt-BR') : 'Nunca usada'}</td>
+      <td class="px-4 py-3 text-center">
+        ${k.active
+          ? '<span class="text-xs font-semibold text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full">Ativa</span>'
+          : '<span class="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">Revogada</span>'}
+      </td>
+      <td class="px-4 py-3 text-center">
+        <button onclick="toggleApiKey(${k.id}, ${k.active})" class="btn-ghost text-xs">${k.active ? '🚫 Revogar' : '✅ Reativar'}</button>
+      </td>
+    </tr>`).join('');
+  document.getElementById('api-keys-count').textContent = `${keys.length} chave${keys.length > 1 ? 's' : ''}`;
+}
+
+async function createApiKey() {
+  const userId = document.getElementById('ak-user').value;
+  const label  = document.getElementById('ak-label').value.trim();
+  if (!userId) { toast('Selecione o cliente que será debitado.', 'error'); return; }
+  const btn = document.getElementById('ak-create-btn');
+  btn.disabled = true; btn.textContent = 'Gerando...';
+  try {
+    const r = await fetch('/api/admin/api-keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: parseInt(userId, 10), label }),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Erro ao gerar chave.', 'error'); return; }
+    document.getElementById('ak-new-key').textContent = d.api_key;
+    document.getElementById('ak-new-key-box').classList.remove('hidden');
+    document.getElementById('ak-label').value = '';
+    toast('Chave gerada! Copie agora — ela não será exibida de novo.');
+    loadApiKeys();
+  } catch { toast('Erro de conexão ao gerar chave.', 'error'); }
+  finally { btn.disabled = false; btn.textContent = '🔑 Gerar Chave'; }
+}
+
+function copyNewApiKey() {
+  const key = document.getElementById('ak-new-key').textContent;
+  navigator.clipboard.writeText(key)
+    .then(() => toast('Chave copiada para a área de transferência.'))
+    .catch(() => toast('Não foi possível copiar. Selecione e copie manualmente.', 'error'));
+}
+
+async function toggleApiKey(id, isActive) {
+  if (isActive && !confirm('Revogar esta chave? O cliente perderá o acesso à API imediatamente.')) return;
+  try {
+    const r = await fetch(`/api/admin/api-keys/${id}/toggle`, { method: 'PUT' });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Erro ao alterar chave.', 'error'); return; }
+    toast(d.active ? 'Chave reativada.' : 'Chave revogada.');
+    loadApiKeys();
+  } catch { toast('Erro de conexão.', 'error'); }
 }
 
 // ── Dashboard Stats ─────────────────────────────────────────────────────────
