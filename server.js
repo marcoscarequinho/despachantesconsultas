@@ -568,6 +568,21 @@ async function initDB() {
       created_at   TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public_orders (
+      id          SERIAL PRIMARY KEY,
+      token       VARCHAR(64) UNIQUE NOT NULL,
+      service_id  VARCHAR(100) NOT NULL,
+      params      TEXT NOT NULL,
+      amount      NUMERIC(10,2) NOT NULL,
+      gateway_id  VARCHAR(100) UNIQUE,
+      status      VARCHAR(20) DEFAULT 'PENDING',
+      error_msg   TEXT,
+      result_data TEXT,
+      contact     VARCHAR(200),
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
   console.log('✅ Tabelas prontas');
 }
 
@@ -3405,6 +3420,126 @@ app.put('/api/admin/api-keys/:id/toggle', requireAuth, requireSuperAdmin, async 
   }
 });
 
+// ── Consulta avulsa (pública, paga por PIX — sem cadastro) ────────────────────
+// O visitante preenche os dados, paga um PIX de valor fixo e a consulta só é
+// executada na Infosimples depois do pagamento ser aprovado no Mercado Pago —
+// mesma regra do restante do sistema: nunca consultar sem receber.
+const PUBLIC_PAY_SERVICES = {
+  'atpve':          'is-detran-mg-atpve',
+  'intencao-venda': 'is-detran-mg-reg-intencao-venda',
+};
+
+async function callInfosimples(service, params) {
+  const qs = new URLSearchParams({ token: INFOSIMPLES_TOKEN });
+  for (const p of service.params) {
+    const v = (params?.[p.name] ?? '').toString().trim();
+    if (v) qs.set(p.name, v);
+  }
+  const apiRes  = await fetch(`${INFOSIMPLES_API_URL}/${service.path}?${qs.toString()}`, { method: 'POST' });
+  const apiData = await apiRes.json().catch(() => null);
+  if (!apiData || apiData.code !== 200) {
+    const errMsg = (apiData && (apiData.errors?.[0] || apiData.code_message)) || `Erro HTTP ${apiRes.status}.`;
+    return { ok: false, errMsg };
+  }
+  return { ok: true, result: Array.isArray(apiData.data) ? (apiData.data[0] ?? {}) : (apiData.data ?? {}) };
+}
+
+app.post('/api/public/pedido', async (req, res) => {
+  const { servico, email, params } = req.body || {};
+  const serviceId = PUBLIC_PAY_SERVICES[servico];
+  if (!serviceId) return res.status(400).json({ error: 'Serviço inválido.' });
+  const service = SERVICES_V3.find(s => s.id === serviceId);
+  if (!service) return res.status(500).json({ error: 'Serviço não configurado.' });
+
+  const mail = (email || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail))
+    return res.status(400).json({ error: 'Informe um e-mail válido para o pagamento.' });
+
+  const faltando = service.params
+    .filter(p => p.required && !(params?.[p.name] ?? '').toString().trim())
+    .map(p => p.label || p.name);
+  if (faltando.length)
+    return res.status(400).json({ error: `Campos obrigatórios ausentes: ${faltando.join(', ')}` });
+
+  try {
+    const valor = EXTERNAL_API_PRICE;
+    const payer = { email: mail, first_name: 'Cliente', last_name: 'Consulta Avulsa' };
+    const doc = (params?.cpf_vendedor || params?.cpf_comprador || '').replace(/\D/g, '');
+    if (doc.length === 11) payer.identification = { type: 'CPF', number: doc };
+
+    const payment = await mpReq('POST', '/v1/payments', {
+      transaction_amount: valor,
+      description: `Consulta avulsa — ${service.name}`,
+      payment_method_id: 'pix',
+      payer,
+    }, { 'X-Idempotency-Key': crypto.randomUUID() });
+
+    const txData = payment.point_of_interaction?.transaction_data || {};
+    if (!txData.qr_code) throw new Error('Mercado Pago não retornou o QR Code PIX.');
+
+    const token = crypto.randomBytes(32).toString('hex');
+    await pool.query(
+      `INSERT INTO public_orders (token, service_id, params, amount, gateway_id, contact)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [token, serviceId, JSON.stringify(params || {}), valor, String(payment.id), mail]
+    );
+
+    res.json({
+      token,
+      valor,
+      qrCode: txData.qr_code_base64,
+      pixCopiaECola: txData.qr_code,
+      expirationDate: payment.date_of_expiration,
+    });
+  } catch (err) {
+    console.error('Erro ao criar pedido avulso:', err.message);
+    res.status(500).json({ error: err.message || 'Erro ao gerar o PIX. Tente novamente.' });
+  }
+});
+
+// Polling do pedido: confirma o pagamento no Mercado Pago e executa a consulta.
+// A execução é reivindicada com UPDATE ... WHERE status='PENDING' (lock de linha
+// do Postgres), então polling concorrente ou duplicado nunca consulta duas vezes.
+app.get('/api/public/pedido/:token', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM public_orders WHERE token=$1', [req.params.token]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    const order = r.rows[0];
+
+    if (order.status === 'DONE')  return res.json({ status: 'DONE', result: JSON.parse(order.result_data || '{}') });
+    if (order.status === 'ERROR') return res.json({ status: 'ERROR', error: order.error_msg || 'Erro ao processar a consulta.' });
+    if (order.status === 'PAID')  return res.json({ status: 'PROCESSING' });
+
+    const mp = await mpReq('GET', `/v1/payments/${order.gateway_id}`);
+    if (mp.status !== 'approved') return res.json({ status: 'PENDING', payment_status: mp.status });
+
+    const claim = await pool.query(
+      `UPDATE public_orders SET status='PAID' WHERE id=$1 AND status='PENDING' RETURNING id`,
+      [order.id]
+    );
+    if (!claim.rows.length) return res.json({ status: 'PROCESSING' });
+
+    const service = SERVICES_V3.find(s => s.id === order.service_id);
+    const params  = JSON.parse(order.params || '{}');
+    try {
+      const out = await callInfosimples(service, params);
+      if (out.ok) {
+        await pool.query(`UPDATE public_orders SET status='DONE', result_data=$1 WHERE id=$2`,
+          [JSON.stringify(out.result), order.id]);
+        return res.json({ status: 'DONE', result: out.result });
+      }
+      await pool.query(`UPDATE public_orders SET status='ERROR', error_msg=$1 WHERE id=$2`, [out.errMsg, order.id]);
+      return res.json({ status: 'ERROR', error: out.errMsg });
+    } catch (e) {
+      await pool.query(`UPDATE public_orders SET status='ERROR', error_msg=$1 WHERE id=$2`, [e.message, order.id]);
+      return res.json({ status: 'ERROR', error: 'Erro ao processar a consulta após o pagamento. Entre em contato com o suporte informando o número do pedido.' });
+    }
+  } catch (err) {
+    console.error('Erro no status do pedido avulso:', err.message);
+    res.status(500).json({ error: 'Erro ao verificar o pedido.' });
+  }
+});
+
 // ── PUT /api/profile/password ─────────────────────────────────────────────────
 app.put('/api/profile/password', requireAuth, async (req, res) => {
   const { current_password, new_password } = req.body;
@@ -4405,6 +4540,9 @@ app.get('/cadastrar', (req, res) => {
 });
 app.get('/cadastrar/revendedor', (req, res) => {
   noCache(res); res.sendFile(path.join(__dirname, 'cadastrar.html'));
+});
+app.get('/consulta-avulsa', (req, res) => {
+  noCache(res); res.sendFile(path.join(__dirname, 'consulta-avulsa.html'));
 });
 app.get('/painel', requireAuth, (req, res) => {
   if (req.user.role === 'reseller' || req.user.role === 'admin')

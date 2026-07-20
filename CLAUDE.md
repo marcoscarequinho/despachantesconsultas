@@ -50,6 +50,7 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 - Chaves são criadas pelo admin (modelo contratual, sem self-service): `POST /api/admin/api-keys` (`user_id`, `label`), `GET /api/admin/api-keys`, `PUT /api/admin/api-keys/:id/toggle`.
 - Endpoints externos proxy para a Infosimples via `runExternalInfosimplesQuery` (parâmetros no corpo raiz, débito na conta dona da chave): `POST /api/v1/detran-mg/intencao-venda` e `POST /api/v1/detran-mg/atpve`.
 - Preço fixo por consulta externa: `EXTERNAL_API_PRICE` (R$ 5,00) — não usa a tabela Infosimples nem markup.
+- **Consulta avulsa** (`/consulta-avulsa` + [consulta-avulsa.html](consulta-avulsa.html)): fluxo público sem cadastro — `POST /api/public/pedido` valida os campos e cria PIX no Mercado Pago (tabela `public_orders`); `GET /api/public/pedido/:token` faz polling, confirma o pagamento e só então executa a consulta na Infosimples (claim atômico `UPDATE ... WHERE status='PENDING'` impede execução dupla). Serviços em `PUBLIC_PAY_SERVICES`, mesmo preço de R$ 5,00.
 
 ## Convenções
 
