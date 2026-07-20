@@ -3271,11 +3271,15 @@ app.post('/api/query-v3', requireAuth, async (req, res) => {
 // mesma regra do /api/query-v3 (validar → consultar → só então debitar créditos
 // da conta dona da chave), mas os parâmetros vêm no corpo raiz da requisição —
 // não aninhados em "params" — para a integração do cliente ficar mais simples.
+// Preço fixo por consulta na API externa — não segue a tabela Infosimples nem
+// o markup do painel; valor comercial definido para os contratos de API.
+const EXTERNAL_API_PRICE = 5.00;
+
 async function runExternalInfosimplesQuery(req, res, serviceId) {
   const service = SERVICES_V3.find(s => s.id === serviceId);
   if (!service) return res.status(500).json({ error: 'Serviço não configurado.' });
 
-  const price  = parseFloat((service.basePrice * INFOSIMPLES_MARKUP).toFixed(2));
+  const price  = EXTERNAL_API_PRICE;
   const params = req.body || {};
 
   try {
