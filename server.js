@@ -3420,6 +3420,28 @@ app.put('/api/admin/api-keys/:id/toggle', requireAuth, requireSuperAdmin, async 
   }
 });
 
+// Lista os pedidos avulsos no admin — toda consulta paga por PIX fica registrada
+// em public_orders (placa, dados enviados, e-mail, pagamento e resultado).
+app.get('/api/admin/public-orders', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, token, service_id, params, amount, status, error_msg, contact, created_at
+         FROM public_orders ORDER BY created_at DESC LIMIT 500`
+    );
+    res.json(r.rows.map(o => {
+      let p = {};
+      try { p = JSON.parse(o.params || '{}'); } catch {}
+      return {
+        id: o.id, token: o.token, service_id: o.service_id, amount: o.amount,
+        status: o.status, error_msg: o.error_msg, contact: o.contact, created_at: o.created_at,
+        placa: p.placa || null, renavam: p.renavam || null,
+      };
+    }));
+  } catch (e) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
 // ── Consulta avulsa (pública, paga por PIX — sem cadastro) ────────────────────
 // O visitante preenche os dados, paga um PIX de valor fixo e a consulta só é
 // executada na Infosimples depois do pagamento ser aprovado no Mercado Pago —

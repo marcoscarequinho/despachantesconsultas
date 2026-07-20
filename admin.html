@@ -96,6 +96,9 @@
     <div class="nav-item" data-section="api-keys" onclick="showSection('api-keys')">
       <span class="text-lg">🔑</span> Chaves de API
     </div>
+    <div class="nav-item" data-section="avulsas" onclick="showSection('avulsas')">
+      <span class="text-lg">🧾</span> Consultas Avulsas
+    </div>
   </nav>
 
   <div class="p-3 border-t border-gray-700 space-y-1">
@@ -446,6 +449,45 @@
       </div>
     </section>
 
+    <!-- ── CONSULTAS AVULSAS ────────────────────────────────────────────────── -->
+    <section id="section-avulsas" class="admin-section hidden space-y-4">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Consultas Avulsas</h2>
+        <p class="text-sm text-gray-500">Consultas pagas por PIX na página avulsa (sem cadastro). Todas as placas consultadas ficam registradas aqui.</p>
+      </div>
+
+      <div class="card space-y-2">
+        <h3 class="font-semibold text-gray-800">🔗 Link da página (envie apenas para clientes específicos)</h3>
+        <div class="flex flex-wrap items-center gap-2">
+          <code id="avulsa-link" class="text-sm bg-gray-100 border border-gray-200 rounded px-3 py-2 break-all flex-1 min-w-0">https://www.despachantesconsultas.com.br/consulta-avulsa</code>
+          <button onclick="copyAvulsaLink()" class="btn-primary text-xs py-2">📋 Copiar Link</button>
+        </div>
+        <p class="text-xs text-gray-400">A página não aparece em nenhum menu do site — só acessa quem receber este link.</p>
+      </div>
+
+      <div class="card p-0 overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Data</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Serviço</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Placa</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">Renavam</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">E-mail</th>
+                <th class="px-4 py-3 text-right font-semibold text-gray-600">Valor</th>
+                <th class="px-4 py-3 text-center font-semibold text-gray-600">Status</th>
+              </tr>
+            </thead>
+            <tbody id="avulsas-tbody" class="divide-y divide-gray-50">
+              <tr><td colspan="7" class="px-4 py-8"><div class="space-y-2"><div class="skeleton"></div><div class="skeleton"></div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="avulsas-count" class="px-4 py-2 text-xs text-gray-400 border-t border-gray-100"></div>
+      </div>
+    </section>
+
   </main>
 </div>
 
@@ -651,7 +693,7 @@ const fmt = v => 'R$ ' + parseFloat(v||0).toLocaleString('pt-BR',{minimumFractio
 const fmtDate = s => { const d=new Date(s); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
 
 let allUsers = [], allTx = [], allQueries = [], allServices = [], allManualQueries = [];
-const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'intencao-rj':'Intenção de Venda RJ', 'intencao-mg':'Intenção de Venda MG', 'api-keys':'Chaves de API' };
+const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'intencao-rj':'Intenção de Venda RJ', 'intencao-mg':'Intenção de Venda MG', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas' };
 
 function toast(msg, type='success') {
   const el = document.getElementById('toast');
@@ -681,6 +723,7 @@ function showSection(id) {
   if (id === 'intencao-rj') loadIntencaoVenda('rj');
   if (id === 'intencao-mg') loadIntencaoVenda('mg');
   if (id === 'api-keys') loadApiKeys();
+  if (id === 'avulsas') loadPublicOrders();
 }
 
 function refreshCurrentSection() {
@@ -696,6 +739,7 @@ function refreshCurrentSection() {
   if (id === 'intencao-rj') loadIntencaoVenda('rj');
   if (id === 'intencao-mg') loadIntencaoVenda('mg');
   if (id === 'api-keys')  loadApiKeys();
+  if (id === 'avulsas')   loadPublicOrders();
 }
 
 function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
@@ -793,6 +837,61 @@ function copyNewApiKey() {
   navigator.clipboard.writeText(key)
     .then(() => toast('Chave copiada para a área de transferência.'))
     .catch(() => toast('Não foi possível copiar. Selecione e copie manualmente.', 'error'));
+}
+
+// ── Consultas Avulsas ───────────────────────────────────────────────────────
+const AVULSA_SERVICE_NAMES = {
+  'is-detran-mg-atpve':              'ATPV-e MG',
+  'is-detran-mg-reg-intencao-venda': 'Intenção de Venda MG',
+};
+const AVULSA_STATUS_BADGES = {
+  PENDING: '<span class="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">PIX não pago</span>',
+  PAID:    '<span class="text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">Processando</span>',
+  DONE:    '<span class="text-xs font-semibold text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full">Concluída</span>',
+  ERROR:   '<span class="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">Erro</span>',
+};
+
+function copyAvulsaLink() {
+  navigator.clipboard.writeText(document.getElementById('avulsa-link').textContent.trim())
+    .then(() => toast('Link copiado para a área de transferência.'))
+    .catch(() => toast('Não foi possível copiar. Selecione e copie manualmente.', 'error'));
+}
+
+async function loadPublicOrders() {
+  try {
+    const r = await fetch('/api/admin/public-orders');
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      toast(err.error || 'Erro ao carregar consultas avulsas.', 'error');
+      return;
+    }
+    renderPublicOrders(await r.json());
+  } catch { toast('Erro de conexão ao carregar consultas avulsas.', 'error'); }
+}
+
+function renderPublicOrders(orders) {
+  const tbody = document.getElementById('avulsas-tbody');
+  if (!orders.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-gray-400">Nenhuma consulta avulsa registrada ainda.</td></tr>';
+    document.getElementById('avulsas-count').textContent = '0 consultas';
+    return;
+  }
+  tbody.innerHTML = orders.map(o => `
+    <tr>
+      <td class="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">${new Date(o.created_at).toLocaleString('pt-BR')}</td>
+      <td class="px-4 py-3">${AVULSA_SERVICE_NAMES[o.service_id] || o.service_id}</td>
+      <td class="px-4 py-3 font-mono font-semibold">${o.placa || '-'}</td>
+      <td class="px-4 py-3 hidden md:table-cell text-gray-600">${o.renavam || '-'}</td>
+      <td class="px-4 py-3 hidden md:table-cell text-xs text-gray-500 break-all">${o.contact || '-'}</td>
+      <td class="px-4 py-3 text-right">${fmt(o.amount)}</td>
+      <td class="px-4 py-3 text-center">
+        ${AVULSA_STATUS_BADGES[o.status] || o.status}
+        ${o.status === 'ERROR' && o.error_msg ? `<div class="text-xs text-red-500 mt-1 max-w-48 mx-auto truncate" title="${(o.error_msg || '').replace(/"/g, '&quot;')}">${o.error_msg}</div>` : ''}
+      </td>
+    </tr>`).join('');
+  const pagas = orders.filter(o => o.status === 'DONE').length;
+  document.getElementById('avulsas-count').textContent =
+    `${orders.length} pedido${orders.length > 1 ? 's' : ''} — ${pagas} concluído${pagas === 1 ? '' : 's'}`;
 }
 
 async function toggleApiKey(id, isActive) {
