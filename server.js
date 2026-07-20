@@ -102,6 +102,36 @@ async function sendWhatsAppPdf(phone, pdfBuffer, fileName, caption) {
   }
 }
 
+async function sendWhatsAppImage(phone, base64Png, caption) {
+  if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !phone) return false;
+  const digits = phone.replace(/\D/g, '');
+  const formatted = digits.startsWith('55') ? digits : `55${digits}`;
+  try {
+    const r = await fetch(
+      `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/send-image`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(ZAPI_CLIENT_TOKEN ? { 'Client-Token': ZAPI_CLIENT_TOKEN } : {}),
+        },
+        body: JSON.stringify({
+          phone: formatted,
+          image: `data:image/png;base64,${base64Png}`,
+          caption,
+        }),
+      }
+    );
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { console.error(`Z-API imagem erro [${formatted}]:`, JSON.stringify(d)); return false; }
+    console.log(`✅ WhatsApp imagem enviada para ${formatted}`);
+    return true;
+  } catch (err) {
+    console.error('Erro ao enviar WhatsApp imagem:', err.message);
+    return false;
+  }
+}
+
 async function mpReq(method, endpoint, body = null, extraHeaders = {}) {
   const opts = {
     method,
@@ -584,6 +614,7 @@ async function initDB() {
     );
   `);
   await pool.query(`ALTER TABLE public_orders ADD COLUMN IF NOT EXISTS access_code VARCHAR(20);`);
+  await pool.query(`ALTER TABLE public_orders ADD COLUMN IF NOT EXISTS phone VARCHAR(20);`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public_access_codes (
       id           SERIAL PRIMARY KEY,
@@ -595,6 +626,7 @@ async function initDB() {
       created_at   TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  await pool.query(`ALTER TABLE public_access_codes ADD COLUMN IF NOT EXISTS page VARCHAR(20) DEFAULT 'avulsa';`);
   console.log('✅ Tabelas prontas');
 }
 
@@ -604,13 +636,15 @@ async function initDB() {
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
-// A página avulsa não pode sair pelo servidor de estáticos (isso pularia a
-// validação do código de acesso) — redireciona para a rota controlada, que
-// exige ?codigo=XXXXXX ativo. Registrado ANTES do express.static de propósito.
-app.get('/consulta-avulsa.html', (req, res) => {
-  const qs = req.originalUrl.split('?')[1];
-  res.redirect('/consulta-avulsa' + (qs ? '?' + qs : ''));
-});
+// As páginas privadas não podem sair pelo servidor de estáticos (isso pularia a
+// validação do código de acesso) — redirecionam para as rotas controladas, que
+// exigem ?codigo=XXXXXX ativo. Registrado ANTES do express.static de propósito.
+for (const page of ['consulta-avulsa', 'consulta-whatsapp']) {
+  app.get(`/${page}.html`, (req, res) => {
+    const qs = req.originalUrl.split('?')[1];
+    res.redirect(`/${page}` + (qs ? '?' + qs : ''));
+  });
+}
 app.use(express.static(path.join(__dirname), { etag: false, lastModified: false, setHeaders: (res) => res.set('Cache-Control', 'no-store') }));
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -3446,7 +3480,7 @@ app.get('/api/admin/public-orders', requireAuth, requireSuperAdmin, async (req, 
   try {
     const r = await pool.query(
       `SELECT o.id, o.token, o.service_id, o.params, o.amount, o.status, o.error_msg,
-              o.contact, o.created_at, o.access_code, c.label AS client_label
+              o.contact, o.phone, o.created_at, o.access_code, c.label AS client_label
          FROM public_orders o
          LEFT JOIN public_access_codes c ON c.code = o.access_code
         ORDER BY o.created_at DESC LIMIT 500`
@@ -3456,8 +3490,8 @@ app.get('/api/admin/public-orders', requireAuth, requireSuperAdmin, async (req, 
       try { p = JSON.parse(o.params || '{}'); } catch {}
       return {
         id: o.id, token: o.token, service_id: o.service_id, amount: o.amount,
-        status: o.status, error_msg: o.error_msg, contact: o.contact, created_at: o.created_at,
-        access_code: o.access_code, client_label: o.client_label,
+        status: o.status, error_msg: o.error_msg, contact: o.contact, phone: o.phone,
+        created_at: o.created_at, access_code: o.access_code, client_label: o.client_label,
         placa: p.placa || null, renavam: p.renavam || null,
       };
     }));
@@ -3479,19 +3513,21 @@ function generateAccessCode() {
 
 app.post('/api/admin/access-codes', requireAuth, requireSuperAdmin, async (req, res) => {
   const label = (req.body?.label || '').trim().slice(0, 100);
+  // 'avulsa' = página com QR na tela; 'whatsapp' = página que envia o PIX pelo WhatsApp.
+  const page  = ['avulsa', 'whatsapp'].includes(req.body?.page) ? req.body.page : 'avulsa';
   if (!label) return res.status(400).json({ error: 'Informe o nome do cliente.' });
   try {
     let code, inserted = null;
     for (let attempt = 0; attempt < 5 && !inserted; attempt++) {
       code = generateAccessCode();
       inserted = await pool.query(
-        `INSERT INTO public_access_codes (code, label) VALUES ($1,$2)
+        `INSERT INTO public_access_codes (code, label, page) VALUES ($1,$2,$3)
          ON CONFLICT (code) DO NOTHING RETURNING id`,
-        [code, label]
+        [code, label, page]
       ).then(r => r.rows[0] || null);
     }
     if (!inserted) return res.status(500).json({ error: 'Não foi possível gerar o código. Tente novamente.' });
-    res.json({ success: true, id: inserted.id, code, label });
+    res.json({ success: true, id: inserted.id, code, label, page });
   } catch (e) {
     console.error('Erro ao criar código de acesso:', e.message);
     res.status(500).json({ error: 'Erro interno.' });
@@ -3501,7 +3537,7 @@ app.post('/api/admin/access-codes', requireAuth, requireSuperAdmin, async (req, 
 app.get('/api/admin/access-codes', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT id, code, label, active, uses, last_used_at, created_at
+      `SELECT id, code, label, page, active, uses, last_used_at, created_at
          FROM public_access_codes ORDER BY created_at DESC`
     );
     res.json(r.rows);
@@ -3551,12 +3587,14 @@ async function callInfosimples(service, params) {
 // formulários. Não conta uso: o incremento acontece só na criação do pedido.
 app.post('/api/public/validar-codigo', async (req, res) => {
   const codigo = (req.body?.codigo || '').trim().toUpperCase();
+  const pagina = (req.body?.pagina || '').trim();
   if (!codigo) return res.status(400).json({ error: 'Informe o código de acesso.' });
   try {
     const r = await pool.query(
-      'SELECT label FROM public_access_codes WHERE code=$1 AND active=true', [codigo]
+      `SELECT label, page FROM public_access_codes WHERE code=$1 AND active=true`, [codigo]
     );
-    if (!r.rows.length) return res.status(401).json({ error: 'Código de acesso inválido ou desativado.' });
+    if (!r.rows.length || (pagina && r.rows[0].page !== pagina))
+      return res.status(401).json({ error: 'Código de acesso inválido ou desativado.' });
     res.json({ ok: true, cliente: r.rows[0].label });
   } catch {
     res.status(500).json({ error: 'Erro interno.' });
@@ -3564,7 +3602,7 @@ app.post('/api/public/validar-codigo', async (req, res) => {
 });
 
 app.post('/api/public/pedido', async (req, res) => {
-  const { servico, email, params, codigo } = req.body || {};
+  const { servico, email, params, codigo, telefone } = req.body || {};
   const serviceId = PUBLIC_PAY_SERVICES[servico];
   if (!serviceId) return res.status(400).json({ error: 'Serviço inválido.' });
   const service = SERVICES_V3.find(s => s.id === serviceId);
@@ -3578,9 +3616,18 @@ app.post('/api/public/pedido', async (req, res) => {
   ).catch(() => ({ rows: [] }));
   if (!ac.rows.length) return res.status(401).json({ error: 'Código de acesso inválido ou desativado.' });
 
-  const mail = (email || '').trim().toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail))
-    return res.status(400).json({ error: 'Informe um e-mail válido para o pagamento.' });
+  // Fluxo WhatsApp (página /consulta-whatsapp): recebe o telefone do pagador e o
+  // PIX é enviado por mensagem. O Mercado Pago exige e-mail no payer, então sem
+  // e-mail informado usamos um endereço sintético derivado do telefone.
+  const phoneDigits = (telefone || '').replace(/\D/g, '');
+  if (telefone && (phoneDigits.length < 10 || phoneDigits.length > 13))
+    return res.status(400).json({ error: 'Telefone inválido. Informe DDD + número (ex.: 22999951574).' });
+
+  let mail = (email || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
+    if (!phoneDigits) return res.status(400).json({ error: 'Informe um e-mail válido para o pagamento.' });
+    mail = `cliente-${phoneDigits}@despachantesconsultas.com.br`;
+  }
 
   const faltando = service.params
     .filter(p => p.required && !(params?.[p.name] ?? '').toString().trim())
@@ -3606,14 +3653,31 @@ app.post('/api/public/pedido', async (req, res) => {
 
     const token = crypto.randomBytes(32).toString('hex');
     await pool.query(
-      `INSERT INTO public_orders (token, service_id, params, amount, gateway_id, contact, access_code)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [token, serviceId, JSON.stringify(params || {}), valor, String(payment.id), mail, accessCode]
+      `INSERT INTO public_orders (token, service_id, params, amount, gateway_id, contact, access_code, phone)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [token, serviceId, JSON.stringify(params || {}), valor, String(payment.id), mail, accessCode, phoneDigits || null]
     );
     await pool.query(
       'UPDATE public_access_codes SET uses = uses + 1, last_used_at = NOW() WHERE id=$1',
       [ac.rows[0].id]
     ).catch(() => {});
+
+    // Envia o PIX pelo WhatsApp do pagador: QR Code como imagem e o copia e cola
+    // como texto separado (mensagem só com o código, fácil de copiar no celular).
+    let whatsappEnviado = false;
+    if (phoneDigits) {
+      const placa = (params?.placa || '').toUpperCase();
+      const caption = [
+        `💳 *PIX de ${fmtMoneyBRL(valor)} — MC Despachadoria*`,
+        `🧾 Serviço: ${service.name}`,
+        ...(placa ? [`🔤 Placa: ${placa}`] : []),
+        ``,
+        `Escaneie o QR Code acima ou use o código copia e cola enviado na próxima mensagem.`,
+        `A consulta é feita automaticamente assim que o pagamento for aprovado.`,
+      ].join('\n');
+      whatsappEnviado = await sendWhatsAppImage(phoneDigits, txData.qr_code_base64, caption).catch(() => false);
+      await sendWhatsApp(phoneDigits, txData.qr_code).catch(() => {});
+    }
 
     res.json({
       token,
@@ -3621,6 +3685,7 @@ app.post('/api/public/pedido', async (req, res) => {
       qrCode: txData.qr_code_base64,
       pixCopiaECola: txData.qr_code,
       expirationDate: payment.date_of_expiration,
+      whatsappEnviado,
     });
   } catch (err) {
     console.error('Erro ao criar pedido avulso:', err.message);
@@ -3657,6 +3722,17 @@ app.get('/api/public/pedido/:token', async (req, res) => {
       if (out.ok) {
         await pool.query(`UPDATE public_orders SET status='DONE', result_data=$1 WHERE id=$2`,
           [JSON.stringify(out.result), order.id]);
+        // Fluxo WhatsApp: avisa o pagador que a consulta foi concluída, com o
+        // link do documento quando o DETRAN retorna um (primeira URL do result).
+        if (order.phone) {
+          const urlMatch = JSON.stringify(out.result).match(/https?:\/\/[^\s"\\]+/);
+          const msg = [
+            `✅ *Pagamento confirmado — consulta concluída!*`,
+            `🧾 ${service.name}`,
+            ...(urlMatch ? [``, `📎 Documento: ${urlMatch[0]}`] : []),
+          ].join('\n');
+          await sendWhatsApp(order.phone, msg).catch(() => {});
+        }
         return res.json({ status: 'DONE', result: out.result });
       }
       await pool.query(`UPDATE public_orders SET status='ERROR', error_msg=$1 WHERE id=$2`, [out.errMsg, order.id]);
@@ -4672,19 +4748,21 @@ app.get('/cadastrar', (req, res) => {
 app.get('/cadastrar/revendedor', (req, res) => {
   noCache(res); res.sendFile(path.join(__dirname, 'cadastrar.html'));
 });
-app.get('/consulta-avulsa', async (req, res) => {
-  // Página privada: o link sem código foi revogado — só abre com ?codigo=XXXXXX
-  // de um cliente ativo (validado no banco antes de servir o HTML). Qualquer
-  // outra tentativa volta para a home, como se a página não existisse.
+// Páginas privadas: o link sem código foi revogado — só abrem com ?codigo=XXXXXX
+// de um cliente ativo E da página certa (validado no banco antes de servir o
+// HTML). Qualquer outra tentativa volta para a home, como se não existissem.
+async function servePrivatePage(req, res, page, file) {
   const codigo = (req.query.codigo || '').toString().trim().toUpperCase();
   if (!codigo) return res.redirect('/');
   const r = await pool.query(
-    'SELECT 1 FROM public_access_codes WHERE code=$1 AND active=true', [codigo]
+    'SELECT 1 FROM public_access_codes WHERE code=$1 AND active=true AND page=$2', [codigo, page]
   ).catch(() => ({ rows: [] }));
   if (!r.rows.length) return res.redirect('/');
   res.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
-  noCache(res); res.sendFile(path.join(__dirname, 'consulta-avulsa.html'));
-});
+  noCache(res); res.sendFile(path.join(__dirname, file));
+}
+app.get('/consulta-avulsa',   (req, res) => servePrivatePage(req, res, 'avulsa',   'consulta-avulsa.html'));
+app.get('/consulta-whatsapp', (req, res) => servePrivatePage(req, res, 'whatsapp', 'consulta-whatsapp.html'));
 app.get('/painel', requireAuth, (req, res) => {
   if (req.user.role === 'reseller' || req.user.role === 'admin')
     return res.redirect('/painel/revendedor');
