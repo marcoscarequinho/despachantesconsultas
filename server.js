@@ -583,6 +583,18 @@ async function initDB() {
       created_at  TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  await pool.query(`ALTER TABLE public_orders ADD COLUMN IF NOT EXISTS access_code VARCHAR(20);`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public_access_codes (
+      id           SERIAL PRIMARY KEY,
+      code         VARCHAR(20) UNIQUE NOT NULL,
+      label        VARCHAR(100) NOT NULL,
+      active       BOOLEAN DEFAULT true,
+      uses         INTEGER DEFAULT 0,
+      last_used_at TIMESTAMPTZ,
+      created_at   TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
   console.log('✅ Tabelas prontas');
 }
 
@@ -3421,12 +3433,16 @@ app.put('/api/admin/api-keys/:id/toggle', requireAuth, requireSuperAdmin, async 
 });
 
 // Lista os pedidos avulsos no admin — toda consulta paga por PIX fica registrada
-// em public_orders (placa, dados enviados, e-mail, pagamento e resultado).
+// em public_orders (placa, dados enviados, e-mail, pagamento e resultado), com o
+// nome do cliente resolvido pelo código de acesso usado.
 app.get('/api/admin/public-orders', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT id, token, service_id, params, amount, status, error_msg, contact, created_at
-         FROM public_orders ORDER BY created_at DESC LIMIT 500`
+      `SELECT o.id, o.token, o.service_id, o.params, o.amount, o.status, o.error_msg,
+              o.contact, o.created_at, o.access_code, c.label AS client_label
+         FROM public_orders o
+         LEFT JOIN public_access_codes c ON c.code = o.access_code
+        ORDER BY o.created_at DESC LIMIT 500`
     );
     res.json(r.rows.map(o => {
       let p = {};
@@ -3434,10 +3450,68 @@ app.get('/api/admin/public-orders', requireAuth, requireSuperAdmin, async (req, 
       return {
         id: o.id, token: o.token, service_id: o.service_id, amount: o.amount,
         status: o.status, error_msg: o.error_msg, contact: o.contact, created_at: o.created_at,
+        access_code: o.access_code, client_label: o.client_label,
         placa: p.placa || null, renavam: p.renavam || null,
       };
     }));
   } catch (e) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── Códigos de acesso da página avulsa (admin) ────────────────────────────────
+// Cada cliente recebe um código próprio: a página /consulta-avulsa só libera os
+// formulários com código ativo, e o código usado fica gravado em cada pedido.
+function generateAccessCode() {
+  // Sem caracteres ambíguos (0/O, 1/I/L) para facilitar a digitação pelo cliente.
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) code += chars[crypto.randomInt(chars.length)];
+  return code;
+}
+
+app.post('/api/admin/access-codes', requireAuth, requireSuperAdmin, async (req, res) => {
+  const label = (req.body?.label || '').trim().slice(0, 100);
+  if (!label) return res.status(400).json({ error: 'Informe o nome do cliente.' });
+  try {
+    let code, inserted = null;
+    for (let attempt = 0; attempt < 5 && !inserted; attempt++) {
+      code = generateAccessCode();
+      inserted = await pool.query(
+        `INSERT INTO public_access_codes (code, label) VALUES ($1,$2)
+         ON CONFLICT (code) DO NOTHING RETURNING id`,
+        [code, label]
+      ).then(r => r.rows[0] || null);
+    }
+    if (!inserted) return res.status(500).json({ error: 'Não foi possível gerar o código. Tente novamente.' });
+    res.json({ success: true, id: inserted.id, code, label });
+  } catch (e) {
+    console.error('Erro ao criar código de acesso:', e.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+app.get('/api/admin/access-codes', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, code, label, active, uses, last_used_at, created_at
+         FROM public_access_codes ORDER BY created_at DESC`
+    );
+    res.json(r.rows);
+  } catch {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+app.put('/api/admin/access-codes/:id/toggle', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(
+      'UPDATE public_access_codes SET active = NOT active WHERE id=$1 RETURNING id, active',
+      [parseInt(req.params.id, 10)]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Código não encontrado.' });
+    res.json({ success: true, active: r.rows[0].active });
+  } catch {
     res.status(500).json({ error: 'Erro interno.' });
   }
 });
@@ -3466,12 +3540,36 @@ async function callInfosimples(service, params) {
   return { ok: true, result: Array.isArray(apiData.data) ? (apiData.data[0] ?? {}) : (apiData.data ?? {}) };
 }
 
+// Valida o código de acesso do cliente — usado pela página antes de liberar os
+// formulários. Não conta uso: o incremento acontece só na criação do pedido.
+app.post('/api/public/validar-codigo', async (req, res) => {
+  const codigo = (req.body?.codigo || '').trim().toUpperCase();
+  if (!codigo) return res.status(400).json({ error: 'Informe o código de acesso.' });
+  try {
+    const r = await pool.query(
+      'SELECT label FROM public_access_codes WHERE code=$1 AND active=true', [codigo]
+    );
+    if (!r.rows.length) return res.status(401).json({ error: 'Código de acesso inválido ou desativado.' });
+    res.json({ ok: true, cliente: r.rows[0].label });
+  } catch {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
 app.post('/api/public/pedido', async (req, res) => {
-  const { servico, email, params } = req.body || {};
+  const { servico, email, params, codigo } = req.body || {};
   const serviceId = PUBLIC_PAY_SERVICES[servico];
   if (!serviceId) return res.status(400).json({ error: 'Serviço inválido.' });
   const service = SERVICES_V3.find(s => s.id === serviceId);
   if (!service) return res.status(500).json({ error: 'Serviço não configurado.' });
+
+  // Página restrita por código de acesso por cliente — sem código ativo não gera PIX.
+  const accessCode = (codigo || '').trim().toUpperCase();
+  if (!accessCode) return res.status(401).json({ error: 'Informe o código de acesso.' });
+  const ac = await pool.query(
+    'SELECT id FROM public_access_codes WHERE code=$1 AND active=true', [accessCode]
+  ).catch(() => ({ rows: [] }));
+  if (!ac.rows.length) return res.status(401).json({ error: 'Código de acesso inválido ou desativado.' });
 
   const mail = (email || '').trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail))
@@ -3501,10 +3599,14 @@ app.post('/api/public/pedido', async (req, res) => {
 
     const token = crypto.randomBytes(32).toString('hex');
     await pool.query(
-      `INSERT INTO public_orders (token, service_id, params, amount, gateway_id, contact)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
-      [token, serviceId, JSON.stringify(params || {}), valor, String(payment.id), mail]
+      `INSERT INTO public_orders (token, service_id, params, amount, gateway_id, contact, access_code)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [token, serviceId, JSON.stringify(params || {}), valor, String(payment.id), mail, accessCode]
     );
+    await pool.query(
+      'UPDATE public_access_codes SET uses = uses + 1, last_used_at = NOW() WHERE id=$1',
+      [ac.rows[0].id]
+    ).catch(() => {});
 
     res.json({
       token,

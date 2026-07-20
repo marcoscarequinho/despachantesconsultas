@@ -462,7 +462,32 @@
           <code id="avulsa-link" class="text-sm bg-gray-100 border border-gray-200 rounded px-3 py-2 break-all flex-1 min-w-0">https://www.despachantesconsultas.com.br/consulta-avulsa</code>
           <button onclick="copyAvulsaLink()" class="btn-primary text-xs py-2">📋 Copiar Link</button>
         </div>
-        <p class="text-xs text-gray-400">A página não aparece em nenhum menu do site — só acessa quem receber este link.</p>
+        <p class="text-xs text-gray-400">A página não aparece em nenhum menu do site e exige código de acesso — envie o link com o código do cliente (botão na tabela abaixo).</p>
+      </div>
+
+      <div class="card space-y-4">
+        <h3 class="font-semibold text-gray-800">🔐 Códigos de Acesso por Cliente</h3>
+        <div class="flex flex-wrap gap-3">
+          <input id="ac-label" type="text" class="input-field flex-1 min-w-48" placeholder="Nome do cliente (ex.: Loja XYZ)" maxlength="100" onkeydown="if(event.key==='Enter')createAccessCode()">
+          <button onclick="createAccessCode()" id="ac-create-btn" class="btn-primary whitespace-nowrap">🔐 Gerar Código</button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th class="px-4 py-2 text-left font-semibold text-gray-600 text-xs">Código</th>
+                <th class="px-4 py-2 text-left font-semibold text-gray-600 text-xs">Cliente</th>
+                <th class="px-4 py-2 text-center font-semibold text-gray-600 text-xs">Consultas</th>
+                <th class="px-4 py-2 text-left font-semibold text-gray-600 text-xs hidden md:table-cell">Último Uso</th>
+                <th class="px-4 py-2 text-center font-semibold text-gray-600 text-xs">Status</th>
+                <th class="px-4 py-2 text-center font-semibold text-gray-600 text-xs">Ações</th>
+              </tr>
+            </thead>
+            <tbody id="access-codes-tbody" class="divide-y divide-gray-50">
+              <tr><td colspan="6" class="px-4 py-6 text-center text-gray-400 text-sm">Carregando...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div class="card p-0 overflow-hidden">
@@ -471,6 +496,7 @@
             <thead class="bg-gray-50 border-b border-gray-100">
               <tr>
                 <th class="px-4 py-3 text-left font-semibold text-gray-600">Data</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Cliente</th>
                 <th class="px-4 py-3 text-left font-semibold text-gray-600">Serviço</th>
                 <th class="px-4 py-3 text-left font-semibold text-gray-600">Placa</th>
                 <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">Renavam</th>
@@ -480,7 +506,7 @@
               </tr>
             </thead>
             <tbody id="avulsas-tbody" class="divide-y divide-gray-50">
-              <tr><td colspan="7" class="px-4 py-8"><div class="space-y-2"><div class="skeleton"></div><div class="skeleton"></div></div></td></tr>
+              <tr><td colspan="8" class="px-4 py-8"><div class="space-y-2"><div class="skeleton"></div><div class="skeleton"></div></div></td></tr>
             </tbody>
           </table>
         </div>
@@ -857,7 +883,84 @@ function copyAvulsaLink() {
     .catch(() => toast('Não foi possível copiar. Selecione e copie manualmente.', 'error'));
 }
 
+// ── Códigos de acesso da página avulsa ──────────────────────────────────────
+const AVULSA_BASE_LINK = 'https://www.despachantesconsultas.com.br/consulta-avulsa';
+
+async function loadAccessCodes() {
+  try {
+    const r = await fetch('/api/admin/access-codes');
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      toast(err.error || 'Erro ao carregar códigos de acesso.', 'error');
+      return;
+    }
+    renderAccessCodes(await r.json());
+  } catch { toast('Erro de conexão ao carregar códigos.', 'error'); }
+}
+
+function renderAccessCodes(codes) {
+  const tbody = document.getElementById('access-codes-tbody');
+  if (!codes.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-center text-gray-400 text-sm">Nenhum código criado. Gere o primeiro acima — sem código ativo, ninguém consegue usar a página.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = codes.map(c => `
+    <tr>
+      <td class="px-4 py-2"><code class="text-sm font-bold bg-gray-100 rounded px-2 py-1">${c.code}</code></td>
+      <td class="px-4 py-2 font-medium text-gray-800">${c.label}</td>
+      <td class="px-4 py-2 text-center">${c.uses || 0}</td>
+      <td class="px-4 py-2 hidden md:table-cell text-xs text-gray-500">${c.last_used_at ? new Date(c.last_used_at).toLocaleString('pt-BR') : 'Nunca usado'}</td>
+      <td class="px-4 py-2 text-center">
+        ${c.active
+          ? '<span class="text-xs font-semibold text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full">Ativo</span>'
+          : '<span class="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">Desativado</span>'}
+      </td>
+      <td class="px-4 py-2 text-center whitespace-nowrap">
+        <button onclick="copyCodeLink('${c.code}')" class="btn-ghost text-xs">🔗 Copiar Link</button>
+        <button onclick="toggleAccessCode(${c.id}, ${c.active})" class="btn-ghost text-xs">${c.active ? '🚫 Desativar' : '✅ Reativar'}</button>
+      </td>
+    </tr>`).join('');
+}
+
+async function createAccessCode() {
+  const label = document.getElementById('ac-label').value.trim();
+  if (!label) { toast('Informe o nome do cliente.', 'error'); return; }
+  const btn = document.getElementById('ac-create-btn');
+  btn.disabled = true; btn.textContent = 'Gerando...';
+  try {
+    const r = await fetch('/api/admin/access-codes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label }),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Erro ao gerar código.', 'error'); return; }
+    document.getElementById('ac-label').value = '';
+    toast(`Código ${d.code} criado para ${d.label}. Use "Copiar Link" para enviar.`);
+    loadAccessCodes();
+  } catch { toast('Erro de conexão ao gerar código.', 'error'); }
+  finally { btn.disabled = false; btn.textContent = '🔐 Gerar Código'; }
+}
+
+function copyCodeLink(code) {
+  navigator.clipboard.writeText(`${AVULSA_BASE_LINK}?codigo=${code}`)
+    .then(() => toast(`Link com o código ${code} copiado — é só enviar ao cliente.`))
+    .catch(() => toast('Não foi possível copiar. Selecione e copie manualmente.', 'error'));
+}
+
+async function toggleAccessCode(id, isActive) {
+  if (isActive && !confirm('Desativar este código? O cliente perderá o acesso à página imediatamente.')) return;
+  try {
+    const r = await fetch(`/api/admin/access-codes/${id}/toggle`, { method: 'PUT' });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Erro ao alterar código.', 'error'); return; }
+    toast(d.active ? 'Código reativado.' : 'Código desativado.');
+    loadAccessCodes();
+  } catch { toast('Erro de conexão.', 'error'); }
+}
+
 async function loadPublicOrders() {
+  loadAccessCodes();
   try {
     const r = await fetch('/api/admin/public-orders');
     if (!r.ok) {
@@ -872,13 +975,17 @@ async function loadPublicOrders() {
 function renderPublicOrders(orders) {
   const tbody = document.getElementById('avulsas-tbody');
   if (!orders.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-gray-400">Nenhuma consulta avulsa registrada ainda.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-8 text-center text-gray-400">Nenhuma consulta avulsa registrada ainda.</td></tr>';
     document.getElementById('avulsas-count').textContent = '0 consultas';
     return;
   }
   tbody.innerHTML = orders.map(o => `
     <tr>
       <td class="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">${new Date(o.created_at).toLocaleString('pt-BR')}</td>
+      <td class="px-4 py-3">
+        <div class="font-medium text-gray-800">${o.client_label || '-'}</div>
+        ${o.access_code ? `<code class="text-xs text-gray-400">${o.access_code}</code>` : ''}
+      </td>
       <td class="px-4 py-3">${AVULSA_SERVICE_NAMES[o.service_id] || o.service_id}</td>
       <td class="px-4 py-3 font-mono font-semibold">${o.placa || '-'}</td>
       <td class="px-4 py-3 hidden md:table-cell text-gray-600">${o.renavam || '-'}</td>
