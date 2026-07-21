@@ -264,8 +264,8 @@
           <div class="w-12 h-12 bg-pink-100 rounded-xl flex items-center justify-center text-2xl">📝</div>
           <div class="text-center">
             <div class="font-semibold text-gray-800">Intenção de Venda (ATPVE)</div>
-            <div class="text-xs text-gray-500 mt-0.5">RJ: envio de documentos · MG: consulta automática</div>
-            <div class="text-xs text-gray-500 mt-0.5"><strong>RJ liberado em até 2 horas · MG na hora</strong></div>
+            <div class="text-xs text-gray-500 mt-0.5">RJ e MG: emissão automática na hora</div>
+            <div class="text-xs text-gray-500 mt-0.5"><strong>Consulta via API, sem envio de documentos</strong></div>
           </div>
         </button>
         <button onclick="showSection('query3')"
@@ -666,7 +666,7 @@
 
       <div>
         <h2 class="text-xl font-bold text-gray-800">Intenção de Venda (ATPVE)</h2>
-        <p class="text-sm text-gray-500">RJ: envie os documentos e o endereço com CEP — nossa equipe processa manualmente e devolve o documento final aqui no seu painel. MG: preencha os dados abaixo e o registro é feito na hora via Infosimples.</p>
+        <p class="text-sm text-gray-500">Preencha os dados do veículo, vendedor e comprador — o ATPV-e (RJ) ou o registro (MG) é emitido na hora, sem envio de documentos.</p>
       </div>
 
       <!-- Saldo disponível -->
@@ -698,42 +698,8 @@
           <button onclick="resetIntencaoForm()" class="text-xs text-gray-500 hover:text-gray-700">✕ Cancelar</button>
         </div>
 
-        <form id="intencao-form" onsubmit="submitIntencao(event)" class="space-y-4">
-          <div class="grid sm:grid-cols-2 gap-4">
-            <div>
-              <label class="label" id="intencao-file-atpve-label">CRLV-e <span class="text-red-500">*</span></label>
-              <input type="file" id="intencao-file-atpve" class="input-field" accept="application/pdf,image/*" onchange="handleIntencaoFile('atpve', this)">
-              <div id="intencao-file-atpve-status" class="text-xs text-gray-500 mt-1"></div>
-            </div>
-            <div>
-              <label class="label">Código de Segurança <span class="text-red-500">*</span></label>
-              <input type="file" id="intencao-file-cod_seguranca" class="input-field" accept="application/pdf,image/*" onchange="handleIntencaoFile('cod_seguranca', this)">
-              <div id="intencao-file-cod_seguranca-status" class="text-xs text-gray-500 mt-1"></div>
-            </div>
-            <div>
-              <label class="label">RG/CPF ou CNH: Vendedor <span class="text-red-500">*</span></label>
-              <input type="file" id="intencao-file-doc_vendedor" class="input-field" accept="application/pdf,image/*" onchange="handleIntencaoFile('doc_vendedor', this)">
-              <div id="intencao-file-doc_vendedor-status" class="text-xs text-gray-500 mt-1"></div>
-            </div>
-            <div>
-              <label class="label">RG/CPF ou CNH: Comprador <span class="text-red-500">*</span></label>
-              <input type="file" id="intencao-file-doc_comprador" class="input-field" accept="application/pdf,image/*" onchange="handleIntencaoFile('doc_comprador', this)">
-              <div id="intencao-file-doc_comprador-status" class="text-xs text-gray-500 mt-1"></div>
-            </div>
-          </div>
-
-          <div>
-            <label class="label">Endereço Com CEP e Valor do Veículo <span class="text-red-500">*</span></label>
-            <textarea id="intencao-endereco" rows="3" class="input-field" placeholder="Rua, número, bairro, cidade/UF, CEP e valor do veículo" required></textarea>
-            <div class="text-xs text-gray-400 mt-1"><strong>Aqui inserir só o endereço do comprador.</strong></div>
-          </div>
-
-          <div>
-            <label class="label">Contrato Social (Opcional)</label>
-            <input type="file" id="intencao-file-contrato_social" class="input-field" accept="application/pdf,image/*" onchange="handleIntencaoFile('contrato_social', this)">
-            <div id="intencao-file-contrato_social-status" class="text-xs text-gray-500 mt-1"></div>
-            <div class="text-xs text-gray-400 mt-1"><strong>Contrato Social só em caso da intenção for para Empresa.</strong></div>
-          </div>
+        <form id="intencao-form" onsubmit="submitIntencao(event)" class="space-y-5">
+          <div id="intencao-form-fields"></div>
 
           <div id="intencao-form-error"
             class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm flex gap-2">
@@ -742,7 +708,7 @@
           </div>
 
           <button id="intencao-submit-btn" type="submit" class="btn-primary w-full justify-center py-3">
-            <span id="intencao-submit-text">Enviar Pedido</span>
+            <span id="intencao-submit-text">Emitir ATPV-e</span>
             <svg id="intencao-spinner" class="hidden w-4 h-4 spin" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
@@ -756,13 +722,14 @@
         <div class="flex items-center gap-3">
           <div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-xl">✅</div>
           <div>
-            <div class="font-bold text-green-800">Pedido Enviado</div>
-            <div id="intencao-result-msg" class="text-sm text-green-700"></div>
+            <div class="font-bold text-green-800">ATPV-e gerado com sucesso</div>
+            <div id="intencao-result-msg" class="text-sm text-green-700">O PDF foi baixado automaticamente.</div>
           </div>
         </div>
-        <button onclick="resetIntencaoForm()" class="btn-secondary w-full justify-center mt-4">
-          🔄 Novo Pedido
-        </button>
+        <div class="grid grid-cols-2 gap-3 mt-4">
+          <button id="intencao-result-pdf-btn" type="button" class="btn-secondary w-full justify-center">📥 Baixar PDF</button>
+          <button onclick="resetIntencaoForm()" class="btn-secondary w-full justify-center">🔄 Novo Pedido</button>
+        </div>
       </div>
 
       <!-- Formulário MG — consulta automática via API Infosimples -->
@@ -1255,8 +1222,6 @@ async function loadStats() {
 
 // ── Intenção de Venda (ATPVE) ────────────────────────────────────────────────
 let selectedIntencaoSvc = null;
-let intencaoFiles = { atpve: null, cod_seguranca: null, doc_vendedor: null, doc_comprador: null, contrato_social: null };
-const INTENCAO_REQUIRED_SLOTS = ['atpve', 'cod_seguranca', 'doc_vendedor', 'doc_comprador'];
 const INTENCAO_ICONS = { 'intencao-venda-rj': '🟢', 'intencao-venda-mg': '🔵', 'atpve-mg': '📄' };
 
 // Serviços MG automáticos (consulta na hora via API Infosimples) — mesmo formulário
@@ -1298,7 +1263,7 @@ function selectIntencaoCategory(svc, cardEl) {
   document.getElementById('intencao-mg-result-wrap').classList.add('hidden');
   document.getElementById('intencao-form-name').textContent  = svc.name;
   document.getElementById('intencao-form-price').textContent = fmt(svc.price);
-  document.getElementById('intencao-file-atpve-label').innerHTML = 'CRLV-e RJ <span class="text-red-500">*</span>';
+  renderIntencaoRjFields();
   document.getElementById('intencao-form-wrap').classList.remove('hidden');
   document.getElementById('intencao-result-wrap').classList.add('hidden');
   scrollToIntencaoForm('intencao-form-wrap');
@@ -1314,36 +1279,92 @@ function scrollToIntencaoForm(id) {
   }, 50);
 }
 
-function handleIntencaoFile(slot, inputEl) {
-  const statusEl = document.getElementById(`intencao-file-${slot}-status`);
-  const file = inputEl.files[0];
-  if (!file) { intencaoFiles[slot] = null; statusEl.textContent = ''; return; }
-  if (file.size > 8 * 1024 * 1024) {
-    statusEl.innerHTML = `<span class="text-red-500">Arquivo muito grande (máx. 8MB). Tire a foto com menor resolução ou compacte o PDF.</span>`;
-    intencaoFiles[slot] = null;
-    inputEl.value = '';
-    return;
-  }
-  statusEl.textContent = 'Lendo arquivo...';
-  const reader = new FileReader();
-  reader.onload = () => {
-    intencaoFiles[slot] = { name: file.name, type: file.type || 'application/octet-stream', data: reader.result.split(',')[1] };
-    statusEl.innerHTML = `<span class="text-green-600">✅ ${file.name}</span>`;
+// Campos do formulário de Intenção de Venda RJ — chamada direta à API Chekaki
+// (POST /api/atpve-rj/cadastrar), que já devolve o ATPV-e pronto em PDF.
+const ATPVE_RJ_FIELDS = [
+  { group: 'Veículo', fields: [
+    { name: 'placa', label: 'Placa', required: true, placeholder: 'ABC1D23' },
+    { name: 'renavam', label: 'Renavam', required: true },
+    { name: 'chassi', label: 'Chassi', required: true },
+    { name: 'ano_fabricacao', label: 'Ano de Fabricação', required: true },
+    { name: 'ano_modelo', label: 'Ano do Modelo', required: true },
+    { name: 'kilometragem', label: 'Quilometragem', required: true },
+  ]},
+  { group: 'CRV', fields: [
+    { name: 'crv_numero', label: 'Número do CRV', required: true },
+    { name: 'crv_numero_via', label: 'Número da Via', required: true },
+    { name: 'crv_uf_emissao', label: 'UF de Emissão', required: true, placeholder: 'RJ' },
+    { name: 'crv_data_emissao', label: 'Data de Emissão', required: true, placeholder: 'DD/MM/AAAA' },
+    { name: 'crv_codigo_seguranca', label: 'Código de Segurança', required: true },
+  ]},
+  { group: 'Vendedor', fields: [
+    { name: 'vendedor_tipo_pessoa', label: 'Tipo de Pessoa', required: true, type: 'select', options: [['F','Física'],['J','Jurídica']] },
+    { name: 'vendedor_documento', label: 'CPF/CNPJ', required: true },
+    { name: 'vendedor_nome', label: 'Nome', required: true },
+    { name: 'vendedor_email', label: 'E-mail', required: true },
+  ]},
+  { group: 'Venda', fields: [
+    { name: 'venda_cidade', label: 'Cidade da Venda', required: true },
+    { name: 'venda_valor', label: 'Valor da Venda', required: true, placeholder: 'Ex.: 25000,00' },
+    { name: 'venda_data', label: 'Data da Venda', required: true, placeholder: 'DD/MM/AAAA' },
+  ]},
+  { group: 'Comprador', fields: [
+    { name: 'comprador_tipo_pessoa', label: 'Tipo de Pessoa', required: true, type: 'select', options: [['F','Física'],['J','Jurídica']] },
+    { name: 'comprador_documento', label: 'CPF/CNPJ', required: true },
+    { name: 'comprador_nome', label: 'Nome', required: true },
+    { name: 'comprador_email', label: 'E-mail', required: true },
+    { name: 'comprador_cep', label: 'CEP', required: true },
+    { name: 'comprador_logradouro', label: 'Logradouro', required: true },
+    { name: 'comprador_numero', label: 'Número', required: true },
+    { name: 'comprador_complemento', label: 'Complemento', required: false },
+    { name: 'comprador_bairro', label: 'Bairro', required: true },
+    { name: 'comprador_cidade', label: 'Cidade', required: true },
+    { name: 'comprador_uf', label: 'UF', required: true, placeholder: 'RJ' },
+  ]},
+];
+
+function renderIntencaoRjFields() {
+  const field = f => {
+    const req = f.required ? ' <span class="text-red-500">*</span>' : '';
+    const input = f.type === 'select'
+      ? `<select id="ir-${f.name}" class="input-field" ${f.required ? 'required' : ''}>
+           <option value="">Selecione...</option>
+           ${f.options.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
+         </select>`
+      : `<input id="ir-${f.name}" type="text" class="input-field" placeholder="${escapeHtml(f.placeholder || '')}" ${f.required ? 'required' : ''}>`;
+    return `<div><label class="label">${escapeHtml(f.label)}${req}</label>${input}</div>`;
   };
-  reader.onerror = () => { statusEl.textContent = 'Erro ao ler arquivo.'; intencaoFiles[slot] = null; };
-  reader.readAsDataURL(file);
+  document.getElementById('intencao-form-fields').innerHTML = ATPVE_RJ_FIELDS.map(g => `
+    <div class="mb-4">
+      <h4 class="text-xs font-semibold text-gray-500 uppercase mb-2">${escapeHtml(g.group)}</h4>
+      <div class="grid sm:grid-cols-2 gap-4">${g.fields.map(field).join('')}</div>
+    </div>`).join('');
+}
+
+function buildIntencaoRjParams() {
+  const params = {};
+  ATPVE_RJ_FIELDS.forEach(g => g.fields.forEach(f => {
+    params[f.name] = (document.getElementById('ir-' + f.name)?.value || '').trim();
+  }));
+  return params;
+}
+
+function validateIntencaoRjParams(p) {
+  for (const g of ATPVE_RJ_FIELDS) {
+    for (const f of g.fields) {
+      if (f.required && !p[f.name]) return `Campo obrigatório: ${f.label}`;
+    }
+  }
+  return null;
 }
 
 function resetIntencaoForm(showCats = true) {
   selectedIntencaoSvc = null;
-  intencaoFiles = { atpve: null, cod_seguranca: null, doc_vendedor: null, doc_comprador: null, contrato_social: null };
   document.getElementById('intencao-form').reset();
-  ['atpve','cod_seguranca','doc_vendedor','doc_comprador','contrato_social'].forEach(slot => {
-    document.getElementById(`intencao-file-${slot}-status`).textContent = '';
-  });
   document.getElementById('intencao-form-error').classList.add('hidden');
   document.getElementById('intencao-form-wrap').classList.add('hidden');
   document.getElementById('intencao-result-wrap').classList.add('hidden');
+  document.getElementById('intencao-result-pdf-btn').classList.remove('hidden');
   document.getElementById('intencao-mg-form-wrap').classList.add('hidden');
   document.getElementById('intencao-mg-result-wrap').classList.add('hidden');
   document.querySelectorAll('#intencao-category-grid .service-cat').forEach(el => el.classList.remove('selected'));
@@ -1356,15 +1377,10 @@ async function submitIntencao(e) {
   const errMsgEl = document.getElementById('intencao-form-error-msg');
   errEl.classList.add('hidden');
 
-  const endereco = document.getElementById('intencao-endereco').value.trim();
-  const missing = INTENCAO_REQUIRED_SLOTS.filter(k => !intencaoFiles[k]);
-  if (missing.length) {
-    errMsgEl.textContent = 'Envie os 4 documentos obrigatórios.';
-    errEl.classList.remove('hidden');
-    return;
-  }
-  if (!endereco) {
-    errMsgEl.textContent = 'Informe o endereço com CEP e o valor do veículo.';
+  const params = buildIntencaoRjParams();
+  const validationError = validateIntencaoRjParams(params);
+  if (validationError) {
+    errMsgEl.textContent = validationError;
     errEl.classList.remove('hidden');
     return;
   }
@@ -1372,30 +1388,48 @@ async function submitIntencao(e) {
   const btn = document.getElementById('intencao-submit-btn');
   const btnText = document.getElementById('intencao-submit-text');
   const spinner = document.getElementById('intencao-spinner');
-  btn.disabled = true; btnText.textContent = 'Enviando...'; spinner.classList.remove('hidden');
+  btn.disabled = true; btnText.textContent = 'Processando...'; spinner.classList.remove('hidden');
 
   try {
     const r = await fetch('/api/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ serviceId: selectedIntencaoSvc.id, params: { endereco, files: intencaoFiles } }),
+      body: JSON.stringify({ serviceId: selectedIntencaoSvc.id, params }),
     });
-    const d = await r.json();
-    if (!r.ok) {
-      errMsgEl.textContent = d.error || 'Erro ao enviar pedido.';
-      errEl.classList.remove('hidden');
-      return;
+
+    const ct = r.headers.get('content-type') || '';
+    if (ct.includes('application/pdf')) {
+      const blob = await r.blob();
+      lastPdfBlob = blob;
+      triggerPdfDownload(blob, selectedIntencaoSvc.id);
+      document.getElementById('intencao-form-wrap').classList.add('hidden');
+      document.getElementById('intencao-category-wrap').classList.add('hidden');
+      document.getElementById('intencao-result-pdf-btn').onclick = () => triggerPdfDownload(blob, selectedIntencaoSvc.id);
+      document.getElementById('intencao-result-wrap').classList.remove('hidden');
+      document.getElementById('intencao-result-wrap').scrollIntoView({ behavior: 'smooth' });
+      toast('ATPV-e gerado! PDF sendo baixado.');
+      await Promise.all([loadStats(), loadQueries()]);
+    } else {
+      const d = await r.json();
+      if (!r.ok) {
+        errMsgEl.textContent = d.error || 'Erro ao emitir o ATPV-e.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      // Sucesso sem PDF não é esperado para este serviço, mas trata para não deixar a tela travada.
+      document.getElementById('intencao-form-wrap').classList.add('hidden');
+      document.getElementById('intencao-category-wrap').classList.add('hidden');
+      document.getElementById('intencao-result-msg').textContent = d.result?.status || 'Solicitação concluída com sucesso!';
+      document.getElementById('intencao-result-pdf-btn').classList.add('hidden');
+      document.getElementById('intencao-result-wrap').classList.remove('hidden');
+      document.getElementById('intencao-result-wrap').scrollIntoView({ behavior: 'smooth' });
+      await Promise.all([loadStats(), loadQueries()]);
     }
-    document.getElementById('intencao-form-wrap').classList.add('hidden');
-    document.getElementById('intencao-category-wrap').classList.add('hidden');
-    document.getElementById('intencao-result-msg').textContent = d.result?.status || 'Pedido registrado com sucesso!';
-    document.getElementById('intencao-result-wrap').classList.remove('hidden');
-    await Promise.all([loadStats(), loadQueries()]);
   } catch {
     errMsgEl.textContent = 'Erro de conexão. Tente novamente.';
     errEl.classList.remove('hidden');
   } finally {
-    btn.disabled = false; btnText.textContent = 'Enviar Pedido'; spinner.classList.add('hidden');
+    btn.disabled = false; btnText.textContent = 'Emitir ATPV-e'; spinner.classList.add('hidden');
   }
 }
 

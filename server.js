@@ -339,21 +339,19 @@ const SERVICES = [
   { id:'crv-antigo-se', name:'Consulta CRV antigo SE', group:'Número CRV (Apenas antigos)', basePrice:448.00, inputType:'placa', icon:'📁', uf:'se', noMarkup:true },
   { id:'crv-antigo-to', name:'Consulta CRV antigo TO', group:'Número CRV (Apenas antigos)', basePrice:350.00, inputType:'placa', icon:'📁', uf:'to', noMarkup:true },
   { id:'crv-antigo-sc', name:'Consulta CRV antigo SC', group:'Número CRV (Apenas antigos)', basePrice:600.00, inputType:'placa', icon:'📁', uf:'sc', noMarkup:true },
-  // ── Intenção de Venda (ATPVE) — RJ: processamento manual (cliente envia os 4
-  // documentos + endereço com CEP, admin baixa tudo em página dedicada e devolve
-  // o PDF final por upload). MG (Intenção de Venda e Emitir ATPV-e): automáticos
-  // via API Infosimples (ver MG_AUTO_SERVICES / handleMgInfosimplesAuto) ──
-  { id:'intencao-venda-rj', name:'Intenção de Venda RJ', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'intencao_venda', icon:'📝', uf:'rj' },
+  // ── Intenção de Venda (ATPVE) — todas automáticas: RJ via Chekaki
+  // (api/atpve-rj/cadastrar, ver bloco "intencao-venda-rj" no /api/query), MG
+  // (Intenção de Venda e Emitir ATPV-e) via API Infosimples (ver MG_AUTO_SERVICES
+  // / handleMgInfosimplesAuto) ──
+  { id:'intencao-venda-rj', name:'Intenção de Venda RJ', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'atpve_rj_cadastro', icon:'📝', uf:'rj' },
   { id:'intencao-venda-mg', name:'Intenção de Venda MG', group:'Intenção de Venda (ATPVE)', basePrice:50.00, noMarkup:true, inputType:'intencao_venda_mg', icon:'📝', uf:'mg' },
   { id:'atpve-mg', name:'Emitir ATPV-e MG', group:'Intenção de Venda (ATPVE)', basePrice:10.00, noMarkup:true, inputType:'atpve_mg', icon:'📄', uf:'mg' },
 ];
 
-// Serviços desta categoria (mais a Reemissão CRLV-e RJ e a Intenção de Venda RJ)
-// não retornam resultado na hora: o pedido fica pendente até o super admin subir
-// o PDF manualmente (ver /api/admin/manual-queries).
+// Serviços desta categoria não retornam resultado na hora: o pedido fica
+// pendente até o super admin subir o PDF manualmente (ver /api/admin/manual-queries).
 const MANUAL_UPLOAD_GROUP = 'Número CRV (Apenas antigos)';
-const INTENCAO_VENDA_SERVICE_IDS = ['intencao-venda-rj'];
-const MANUAL_SERVICE_IDS  = [...SERVICES.filter(s => s.group === MANUAL_UPLOAD_GROUP).map(s => s.id), 'crlv-agendado-rj-reemissao', ...INTENCAO_VENDA_SERVICE_IDS];
+const MANUAL_SERVICE_IDS  = [...SERVICES.filter(s => s.group === MANUAL_UPLOAD_GROUP).map(s => s.id), 'crlv-agendado-rj-reemissao'];
 
 // ── SERVICES_V2 — API Datacube (api.consultasdeveiculos.com) ──────────────────
 // Catálogo completamente separado do SERVICES/autocrlv/chekaki acima. Preços em
@@ -2141,16 +2139,6 @@ app.post('/api/query', requireAuth, async (req, res) => {
     }
   }
 
-  if (INTENCAO_VENDA_SERVICE_IDS.includes(serviceId)) {
-    const files = params?.files || {};
-    const required = ['atpve', 'cod_seguranca', 'doc_vendedor', 'doc_comprador'];
-    const missing = required.filter(k => !files[k]?.data);
-    if (missing.length)
-      return res.status(400).json({ error: 'Envie os 4 documentos obrigatórios: ATPVE, Código de Segurança, RG/CPF/CNH do Vendedor e do Comprador.' });
-    if (!params?.endereco || !String(params.endereco).trim())
-      return res.status(400).json({ error: 'Informe o endereço com CEP.' });
-  }
-
   const price = parseFloat((service.basePrice * (service.noMarkup ? 1 : MARKUP)).toFixed(2));
 
   try {
@@ -2166,35 +2154,16 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
     // ── Serviços manuais (upload de arquivo pelo super admin — resultado não vem na hora) ──
     if (MANUAL_SERVICE_IDS.includes(serviceId)) {
-      const isIntencaoVenda = INTENCAO_VENDA_SERVICE_IDS.includes(serviceId);
-      // Para Intenção de Venda os 4 documentos ficam em intencao_venda_files (tabela à parte);
-      // queries.params guarda só o endereço, para não carregar base64 pesado em toda listagem.
-      const storedParams = isIntencaoVenda ? { endereco: String(params.endereco).trim() } : (params || {});
-
       await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
       const txRow = await pool.query(
         `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
         [req.user.id, price, `Consulta: ${service.name}`]
       );
-      const qRow = await pool.query(
+      await pool.query(
         `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
          VALUES ($1,$2,$3,$4,'pendente',$5,$6,'pdf') RETURNING id`,
-        [req.user.id, serviceId, service.name, JSON.stringify(storedParams), price, txRow.rows[0].id]
+        [req.user.id, serviceId, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id]
       );
-
-      if (isIntencaoVenda) {
-        const f = params.files;
-        await pool.query(
-          `INSERT INTO intencao_venda_files (query_id, files) VALUES ($1,$2)`,
-          [qRow.rows[0].id, JSON.stringify({
-            atpve:            f.atpve,
-            cod_seguranca:    f.cod_seguranca,
-            doc_vendedor:     f.doc_vendedor,
-            doc_comprador:    f.doc_comprador,
-            contrato_social:  f.contrato_social || null,
-          })]
-        );
-      }
 
       await notifyAdminNewQuery(user, service, price, params);
       return res.json({
@@ -2389,6 +2358,56 @@ app.post('/api/query', requireAuth, async (req, res) => {
         return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
       apiUrl = `${BASE_API_URL}/consultar-atpve`;
       body = { placa, renavam };
+    }
+    // Intenção de Venda RJ — registra a venda e emite o ATPV-e na hora (substitui o
+    // antigo fluxo manual de upload de documentos). A API devolve o PDF pronto.
+    if (serviceId === 'intencao-venda-rj') {
+      const p = params || {};
+      const requiredFields = [
+        'placa', 'renavam', 'ano_fabricacao', 'ano_modelo', 'chassi', 'kilometragem',
+        'crv_numero', 'crv_numero_via', 'crv_uf_emissao', 'crv_data_emissao', 'crv_codigo_seguranca',
+        'vendedor_tipo_pessoa', 'vendedor_documento', 'vendedor_nome', 'vendedor_email',
+        'venda_cidade', 'venda_valor', 'venda_data',
+        'comprador_tipo_pessoa', 'comprador_documento', 'comprador_nome', 'comprador_email',
+        'comprador_cep', 'comprador_logradouro', 'comprador_numero',
+        'comprador_bairro', 'comprador_cidade', 'comprador_uf',
+      ];
+      const missingFields = requiredFields.filter(k => !String(p[k] ?? '').trim());
+      if (missingFields.length)
+        return res.status(400).json({ error: `Campos obrigatórios ausentes: ${missingFields.join(', ')}` });
+
+      apiUrl = `${BASE_API_URL}/api/atpve-rj/cadastrar`;
+      body = {
+        placa: String(p.placa).toUpperCase().replace(/[\s-]/g, ''),
+        renavam: String(p.renavam).replace(/\D/g, ''),
+        ano_fabricacao: String(p.ano_fabricacao).trim(),
+        ano_modelo: String(p.ano_modelo).trim(),
+        chassi: String(p.chassi).toUpperCase().replace(/\s/g, ''),
+        kilometragem: String(p.kilometragem).replace(/\D/g, ''),
+        crv_numero: String(p.crv_numero).replace(/\D/g, ''),
+        crv_numero_via: String(p.crv_numero_via).trim(),
+        crv_uf_emissao: String(p.crv_uf_emissao).toUpperCase().trim(),
+        crv_data_emissao: String(p.crv_data_emissao).trim(),
+        crv_codigo_seguranca: String(p.crv_codigo_seguranca).replace(/\D/g, ''),
+        vendedor_tipo_pessoa: String(p.vendedor_tipo_pessoa).toUpperCase().trim(),
+        vendedor_documento: String(p.vendedor_documento).replace(/\D/g, ''),
+        vendedor_nome: String(p.vendedor_nome).trim().toUpperCase(),
+        vendedor_email: String(p.vendedor_email).trim(),
+        venda_cidade: String(p.venda_cidade).trim().toUpperCase(),
+        venda_valor: String(p.venda_valor).trim(),
+        venda_data: String(p.venda_data).trim(),
+        comprador_tipo_pessoa: String(p.comprador_tipo_pessoa).toUpperCase().trim(),
+        comprador_documento: String(p.comprador_documento).replace(/\D/g, ''),
+        comprador_nome: String(p.comprador_nome).trim().toUpperCase(),
+        comprador_email: String(p.comprador_email).trim(),
+        comprador_cep: String(p.comprador_cep).replace(/\D/g, ''),
+        comprador_logradouro: String(p.comprador_logradouro).trim().toUpperCase(),
+        comprador_numero: String(p.comprador_numero).trim(),
+        comprador_complemento: (String(p.comprador_complemento || '').trim() || '-').toUpperCase(),
+        comprador_bairro: String(p.comprador_bairro).trim().toUpperCase(),
+        comprador_cidade: String(p.comprador_cidade).trim().toUpperCase(),
+        comprador_uf: String(p.comprador_uf).toUpperCase().trim(),
+      };
     }
     // CNH: converte cpfCnpj → cpf para a nova API
     if (serviceId === 'consultar-cnh') {
@@ -4824,91 +4843,6 @@ app.post('/api/admin/manual-queries/:id/resend-whatsapp', requireAuth, requireSu
     res.json({ success: true });
   } catch (err) {
     console.error('Erro no reenvio manual de WhatsApp:', err.message);
-    res.status(500).json({ error: 'Erro interno.' });
-  }
-});
-
-// ── ADMIN: GET /api/admin/intencao-venda/:uf (fila de "Intenção de Venda RJ/MG") ──
-app.get('/api/admin/intencao-venda/:uf', requireAuth, requireSuperAdmin, async (req, res) => {
-  const uf = String(req.params.uf || '').toLowerCase();
-  const serviceId = `intencao-venda-${uf}`;
-  if (!INTENCAO_VENDA_SERVICE_IDS.includes(serviceId))
-    return res.status(400).json({ error: 'UF inválida.' });
-  try {
-    const r = await pool.query(
-      `SELECT q.id, q.service_id, q.service_name, q.params, q.amount, q.status, q.created_at, q.whatsapp_sent_at,
-              u.id AS user_id, u.name AS user_name, u.email AS user_email, u.phone AS user_phone
-       FROM queries q JOIN users u ON u.id = q.user_id
-       WHERE q.service_id = $1
-       ORDER BY (q.status = 'pendente') DESC, q.created_at DESC
-       LIMIT 300`,
-      [serviceId]
-    );
-    res.json({ queries: r.rows });
-  } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
-});
-
-// ── ADMIN: GET /api/admin/intencao-venda/:queryId/file/:slot (baixar 1 documento) ──
-const INTENCAO_VENDA_SLOTS = ['atpve', 'cod_seguranca', 'doc_vendedor', 'doc_comprador', 'contrato_social'];
-app.get('/api/admin/intencao-venda/:queryId/file/:slot', requireAuth, requireSuperAdmin, async (req, res) => {
-  const { queryId, slot } = req.params;
-  if (!INTENCAO_VENDA_SLOTS.includes(slot)) return res.status(400).json({ error: 'Documento inválido.' });
-  try {
-    const qr = await pool.query(`SELECT service_id FROM queries WHERE id=$1`, [queryId]);
-    if (!qr.rows.length || !INTENCAO_VENDA_SERVICE_IDS.includes(qr.rows[0].service_id))
-      return res.status(404).json({ error: 'Pedido não encontrado.' });
-
-    const fr = await pool.query(`SELECT files FROM intencao_venda_files WHERE query_id=$1`, [queryId]);
-    const file = fr.rows[0]?.files?.[slot];
-    if (!file?.data) return res.status(404).json({ error: 'Arquivo não encontrado.' });
-
-    const buf = Buffer.from(file.data, 'base64');
-    const disposition = req.query.download ? 'attachment' : 'inline';
-    res.set('Content-Type', file.type || 'application/octet-stream');
-    res.set('Content-Disposition', `${disposition}; filename="${(file.name || slot).replace(/"/g, '')}"`);
-    res.send(buf);
-  } catch (err) {
-    console.error('Erro ao baixar documento de intenção de venda:', err.message);
-    res.status(500).json({ error: 'Erro interno.' });
-  }
-});
-
-// ── ADMIN: GET /api/admin/intencao-venda/:queryId/messages (histórico do chat) ──
-app.get('/api/admin/intencao-venda/:queryId/messages', requireAuth, requireSuperAdmin, async (req, res) => {
-  try {
-    const r = await pool.query(
-      `SELECT id, message, created_at FROM query_messages WHERE query_id=$1 ORDER BY created_at ASC`,
-      [req.params.queryId]
-    );
-    res.json({ messages: r.rows });
-  } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
-});
-
-// ── ADMIN: POST /api/admin/intencao-venda/:queryId/messages (enviar msg pro WhatsApp do usuário) ──
-app.post('/api/admin/intencao-venda/:queryId/messages', requireAuth, requireSuperAdmin, async (req, res) => {
-  const message = String(req.body?.message || '').trim();
-  if (!message) return res.status(400).json({ error: 'Digite uma mensagem.' });
-  try {
-    const qr = await pool.query(
-      `SELECT q.id, q.service_id, u.phone
-       FROM queries q JOIN users u ON u.id = q.user_id WHERE q.id=$1`,
-      [req.params.queryId]
-    );
-    if (!qr.rows.length || !INTENCAO_VENDA_SERVICE_IDS.includes(qr.rows[0].service_id))
-      return res.status(404).json({ error: 'Pedido não encontrado.' });
-    const query = qr.rows[0];
-    if (!query.phone) return res.status(400).json({ error: 'Usuário sem telefone cadastrado.' });
-
-    const whatsappSent = await sendWhatsApp(query.phone, message).catch(() => false);
-    if (!whatsappSent) return res.status(502).json({ error: 'Falha ao enviar pelo WhatsApp. Tente novamente.' });
-
-    const mr = await pool.query(
-      `INSERT INTO query_messages (query_id, message) VALUES ($1,$2) RETURNING id, message, created_at`,
-      [query.id, message]
-    );
-    res.json({ success: true, message: mr.rows[0] });
-  } catch (err) {
-    console.error('Erro ao enviar mensagem de intenção de venda:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
   }
 });
