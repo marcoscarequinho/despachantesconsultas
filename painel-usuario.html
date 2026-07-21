@@ -264,8 +264,8 @@
           <div class="w-12 h-12 bg-pink-100 rounded-xl flex items-center justify-center text-2xl">📝</div>
           <div class="text-center">
             <div class="font-semibold text-gray-800">Intenção de Venda (ATPVE)</div>
-            <div class="text-xs text-gray-500 mt-0.5">Envio de documentos — RJ e MG</div>
-            <div class="text-xs text-gray-500 mt-0.5"><strong>Documento será liberado em até 2 horas</strong></div>
+            <div class="text-xs text-gray-500 mt-0.5">RJ: envio de documentos · MG: consulta automática</div>
+            <div class="text-xs text-gray-500 mt-0.5"><strong>RJ liberado em até 2 horas · MG na hora</strong></div>
           </div>
         </button>
         <button onclick="showSection('query3')"
@@ -666,7 +666,7 @@
 
       <div>
         <h2 class="text-xl font-bold text-gray-800">Intenção de Venda (ATPVE)</h2>
-        <p class="text-sm text-gray-500">Envie os documentos e o endereço com CEP — nossa equipe processa manualmente e devolve o documento final aqui no seu painel</p>
+        <p class="text-sm text-gray-500">RJ: envie os documentos e o endereço com CEP — nossa equipe processa manualmente e devolve o documento final aqui no seu painel. MG: preencha os dados abaixo e o registro é feito na hora via Infosimples.</p>
       </div>
 
       <!-- Saldo disponível -->
@@ -762,6 +762,65 @@
         </div>
         <button onclick="resetIntencaoForm()" class="btn-secondary w-full justify-center mt-4">
           🔄 Novo Pedido
+        </button>
+      </div>
+
+      <!-- Formulário MG — consulta automática via API Infosimples -->
+      <div id="intencao-mg-form-wrap" class="card hidden">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h3 class="font-semibold text-gray-800">Intenção de Venda MG</h3>
+            <div class="flex items-center gap-2 mt-1">
+              <span class="text-xs text-gray-500">Custo:</span>
+              <span id="intencao-mg-form-price" class="price-tag"></span>
+            </div>
+          </div>
+          <button onclick="resetIntencaoMgForm()" class="text-xs text-gray-500 hover:text-gray-700">✕ Cancelar</button>
+        </div>
+
+        <form id="intencao-mg-form" onsubmit="submitIntencaoMg(event)" class="space-y-4">
+          <div id="intencao-mg-form-fields" class="grid sm:grid-cols-2 gap-4"></div>
+
+          <div id="intencao-mg-form-error"
+            class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm flex gap-2">
+            <span class="flex-shrink-0">⚠️</span>
+            <span id="intencao-mg-form-error-msg"></span>
+          </div>
+
+          <button id="intencao-mg-submit-btn" type="submit" class="btn-primary w-full justify-center py-3">
+            <span id="intencao-mg-submit-text">Realizar Consulta</span>
+            <svg id="intencao-mg-spinner" class="hidden w-4 h-4 spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+            </svg>
+          </button>
+        </form>
+      </div>
+
+      <!-- Resultado MG -->
+      <div id="intencao-mg-result-wrap" class="hidden result-card p-5">
+        <div class="flex items-center gap-3 mb-4">
+          <div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-xl">✅</div>
+          <div>
+            <div class="font-bold text-green-800">Intenção de Venda registrada</div>
+            <div class="text-sm text-green-700">Retorno da Infosimples abaixo</div>
+          </div>
+          <div class="ml-auto text-right">
+            <div class="text-xs text-gray-500">Debitado</div>
+            <div id="intencao-mg-result-charged" class="font-bold text-red-500 text-sm"></div>
+          </div>
+        </div>
+
+        <div id="intencao-mg-result-fields" class="grid sm:grid-cols-2 gap-3 mb-4"></div>
+
+        <details class="mt-2">
+          <summary class="text-xs text-gray-500 cursor-pointer hover:text-gray-700">Ver JSON completo</summary>
+          <pre id="intencao-mg-result-json"
+            class="mt-2 bg-gray-900 text-green-400 text-xs p-4 rounded-lg overflow-x-auto max-h-80 overflow-y-auto"></pre>
+        </details>
+
+        <button onclick="resetIntencaoMgForm()" class="btn-secondary w-full justify-center mt-4">
+          🔄 Nova Consulta
         </button>
       </div>
     </section>
@@ -1215,15 +1274,31 @@ function selectIntencaoCategory(svc, cardEl) {
   selectedIntencaoSvc = svc;
   document.querySelectorAll('#intencao-category-grid .service-cat').forEach(el => el.classList.remove('selected'));
   cardEl?.classList.add('selected');
+
+  if (svc.id === 'intencao-venda-mg') {
+    document.getElementById('intencao-form-wrap').classList.add('hidden');
+    document.getElementById('intencao-result-wrap').classList.add('hidden');
+    document.getElementById('intencao-mg-result-wrap').classList.add('hidden');
+    document.getElementById('intencao-mg-form-price').textContent = fmt(svc.price);
+    renderIntencaoMgFields();
+    document.getElementById('intencao-mg-form-wrap').classList.remove('hidden');
+    scrollToIntencaoForm('intencao-mg-form-wrap');
+    return;
+  }
+
+  document.getElementById('intencao-mg-form-wrap').classList.add('hidden');
+  document.getElementById('intencao-mg-result-wrap').classList.add('hidden');
   document.getElementById('intencao-form-name').textContent  = svc.name;
   document.getElementById('intencao-form-price').textContent = fmt(svc.price);
-  document.getElementById('intencao-file-atpve-label').innerHTML = svc.id === 'intencao-venda-mg'
-    ? 'CRLV-e MG <span class="text-red-500">*</span>'
-    : 'CRLV-e RJ <span class="text-red-500">*</span>';
+  document.getElementById('intencao-file-atpve-label').innerHTML = 'CRLV-e RJ <span class="text-red-500">*</span>';
   document.getElementById('intencao-form-wrap').classList.remove('hidden');
   document.getElementById('intencao-result-wrap').classList.add('hidden');
+  scrollToIntencaoForm('intencao-form-wrap');
+}
+
+function scrollToIntencaoForm(id) {
   setTimeout(() => {
-    const el = document.getElementById('intencao-form-wrap');
+    const el = document.getElementById(id);
     const header = document.querySelector('header');
     const offset = (header ? header.offsetHeight : 0) + 16;
     const top = el.getBoundingClientRect().top + window.scrollY - offset;
@@ -1261,6 +1336,8 @@ function resetIntencaoForm(showCats = true) {
   document.getElementById('intencao-form-error').classList.add('hidden');
   document.getElementById('intencao-form-wrap').classList.add('hidden');
   document.getElementById('intencao-result-wrap').classList.add('hidden');
+  document.getElementById('intencao-mg-form-wrap').classList.add('hidden');
+  document.getElementById('intencao-mg-result-wrap').classList.add('hidden');
   document.querySelectorAll('#intencao-category-grid .service-cat').forEach(el => el.classList.remove('selected'));
   if (showCats) document.getElementById('intencao-category-wrap').classList.remove('hidden');
 }
@@ -1312,6 +1389,117 @@ async function submitIntencao(e) {
   } finally {
     btn.disabled = false; btnText.textContent = 'Enviar Pedido'; spinner.classList.add('hidden');
   }
+}
+
+// ── Intenção de Venda MG — automática via API Infosimples Nova Consulta ────────
+const INTENCAO_MG_INFOSIMPLES_ID = 'is-detran-mg-reg-intencao-venda';
+
+function getIntencaoMgSpec() {
+  return allServicesV3.find(s => s.id === INTENCAO_MG_INFOSIMPLES_ID);
+}
+
+function renderIntencaoMgFields() {
+  const spec = getIntencaoMgSpec();
+  const wrap = document.getElementById('intencao-mg-form-fields');
+  if (!spec) {
+    wrap.innerHTML = '<p class="text-sm text-red-500">Não foi possível carregar o formulário. Recarregue a página.</p>';
+    return;
+  }
+  wrap.innerHTML = spec.params.map(p => `
+    <div>
+      <label class="label">${escapeHtml(p.label)}${p.required ? ' <span class="text-red-500">*</span>' : ''}</label>
+      <input id="im-${escapeHtml(p.name)}" type="text" class="input-field" ${p.required ? 'required' : ''}>
+      ${p.description ? `<p class="text-xs text-gray-400 mt-1">${escapeHtml(p.description)}</p>` : ''}
+    </div>`).join('');
+}
+
+function buildIntencaoMgParams() {
+  const spec = getIntencaoMgSpec();
+  const params = {};
+  (spec?.params || []).forEach(p => {
+    params[p.name] = (document.getElementById('im-' + p.name)?.value || '').trim();
+  });
+  return params;
+}
+
+function validateIntencaoMgParams(p) {
+  const spec = getIntencaoMgSpec();
+  for (const param of (spec?.params || [])) {
+    if (param.required && !p[param.name]) return `Campo obrigatório: ${param.label}`;
+  }
+  if (!p.cpf_vendedor && !p.cnpj_vendedor) return 'Informe o CPF ou CNPJ do vendedor.';
+  if (!p.cpf_comprador && !p.cnpj_comprador) return 'Informe o CPF ou CNPJ do comprador.';
+  return null;
+}
+
+function resetIntencaoMgForm(showCats = true) {
+  selectedIntencaoSvc = null;
+  document.getElementById('intencao-mg-form').reset();
+  document.getElementById('intencao-mg-form-error').classList.add('hidden');
+  document.getElementById('intencao-mg-form-wrap').classList.add('hidden');
+  document.getElementById('intencao-mg-result-wrap').classList.add('hidden');
+  document.querySelectorAll('#intencao-category-grid .service-cat').forEach(el => el.classList.remove('selected'));
+  if (showCats) document.getElementById('intencao-category-wrap').classList.remove('hidden');
+}
+
+async function submitIntencaoMg(e) {
+  e.preventDefault();
+  const errEl    = document.getElementById('intencao-mg-form-error');
+  const errMsgEl = document.getElementById('intencao-mg-form-error-msg');
+  errEl.classList.add('hidden');
+
+  const params = buildIntencaoMgParams();
+  const validationError = validateIntencaoMgParams(params);
+  if (validationError) {
+    errMsgEl.textContent = validationError;
+    errEl.classList.remove('hidden');
+    return;
+  }
+
+  const btn = document.getElementById('intencao-mg-submit-btn');
+  const btnText = document.getElementById('intencao-mg-submit-text');
+  const spinner = document.getElementById('intencao-mg-spinner');
+  btn.disabled = true; btnText.textContent = 'Processando...'; spinner.classList.remove('hidden');
+
+  try {
+    const r = await fetch('/api/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serviceId: 'intencao-venda-mg', params }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      errMsgEl.textContent = d.error || 'Erro ao realizar consulta.';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    showIntencaoMgResult(d);
+    await Promise.all([loadStats(), loadQueries()]);
+  } catch {
+    errMsgEl.textContent = 'Erro de conexão. Tente novamente.';
+    errEl.classList.remove('hidden');
+  } finally {
+    btn.disabled = false; btnText.textContent = 'Realizar Consulta'; spinner.classList.add('hidden');
+  }
+}
+
+function showIntencaoMgResult(data) {
+  document.getElementById('intencao-mg-form-wrap').classList.add('hidden');
+  document.getElementById('intencao-category-wrap').classList.add('hidden');
+  document.getElementById('intencao-mg-result-charged').textContent = '-' + fmt(data.charged);
+
+  const result = data.result || {};
+  const fields = flattenObj(result, '', 3);
+  document.getElementById('intencao-mg-result-fields').innerHTML = fields.slice(0, 60).map(([k, v]) => `
+    <div class="result-field bg-white rounded-lg p-3 border border-gray-100">
+      <span class="result-label">${escapeHtml(k)}</span>
+      <span class="result-value">${escapeHtml(v)}</span>
+    </div>`).join('');
+  document.getElementById('intencao-mg-result-json').textContent = JSON.stringify(result, null, 2);
+
+  document.getElementById('intencao-mg-result-wrap').classList.remove('hidden');
+  document.getElementById('intencao-mg-result-wrap').scrollIntoView({ behavior: 'smooth' });
+  toast('Consulta concluída com sucesso!');
 }
 
 // ── Consultas ──────────────────────────────────────────────────────────────────

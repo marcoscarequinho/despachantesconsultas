@@ -89,10 +89,6 @@
       <span class="text-lg">🟢</span> Intenção de Venda RJ
       <span id="intencao-rj-pending-badge" class="ml-auto hidden bg-red-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-full"></span>
     </div>
-    <div class="nav-item" data-section="intencao-mg" onclick="showSection('intencao-mg')">
-      <span class="text-lg">🔵</span> Intenção de Venda MG
-      <span id="intencao-mg-pending-badge" class="ml-auto hidden bg-red-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-full"></span>
-    </div>
     <div class="nav-item" data-section="api-keys" onclick="showSection('api-keys')">
       <span class="text-lg">🔑</span> Chaves de API
     </div>
@@ -382,17 +378,6 @@
         <p class="text-sm text-gray-500">Documentos enviados pelos usuários para a categoria "Intenção de Venda RJ" — baixe os arquivos, veja o endereço e converse pelo WhatsApp.</p>
       </div>
       <div id="intencao-rj-list" class="space-y-4">
-        <div class="card space-y-2"><div class="skeleton"></div><div class="skeleton"></div></div>
-      </div>
-    </section>
-
-    <!-- ── INTENÇÃO DE VENDA MG ─────────────────────────────────────────────── -->
-    <section id="section-intencao-mg" class="admin-section hidden space-y-4">
-      <div>
-        <h2 class="text-xl font-bold text-gray-800">Intenção de Venda MG</h2>
-        <p class="text-sm text-gray-500">Documentos enviados pelos usuários para a categoria "Intenção de Venda MG" — baixe os arquivos, veja o endereço e converse pelo WhatsApp.</p>
-      </div>
-      <div id="intencao-mg-list" class="space-y-4">
         <div class="card space-y-2"><div class="skeleton"></div><div class="skeleton"></div></div>
       </div>
     </section>
@@ -758,7 +743,7 @@ const fmt = v => 'R$ ' + parseFloat(v||0).toLocaleString('pt-BR',{minimumFractio
 const fmtDate = s => { const d=new Date(s); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
 
 let allUsers = [], allTx = [], allQueries = [], allServices = [], allManualQueries = [];
-const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'intencao-rj':'Intenção de Venda RJ', 'intencao-mg':'Intenção de Venda MG', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API' };
+const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'intencao-rj':'Intenção de Venda RJ', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API' };
 
 function toast(msg, type='success') {
   const el = document.getElementById('toast');
@@ -786,7 +771,6 @@ function showSection(id) {
   if (id === 'services' && !allServices.length) loadServices();
   if (id === 'manual')  loadManualQueries();
   if (id === 'intencao-rj') loadIntencaoVenda('rj');
-  if (id === 'intencao-mg') loadIntencaoVenda('mg');
   if (id === 'api-keys') loadApiKeys();
   if (id === 'avulsas') loadPublicOrders();
   if (id === 'api-cobrancas') loadApiCharges();
@@ -803,7 +787,6 @@ function refreshCurrentSection() {
   if (id === 'services')  { allServices = []; loadServices(); }
   if (id === 'manual')    loadManualQueries();
   if (id === 'intencao-rj') loadIntencaoVenda('rj');
-  if (id === 'intencao-mg') loadIntencaoVenda('mg');
   if (id === 'api-keys')  loadApiKeys();
   if (id === 'avulsas')   loadPublicOrders();
   if (id === 'api-cobrancas') loadApiCharges();
@@ -818,7 +801,7 @@ async function init() {
     if (!r.ok) { window.location.href = '/entrar'; return; }
     const user = await r.json();
     if (!['contato@mygmail.com.br', 'contato@mcdetranrj.com'].includes(user.email)) { window.location.href = '/painel'; return; }
-    await Promise.all([loadStats(), loadUsers(), loadManualQueries(), loadIntencaoVenda('rj'), loadIntencaoVenda('mg')]);
+    await Promise.all([loadStats(), loadUsers(), loadManualQueries(), loadIntencaoVenda('rj')]);
   } catch { window.location.href = '/entrar'; }
 }
 

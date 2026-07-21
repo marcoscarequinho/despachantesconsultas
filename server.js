@@ -339,17 +339,19 @@ const SERVICES = [
   { id:'crv-antigo-se', name:'Consulta CRV antigo SE', group:'Número CRV (Apenas antigos)', basePrice:448.00, inputType:'placa', icon:'📁', uf:'se', noMarkup:true },
   { id:'crv-antigo-to', name:'Consulta CRV antigo TO', group:'Número CRV (Apenas antigos)', basePrice:350.00, inputType:'placa', icon:'📁', uf:'to', noMarkup:true },
   { id:'crv-antigo-sc', name:'Consulta CRV antigo SC', group:'Número CRV (Apenas antigos)', basePrice:600.00, inputType:'placa', icon:'📁', uf:'sc', noMarkup:true },
-  // ── Intenção de Venda (ATPVE) — processamento manual: cliente envia os 4 documentos +
-  // endereço com CEP, admin baixa tudo em página dedicada e devolve o PDF final por upload ──
+  // ── Intenção de Venda (ATPVE) — RJ: processamento manual (cliente envia os 4
+  // documentos + endereço com CEP, admin baixa tudo em página dedicada e devolve
+  // o PDF final por upload). MG: automático via API Infosimples (ver
+  // handleIntencaoVendaMg / rota /api/query) ──
   { id:'intencao-venda-rj', name:'Intenção de Venda RJ', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'intencao_venda', icon:'📝', uf:'rj' },
-  { id:'intencao-venda-mg', name:'Intenção de Venda MG', group:'Intenção de Venda (ATPVE)', basePrice:50.00, noMarkup:true, inputType:'intencao_venda', icon:'📝', uf:'mg' },
+  { id:'intencao-venda-mg', name:'Intenção de Venda MG', group:'Intenção de Venda (ATPVE)', basePrice:50.00, noMarkup:true, inputType:'intencao_venda_mg', icon:'📝', uf:'mg' },
 ];
 
-// Serviços desta categoria (mais a Reemissão CRLV-e RJ) não retornam resultado na hora:
-// o pedido fica pendente até o super admin subir o PDF manualmente (ver
-// /api/admin/manual-queries).
+// Serviços desta categoria (mais a Reemissão CRLV-e RJ e a Intenção de Venda RJ)
+// não retornam resultado na hora: o pedido fica pendente até o super admin subir
+// o PDF manualmente (ver /api/admin/manual-queries).
 const MANUAL_UPLOAD_GROUP = 'Número CRV (Apenas antigos)';
-const INTENCAO_VENDA_SERVICE_IDS = ['intencao-venda-rj', 'intencao-venda-mg'];
+const INTENCAO_VENDA_SERVICE_IDS = ['intencao-venda-rj'];
 const MANUAL_SERVICE_IDS  = [...SERVICES.filter(s => s.group === MANUAL_UPLOAD_GROUP).map(s => s.id), 'crlv-agendado-rj-reemissao', ...INTENCAO_VENDA_SERVICE_IDS];
 
 // ── SERVICES_V2 — API Datacube (api.consultasdeveiculos.com) ──────────────────
@@ -2046,6 +2048,68 @@ function buildComunicacaoVendaPdfBuffer(service, data, params) {
   });
 }
 
+// ── Intenção de Venda MG — automática via API Infosimples (detran/mg/reg-intencao-venda) ──
+// Mesmo fluxo de validar → consultar → só então debitar créditos do /api/query-v3, mas com
+// preço fixo de R$ 50,00 (catálogo SERVICES, noMarkup) em vez do markup padrão da Infosimples.
+async function handleIntencaoVendaMg(req, res, service, params) {
+  const isvc = SERVICES_V3.find(s => s.id === 'is-detran-mg-reg-intencao-venda');
+  if (!isvc) return res.status(500).json({ error: 'Serviço não configurado.' });
+
+  const price = parseFloat((service.basePrice * (service.noMarkup ? 1 : MARKUP)).toFixed(2));
+
+  const missingLabels = isvc.params
+    .filter(p => p.required && !(params?.[p.name] ?? '').toString().trim())
+    .map(p => p.label);
+  if (missingLabels.length)
+    return res.status(400).json({ error: `Campos obrigatórios ausentes: ${missingLabels.join(', ')}` });
+  if (!String(params?.cpf_vendedor || '').trim() && !String(params?.cnpj_vendedor || '').trim())
+    return res.status(400).json({ error: 'Informe o CPF ou CNPJ do vendedor.' });
+  if (!String(params?.cpf_comprador || '').trim() && !String(params?.cnpj_comprador || '').trim())
+    return res.status(400).json({ error: 'Informe o CPF ou CNPJ do comprador.' });
+
+  const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.user.id]);
+  const user = ur.rows[0];
+  if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+  if (parseFloat(user.credits) < price)
+    return res.status(400).json({ error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}` });
+
+  const qs = new URLSearchParams({ token: INFOSIMPLES_TOKEN });
+  for (const p of isvc.params) {
+    const v = (params?.[p.name] ?? '').toString().trim();
+    if (v) qs.set(p.name, v);
+  }
+
+  let apiRes, apiData;
+  try {
+    apiRes = await fetch(`${INFOSIMPLES_API_URL}/${isvc.path}?${qs.toString()}`, { method: 'POST' });
+    apiData = await apiRes.json().catch(() => null);
+  } catch (e) {
+    console.error('Erro na API Infosimples [intencao-venda-mg]:', e.message);
+    return res.status(502).json({ error: 'Erro ao consultar a API. Tente novamente.' });
+  }
+
+  if (!apiData || apiData.code !== 200) {
+    const errMsg = (apiData && (apiData.errors?.[0] || apiData.code_message)) || `Erro HTTP ${apiRes.status}.`;
+    console.error(`Erro API Infosimples [intencao-venda-mg] code ${apiData?.code}: ${errMsg}`);
+    return res.status(apiRes.status && apiRes.status >= 400 ? apiRes.status : 502).json({ error: errMsg });
+  }
+
+  const result = Array.isArray(apiData.data) ? (apiData.data[0] ?? {}) : (apiData.data ?? {});
+
+  await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
+  const txRow = await pool.query(
+    `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+    [req.user.id, price, `Consulta: ${service.name} (Infosimples)`]
+  );
+  await pool.query(
+    `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type, result_data)
+     VALUES ($1,$2,$3,$4,'success',$5,$6,'json',$7)`,
+    [req.user.id, service.id, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id, JSON.stringify(result)]
+  );
+
+  return res.json({ success: true, result, charged: price });
+}
+
 // ── POST /api/query ───────────────────────────────────────────────────────────
 app.post('/api/query', requireAuth, async (req, res) => {
   const { serviceId, params } = req.body;
@@ -2053,6 +2117,15 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
   const service = SERVICES.find(s => s.id === serviceId);
   if (!service) return res.status(400).json({ error: 'Serviço inválido.' });
+
+  if (serviceId === 'intencao-venda-mg') {
+    try {
+      return await handleIntencaoVendaMg(req, res, service, params);
+    } catch (err) {
+      console.error('Erro em /api/query [intencao-venda-mg]:', err.message);
+      return res.status(500).json({ error: 'Erro interno. Tente novamente.' });
+    }
+  }
 
   if (INTENCAO_VENDA_SERVICE_IDS.includes(serviceId)) {
     const files = params?.files || {};
