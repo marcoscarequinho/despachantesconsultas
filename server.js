@@ -341,10 +341,11 @@ const SERVICES = [
   { id:'crv-antigo-sc', name:'Consulta CRV antigo SC', group:'Número CRV (Apenas antigos)', basePrice:600.00, inputType:'placa', icon:'📁', uf:'sc', noMarkup:true },
   // ── Intenção de Venda (ATPVE) — RJ: processamento manual (cliente envia os 4
   // documentos + endereço com CEP, admin baixa tudo em página dedicada e devolve
-  // o PDF final por upload). MG: automático via API Infosimples (ver
-  // handleIntencaoVendaMg / rota /api/query) ──
+  // o PDF final por upload). MG (Intenção de Venda e Emitir ATPV-e): automáticos
+  // via API Infosimples (ver MG_AUTO_SERVICES / handleMgInfosimplesAuto) ──
   { id:'intencao-venda-rj', name:'Intenção de Venda RJ', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'intencao_venda', icon:'📝', uf:'rj' },
   { id:'intencao-venda-mg', name:'Intenção de Venda MG', group:'Intenção de Venda (ATPVE)', basePrice:50.00, noMarkup:true, inputType:'intencao_venda_mg', icon:'📝', uf:'mg' },
+  { id:'atpve-mg', name:'Emitir ATPV-e MG', group:'Intenção de Venda (ATPVE)', basePrice:50.00, noMarkup:true, inputType:'atpve_mg', icon:'📄', uf:'mg' },
 ];
 
 // Serviços desta categoria (mais a Reemissão CRLV-e RJ e a Intenção de Venda RJ)
@@ -2048,11 +2049,26 @@ function buildComunicacaoVendaPdfBuffer(service, data, params) {
   });
 }
 
-// ── Intenção de Venda MG — automática via API Infosimples (detran/mg/reg-intencao-venda) ──
+// ── Serviços MG automáticos via API Infosimples (Intenção de Venda MG / Emitir ATPV-e MG) ──
 // Mesmo fluxo de validar → consultar → só então debitar créditos do /api/query-v3, mas com
 // preço fixo de R$ 50,00 (catálogo SERVICES, noMarkup) em vez do markup padrão da Infosimples.
-async function handleIntencaoVendaMg(req, res, service, params) {
-  const isvc = SERVICES_V3.find(s => s.id === 'is-detran-mg-reg-intencao-venda');
+const MG_AUTO_SERVICES = {
+  'intencao-venda-mg': {
+    infosimplesId: 'is-detran-mg-reg-intencao-venda',
+    extraValidate: p => {
+      if (!String(p?.cpf_vendedor || '').trim() && !String(p?.cnpj_vendedor || '').trim())
+        return 'Informe o CPF ou CNPJ do vendedor.';
+      if (!String(p?.cpf_comprador || '').trim() && !String(p?.cnpj_comprador || '').trim())
+        return 'Informe o CPF ou CNPJ do comprador.';
+      return null;
+    },
+  },
+  'atpve-mg': { infosimplesId: 'is-detran-mg-atpve', extraValidate: null },
+};
+
+async function handleMgInfosimplesAuto(req, res, service, params) {
+  const cfg = MG_AUTO_SERVICES[service.id];
+  const isvc = SERVICES_V3.find(s => s.id === cfg.infosimplesId);
   if (!isvc) return res.status(500).json({ error: 'Serviço não configurado.' });
 
   const price = parseFloat((service.basePrice * (service.noMarkup ? 1 : MARKUP)).toFixed(2));
@@ -2062,10 +2078,8 @@ async function handleIntencaoVendaMg(req, res, service, params) {
     .map(p => p.label);
   if (missingLabels.length)
     return res.status(400).json({ error: `Campos obrigatórios ausentes: ${missingLabels.join(', ')}` });
-  if (!String(params?.cpf_vendedor || '').trim() && !String(params?.cnpj_vendedor || '').trim())
-    return res.status(400).json({ error: 'Informe o CPF ou CNPJ do vendedor.' });
-  if (!String(params?.cpf_comprador || '').trim() && !String(params?.cnpj_comprador || '').trim())
-    return res.status(400).json({ error: 'Informe o CPF ou CNPJ do comprador.' });
+  const extraError = cfg.extraValidate?.(params);
+  if (extraError) return res.status(400).json({ error: extraError });
 
   const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.user.id]);
   const user = ur.rows[0];
@@ -2084,13 +2098,13 @@ async function handleIntencaoVendaMg(req, res, service, params) {
     apiRes = await fetch(`${INFOSIMPLES_API_URL}/${isvc.path}?${qs.toString()}`, { method: 'POST' });
     apiData = await apiRes.json().catch(() => null);
   } catch (e) {
-    console.error('Erro na API Infosimples [intencao-venda-mg]:', e.message);
+    console.error(`Erro na API Infosimples [${service.id}]:`, e.message);
     return res.status(502).json({ error: 'Erro ao consultar a API. Tente novamente.' });
   }
 
   if (!apiData || apiData.code !== 200) {
     const errMsg = (apiData && (apiData.errors?.[0] || apiData.code_message)) || `Erro HTTP ${apiRes.status}.`;
-    console.error(`Erro API Infosimples [intencao-venda-mg] code ${apiData?.code}: ${errMsg}`);
+    console.error(`Erro API Infosimples [${service.id}] code ${apiData?.code}: ${errMsg}`);
     return res.status(apiRes.status && apiRes.status >= 400 ? apiRes.status : 502).json({ error: errMsg });
   }
 
@@ -2118,11 +2132,11 @@ app.post('/api/query', requireAuth, async (req, res) => {
   const service = SERVICES.find(s => s.id === serviceId);
   if (!service) return res.status(400).json({ error: 'Serviço inválido.' });
 
-  if (serviceId === 'intencao-venda-mg') {
+  if (MG_AUTO_SERVICES[serviceId]) {
     try {
-      return await handleIntencaoVendaMg(req, res, service, params);
+      return await handleMgInfosimplesAuto(req, res, service, params);
     } catch (err) {
-      console.error('Erro em /api/query [intencao-venda-mg]:', err.message);
+      console.error(`Erro em /api/query [${serviceId}]:`, err.message);
       return res.status(500).json({ error: 'Erro interno. Tente novamente.' });
     }
   }

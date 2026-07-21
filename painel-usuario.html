@@ -769,7 +769,7 @@
       <div id="intencao-mg-form-wrap" class="card hidden">
         <div class="flex items-center justify-between mb-4">
           <div>
-            <h3 class="font-semibold text-gray-800">Intenção de Venda MG</h3>
+            <h3 id="intencao-mg-form-name" class="font-semibold text-gray-800"></h3>
             <div class="flex items-center gap-2 mt-1">
               <span class="text-xs text-gray-500">Custo:</span>
               <span id="intencao-mg-form-price" class="price-tag"></span>
@@ -802,7 +802,7 @@
         <div class="flex items-center gap-3 mb-4">
           <div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-xl">✅</div>
           <div>
-            <div class="font-bold text-green-800">Intenção de Venda registrada</div>
+            <div id="intencao-mg-result-title" class="font-bold text-green-800"></div>
             <div class="text-sm text-green-700">Retorno da Infosimples abaixo</div>
           </div>
           <div class="ml-auto text-right">
@@ -1257,7 +1257,14 @@ async function loadStats() {
 let selectedIntencaoSvc = null;
 let intencaoFiles = { atpve: null, cod_seguranca: null, doc_vendedor: null, doc_comprador: null, contrato_social: null };
 const INTENCAO_REQUIRED_SLOTS = ['atpve', 'cod_seguranca', 'doc_vendedor', 'doc_comprador'];
-const INTENCAO_ICONS = { 'intencao-venda-rj': '🟢', 'intencao-venda-mg': '🔵' };
+const INTENCAO_ICONS = { 'intencao-venda-rj': '🟢', 'intencao-venda-mg': '🔵', 'atpve-mg': '📄' };
+
+// Serviços MG automáticos (consulta na hora via API Infosimples) — mesmo formulário
+// dinâmico e mesma tela de resultado, só troca o spec de campos e o serviceId.
+const MG_AUTO_SERVICES = {
+  'intencao-venda-mg': { infosimplesId: 'is-detran-mg-reg-intencao-venda', resultTitle: 'Intenção de Venda registrada' },
+  'atpve-mg':           { infosimplesId: 'is-detran-mg-atpve',              resultTitle: 'ATPV-e emitido' },
+};
 
 function buildIntencaoCategoryGrid() {
   const svcs = allServices.filter(s => s.group === 'Intenção de Venda (ATPVE)');
@@ -1275,10 +1282,11 @@ function selectIntencaoCategory(svc, cardEl) {
   document.querySelectorAll('#intencao-category-grid .service-cat').forEach(el => el.classList.remove('selected'));
   cardEl?.classList.add('selected');
 
-  if (svc.id === 'intencao-venda-mg') {
+  if (MG_AUTO_SERVICES[svc.id]) {
     document.getElementById('intencao-form-wrap').classList.add('hidden');
     document.getElementById('intencao-result-wrap').classList.add('hidden');
     document.getElementById('intencao-mg-result-wrap').classList.add('hidden');
+    document.getElementById('intencao-mg-form-name').textContent = svc.name;
     document.getElementById('intencao-mg-form-price').textContent = fmt(svc.price);
     renderIntencaoMgFields();
     document.getElementById('intencao-mg-form-wrap').classList.remove('hidden');
@@ -1391,11 +1399,10 @@ async function submitIntencao(e) {
   }
 }
 
-// ── Intenção de Venda MG — automática via API Infosimples Nova Consulta ────────
-const INTENCAO_MG_INFOSIMPLES_ID = 'is-detran-mg-reg-intencao-venda';
-
+// ── Serviços MG automáticos (Intenção de Venda / Emitir ATPV-e) — via API Infosimples Nova Consulta ──
 function getIntencaoMgSpec() {
-  return allServicesV3.find(s => s.id === INTENCAO_MG_INFOSIMPLES_ID);
+  const cfg = MG_AUTO_SERVICES[selectedIntencaoSvc?.id];
+  return cfg && allServicesV3.find(s => s.id === cfg.infosimplesId);
 }
 
 function renderIntencaoMgFields() {
@@ -1427,8 +1434,10 @@ function validateIntencaoMgParams(p) {
   for (const param of (spec?.params || [])) {
     if (param.required && !p[param.name]) return `Campo obrigatório: ${param.label}`;
   }
-  if (!p.cpf_vendedor && !p.cnpj_vendedor) return 'Informe o CPF ou CNPJ do vendedor.';
-  if (!p.cpf_comprador && !p.cnpj_comprador) return 'Informe o CPF ou CNPJ do comprador.';
+  if (selectedIntencaoSvc?.id === 'intencao-venda-mg') {
+    if (!p.cpf_vendedor && !p.cnpj_vendedor) return 'Informe o CPF ou CNPJ do vendedor.';
+    if (!p.cpf_comprador && !p.cnpj_comprador) return 'Informe o CPF ou CNPJ do comprador.';
+  }
   return null;
 }
 
@@ -1465,7 +1474,7 @@ async function submitIntencaoMg(e) {
     const r = await fetch('/api/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ serviceId: 'intencao-venda-mg', params }),
+      body: JSON.stringify({ serviceId: selectedIntencaoSvc.id, params }),
     });
     const d = await r.json();
     if (!r.ok) {
@@ -1486,6 +1495,8 @@ async function submitIntencaoMg(e) {
 function showIntencaoMgResult(data) {
   document.getElementById('intencao-mg-form-wrap').classList.add('hidden');
   document.getElementById('intencao-category-wrap').classList.add('hidden');
+  document.getElementById('intencao-mg-result-title').textContent =
+    MG_AUTO_SERVICES[selectedIntencaoSvc?.id]?.resultTitle || 'Consulta concluída';
   document.getElementById('intencao-mg-result-charged').textContent = '-' + fmt(data.charged);
 
   const result = data.result || {};
