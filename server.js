@@ -2243,8 +2243,11 @@ async function handleMgInfosimplesAuto(req, res, service, params) {
 // pdf_disponivel=true. O Cadastrar nem sempre devolve o PDF pronto na hora — placas
 // que passam por verificação extra (LAUDOCAR) respondem com JSON e só depois ficam
 // com pdf_disponivel=true — então sem isso o usuário ficava sem PDF nenhum até
-// clicar manualmente em "Atualizar". Não sobrescreve um cache ainda válido.
-async function ensureAtpveRjPdfCached(queryId, userId, fresh) {
+// clicar manualmente em "Atualizar". Não sobrescreve um cache ainda válido. Quando
+// um PDF é cacheado aqui (ou seja, é a primeira vez que fica disponível) e
+// notifyPhone é informado, também envia por WhatsApp — cobre o caso em que o
+// cadastro original não devolveu PDF na hora e por isso o envio síncrono não rodou.
+async function ensureAtpveRjPdfCached(queryId, userId, fresh, notifyPhone) {
   if (!fresh?.pdf_disponivel || !fresh?.id) return;
   try {
     const existing = await pool.query(
@@ -2263,6 +2266,16 @@ async function ensureAtpveRjPdfCached(queryId, userId, fresh) {
       `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
       [queryId, userId, token, buf.toString('base64'), expiresAt]
     );
+    if (notifyPhone) {
+      const placa = (fresh.placa || '').toUpperCase();
+      const caption = `✅ *ATPV-e RJ pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
+      const fileName = `ATPVE-RJ-${placa || 'doc'}.pdf`;
+      const sent = await sendWhatsAppPdf(notifyPhone, buf, fileName, caption).catch(e => {
+        console.error(`Erro ao enviar ATPV-e RJ por WhatsApp [id ${fresh.id}]:`, e.message);
+        return false;
+      });
+      if (!sent) console.error(`Falha ao enviar ATPV-e RJ por WhatsApp [id ${fresh.id}] para ${notifyPhone}`);
+    }
   } catch (e) {
     console.error(`Erro ao cachear PDF do ATPV-e RJ [id ${fresh.id}]:`, e.message);
   }
@@ -2271,9 +2284,11 @@ async function ensureAtpveRjPdfCached(queryId, userId, fresh) {
 // Correlaciona a Intenção de Venda RJ recém-cadastrada com seu registro na Chekaki
 // (GET /api/atpve-rj — "Listar pedidos", endpoint que retorna os pedidos de toda a
 // chave de acesso), guardando id/protocolo/situação em queries.result_data — usado
-// pelo botão "Atualizar" e pela situação exibida em "Meus ATPV-e RJ". Best effort:
-// uma falha aqui nunca deve impedir a entrega do PDF já emitido.
-async function correlateAtpveRjRecord(queryId, userId, placa) {
+// pelo botão "Atualizar" e pela situação exibida em "Meus ATPV-e RJ". Retorna o
+// registro encontrado (ou null) para o chamador decidir se ainda precisa buscar/
+// notificar o PDF (ver ensureAtpveRjPdfCached). Best effort: uma falha aqui nunca
+// deve impedir a entrega do PDF já emitido.
+async function correlateAtpveRjRecord(queryId, placa) {
   try {
     const lr = await fetch(`${BASE_API_URL}/api/atpve-rj`, {
       headers: { 'chaveAcesso': CHAVE_ACESSO },
@@ -2287,10 +2302,11 @@ async function correlateAtpveRjRecord(queryId, userId, placa) {
     const match = list.find(it => String(it.placa || '').toUpperCase() === alvo);
     if (match) {
       await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(match), queryId]);
-      await ensureAtpveRjPdfCached(queryId, userId, match);
     }
+    return match || null;
   } catch (e) {
     console.error('Erro ao correlacionar pedido ATPV-e RJ:', e.message);
+    return null;
   }
 }
 
@@ -3049,11 +3065,20 @@ app.post('/api/query', requireAuth, async (req, res) => {
        htmlBuf ? 'html' : (isRealPdf || base64PdfBuf || dcDebitoPdfBuf || dcMotorPdfBuf || vendaPdfBuf) ? 'pdf' : 'json',
        resultData]
     );
-    if (serviceId === 'intencao-venda-rj') await correlateAtpveRjRecord(qRow.rows[0].id, req.user.id, body.placa);
-    await notifyAdminNewQuery(user, service, price, params);
-
     // ── Envia PDF + salva no cache por 7 dias ────────────────────────────────
     const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null) || dcDebitoPdfBuf || dcMotorPdfBuf || vendaPdfBuf;
+
+    if (serviceId === 'intencao-venda-rj') {
+      const match = await correlateAtpveRjRecord(qRow.rows[0].id, body.placa);
+      // Se o cadastro não devolveu o PDF na hora (placa passou por verificação
+      // extra/LAUDOCAR), garante e notifica aqui mesmo — do contrário o bloco
+      // abaixo (pdfToSend) já cuida de cachear e mandar por WhatsApp.
+      if (match && !pdfToSend) {
+        await ensureAtpveRjPdfCached(qRow.rows[0].id, req.user.id, match, user.phone);
+      }
+    }
+    await notifyAdminNewQuery(user, service, price, params);
+
     if (pdfToSend || htmlBuf) {
       const dataToCache = pdfToSend || htmlBuf;
       const token       = crypto.randomBytes(32).toString('hex');
@@ -3077,7 +3102,8 @@ app.post('/api/query', requireAuth, async (req, res) => {
           const placa = (params?.placa || '').toUpperCase();
           const caption = `✅ *ATPV-e RJ pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
           const fileName = `ATPVE-RJ-${placa || 'doc'}.pdf`;
-          await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
+          await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(e =>
+            console.error('Erro ao enviar ATPV-e RJ por WhatsApp (cadastro síncrono):', e.message));
         }
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="${serviceId}-${Date.now()}.pdf"`);
