@@ -5337,6 +5337,75 @@ app.post('/api/admin/crlv-agendado-status-check', requireAuth, requireSuperAdmin
   }
 });
 
+// Varre as Intenções de Venda RJ recentes que ainda não têm PDF disponível
+// localmente (ex.: situação PROCESSANDO no momento do cadastro) e reconsulta cada
+// uma na Chekaki — mesmo problema do CRLV-e Agendado: o Cadastrar às vezes não
+// devolve o documento pronto na hora, e sem essa varredura periódica o usuário só
+// receberia o PDF/WhatsApp se clicasse manualmente em "Atualizar".
+async function runAtpveRjPendingCheck() {
+  const { rows } = await pool.query(
+    `SELECT q.id AS query_id, q.user_id, q.result_data, u.phone
+     FROM queries q JOIN users u ON u.id = q.user_id
+     WHERE q.service_id = 'intencao-venda-rj'
+       AND q.created_at > NOW() - INTERVAL '3 days'
+     ORDER BY q.created_at DESC LIMIT 200`
+  );
+  let checked = 0, notified = 0;
+  for (const row of rows) {
+    let meta = {};
+    try { meta = JSON.parse(row.result_data || '{}'); } catch {}
+    if (!meta.id || meta.pdf_disponivel === true) continue; // sem id vinculado, ou já tinha PDF (já deve estar cacheado)
+
+    checked++;
+    try {
+      const fresh = await fetchAtpveRjById(meta.id);
+      if (!fresh) continue;
+      const merged = { ...meta, ...fresh };
+      await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), row.query_id]);
+      if (fresh.pdf_disponivel) {
+        const before = await pool.query(
+          `SELECT 1 FROM pdf_cache WHERE query_id=$1 AND expires_at > NOW()`, [row.query_id]
+        );
+        if (!before.rows.length) {
+          await ensureAtpveRjPdfCached(row.query_id, row.user_id, merged, row.phone);
+          notified++;
+        }
+      }
+    } catch (e) {
+      console.error(`Erro ao checar ATPV-e RJ pendente [query ${row.query_id}]:`, e.message);
+    }
+    await new Promise(r => setTimeout(r, 400));
+  }
+  console.log(`✅ Checagem ATPV-e RJ pendentes: ${checked} verificados, ${notified} avisados`);
+  return { checked, notified, total: rows.length };
+}
+
+// ── GET /api/cron/atpve-rj-status (Vercel Cron) ───────────────────────────────
+app.get('/api/cron/atpve-rj-status', async (req, res) => {
+  const secret = process.env.CRON_SECRET || '';
+  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const result = await runAtpveRjPendingCheck();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Erro no cron atpve-rj-status:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/admin/atpve-rj-status-check (teste manual pelo admin) ──────────
+app.post('/api/admin/atpve-rj-status-check', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const result = await runAtpveRjPendingCheck();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Erro na checagem manual ATPV-e RJ:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Iniciar ───────────────────────────────────────────────────────────────────
 // require.main === module → true quando rodado diretamente (node server.js)
 //                         → false quando importado pelo Vercel

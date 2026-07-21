@@ -21,6 +21,10 @@
     {
       "path": "/api/cron/pix-reconcile",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/atpve-rj-status",
+      "schedule": "*/5 * * * *"
     }
   ]
 }
