@@ -1320,6 +1320,7 @@ async function callAtpveRjAction(req, res, action, postProcess) {
         if (fresh) {
           const resynced = postProcess ? postProcess({ ...meta, ...fresh }) : { ...meta, ...fresh };
           await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(resynced), qr.rows[0].id]);
+          await ensureAtpveRjPdfCached(qr.rows[0].id, req.user.id, resynced);
         }
       } catch (e) {
         console.error(`Erro ao resincronizar ATPV-e RJ [id ${atpveId}] após falha:`, e.message);
@@ -1352,6 +1353,9 @@ async function callAtpveRjAction(req, res, action, postProcess) {
       return res.json({ success: true, pdf_token: token, result: merged });
     }
 
+    // A ação em si não devolveu o PDF (ex.: registrar/atualizar responderam só
+    // JSON) — se a Chekaki sinaliza que o PDF já existe, busca e cacheia agora.
+    await ensureAtpveRjPdfCached(qr.rows[0].id, req.user.id, merged);
     res.json({ success: true, result: merged });
   } catch (err) {
     console.error(`Erro em ação ATPV-e RJ [${action}]:`, err.message);
@@ -2235,12 +2239,41 @@ async function handleMgInfosimplesAuto(req, res, service, params) {
   return res.json({ success: true, result, charged: price });
 }
 
+// Garante um PDF em cache válido (7 dias) pro pedido sempre que a Chekaki sinalizar
+// pdf_disponivel=true. O Cadastrar nem sempre devolve o PDF pronto na hora — placas
+// que passam por verificação extra (LAUDOCAR) respondem com JSON e só depois ficam
+// com pdf_disponivel=true — então sem isso o usuário ficava sem PDF nenhum até
+// clicar manualmente em "Atualizar". Não sobrescreve um cache ainda válido.
+async function ensureAtpveRjPdfCached(queryId, userId, fresh) {
+  if (!fresh?.pdf_disponivel || !fresh?.id) return;
+  try {
+    const existing = await pool.query(
+      `SELECT 1 FROM pdf_cache WHERE query_id=$1 AND expires_at > NOW()`, [queryId]
+    );
+    if (existing.rows.length) return;
+
+    const pr = await fetch(`${BASE_API_URL}/api/atpve-rj/${fresh.id}/pdf`, {
+      headers: { 'chaveAcesso': CHAVE_ACESSO },
+    });
+    if (!pr.ok || !(pr.headers.get('content-type') || '').includes('application/pdf')) return;
+    const buf = Buffer.from(await pr.arrayBuffer());
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+    await pool.query(
+      `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+      [queryId, userId, token, buf.toString('base64'), expiresAt]
+    );
+  } catch (e) {
+    console.error(`Erro ao cachear PDF do ATPV-e RJ [id ${fresh.id}]:`, e.message);
+  }
+}
+
 // Correlaciona a Intenção de Venda RJ recém-cadastrada com seu registro na Chekaki
 // (GET /api/atpve-rj — "Listar pedidos", endpoint que retorna os pedidos de toda a
 // chave de acesso), guardando id/protocolo/situação em queries.result_data — usado
 // pelo botão "Atualizar" e pela situação exibida em "Meus ATPV-e RJ". Best effort:
 // uma falha aqui nunca deve impedir a entrega do PDF já emitido.
-async function correlateAtpveRjRecord(queryId, placa) {
+async function correlateAtpveRjRecord(queryId, userId, placa) {
   try {
     const lr = await fetch(`${BASE_API_URL}/api/atpve-rj`, {
       headers: { 'chaveAcesso': CHAVE_ACESSO },
@@ -2254,6 +2287,7 @@ async function correlateAtpveRjRecord(queryId, placa) {
     const match = list.find(it => String(it.placa || '').toUpperCase() === alvo);
     if (match) {
       await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(match), queryId]);
+      await ensureAtpveRjPdfCached(queryId, userId, match);
     }
   } catch (e) {
     console.error('Erro ao correlacionar pedido ATPV-e RJ:', e.message);
@@ -3015,7 +3049,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
        htmlBuf ? 'html' : (isRealPdf || base64PdfBuf || dcDebitoPdfBuf || dcMotorPdfBuf || vendaPdfBuf) ? 'pdf' : 'json',
        resultData]
     );
-    if (serviceId === 'intencao-venda-rj') await correlateAtpveRjRecord(qRow.rows[0].id, body.placa);
+    if (serviceId === 'intencao-venda-rj') await correlateAtpveRjRecord(qRow.rows[0].id, req.user.id, body.placa);
     await notifyAdminNewQuery(user, service, price, params);
 
     // ── Envia PDF + salva no cache por 7 dias ────────────────────────────────
