@@ -1266,6 +1266,19 @@ app.get('/api/queries/:id/result', requireAuth, async (req, res) => {
   }
 });
 
+// Busca o estado canônico de um pedido ATPV-e RJ direto na Chekaki (GET
+// /api/atpve-rj/:id — "Consultar por ID"). É a fonte confiável de situação: a
+// resposta da ação (atualizar/registrar/excluir) nem sempre traz o campo
+// situacao_codigo/situacao_descricao atualizado, então toda ação re-consulta este
+// endpoint depois de rodar, em vez de confiar no corpo que a própria ação devolveu.
+async function fetchAtpveRjById(atpveId) {
+  const cr = await fetch(`${BASE_API_URL}/api/atpve-rj/${atpveId}`, {
+    headers: { 'chaveAcesso': CHAVE_ACESSO },
+  });
+  const cdata = await cr.json().catch(() => null);
+  return cdata?.pedido || null;
+}
+
 // ── Ações de ciclo de vida do ATPV-e RJ já cadastrado (Atualizar / Registrar no
 // DETRAN / Excluir) — botões de "Meus ATPV-e RJ", espelhando o próprio painel da
 // Chekaki (atpve-rj). Todas seguem o mesmo padrão: chamam POST /api/atpve-rj/:id/
@@ -1299,24 +1312,46 @@ async function callAtpveRjAction(req, res, action, postProcess) {
         const errData = await upRes.json().catch(() => null);
         errMsg = errData?.error || errData?.erro || errMsg;
       }
+      // A situação local pode estar desatualizada (ex.: pedido já foi registrado
+      // direto no painel da Chekaki) e por isso a ação falhou aqui — resincroniza
+      // antes de responder, para o botão certo aparecer na próxima renderização.
+      try {
+        const fresh = await fetchAtpveRjById(atpveId);
+        if (fresh) {
+          const resynced = postProcess ? postProcess({ ...meta, ...fresh }) : { ...meta, ...fresh };
+          await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(resynced), qr.rows[0].id]);
+        }
+      } catch (e) {
+        console.error(`Erro ao resincronizar ATPV-e RJ [id ${atpveId}] após falha:`, e.message);
+      }
       return res.status(upRes.status).json({ error: errMsg });
     }
 
-    if (ct.includes('application/pdf')) {
-      const buf = Buffer.from(await upRes.arrayBuffer());
+    let pdfBuf = null;
+    if (ct.includes('application/pdf')) pdfBuf = Buffer.from(await upRes.arrayBuffer());
+
+    // Independentemente do que a ação devolveu, busca o estado canônico do pedido
+    // pra manter result_data sempre fiel à Chekaki.
+    let merged = meta;
+    try {
+      const fresh = await fetchAtpveRjById(atpveId);
+      if (fresh) merged = { ...meta, ...fresh };
+    } catch (e) {
+      console.error(`Erro ao consultar situação atual do ATPV-e RJ [id ${atpveId}]:`, e.message);
+    }
+    if (postProcess) merged = postProcess(merged);
+    await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), qr.rows[0].id]);
+
+    if (pdfBuf) {
       const token = crypto.randomBytes(32).toString('hex');
       const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
       await pool.query(
         `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
-        [qr.rows[0].id, req.user.id, token, buf.toString('base64'), expiresAt]
+        [qr.rows[0].id, req.user.id, token, pdfBuf.toString('base64'), expiresAt]
       );
-      return res.json({ success: true, pdf_token: token });
+      return res.json({ success: true, pdf_token: token, result: merged });
     }
 
-    const data = await upRes.json().catch(() => null);
-    let merged = { ...meta, ...(data || {}) };
-    if (postProcess) merged = postProcess(merged);
-    await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), qr.rows[0].id]);
     res.json({ success: true, result: merged });
   } catch (err) {
     console.error(`Erro em ação ATPV-e RJ [${action}]:`, err.message);
