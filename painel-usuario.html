@@ -1404,10 +1404,13 @@ function renderMeusAtpveRj() {
     const comprador   = p.comprador_nome || '';
     const situacao    = meta.situacao || meta.status || meta.situacao_descricao || '';
     const protocolo   = meta.protocolo || '';
-    // "Registrar" e "Excluir" só fazem sentido enquanto o pedido ainda está no
-    // estágio inicial (situacao_codigo '1' = CADASTRADA) — depois disso a Chekaki
-    // some com essas ações no próprio painel dela, então escondemos também.
-    const podeRegistrarOuExcluir = String(meta.situacao_codigo || '') === '1';
+    // "Registrar" e "Excluir" continuam válidos em qualquer estágio anterior ao
+    // final — não só na CADASTRADA (1) mas também na PROCESSANDO (3): "Registrar"
+    // consegue avançar um pedido travado em PROCESSANDO até COMUNICADA (confirmado
+    // testando direto no painel da Chekaki). Só escondemos quando já está
+    // COMUNICADA (5) ou foi excluído — aí sim a Chekaki não oferece mais essas ações.
+    const situacaoCodigo = String(meta.situacao_codigo || '');
+    const podeRegistrarOuExcluir = !!meta.id && situacaoCodigo !== '5' && situacaoCodigo !== 'excluida';
     return `
     <div class="py-2 border-b border-gray-50 last:border-0">
       <div class="flex items-center justify-between gap-3 flex-wrap">
