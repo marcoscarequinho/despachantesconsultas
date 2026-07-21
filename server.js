@@ -2365,7 +2365,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       const p = params || {};
       const requiredFields = [
         'placa', 'renavam', 'ano_fabricacao', 'ano_modelo', 'chassi', 'kilometragem',
-        'crv_numero', 'crv_numero_via', 'crv_uf_emissao', 'crv_data_emissao', 'crv_codigo_seguranca',
+        'crv_numero', 'crv_numero_via', 'crv_uf_emissao', 'crv_data_emissao',
         'vendedor_tipo_pessoa', 'vendedor_documento', 'vendedor_nome', 'vendedor_email',
         'venda_cidade', 'venda_valor', 'venda_data',
         'comprador_tipo_pessoa', 'comprador_documento', 'comprador_nome', 'comprador_email',
@@ -2388,7 +2388,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
         crv_numero_via: String(p.crv_numero_via).trim(),
         crv_uf_emissao: String(p.crv_uf_emissao).toUpperCase().trim(),
         crv_data_emissao: String(p.crv_data_emissao).trim(),
-        crv_codigo_seguranca: String(p.crv_codigo_seguranca).replace(/\D/g, ''),
+        crv_codigo_seguranca: String(p.crv_codigo_seguranca || '').replace(/\D/g, ''),
         vendedor_tipo_pessoa: String(p.vendedor_tipo_pessoa).toUpperCase().trim(),
         vendedor_documento: String(p.vendedor_documento).replace(/\D/g, ''),
         vendedor_nome: String(p.vendedor_nome).trim().toUpperCase(),
@@ -2897,6 +2897,13 @@ app.post('/api/query', requireAuth, async (req, res) => {
           const placa  = (params?.placa || '').toUpperCase();
           const caption = `✅ *CRLV-e ${ufCode} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
           const fileName = `CRLV-e-${ufCode}-${placa || 'doc'}.pdf`;
+          await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
+        }
+        // Envia PDF via WhatsApp para Intenção de Venda RJ (ATPV-e instantâneo)
+        if (serviceId === 'intencao-venda-rj' && user.phone) {
+          const placa = (params?.placa || '').toUpperCase();
+          const caption = `✅ *ATPV-e RJ pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
+          const fileName = `ATPVE-RJ-${placa || 'doc'}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
         }
         res.setHeader('Content-Type', 'application/pdf');
