@@ -1223,6 +1223,7 @@ app.get('/api/queries', requireAuth, async (req, res) => {
     const r = await pool.query(
       `SELECT q.id, q.service_id, q.service_name, q.params, q.status, q.amount,
               q.result_type, q.created_at,
+              CASE WHEN q.service_id = 'intencao-venda-rj' THEN q.result_data ELSE NULL END AS atpve_rj_meta,
               pc.token      AS pdf_token,
               pc.expires_at AS pdf_expires
        FROM queries q
@@ -1261,6 +1262,61 @@ app.get('/api/queries/:id/result', requireAuth, async (req, res) => {
       result: JSON.parse(row.result_data),
     });
   } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── POST /api/queries/:id/atpve-rj-atualizar (botão "Atualizar" em "Meus ATPV-e RJ") ──
+// Chama POST /api/atpve-rj/:id/atualizar na Chekaki para atualizar a situação/PDF de
+// um pedido já cadastrado. Sem custo adicional para o usuário (não debita créditos).
+app.post('/api/queries/:id/atpve-rj-atualizar', requireAuth, async (req, res) => {
+  try {
+    const qr = await pool.query(
+      `SELECT id, service_id, result_data FROM queries WHERE id=$1 AND user_id=$2`,
+      [req.params.id, req.user.id]
+    );
+    if (!qr.rows.length || qr.rows[0].service_id !== 'intencao-venda-rj')
+      return res.status(404).json({ error: 'Pedido não encontrado.' });
+
+    let meta = {};
+    try { meta = JSON.parse(qr.rows[0].result_data || '{}'); } catch {}
+    const atpveId = meta.id;
+    if (!atpveId)
+      return res.status(400).json({ error: 'Este pedido ainda não tem um identificador da Chekaki vinculado. Tente novamente em alguns instantes.' });
+
+    const upRes = await fetch(`${BASE_API_URL}/api/atpve-rj/${atpveId}/atualizar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO },
+      body: JSON.stringify({}),
+    });
+    const ct = upRes.headers.get('content-type') || '';
+
+    if (!upRes.ok) {
+      let errMsg = `Erro HTTP ${upRes.status}.`;
+      if (ct.includes('application/json')) {
+        const errData = await upRes.json().catch(() => null);
+        errMsg = errData?.error || errData?.erro || errMsg;
+      }
+      return res.status(upRes.status).json({ error: errMsg });
+    }
+
+    if (ct.includes('application/pdf')) {
+      const buf = Buffer.from(await upRes.arrayBuffer());
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qr.rows[0].id, req.user.id, token, buf.toString('base64'), expiresAt]
+      );
+      return res.json({ success: true, pdf_token: token });
+    }
+
+    const data = await upRes.json().catch(() => null);
+    const merged = { ...meta, ...(data || {}) };
+    await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), qr.rows[0].id]);
+    res.json({ success: true, result: merged });
+  } catch (err) {
+    console.error('Erro ao atualizar ATPV-e RJ:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
   }
 });
@@ -2122,6 +2178,31 @@ async function handleMgInfosimplesAuto(req, res, service, params) {
   return res.json({ success: true, result, charged: price });
 }
 
+// Correlaciona a Intenção de Venda RJ recém-cadastrada com seu registro na Chekaki
+// (GET /api/atpve-rj — "Listar pedidos", endpoint que retorna os pedidos de toda a
+// chave de acesso), guardando id/protocolo/situação em queries.result_data — usado
+// pelo botão "Atualizar" e pela situação exibida em "Meus ATPV-e RJ". Best effort:
+// uma falha aqui nunca deve impedir a entrega do PDF já emitido.
+async function correlateAtpveRjRecord(queryId, placa) {
+  try {
+    const lr = await fetch(`${BASE_API_URL}/api/atpve-rj`, {
+      headers: { 'chaveAcesso': CHAVE_ACESSO },
+    });
+    const ldata = await lr.json().catch(() => null);
+    const list = Array.isArray(ldata) ? ldata
+      : Array.isArray(ldata?.data) ? ldata.data
+      : Array.isArray(ldata?.pedidos) ? ldata.pedidos
+      : [];
+    const alvo  = String(placa || '').toUpperCase();
+    const match = list.find(it => String(it.placa || '').toUpperCase() === alvo);
+    if (match) {
+      await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(match), queryId]);
+    }
+  } catch (e) {
+    console.error('Erro ao correlacionar pedido ATPV-e RJ:', e.message);
+  }
+}
+
 // ── POST /api/query ───────────────────────────────────────────────────────────
 app.post('/api/query', requireAuth, async (req, res) => {
   const { serviceId, params } = req.body;
@@ -2877,6 +2958,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
        htmlBuf ? 'html' : (isRealPdf || base64PdfBuf || dcDebitoPdfBuf || dcMotorPdfBuf || vendaPdfBuf) ? 'pdf' : 'json',
        resultData]
     );
+    if (serviceId === 'intencao-venda-rj') await correlateAtpveRjRecord(qRow.rows[0].id, body.placa);
     await notifyAdminNewQuery(user, service, price, params);
 
     // ── Envia PDF + salva no cache por 7 dias ────────────────────────────────
