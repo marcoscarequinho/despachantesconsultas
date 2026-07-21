@@ -345,7 +345,7 @@ const SERVICES = [
   // via API Infosimples (ver MG_AUTO_SERVICES / handleMgInfosimplesAuto) ──
   { id:'intencao-venda-rj', name:'Intenção de Venda RJ', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'intencao_venda', icon:'📝', uf:'rj' },
   { id:'intencao-venda-mg', name:'Intenção de Venda MG', group:'Intenção de Venda (ATPVE)', basePrice:50.00, noMarkup:true, inputType:'intencao_venda_mg', icon:'📝', uf:'mg' },
-  { id:'atpve-mg', name:'Emitir ATPV-e MG', group:'Intenção de Venda (ATPVE)', basePrice:50.00, noMarkup:true, inputType:'atpve_mg', icon:'📄', uf:'mg' },
+  { id:'atpve-mg', name:'Emitir ATPV-e MG', group:'Intenção de Venda (ATPVE)', basePrice:10.00, noMarkup:true, inputType:'atpve_mg', icon:'📄', uf:'mg' },
 ];
 
 // Serviços desta categoria (mais a Reemissão CRLV-e RJ e a Intenção de Venda RJ)
