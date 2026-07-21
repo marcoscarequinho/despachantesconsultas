@@ -1404,6 +1404,10 @@ function renderMeusAtpveRj() {
     const comprador   = p.comprador_nome || '';
     const situacao    = meta.situacao || meta.status || meta.situacao_descricao || '';
     const protocolo   = meta.protocolo || '';
+    // "Registrar" e "Excluir" só fazem sentido enquanto o pedido ainda está no
+    // estágio inicial (situacao_codigo '1' = CADASTRADA) — depois disso a Chekaki
+    // some com essas ações no próprio painel dela, então escondemos também.
+    const podeRegistrarOuExcluir = String(meta.situacao_codigo || '') === '1';
     return `
     <div class="py-2 border-b border-gray-50 last:border-0">
       <div class="flex items-center justify-between gap-3 flex-wrap">
@@ -1412,9 +1416,11 @@ function renderMeusAtpveRj() {
           <div class="text-xs text-gray-400">${fmtDate(q.created_at)}${protocolo ? ' · Protocolo: ' + escapeHtml(protocolo) : ''}</div>
           ${situacao ? `<div class="text-xs text-blue-600 mt-0.5">${escapeHtml(String(situacao))}</div>` : ''}
         </div>
-        <div class="text-right flex-shrink-0 flex items-center gap-2">
+        <div class="text-right flex-shrink-0 flex items-center gap-2 flex-wrap justify-end">
           <div class="text-sm font-semibold text-red-500">-${fmt(q.amount)}</div>
+          ${podeRegistrarOuExcluir ? `<button type="button" onclick="registrarAtpveRj(${q.id}, this)" class="text-xs bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded font-medium">✅ Registrar</button>` : ''}
           ${meta.id ? `<button type="button" onclick="atualizarAtpveRj(${q.id}, this)" class="text-xs bg-gray-600 hover:bg-gray-700 text-white px-2 py-1 rounded font-medium">🔄 Atualizar</button>` : ''}
+          ${podeRegistrarOuExcluir ? `<button type="button" onclick="excluirAtpveRj(${q.id}, this)" class="text-xs bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded font-medium">🗑️ Excluir</button>` : ''}
           ${q.pdf_token
             ? `<a href="/api/pdf/${q.pdf_token}" target="_blank" class="text-xs bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded font-medium">📥 PDF</a>`
             : `<span class="text-xs text-gray-400">PDF expirado</span>`}
@@ -1424,25 +1430,39 @@ function renderMeusAtpveRj() {
   }).join('');
 }
 
-async function atualizarAtpveRj(queryId, btnEl) {
+async function runAtpveRjAction(endpoint, queryId, btnEl, loadingText, successMsg) {
   const originalText = btnEl.textContent;
   btnEl.disabled = true;
-  btnEl.textContent = 'Atualizando...';
+  btnEl.textContent = loadingText;
   try {
-    const r = await fetch(`/api/queries/${queryId}/atpve-rj-atualizar`, { method: 'POST' });
+    const r = await fetch(`/api/queries/${queryId}/${endpoint}`, { method: 'POST' });
     const d = await r.json();
     if (!r.ok) {
-      toast(d.error || 'Erro ao atualizar.', 'error');
+      toast(d.error || 'Erro ao processar.', 'error');
       return;
     }
-    toast('Pedido atualizado!');
+    toast(successMsg);
     await loadQueries();
   } catch {
-    toast('Erro de conexão ao atualizar.', 'error');
+    toast('Erro de conexão.', 'error');
   } finally {
     btnEl.disabled = false;
     btnEl.textContent = originalText;
   }
+}
+
+function atualizarAtpveRj(queryId, btnEl) {
+  runAtpveRjAction('atpve-rj-atualizar', queryId, btnEl, 'Atualizando...', 'Pedido atualizado!');
+}
+
+function registrarAtpveRj(queryId, btnEl) {
+  if (!confirm('Confirma o registro deste ATPV-e no DETRAN? Essa ação não pode ser desfeita.')) return;
+  runAtpveRjAction('atpve-rj-registrar', queryId, btnEl, 'Registrando...', 'ATPV-e registrado no DETRAN!');
+}
+
+function excluirAtpveRj(queryId, btnEl) {
+  if (!confirm('Tem certeza que deseja excluir este pedido de ATPV-e? Essa ação não pode ser desfeita.')) return;
+  runAtpveRjAction('atpve-rj-excluir', queryId, btnEl, 'Excluindo...', 'Pedido excluído.');
 }
 
 async function submitIntencao(e) {

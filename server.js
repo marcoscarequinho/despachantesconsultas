@@ -1266,10 +1266,12 @@ app.get('/api/queries/:id/result', requireAuth, async (req, res) => {
   }
 });
 
-// ── POST /api/queries/:id/atpve-rj-atualizar (botão "Atualizar" em "Meus ATPV-e RJ") ──
-// Chama POST /api/atpve-rj/:id/atualizar na Chekaki para atualizar a situação/PDF de
-// um pedido já cadastrado. Sem custo adicional para o usuário (não debita créditos).
-app.post('/api/queries/:id/atpve-rj-atualizar', requireAuth, async (req, res) => {
+// ── Ações de ciclo de vida do ATPV-e RJ já cadastrado (Atualizar / Registrar no
+// DETRAN / Excluir) — botões de "Meus ATPV-e RJ", espelhando o próprio painel da
+// Chekaki (atpve-rj). Todas seguem o mesmo padrão: chamam POST /api/atpve-rj/:id/
+// <ação> usando o id que guardamos em result_data (ver correlateAtpveRjRecord).
+// Sem custo adicional para o usuário — nenhuma delas debita créditos.
+async function callAtpveRjAction(req, res, action, postProcess) {
   try {
     const qr = await pool.query(
       `SELECT id, service_id, result_data FROM queries WHERE id=$1 AND user_id=$2`,
@@ -1284,7 +1286,7 @@ app.post('/api/queries/:id/atpve-rj-atualizar', requireAuth, async (req, res) =>
     if (!atpveId)
       return res.status(400).json({ error: 'Este pedido ainda não tem um identificador da Chekaki vinculado. Tente novamente em alguns instantes.' });
 
-    const upRes = await fetch(`${BASE_API_URL}/api/atpve-rj/${atpveId}/atualizar`, {
+    const upRes = await fetch(`${BASE_API_URL}/api/atpve-rj/${atpveId}/${action}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO },
       body: JSON.stringify({}),
@@ -1312,14 +1314,34 @@ app.post('/api/queries/:id/atpve-rj-atualizar', requireAuth, async (req, res) =>
     }
 
     const data = await upRes.json().catch(() => null);
-    const merged = { ...meta, ...(data || {}) };
+    let merged = { ...meta, ...(data || {}) };
+    if (postProcess) merged = postProcess(merged);
     await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), qr.rows[0].id]);
     res.json({ success: true, result: merged });
   } catch (err) {
-    console.error('Erro ao atualizar ATPV-e RJ:', err.message);
+    console.error(`Erro em ação ATPV-e RJ [${action}]:`, err.message);
     res.status(500).json({ error: 'Erro interno.' });
   }
-});
+}
+
+// Botão "Atualizar" — atualiza situação/PDF do pedido.
+app.post('/api/queries/:id/atpve-rj-atualizar', requireAuth, (req, res) =>
+  callAtpveRjAction(req, res, 'atualizar'));
+
+// Botão "Registrar" — efetiva o registro no DETRAN (some com o passo manual que o
+// usuário precisa confirmar; não é feito automaticamente no cadastro).
+app.post('/api/queries/:id/atpve-rj-registrar', requireAuth, (req, res) =>
+  callAtpveRjAction(req, res, 'registrar'));
+
+// Botão "Excluir" — cancela o pedido na Chekaki. Marca a situação localmente como
+// excluída mesmo que a resposta da Chekaki não devolva um campo de situação claro,
+// para o botão sumir da lista de qualquer forma.
+app.post('/api/queries/:id/atpve-rj-excluir', requireAuth, (req, res) =>
+  callAtpveRjAction(req, res, 'excluir', merged => ({
+    ...merged,
+    situacao_codigo: 'excluida',
+    situacao_descricao: merged.situacao_descricao || 'EXCLUÍDA',
+  })));
 
 // ── GET /api/pdf/:token ───────────────────────────────────────────────────────
 app.get('/api/pdf/:token', requireAuth, async (req, res) => {
