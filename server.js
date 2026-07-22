@@ -1227,6 +1227,8 @@ app.get('/api/queries', requireAuth, async (req, res) => {
               q.result_type, q.created_at,
               CASE WHEN q.service_id IN ('intencao-venda-rj','intencao-venda-sp','intencao-venda-ms')
                    THEN q.result_data ELSE NULL END AS atpve_meta,
+              CASE WHEN q.service_id = 'inserir-comunicacao-venda'
+                   THEN q.result_data ELSE NULL END AS comunicacao_venda_meta,
               pc.token      AS pdf_token,
               pc.expires_at AS pdf_expires
        FROM queries q
@@ -2322,6 +2324,50 @@ async function correlateAtpveRecord(uf, queryId, placa) {
   }
 }
 
+// Botão "Transmitir" de "Meus Comunicados de Venda" — finaliza na Chekaki uma
+// comunicação já inserida (situação inicial "importado" → "comunicado"; sem
+// transmitir, a comunicação de venda não é considerada concluída). Usa o "id"
+// salvo em result_data no momento do Inserir Comunicação Venda (ver resultData
+// em /api/query). Sem custo adicional: a cobrança já ocorreu no Inserir.
+app.post('/api/queries/:id/comunicacao-venda-transmitir', requireAuth, async (req, res) => {
+  try {
+    const qr = await pool.query(
+      `SELECT id, service_id, result_data FROM queries WHERE id=$1 AND user_id=$2`,
+      [req.params.id, req.user.id]
+    );
+    if (!qr.rows.length || qr.rows[0].service_id !== 'inserir-comunicacao-venda')
+      return res.status(404).json({ error: 'Comunicação de venda não encontrada.' });
+
+    let meta = {};
+    try { meta = JSON.parse(qr.rows[0].result_data || '{}'); } catch {}
+    const comunicacaoId = meta.id;
+    if (!comunicacaoId)
+      return res.status(400).json({ error: 'Esta comunicação ainda não tem um identificador da Chekaki vinculado. Tente novamente em alguns instantes.' });
+
+    const upRes = await fetch(`${BASE_API_URL}/comunicacao-venda/transmitir/${comunicacaoId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO },
+      body: JSON.stringify({}),
+    });
+    const upData = await upRes.json().catch(() => null);
+
+    if (!upRes.ok) {
+      const errMsg = upData?.error || upData?.erro || `Erro HTTP ${upRes.status}.`;
+      return res.status(upRes.status).json({ error: errMsg });
+    }
+
+    // O nome do campo de situação na resposta da Chekaki não é documentado/estável
+    // o suficiente para o painel confiar nele para esconder o botão "Transmitir" —
+    // marca um flag próprio, garantido, para não permitir transmitir de novo.
+    const merged = { ...meta, ...(upData || {}), _transmitido: true };
+    await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), qr.rows[0].id]);
+    res.json({ success: true, result: merged });
+  } catch (err) {
+    console.error('Erro ao transmitir comunicação de venda:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
 // ── POST /api/query ───────────────────────────────────────────────────────────
 app.post('/api/query', requireAuth, async (req, res) => {
   const { serviceId, params } = req.body;
@@ -3070,7 +3116,12 @@ app.post('/api/query', requireAuth, async (req, res) => {
     );
     // Guarda o corpo JSON retornado (quando não é PDF/HTML) para o histórico poder
     // reexibir o mesmo resultado depois, sem precisar refazer (e recobrar) a consulta.
-    const resultData = (willBePdfOrHtml || vendaPdfBuf) ? null : JSON.stringify(genericParseOk ? genericData : { resposta: bodyStr });
+    // Exceção: Inserir Comunicação Venda vira PDF (vendaPdfBuf), mas o JSON de origem
+    // (com o "id" da Chekaki) precisa ficar salvo mesmo assim — é o que habilita o
+    // botão "Transmitir" em "Meus Comunicados de Venda" sem precisar reabrir o PDF.
+    const resultData = vendaPdfBuf ? JSON.stringify(genericData)
+      : willBePdfOrHtml ? null
+      : JSON.stringify(genericParseOk ? genericData : { resposta: bodyStr });
     const qRow = await pool.query(
       `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type, result_data)
        VALUES ($1,$2,$3,$4,'success',$5,$6,$7,$8) RETURNING id`,

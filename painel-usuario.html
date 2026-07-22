@@ -445,6 +445,15 @@
           🔄 Nova Consulta
         </button>
       </div>
+
+      <!-- Meus Comunicados de Venda -->
+      <div class="card">
+        <h3 class="font-semibold text-gray-800 mb-1">Meus Comunicados de Venda</h3>
+        <p class="text-xs text-gray-500 mb-4">Comunicações de venda inseridas nesta conta. Clique em "Transmitir" para finalizar na Chekaki — sem isso a comunicação não é concluída.</p>
+        <div id="meus-comunicados-venda-list" class="space-y-1">
+          <div class="text-center py-6 text-gray-400 text-sm">Nenhuma comunicação de venda inserida ainda.</div>
+        </div>
+      </div>
     </section>
 
     <!-- ── OPÇÃO 2 NOVA CONSULTA (API Datacube) ───────────────────────────── -->
@@ -1666,7 +1675,54 @@ async function loadQueries() {
     allQueries = d.queries || [];
     renderRecentQueries();
     renderMeusAtpve();
+    renderMeusComunicadosVenda();
   } catch {}
+}
+
+// "Meus Comunicados de Venda" — lista as próprias inserções de Comunicação de
+// Venda e permite transmitir cada uma (finalização exigida na Chekaki; sem isso
+// a comunicação fica só "importada", não "comunicada"). Sem custo adicional: a
+// cobrança já ocorreu no Inserir Comunicação Venda. O "id" da Chekaki vem de
+// comunicacao_venda_meta (ver GET /api/queries), salvo no momento da inserção.
+function renderMeusComunicadosVenda() {
+  const wrap = document.getElementById('meus-comunicados-venda-list');
+  if (!wrap) return;
+  const list = allQueries.filter(q => q.service_id === 'inserir-comunicacao-venda');
+  if (!list.length) {
+    wrap.innerHTML = `<div class="text-center py-6 text-gray-400 text-sm">Nenhuma comunicação de venda inserida ainda.</div>`;
+    return;
+  }
+  wrap.innerHTML = list.map(q => {
+    let p = {};
+    try { p = JSON.parse(q.params || '{}'); } catch {}
+    let meta = {};
+    try { meta = JSON.parse(q.comunicacao_venda_meta || '{}'); } catch {}
+    const placa      = p?.veiculo?.placa || '—';
+    const comprador  = p?.comprador?.nome || '';
+    const jaTransmitido = !!meta._transmitido;
+    return `
+    <div class="py-2 border-b border-gray-50 last:border-0">
+      <div class="flex items-center justify-between gap-3 flex-wrap">
+        <div class="min-w-0">
+          <div class="text-sm font-medium text-gray-800 truncate">${escapeHtml(placa)}${comprador ? ' · ' + escapeHtml(comprador) : ''}</div>
+          <div class="text-xs text-gray-400">${fmtDate(q.created_at)}</div>
+          ${jaTransmitido ? `<div class="text-xs text-green-600 mt-0.5">✅ Transmitido</div>` : ''}
+        </div>
+        <div class="text-right flex-shrink-0 flex items-center gap-2 flex-wrap justify-end">
+          <div class="text-sm font-semibold text-red-500">-${fmt(q.amount)}</div>
+          ${!jaTransmitido && meta.id ? `<button type="button" onclick="transmitirComunicacaoVenda(${q.id}, this)" class="text-xs bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded font-medium">📤 Transmitir</button>` : ''}
+          ${q.pdf_token
+            ? `<a href="/api/pdf/${q.pdf_token}" target="_blank" class="text-xs bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded font-medium">📥 PDF</a>`
+            : `<span class="text-xs text-gray-400">PDF expirado</span>`}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function transmitirComunicacaoVenda(queryId, btnEl) {
+  if (!confirm('Confirma a transmissão desta comunicação de venda? Depois de transmitida ela não pode ser desfeita por aqui.')) return;
+  runAtpveAction('comunicacao-venda-transmitir', queryId, btnEl, 'Transmitindo...', 'Comunicação de venda transmitida com sucesso!');
 }
 
 function renderRecentQueries() {
