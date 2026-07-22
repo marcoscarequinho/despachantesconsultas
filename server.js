@@ -5148,6 +5148,8 @@ Precisa puxar a capivara do carro ou emitir a ATPV-e? Aqui é vapt-vupt:
 
 🔎 Nossos Serviços:
 
+🛑Agora temos Intenção de venda para os seguintes Estados, RJ,SP,MG e MS
+
 🛑Numero do CRV Antigo, das UFs: RJ, SP, MG, CE, ES, BA, RN, PE, PB, e outros, total de 21 UFs veja em seu painel🛑
 
 Galera, minha plataforma está com preços melhores do que a TDI, cod segurança 9,10, reemissão de ATPVE 18,90, CRLV-e do Rio 14,00, reemissão CRVL-e Rio 110,00, o kit de códigos da ATPVE quando tem comunicação de venda, 35,00.
@@ -5157,7 +5159,7 @@ Olá! Quero te indicar a plataforma DESPACHANTES CONSULTAS — consultas veicula
 
 👉 https://www.despachantesconsultas.com.br/cadastrar?ref=MARCOTSN0
 
-✅ Sem mensalidade. Pague só pelo que usar`;
+✅ Sem mensalidade. Pague só pelo que usar.`;
 
 // Envia broadcast apenas para grupos — envio para contatos individuais foi
 // desativado por estar sendo denunciado como spam no WhatsApp.
