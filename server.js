@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
 const PDFDocument = require('pdfkit');
 
@@ -5209,28 +5210,18 @@ app.get('/admin', requireAuth, async (req, res) => {
   }
 });
 
-// ── Broadcast WhatsApp (disparo diário automático) ───────────────────────────
+// ── Broadcast WhatsApp (disparo automático a cada 2 dias) ────────────────────
+const BROADCAST_IMAGE_PATH = path.join(__dirname, 'promo-atpve.png');
 const BROADCAST_MESSAGE =
-`🛑ATENÇÃO CADASTRE COM SEU NUMERO WHATSAPP CORRETO PARA RECEBER AS NOTIFICAÇÕES DO SITE, SE NAO TIVER RECEBENDO AS NOTIFICAÇÕES, VÁ EM PERFIL E ALTERE SEU NUMERO.
-
-Precisa puxar a capivara do carro ou emitir a ATPV-e? Aqui é vapt-vupt:
-✅ FAÇA SEU CADASTRO: ✅ PAGAMENTO INSTANTÂNEO: PIX QR, copia e Cola, na tela. ✅ Faça Carga via PIX no valor que quiser.
-
-
+`🛑ATENÇÃO CADASTRE COM SEU NUMERO WHATSAPP CORRETO PARA RECEBER AS NOTIFICAÇÕES
+✅ FAÇA SEU CADASTRO:
+✅ PAGAMENTO INSTANTÂNEO: PIX: QRcod, copia e Cola, na tela.
+✅ Faça Recarga via PIX no valor que quiser.
 🔎 Nossos Serviços:
-
-🛑Agora temos Intenção de venda para os seguintes Estados, RJ,SP,MG e MS
-
-🛑Numero do CRV Antigo, das UFs: RJ, SP, MG, CE, ES, BA, RN, PE, PB, e outros, total de 21 UFs veja em seu painel🛑
-
-Galera, minha plataforma está com preços melhores do que a TDI, cod segurança 9,10, reemissão de ATPVE 18,90, CRLV-e do Rio 14,00, reemissão CRVL-e Rio 110,00, o kit de códigos da ATPVE quando tem comunicação de venda, 35,00.
-Olá! Quero te indicar a plataforma DESPACHANTES CONSULTAS — consultas veiculares e CRLV-e digital para profissionais.
-
-🎁 Cadastre-se pelo meu link e ganhe R$ 10,00 de crédito grátis para usar na plataforma!
-
-👉 https://www.despachantesconsultas.com.br/cadastrar?ref=MARCOTSN0
-
-✅ Sem mensalidade. Pague só pelo que usar.`;
+🛑Agora temos Intenção de venda para os seguintes Estados, RJ, SP, MG e MS
+🛑Numero do CRV Antigo, dos Estados: RJ, SP, MG, CE, ES, BA, RN, PE, PB, e outros, total de 21 Estados veja em seu painel🛑
+✅ Sem mensalidade. Pague só pelo que usar.
+👉 https://www.despachantesconsultas.com.br`;
 
 // Envia broadcast apenas para grupos — envio para contatos individuais foi
 // desativado por estar sendo denunciado como spam no WhatsApp.
@@ -5267,20 +5258,20 @@ async function fetchZApiDestinations() {
   return [...destinations.values()];
 }
 
-// Envio para broadcast — sempre para IDs de grupo ("<id>-group")
-async function sendBroadcastMessage(dest, message) {
+// Envio para broadcast — sempre para IDs de grupo ("<id>-group"), imagem + legenda
+async function sendBroadcastImage(dest, base64Png, caption) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !dest) return;
   const phone = String(dest);
   try {
     const r = await fetch(
-      `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/send-text`,
+      `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/send-image`,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...(ZAPI_CLIENT_TOKEN ? { 'Client-Token': ZAPI_CLIENT_TOKEN } : {}),
         },
-        body: JSON.stringify({ phone, message }),
+        body: JSON.stringify({ phone, image: `data:image/png;base64,${base64Png}`, caption }),
       }
     );
     const d = await r.json().catch(() => ({}));
@@ -5296,10 +5287,11 @@ async function runWhatsAppBroadcast() {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN) throw new Error('Z-API não configurada');
   const dests = await fetchZApiDestinations();
   console.log(`📢 Broadcast: ${dests.length} grupos`);
+  const imageBase64 = fs.readFileSync(BROADCAST_IMAGE_PATH).toString('base64');
   let sent = 0, failed = 0;
   for (const dest of dests) {
     try {
-      await sendBroadcastMessage(dest, BROADCAST_MESSAGE);
+      await sendBroadcastImage(dest, imageBase64, BROADCAST_MESSAGE);
       sent++;
     } catch {
       failed++;
