@@ -1308,6 +1308,15 @@ async function callAtpveAction(req, res, uf, action, postProcess) {
     if (!atpveId)
       return res.status(400).json({ error: 'Este pedido ainda não tem um identificador da Chekaki vinculado. Tente novamente em alguns instantes.' });
 
+    // "Registrar" efetiva o ATPV-e no DETRAN — é o botão que finaliza o pedido, então
+    // dispara o WhatsApp assim que o PDF ficar disponível (ao contrário de Atualizar/
+    // Excluir, que não notificam). "Atualizar"/"Excluir" não buscam o telefone.
+    let notifyPhone = null;
+    if (action === 'registrar') {
+      const ur = await pool.query('SELECT phone FROM users WHERE id=$1', [req.user.id]);
+      notifyPhone = ur.rows[0]?.phone || null;
+    }
+
     const upRes = await fetch(`${BASE_API_URL}/api/atpve-${uf}/${atpveId}/${action}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO },
@@ -1329,7 +1338,7 @@ async function callAtpveAction(req, res, uf, action, postProcess) {
         if (fresh) {
           const resynced = postProcess ? postProcess({ ...meta, ...fresh }) : { ...meta, ...fresh };
           await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(resynced), qr.rows[0].id]);
-          await ensureAtpvePdfCached(uf, qr.rows[0].id, req.user.id, resynced);
+          await ensureAtpvePdfCached(uf, qr.rows[0].id, req.user.id, resynced, notifyPhone);
         }
       } catch (e) {
         console.error(`Erro ao resincronizar ATPV-e ${uf.toUpperCase()} [id ${atpveId}] após falha:`, e.message);
@@ -1359,12 +1368,23 @@ async function callAtpveAction(req, res, uf, action, postProcess) {
         `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
         [qr.rows[0].id, req.user.id, token, pdfBuf.toString('base64'), expiresAt]
       );
+      // Diferente do fluxo via ensureAtpvePdfCached, aqui o PDF já veio pronto na
+      // resposta da própria ação — envia direto por WhatsApp (só quando é o botão
+      // "Registrar", que é quem tem notifyPhone preenchido).
+      if (notifyPhone) {
+        const ufUpper = uf.toUpperCase();
+        const placa = (merged.placa || '').toUpperCase();
+        const caption = `✅ *ATPV-e ${ufUpper} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
+        const fileName = `ATPVE-${ufUpper}-${placa || 'doc'}.pdf`;
+        await sendWhatsAppPdf(notifyPhone, pdfBuf, fileName, caption).catch(e =>
+          console.error(`Erro ao enviar ATPV-e ${ufUpper} por WhatsApp (ação ${action}):`, e.message));
+      }
       return res.json({ success: true, pdf_token: token, result: merged });
     }
 
     // A ação em si não devolveu o PDF (ex.: registrar/atualizar responderam só
     // JSON) — se a Chekaki sinaliza que o PDF já existe, busca e cacheia agora.
-    await ensureAtpvePdfCached(uf, qr.rows[0].id, req.user.id, merged);
+    await ensureAtpvePdfCached(uf, qr.rows[0].id, req.user.id, merged, notifyPhone);
     res.json({ success: true, result: merged });
   } catch (err) {
     console.error(`Erro em ação ATPV-e ${uf.toUpperCase()} [${action}]:`, err.message);
