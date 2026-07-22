@@ -1309,11 +1309,15 @@ async function callAtpveAction(req, res, uf, action, postProcess) {
     if (!atpveId)
       return res.status(400).json({ error: 'Este pedido ainda não tem um identificador da Chekaki vinculado. Tente novamente em alguns instantes.' });
 
-    // "Registrar" efetiva o ATPV-e no DETRAN — é o botão que finaliza o pedido, então
-    // dispara o WhatsApp assim que o PDF ficar disponível (ao contrário de Atualizar/
-    // Excluir, que não notificam). "Atualizar"/"Excluir" não buscam o telefone.
+    // "Registrar" e "Atualizar" podem ser quem efetivamente finaliza o pedido no
+    // DETRAN — se o clique em "Registrar" falhar (ex.: pedido ainda PROCESSANDO na
+    // Chekaki) e o usuário só conseguir avançar depois clicando em "Atualizar", é o
+    // Atualizar quem vai detectar o PDF final disponível pela primeira vez. Por isso
+    // ambos buscam o telefone; quem decide se notifica de fato é ensureAtpvePdfCached,
+    // que só envia na primeira vez que cacheia o PDF daquele pedido (nunca duplica).
+    // "Excluir" não notifica.
     let notifyPhone = null;
-    if (action === 'registrar') {
+    if (action === 'registrar' || action === 'atualizar') {
       const ur = await pool.query('SELECT phone FROM users WHERE id=$1', [req.user.id]);
       notifyPhone = ur.rows[0]?.phone || null;
     }
