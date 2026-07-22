@@ -344,8 +344,8 @@ const SERVICES = [
   // (Intenção de Venda e Emitir ATPV-e) via API Infosimples (ver MG_AUTO_SERVICES
   // / handleMgInfosimplesAuto) ──
   { id:'intencao-venda-rj', name:'Intenção de Venda RJ', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'atpve_rj_cadastro', icon:'📝', uf:'rj' },
-  { id:'intencao-venda-mg', name:'Intenção de Venda MG', group:'Intenção de Venda (ATPVE)', basePrice:50.00, noMarkup:true, inputType:'intencao_venda_mg', icon:'📝', uf:'mg' },
-  { id:'atpve-mg', name:'Emitir ATPV-e MG', group:'Intenção de Venda (ATPVE)', basePrice:10.00, noMarkup:true, inputType:'atpve_mg', icon:'📄', uf:'mg' },
+  { id:'intencao-venda-mg', name:'Intenção de Venda MG', group:'Intenção de Venda (ATPVE)', basePrice:25.00, noMarkup:true, inputType:'intencao_venda_mg', icon:'📝', uf:'mg' },
+  { id:'atpve-mg', name:'Emitir ATPV-e MG', group:'Intenção de Venda (ATPVE)', basePrice:2.00, noMarkup:true, inputType:'atpve_mg', icon:'📄', uf:'mg' },
 ];
 
 // Serviços desta categoria não retornam resultado na hora: o pedido fica
