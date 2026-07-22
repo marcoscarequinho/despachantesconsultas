@@ -344,6 +344,8 @@ const SERVICES = [
   // (Intenção de Venda e Emitir ATPV-e) via API Infosimples (ver MG_AUTO_SERVICES
   // / handleMgInfosimplesAuto) ──
   { id:'intencao-venda-rj', name:'Intenção de Venda RJ', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'atpve_rj_cadastro', icon:'📝', uf:'rj' },
+  { id:'intencao-venda-sp', name:'Intenção de Venda SP', group:'Intenção de Venda (ATPVE)', basePrice:60.00, noMarkup:true, inputType:'atpve_sp_cadastro', icon:'📝', uf:'sp' },
+  { id:'intencao-venda-ms', name:'Intenção de Venda MS', group:'Intenção de Venda (ATPVE)', basePrice:60.00, noMarkup:true, inputType:'atpve_ms_cadastro', icon:'📝', uf:'ms' },
   { id:'intencao-venda-mg', name:'Intenção de Venda MG', group:'Intenção de Venda (ATPVE)', basePrice:25.00, noMarkup:true, inputType:'intencao_venda_mg', icon:'📝', uf:'mg' },
   { id:'atpve-mg', name:'Emitir ATPV-e MG', group:'Intenção de Venda (ATPVE)', basePrice:2.00, noMarkup:true, inputType:'atpve_mg', icon:'📄', uf:'mg' },
 ];
@@ -1223,7 +1225,8 @@ app.get('/api/queries', requireAuth, async (req, res) => {
     const r = await pool.query(
       `SELECT q.id, q.service_id, q.service_name, q.params, q.status, q.amount,
               q.result_type, q.created_at,
-              CASE WHEN q.service_id = 'intencao-venda-rj' THEN q.result_data ELSE NULL END AS atpve_rj_meta,
+              CASE WHEN q.service_id IN ('intencao-venda-rj','intencao-venda-sp','intencao-venda-ms')
+                   THEN q.result_data ELSE NULL END AS atpve_meta,
               pc.token      AS pdf_token,
               pc.expires_at AS pdf_expires
        FROM queries q
@@ -1266,31 +1269,35 @@ app.get('/api/queries/:id/result', requireAuth, async (req, res) => {
   }
 });
 
-// Busca o estado canônico de um pedido ATPV-e RJ direto na Chekaki (GET
-// /api/atpve-rj/:id — "Consultar por ID"). É a fonte confiável de situação: a
+// Estados suportados pelo fluxo automático de Intenção de Venda (ATPVE) via
+// Chekaki — cada um mapeia para /api/atpve-<uf>/... e service_id 'intencao-venda-<uf>'.
+const ATPVE_UFS = ['rj', 'sp', 'ms'];
+
+// Busca o estado canônico de um pedido ATPV-e direto na Chekaki (GET
+// /api/atpve-<uf>/:id — "Consultar por ID"). É a fonte confiável de situação: a
 // resposta da ação (atualizar/registrar/excluir) nem sempre traz o campo
 // situacao_codigo/situacao_descricao atualizado, então toda ação re-consulta este
 // endpoint depois de rodar, em vez de confiar no corpo que a própria ação devolveu.
-async function fetchAtpveRjById(atpveId) {
-  const cr = await fetch(`${BASE_API_URL}/api/atpve-rj/${atpveId}`, {
+async function fetchAtpveById(uf, atpveId) {
+  const cr = await fetch(`${BASE_API_URL}/api/atpve-${uf}/${atpveId}`, {
     headers: { 'chaveAcesso': CHAVE_ACESSO },
   });
   const cdata = await cr.json().catch(() => null);
   return cdata?.pedido || null;
 }
 
-// ── Ações de ciclo de vida do ATPV-e RJ já cadastrado (Atualizar / Registrar no
-// DETRAN / Excluir) — botões de "Meus ATPV-e RJ", espelhando o próprio painel da
-// Chekaki (atpve-rj). Todas seguem o mesmo padrão: chamam POST /api/atpve-rj/:id/
-// <ação> usando o id que guardamos em result_data (ver correlateAtpveRjRecord).
+// ── Ações de ciclo de vida do ATPV-e já cadastrado (Atualizar / Registrar no
+// DETRAN / Excluir) — botões de "Meus ATPV-e", espelhando o próprio painel da
+// Chekaki (atpve-<uf>). Todas seguem o mesmo padrão: chamam POST /api/atpve-<uf>/:id/
+// <ação> usando o id que guardamos em result_data (ver correlateAtpveRecord).
 // Sem custo adicional para o usuário — nenhuma delas debita créditos.
-async function callAtpveRjAction(req, res, action, postProcess) {
+async function callAtpveAction(req, res, uf, action, postProcess) {
   try {
     const qr = await pool.query(
       `SELECT id, service_id, result_data FROM queries WHERE id=$1 AND user_id=$2`,
       [req.params.id, req.user.id]
     );
-    if (!qr.rows.length || qr.rows[0].service_id !== 'intencao-venda-rj')
+    if (!qr.rows.length || qr.rows[0].service_id !== `intencao-venda-${uf}`)
       return res.status(404).json({ error: 'Pedido não encontrado.' });
 
     let meta = {};
@@ -1299,7 +1306,7 @@ async function callAtpveRjAction(req, res, action, postProcess) {
     if (!atpveId)
       return res.status(400).json({ error: 'Este pedido ainda não tem um identificador da Chekaki vinculado. Tente novamente em alguns instantes.' });
 
-    const upRes = await fetch(`${BASE_API_URL}/api/atpve-rj/${atpveId}/${action}`, {
+    const upRes = await fetch(`${BASE_API_URL}/api/atpve-${uf}/${atpveId}/${action}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO },
       body: JSON.stringify({}),
@@ -1316,14 +1323,14 @@ async function callAtpveRjAction(req, res, action, postProcess) {
       // direto no painel da Chekaki) e por isso a ação falhou aqui — resincroniza
       // antes de responder, para o botão certo aparecer na próxima renderização.
       try {
-        const fresh = await fetchAtpveRjById(atpveId);
+        const fresh = await fetchAtpveById(uf, atpveId);
         if (fresh) {
           const resynced = postProcess ? postProcess({ ...meta, ...fresh }) : { ...meta, ...fresh };
           await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(resynced), qr.rows[0].id]);
-          await ensureAtpveRjPdfCached(qr.rows[0].id, req.user.id, resynced);
+          await ensureAtpvePdfCached(uf, qr.rows[0].id, req.user.id, resynced);
         }
       } catch (e) {
-        console.error(`Erro ao resincronizar ATPV-e RJ [id ${atpveId}] após falha:`, e.message);
+        console.error(`Erro ao resincronizar ATPV-e ${uf.toUpperCase()} [id ${atpveId}] após falha:`, e.message);
       }
       return res.status(upRes.status).json({ error: errMsg });
     }
@@ -1335,10 +1342,10 @@ async function callAtpveRjAction(req, res, action, postProcess) {
     // pra manter result_data sempre fiel à Chekaki.
     let merged = meta;
     try {
-      const fresh = await fetchAtpveRjById(atpveId);
+      const fresh = await fetchAtpveById(uf, atpveId);
       if (fresh) merged = { ...meta, ...fresh };
     } catch (e) {
-      console.error(`Erro ao consultar situação atual do ATPV-e RJ [id ${atpveId}]:`, e.message);
+      console.error(`Erro ao consultar situação atual do ATPV-e ${uf.toUpperCase()} [id ${atpveId}]:`, e.message);
     }
     if (postProcess) merged = postProcess(merged);
     await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), qr.rows[0].id]);
@@ -1355,32 +1362,36 @@ async function callAtpveRjAction(req, res, action, postProcess) {
 
     // A ação em si não devolveu o PDF (ex.: registrar/atualizar responderam só
     // JSON) — se a Chekaki sinaliza que o PDF já existe, busca e cacheia agora.
-    await ensureAtpveRjPdfCached(qr.rows[0].id, req.user.id, merged);
+    await ensureAtpvePdfCached(uf, qr.rows[0].id, req.user.id, merged);
     res.json({ success: true, result: merged });
   } catch (err) {
-    console.error(`Erro em ação ATPV-e RJ [${action}]:`, err.message);
+    console.error(`Erro em ação ATPV-e ${uf.toUpperCase()} [${action}]:`, err.message);
     res.status(500).json({ error: 'Erro interno.' });
   }
 }
 
-// Botão "Atualizar" — atualiza situação/PDF do pedido.
-app.post('/api/queries/:id/atpve-rj-atualizar', requireAuth, (req, res) =>
-  callAtpveRjAction(req, res, 'atualizar'));
-
-// Botão "Registrar" — efetiva o registro no DETRAN (some com o passo manual que o
-// usuário precisa confirmar; não é feito automaticamente no cadastro).
-app.post('/api/queries/:id/atpve-rj-registrar', requireAuth, (req, res) =>
-  callAtpveRjAction(req, res, 'registrar'));
-
 // Botão "Excluir" — cancela o pedido na Chekaki. Marca a situação localmente como
 // excluída mesmo que a resposta da Chekaki não devolva um campo de situação claro,
 // para o botão sumir da lista de qualquer forma.
-app.post('/api/queries/:id/atpve-rj-excluir', requireAuth, (req, res) =>
-  callAtpveRjAction(req, res, 'excluir', merged => ({
-    ...merged,
-    situacao_codigo: 'excluida',
-    situacao_descricao: merged.situacao_descricao || 'EXCLUÍDA',
-  })));
+const atpveExcluirPostProcess = merged => ({
+  ...merged,
+  situacao_codigo: 'excluida',
+  situacao_descricao: merged.situacao_descricao || 'EXCLUÍDA',
+});
+
+for (const uf of ATPVE_UFS) {
+  // Botão "Atualizar" — atualiza situação/PDF do pedido.
+  app.post(`/api/queries/:id/atpve-${uf}-atualizar`, requireAuth, (req, res) =>
+    callAtpveAction(req, res, uf, 'atualizar'));
+
+  // Botão "Registrar" — efetiva o registro no DETRAN (some com o passo manual que o
+  // usuário precisa confirmar; não é feito automaticamente no cadastro).
+  app.post(`/api/queries/:id/atpve-${uf}-registrar`, requireAuth, (req, res) =>
+    callAtpveAction(req, res, uf, 'registrar'));
+
+  app.post(`/api/queries/:id/atpve-${uf}-excluir`, requireAuth, (req, res) =>
+    callAtpveAction(req, res, uf, 'excluir', atpveExcluirPostProcess));
+}
 
 // ── GET /api/pdf/:token ───────────────────────────────────────────────────────
 app.get('/api/pdf/:token', requireAuth, async (req, res) => {
@@ -2247,7 +2258,7 @@ async function handleMgInfosimplesAuto(req, res, service, params) {
 // um PDF é cacheado aqui (ou seja, é a primeira vez que fica disponível) e
 // notifyPhone é informado, também envia por WhatsApp — cobre o caso em que o
 // cadastro original não devolveu PDF na hora e por isso o envio síncrono não rodou.
-async function ensureAtpveRjPdfCached(queryId, userId, fresh, notifyPhone) {
+async function ensureAtpvePdfCached(uf, queryId, userId, fresh, notifyPhone) {
   if (!fresh?.pdf_disponivel || !fresh?.id) return;
   try {
     const existing = await pool.query(
@@ -2255,7 +2266,7 @@ async function ensureAtpveRjPdfCached(queryId, userId, fresh, notifyPhone) {
     );
     if (existing.rows.length) return;
 
-    const pr = await fetch(`${BASE_API_URL}/api/atpve-rj/${fresh.id}/pdf`, {
+    const pr = await fetch(`${BASE_API_URL}/api/atpve-${uf}/${fresh.id}/pdf`, {
       headers: { 'chaveAcesso': CHAVE_ACESSO },
     });
     if (!pr.ok || !(pr.headers.get('content-type') || '').includes('application/pdf')) return;
@@ -2267,30 +2278,31 @@ async function ensureAtpveRjPdfCached(queryId, userId, fresh, notifyPhone) {
       [queryId, userId, token, buf.toString('base64'), expiresAt]
     );
     if (notifyPhone) {
+      const ufUpper = uf.toUpperCase();
       const placa = (fresh.placa || '').toUpperCase();
-      const caption = `✅ *ATPV-e RJ pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
-      const fileName = `ATPVE-RJ-${placa || 'doc'}.pdf`;
+      const caption = `✅ *ATPV-e ${ufUpper} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
+      const fileName = `ATPVE-${ufUpper}-${placa || 'doc'}.pdf`;
       const sent = await sendWhatsAppPdf(notifyPhone, buf, fileName, caption).catch(e => {
-        console.error(`Erro ao enviar ATPV-e RJ por WhatsApp [id ${fresh.id}]:`, e.message);
+        console.error(`Erro ao enviar ATPV-e ${ufUpper} por WhatsApp [id ${fresh.id}]:`, e.message);
         return false;
       });
-      if (!sent) console.error(`Falha ao enviar ATPV-e RJ por WhatsApp [id ${fresh.id}] para ${notifyPhone}`);
+      if (!sent) console.error(`Falha ao enviar ATPV-e ${ufUpper} por WhatsApp [id ${fresh.id}] para ${notifyPhone}`);
     }
   } catch (e) {
-    console.error(`Erro ao cachear PDF do ATPV-e RJ [id ${fresh.id}]:`, e.message);
+    console.error(`Erro ao cachear PDF do ATPV-e ${uf.toUpperCase()} [id ${fresh.id}]:`, e.message);
   }
 }
 
-// Correlaciona a Intenção de Venda RJ recém-cadastrada com seu registro na Chekaki
-// (GET /api/atpve-rj — "Listar pedidos", endpoint que retorna os pedidos de toda a
+// Correlaciona a Intenção de Venda recém-cadastrada com seu registro na Chekaki
+// (GET /api/atpve-<uf> — "Listar pedidos", endpoint que retorna os pedidos de toda a
 // chave de acesso), guardando id/protocolo/situação em queries.result_data — usado
-// pelo botão "Atualizar" e pela situação exibida em "Meus ATPV-e RJ". Retorna o
+// pelo botão "Atualizar" e pela situação exibida em "Meus ATPV-e". Retorna o
 // registro encontrado (ou null) para o chamador decidir se ainda precisa buscar/
-// notificar o PDF (ver ensureAtpveRjPdfCached). Best effort: uma falha aqui nunca
+// notificar o PDF (ver ensureAtpvePdfCached). Best effort: uma falha aqui nunca
 // deve impedir a entrega do PDF já emitido.
-async function correlateAtpveRjRecord(queryId, placa) {
+async function correlateAtpveRecord(uf, queryId, placa) {
   try {
-    const lr = await fetch(`${BASE_API_URL}/api/atpve-rj`, {
+    const lr = await fetch(`${BASE_API_URL}/api/atpve-${uf}`, {
       headers: { 'chaveAcesso': CHAVE_ACESSO },
     });
     const ldata = await lr.json().catch(() => null);
@@ -2305,7 +2317,7 @@ async function correlateAtpveRjRecord(queryId, placa) {
     }
     return match || null;
   } catch (e) {
-    console.error('Erro ao correlacionar pedido ATPV-e RJ:', e.message);
+    console.error(`Erro ao correlacionar pedido ATPV-e ${uf.toUpperCase()}:`, e.message);
     return null;
   }
 }
@@ -2547,9 +2559,11 @@ app.post('/api/query', requireAuth, async (req, res) => {
       apiUrl = `${BASE_API_URL}/consultar-atpve`;
       body = { placa, renavam };
     }
-    // Intenção de Venda RJ — registra a venda e emite o ATPV-e na hora (substitui o
-    // antigo fluxo manual de upload de documentos). A API devolve o PDF pronto.
-    if (serviceId === 'intencao-venda-rj') {
+    // Intenção de Venda (RJ/SP/MS) — registra a venda e emite o ATPV-e na hora
+    // (substitui o antigo fluxo manual de upload de documentos). A API devolve o
+    // PDF pronto. Mesmo corpo/validação para os três estados — só muda a URL.
+    if (ATPVE_UFS.some(uf => serviceId === `intencao-venda-${uf}`)) {
+      const atpveUf = serviceId.split('-')[2];
       const p = params || {};
       const requiredFields = [
         'placa', 'renavam', 'ano_fabricacao', 'ano_modelo', 'chassi', 'kilometragem',
@@ -2564,7 +2578,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       if (missingFields.length)
         return res.status(400).json({ error: `Campos obrigatórios ausentes: ${missingFields.join(', ')}` });
 
-      apiUrl = `${BASE_API_URL}/api/atpve-rj/cadastrar`;
+      apiUrl = `${BASE_API_URL}/api/atpve-${atpveUf}/cadastrar`;
       body = {
         placa: String(p.placa).toUpperCase().replace(/[\s-]/g, ''),
         renavam: String(p.renavam).replace(/\D/g, ''),
@@ -3068,13 +3082,14 @@ app.post('/api/query', requireAuth, async (req, res) => {
     // ── Envia PDF + salva no cache por 7 dias ────────────────────────────────
     const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null) || dcDebitoPdfBuf || dcMotorPdfBuf || vendaPdfBuf;
 
-    if (serviceId === 'intencao-venda-rj') {
-      const match = await correlateAtpveRjRecord(qRow.rows[0].id, body.placa);
+    if (ATPVE_UFS.some(uf => serviceId === `intencao-venda-${uf}`)) {
+      const atpveUf = serviceId.split('-')[2];
+      const match = await correlateAtpveRecord(atpveUf, qRow.rows[0].id, body.placa);
       // Se o cadastro não devolveu o PDF na hora (placa passou por verificação
       // extra/LAUDOCAR), garante e notifica aqui mesmo — do contrário o bloco
       // abaixo (pdfToSend) já cuida de cachear e mandar por WhatsApp.
       if (match && !pdfToSend) {
-        await ensureAtpveRjPdfCached(qRow.rows[0].id, req.user.id, match, user.phone);
+        await ensureAtpvePdfCached(atpveUf, qRow.rows[0].id, req.user.id, match, user.phone);
       }
     }
     await notifyAdminNewQuery(user, service, price, params);
@@ -3097,13 +3112,14 @@ app.post('/api/query', requireAuth, async (req, res) => {
           const fileName = `CRLV-e-${ufCode}-${placa || 'doc'}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
         }
-        // Envia PDF via WhatsApp para Intenção de Venda RJ (ATPV-e instantâneo)
-        if (serviceId === 'intencao-venda-rj' && user.phone) {
+        // Envia PDF via WhatsApp para Intenção de Venda (ATPV-e instantâneo)
+        if (ATPVE_UFS.some(uf => serviceId === `intencao-venda-${uf}`) && user.phone) {
+          const ufUpper = serviceId.split('-')[2].toUpperCase();
           const placa = (params?.placa || '').toUpperCase();
-          const caption = `✅ *ATPV-e RJ pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
-          const fileName = `ATPVE-RJ-${placa || 'doc'}.pdf`;
+          const caption = `✅ *ATPV-e ${ufUpper} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
+          const fileName = `ATPVE-${ufUpper}-${placa || 'doc'}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(e =>
-            console.error('Erro ao enviar ATPV-e RJ por WhatsApp (cadastro síncrono):', e.message));
+            console.error(`Erro ao enviar ATPV-e ${ufUpper} por WhatsApp (cadastro síncrono):`, e.message));
         }
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="${serviceId}-${Date.now()}.pdf"`);
@@ -5337,28 +5353,29 @@ app.post('/api/admin/crlv-agendado-status-check', requireAuth, requireSuperAdmin
   }
 });
 
-// Varre as Intenções de Venda RJ recentes que ainda não têm PDF disponível
+// Varre as Intenções de Venda (RJ/SP/MS) recentes que ainda não têm PDF disponível
 // localmente (ex.: situação PROCESSANDO no momento do cadastro) e reconsulta cada
 // uma na Chekaki — mesmo problema do CRLV-e Agendado: o Cadastrar às vezes não
 // devolve o documento pronto na hora, e sem essa varredura periódica o usuário só
 // receberia o PDF/WhatsApp se clicasse manualmente em "Atualizar".
-async function runAtpveRjPendingCheck() {
+async function runAtpvePendingCheck() {
   const { rows } = await pool.query(
-    `SELECT q.id AS query_id, q.user_id, q.result_data, u.phone
+    `SELECT q.id AS query_id, q.user_id, q.service_id, q.result_data, u.phone
      FROM queries q JOIN users u ON u.id = q.user_id
-     WHERE q.service_id = 'intencao-venda-rj'
+     WHERE q.service_id IN ('intencao-venda-rj','intencao-venda-sp','intencao-venda-ms')
        AND q.created_at > NOW() - INTERVAL '3 days'
      ORDER BY q.created_at DESC LIMIT 200`
   );
   let checked = 0, notified = 0;
   for (const row of rows) {
+    const uf = row.service_id.split('-')[2];
     let meta = {};
     try { meta = JSON.parse(row.result_data || '{}'); } catch {}
     if (!meta.id || meta.pdf_disponivel === true) continue; // sem id vinculado, ou já tinha PDF (já deve estar cacheado)
 
     checked++;
     try {
-      const fresh = await fetchAtpveRjById(meta.id);
+      const fresh = await fetchAtpveById(uf, meta.id);
       if (!fresh) continue;
       const merged = { ...meta, ...fresh };
       await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), row.query_id]);
@@ -5367,27 +5384,28 @@ async function runAtpveRjPendingCheck() {
           `SELECT 1 FROM pdf_cache WHERE query_id=$1 AND expires_at > NOW()`, [row.query_id]
         );
         if (!before.rows.length) {
-          await ensureAtpveRjPdfCached(row.query_id, row.user_id, merged, row.phone);
+          await ensureAtpvePdfCached(uf, row.query_id, row.user_id, merged, row.phone);
           notified++;
         }
       }
     } catch (e) {
-      console.error(`Erro ao checar ATPV-e RJ pendente [query ${row.query_id}]:`, e.message);
+      console.error(`Erro ao checar ATPV-e ${uf.toUpperCase()} pendente [query ${row.query_id}]:`, e.message);
     }
     await new Promise(r => setTimeout(r, 400));
   }
-  console.log(`✅ Checagem ATPV-e RJ pendentes: ${checked} verificados, ${notified} avisados`);
+  console.log(`✅ Checagem ATPV-e pendentes: ${checked} verificados, ${notified} avisados`);
   return { checked, notified, total: rows.length };
 }
 
-// ── GET /api/cron/atpve-rj-status (Vercel Cron) ───────────────────────────────
+// ── GET /api/cron/atpve-rj-status (Vercel Cron) — nome histórico, hoje varre
+// RJ+SP+MS numa passada só; ver runAtpvePendingCheck. ─────────────────────────
 app.get('/api/cron/atpve-rj-status', async (req, res) => {
   const secret = process.env.CRON_SECRET || '';
   if (secret && req.headers.authorization !== `Bearer ${secret}`) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
-    const result = await runAtpveRjPendingCheck();
+    const result = await runAtpvePendingCheck();
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('Erro no cron atpve-rj-status:', err.message);
@@ -5398,10 +5416,10 @@ app.get('/api/cron/atpve-rj-status', async (req, res) => {
 // ── POST /api/admin/atpve-rj-status-check (teste manual pelo admin) ──────────
 app.post('/api/admin/atpve-rj-status-check', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
-    const result = await runAtpveRjPendingCheck();
+    const result = await runAtpvePendingCheck();
     res.json({ success: true, ...result });
   } catch (err) {
-    console.error('Erro na checagem manual ATPV-e RJ:', err.message);
+    console.error('Erro na checagem manual ATPV-e:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

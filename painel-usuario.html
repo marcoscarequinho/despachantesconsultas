@@ -264,7 +264,7 @@
           <div class="w-12 h-12 bg-pink-100 rounded-xl flex items-center justify-center text-2xl">📝</div>
           <div class="text-center">
             <div class="font-semibold text-gray-800">Intenção de Venda (ATPVE)</div>
-            <div class="text-xs text-gray-500 mt-0.5">RJ e MG: emissão automática na hora</div>
+            <div class="text-xs text-gray-500 mt-0.5">RJ, SP, MS e MG: emissão automática na hora</div>
             <div class="text-xs text-gray-500 mt-0.5"><strong>Consulta via API, sem envio de documentos</strong></div>
           </div>
         </button>
@@ -666,7 +666,7 @@
 
       <div>
         <h2 class="text-xl font-bold text-gray-800">Intenção de Venda (ATPVE)</h2>
-        <p class="text-sm text-gray-500">Preencha os dados do veículo, vendedor e comprador — o ATPV-e (RJ) ou o registro (MG) é emitido na hora, sem envio de documentos.</p>
+        <p class="text-sm text-gray-500">Preencha os dados do veículo, vendedor e comprador — o ATPV-e (RJ/SP/MS) ou o registro (MG) é emitido na hora, sem envio de documentos.</p>
       </div>
 
       <!-- Saldo disponível -->
@@ -732,12 +732,12 @@
         </div>
       </div>
 
-      <!-- Meus ATPV-e RJ -->
+      <!-- Meus ATPV-e (RJ/SP/MS) -->
       <div class="card">
-        <h3 class="font-semibold text-gray-800 mb-1">Meus ATPV-e RJ</h3>
-        <p class="text-xs text-gray-500 mb-4">Suas emissões de ATPV-e RJ nesta conta. O PDF fica disponível para novo download por 7 dias.</p>
-        <div id="meus-atpve-rj-list" class="space-y-1">
-          <div class="text-center py-6 text-gray-400 text-sm">Nenhuma emissão de ATPV-e RJ ainda.</div>
+        <h3 class="font-semibold text-gray-800 mb-1">Meus ATPV-e</h3>
+        <p class="text-xs text-gray-500 mb-4">Suas emissões de ATPV-e (RJ, SP e MS) nesta conta. O PDF fica disponível para novo download por 7 dias.</p>
+        <div id="meus-atpve-list" class="space-y-1">
+          <div class="text-center py-6 text-gray-400 text-sm">Nenhuma emissão de ATPV-e ainda.</div>
         </div>
       </div>
 
@@ -1231,7 +1231,12 @@ async function loadStats() {
 
 // ── Intenção de Venda (ATPVE) ────────────────────────────────────────────────
 let selectedIntencaoSvc = null;
-const INTENCAO_ICONS = { 'intencao-venda-rj': '🟢', 'intencao-venda-mg': '🔵', 'atpve-mg': '📄' };
+const INTENCAO_ICONS = {
+  'intencao-venda-rj': '🟢', 'intencao-venda-sp': '🟡', 'intencao-venda-ms': '🟠',
+  'intencao-venda-mg': '🔵', 'atpve-mg': '📄',
+};
+// Selo exibido em "Meus ATPV-e" para identificar rapidamente o estado do pedido.
+const ATPVE_UF_LABELS = { 'intencao-venda-rj': 'RJ', 'intencao-venda-sp': 'SP', 'intencao-venda-ms': 'MS' };
 
 // Serviços MG automáticos (consulta na hora via API Infosimples) — mesmo formulário
 // dinâmico e mesma tela de resultado, só troca o spec de campos e o serviceId.
@@ -1272,7 +1277,7 @@ function selectIntencaoCategory(svc, cardEl) {
   document.getElementById('intencao-mg-result-wrap').classList.add('hidden');
   document.getElementById('intencao-form-name').textContent  = svc.name;
   document.getElementById('intencao-form-price').textContent = fmt(svc.price);
-  renderIntencaoRjFields();
+  renderIntencaoRjFields(svc.uf ? svc.uf.toUpperCase() : 'RJ');
   document.getElementById('intencao-form-wrap').classList.remove('hidden');
   document.getElementById('intencao-result-wrap').classList.add('hidden');
   scrollToIntencaoForm('intencao-form-wrap');
@@ -1332,15 +1337,19 @@ const ATPVE_RJ_FIELDS = [
   ]},
 ];
 
-function renderIntencaoRjFields() {
+function renderIntencaoRjFields(ufPlaceholder = 'RJ') {
   const field = f => {
     const req = f.required ? ' <span class="text-red-500">*</span>' : '';
+    // crv_uf_emissao/comprador_uf usam "RJ" como placeholder no spec, mas o campo é
+    // compartilhado por RJ/SP/MS — troca pelo UF do estado selecionado.
+    const placeholder = (f.name === 'crv_uf_emissao' || f.name === 'comprador_uf')
+      ? ufPlaceholder : (f.placeholder || '');
     const input = f.type === 'select'
       ? `<select id="ir-${f.name}" class="input-field" ${f.required ? 'required' : ''}>
            <option value="">Selecione...</option>
            ${f.options.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
          </select>`
-      : `<input id="ir-${f.name}" type="text" class="input-field" placeholder="${escapeHtml(f.placeholder || '')}" ${f.required ? 'required' : ''}>`;
+      : `<input id="ir-${f.name}" type="text" class="input-field" placeholder="${escapeHtml(placeholder)}" ${f.required ? 'required' : ''}>`;
     return `<div><label class="label">${escapeHtml(f.label)}${req}</label>${input}</div>`;
   };
   document.getElementById('intencao-form-fields').innerHTML = ATPVE_RJ_FIELDS.map(g => `
@@ -1380,26 +1389,27 @@ function resetIntencaoForm(showCats = true) {
   if (showCats) document.getElementById('intencao-category-wrap').classList.remove('hidden');
 }
 
-// "Meus ATPV-e RJ" — lista as próprias emissões (fonte: histórico local do usuário,
-// já isolado por conta em /api/queries). Não usamos o endpoint "Listar pedidos" da
-// Chekaki (GET /api/atpve-rj) direto no painel porque ele é indexado pela chave de
-// acesso da plataforma inteira, não por usuário — expor a lista bruta vazaria dados
-// (placa, CPF, endereço) de outros clientes que também emitem ATPV-e RJ. O servidor
-// correlaciona o pedido com o registro da Chekaki (id/protocolo/situação) e guarda
-// em atpve_rj_meta, o que habilita o botão "Atualizar" abaixo.
-function renderMeusAtpveRj() {
-  const wrap = document.getElementById('meus-atpve-rj-list');
+// "Meus ATPV-e" — lista as próprias emissões (RJ + SP + MS), fonte: histórico
+// local do usuário, já isolado por conta em /api/queries. Não usamos o endpoint
+// "Listar pedidos" da Chekaki (GET /api/atpve-<uf>) direto no painel porque ele é
+// indexado pela chave de acesso da plataforma inteira, não por usuário — expor a
+// lista bruta vazaria dados (placa, CPF, endereço) de outros clientes que também
+// emitem ATPV-e. O servidor correlaciona o pedido com o registro da Chekaki
+// (id/protocolo/situação) e guarda em atpve_meta, o que habilita o botão "Atualizar".
+function renderMeusAtpve() {
+  const wrap = document.getElementById('meus-atpve-list');
   if (!wrap) return;
-  const list = allQueries.filter(q => q.service_id === 'intencao-venda-rj');
+  const list = allQueries.filter(q => ATPVE_UF_LABELS[q.service_id]);
   if (!list.length) {
-    wrap.innerHTML = `<div class="text-center py-6 text-gray-400 text-sm">Nenhuma emissão de ATPV-e RJ ainda.</div>`;
+    wrap.innerHTML = `<div class="text-center py-6 text-gray-400 text-sm">Nenhuma emissão de ATPV-e ainda.</div>`;
     return;
   }
   wrap.innerHTML = list.map(q => {
+    const uf = q.service_id.split('-')[2]; // intencao-venda-<uf>
     let p = {};
     try { p = JSON.parse(q.params || '{}'); } catch {}
     let meta = {};
-    try { meta = JSON.parse(q.atpve_rj_meta || '{}'); } catch {}
+    try { meta = JSON.parse(q.atpve_meta || '{}'); } catch {}
     const placa      = p.placa || '—';
     const comprador   = p.comprador_nome || '';
     const situacao    = meta.situacao || meta.status || meta.situacao_descricao || '';
@@ -1415,15 +1425,18 @@ function renderMeusAtpveRj() {
     <div class="py-2 border-b border-gray-50 last:border-0">
       <div class="flex items-center justify-between gap-3 flex-wrap">
         <div class="min-w-0">
-          <div class="text-sm font-medium text-gray-800 truncate">${escapeHtml(placa)}${comprador ? ' · ' + escapeHtml(comprador) : ''}</div>
+          <div class="text-sm font-medium text-gray-800 truncate">
+            <span class="inline-block text-[10px] font-bold text-orange-600 bg-orange-50 border border-orange-200 rounded px-1.5 py-0.5 mr-1 align-middle">${uf.toUpperCase()}</span>
+            ${escapeHtml(placa)}${comprador ? ' · ' + escapeHtml(comprador) : ''}
+          </div>
           <div class="text-xs text-gray-400">${fmtDate(q.created_at)}${protocolo ? ' · Protocolo: ' + escapeHtml(protocolo) : ''}</div>
           ${situacao ? `<div class="text-xs text-blue-600 mt-0.5">${escapeHtml(String(situacao))}</div>` : ''}
         </div>
         <div class="text-right flex-shrink-0 flex items-center gap-2 flex-wrap justify-end">
           <div class="text-sm font-semibold text-red-500">-${fmt(q.amount)}</div>
-          ${podeRegistrarOuExcluir ? `<button type="button" onclick="registrarAtpveRj(${q.id}, this)" class="text-xs bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded font-medium">✅ Registrar</button>` : ''}
-          ${meta.id ? `<button type="button" onclick="atualizarAtpveRj(${q.id}, this)" class="text-xs bg-gray-600 hover:bg-gray-700 text-white px-2 py-1 rounded font-medium">🔄 Atualizar</button>` : ''}
-          ${podeRegistrarOuExcluir ? `<button type="button" onclick="excluirAtpveRj(${q.id}, this)" class="text-xs bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded font-medium">🗑️ Excluir</button>` : ''}
+          ${podeRegistrarOuExcluir ? `<button type="button" onclick="registrarAtpve('${uf}', ${q.id}, this)" class="text-xs bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded font-medium">✅ Registrar</button>` : ''}
+          ${meta.id ? `<button type="button" onclick="atualizarAtpve('${uf}', ${q.id}, this)" class="text-xs bg-gray-600 hover:bg-gray-700 text-white px-2 py-1 rounded font-medium">🔄 Atualizar</button>` : ''}
+          ${podeRegistrarOuExcluir ? `<button type="button" onclick="excluirAtpve('${uf}', ${q.id}, this)" class="text-xs bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded font-medium">🗑️ Excluir</button>` : ''}
           ${q.pdf_token
             ? `<a href="/api/pdf/${q.pdf_token}" target="_blank" class="text-xs bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded font-medium">📥 PDF</a>`
             : `<span class="text-xs text-gray-400">PDF expirado</span>`}
@@ -1433,7 +1446,7 @@ function renderMeusAtpveRj() {
   }).join('');
 }
 
-async function runAtpveRjAction(endpoint, queryId, btnEl, loadingText, successMsg) {
+async function runAtpveAction(endpoint, queryId, btnEl, loadingText, successMsg) {
   const originalText = btnEl.textContent;
   btnEl.disabled = true;
   btnEl.textContent = loadingText;
@@ -1454,18 +1467,18 @@ async function runAtpveRjAction(endpoint, queryId, btnEl, loadingText, successMs
   }
 }
 
-function atualizarAtpveRj(queryId, btnEl) {
-  runAtpveRjAction('atpve-rj-atualizar', queryId, btnEl, 'Atualizando...', 'Pedido atualizado!');
+function atualizarAtpve(uf, queryId, btnEl) {
+  runAtpveAction(`atpve-${uf}-atualizar`, queryId, btnEl, 'Atualizando...', 'Pedido atualizado!');
 }
 
-function registrarAtpveRj(queryId, btnEl) {
+function registrarAtpve(uf, queryId, btnEl) {
   if (!confirm('Confirma o registro deste ATPV-e no DETRAN? Essa ação não pode ser desfeita.')) return;
-  runAtpveRjAction('atpve-rj-registrar', queryId, btnEl, 'Registrando...', 'ATPV-e registrado no DETRAN!');
+  runAtpveAction(`atpve-${uf}-registrar`, queryId, btnEl, 'Registrando...', 'ATPV-e registrado no DETRAN!');
 }
 
-function excluirAtpveRj(queryId, btnEl) {
+function excluirAtpve(uf, queryId, btnEl) {
   if (!confirm('Tem certeza que deseja excluir este pedido de ATPV-e? Essa ação não pode ser desfeita.')) return;
-  runAtpveRjAction('atpve-rj-excluir', queryId, btnEl, 'Excluindo...', 'Pedido excluído.');
+  runAtpveAction(`atpve-${uf}-excluir`, queryId, btnEl, 'Excluindo...', 'Pedido excluído.');
 }
 
 async function submitIntencao(e) {
@@ -1652,7 +1665,7 @@ async function loadQueries() {
     const d = await r.json();
     allQueries = d.queries || [];
     renderRecentQueries();
-    renderMeusAtpveRj();
+    renderMeusAtpve();
   } catch {}
 }
 
