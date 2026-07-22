@@ -3669,12 +3669,18 @@ app.post('/api/query-v3', requireAuth, async (req, res) => {
 // Preço fixo por consulta na API externa — não segue a tabela Infosimples nem
 // o markup do painel; valor comercial definido para os contratos de API.
 const EXTERNAL_API_PRICE = 5.00;
+// Preço por serviço na API externa contratada (chave dedicada); serviços não
+// listados aqui caem no valor padrão EXTERNAL_API_PRICE.
+const EXTERNAL_API_PRICES = {
+  'is-detran-mg-reg-intencao-venda': 25.00,
+  'is-detran-mg-atpve': 2.00,
+};
 
 async function runExternalInfosimplesQuery(req, res, serviceId) {
   const service = SERVICES_V3.find(s => s.id === serviceId);
   if (!service) return res.status(500).json({ error: 'Serviço não configurado.' });
 
-  const price  = EXTERNAL_API_PRICE;
+  const price  = EXTERNAL_API_PRICES[serviceId] ?? EXTERNAL_API_PRICE;
   const params = req.body || {};
   const isGeneral = !req.apiUser; // chave geral (pós-paga): não debita créditos
 
