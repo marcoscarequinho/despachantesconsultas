@@ -714,6 +714,15 @@
           <button onclick="resetIntencaoForm()" class="text-xs text-gray-500 hover:text-gray-700">✕ Cancelar</button>
         </div>
 
+        <div class="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-800 flex gap-2 mb-4">
+          <span class="flex-shrink-0">⚠️</span>
+          <div>
+            <p class="font-semibold">Atenção — conferência dos dados</p>
+            <p class="mt-1">Revise com cuidado todas as informações antes de concluir o ATPV-e. Dados preenchidos incorretamente após a finalização do documento não podem ser corrigidos por esta plataforma.</p>
+            <p class="mt-1">Em caso de erro após o ATPV concluído, o cancelamento ou desfazimento só pode ser feito diretamente junto ao DETRAN de origem. Não nos responsabilizamos por dados inseridos de forma errada.</p>
+          </div>
+        </div>
+
         <form id="intencao-form" onsubmit="submitIntencao(event)" class="space-y-5">
           <div id="intencao-form-fields"></div>
 
@@ -768,6 +777,15 @@
             </div>
           </div>
           <button onclick="resetIntencaoMgForm()" class="text-xs text-gray-500 hover:text-gray-700">✕ Cancelar</button>
+        </div>
+
+        <div id="intencao-mg-warning" class="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-800 flex gap-2 mb-4">
+          <span class="flex-shrink-0">⚠️</span>
+          <div>
+            <p class="font-semibold">Atenção — conferência dos dados</p>
+            <p class="mt-1">Revise com cuidado todas as informações antes de concluir o ATPV-e. Dados preenchidos incorretamente após a finalização do documento não podem ser corrigidos por esta plataforma.</p>
+            <p class="mt-1">Em caso de erro após o ATPV concluído, o cancelamento ou desfazimento só pode ser feito diretamente junto ao DETRAN de origem. Não nos responsabilizamos por dados inseridos de forma errada.</p>
+          </div>
         </div>
 
         <form id="intencao-mg-form" onsubmit="submitIntencaoMg(event)" class="space-y-4">
@@ -1310,6 +1328,10 @@ function selectIntencaoCategory(svc, cardEl) {
     document.getElementById('intencao-mg-result-wrap').classList.add('hidden');
     document.getElementById('intencao-mg-form-name').textContent = svc.name;
     document.getElementById('intencao-mg-form-price').textContent = fmt(svc.price);
+    // Aviso de conferência de dados vale para toda "Intenção de Venda (ATPVE)",
+    // exceto "Emitir ATPV-e MG" (o próprio ATPV-e emitido, não uma intenção de
+    // venda a ser conferida antes de concluir).
+    document.getElementById('intencao-mg-warning').classList.toggle('hidden', svc.id === 'atpve-mg');
     renderIntencaoMgFields();
     document.getElementById('intencao-mg-form-wrap').classList.remove('hidden');
     scrollToIntencaoForm('intencao-mg-form-wrap');
