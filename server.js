@@ -1241,6 +1241,35 @@ app.get('/api/queries', requireAuth, async (req, res) => {
        ORDER BY q.created_at DESC LIMIT 100`,
       [req.user.id]
     );
+
+    // Sincroniza silenciosamente comunicações de venda que já têm um
+    // "comunicacao_id" vinculado mas ainda não estão marcadas como transmitidas
+    // no nosso banco — cobre o caso de a comunicação ter sido transmitida direto
+    // no site da Chekaki (fora do botão "Transmitir" deste painel), que sem isso
+    // ficaria mostrando "Importado" para sempre. Best effort: uma falha aqui
+    // nunca deve quebrar a listagem.
+    for (const row of r.rows) {
+      if (row.service_id !== 'inserir-comunicacao-venda' || !row.comunicacao_venda_meta) continue;
+      let meta = {};
+      try { meta = JSON.parse(row.comunicacao_venda_meta); } catch {}
+      if (meta._transmitido || meta._cancelado || !meta.comunicacao_id) continue;
+      try {
+        const sync = await correlateComunicacaoVenda(meta.comunicacao_id);
+        if (sync?.status !== 'comunicado') continue;
+        const merged = { ...meta, ...sync, _transmitido: true };
+        await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), row.id]);
+        row.comunicacao_venda_meta = JSON.stringify(merged);
+
+        const params = JSON.parse(row.params || '{}');
+        const cached = await cacheComunicacaoVendaPdf(row.id, req.user.id, params);
+        row.result_type = 'pdf';
+        row.pdf_token   = cached.token;
+        row.pdf_expires = cached.expiresAt;
+      } catch (e) {
+        console.error(`Erro ao sincronizar comunicação de venda [query ${row.id}]:`, e.message);
+      }
+    }
+
     res.json({ queries: r.rows });
   } catch (err) {
     res.status(500).json({ error: 'Erro interno.' });
@@ -2189,10 +2218,11 @@ function buildComunicacaoVendaPdfBuffer(service, data, params) {
       ]);
       doc.moveDown(0.4);
 
-      pdfBar(doc, 'RESULTADO');
-      pdfRenderGenericObject(doc, data);
-      doc.moveDown(0.4);
-
+      // Sem seção "RESULTADO": a resposta bruta da Chekaki inclui um campo de
+      // situação (ex.: "importado") que fica congelado no momento da inserção —
+      // exibi-lo aqui seria enganoso depois da transmissão, já que o PDF não é
+      // regerado. A situação atual é mostrada dinamicamente em "Meus Comunicados
+      // de Venda" (ver renderMeusComunicadosVenda em painel-usuario.html).
       pdfReportFooter(doc, now);
 
       doc.end();
@@ -2349,15 +2379,59 @@ async function correlateAtpveRecord(uf, queryId, placa) {
   }
 }
 
+// Consulta o status atual de uma comunicação de venda na Chekaki (GET
+// /api/comunicado-venda/:id — testado direto: o "id" válido para essa rota (e
+// para /comunicacao-venda/transmitir/:id) é o "comunicacao_id" de NÍVEL RAIZ do
+// JSON devolvido no Inserir, não o comunicacao_id aninhado em "data" — este
+// último é de outro sistema interno da Chekaki e devolve 404 aqui). Usado para
+// sincronizar o status de comunicações já transmitidas fora do painel (ex.:
+// direto no site da Chekaki) e para conferir a situação antes do Cancelar.
+async function correlateComunicacaoVenda(comunicacaoId) {
+  try {
+    const r = await fetch(`${BASE_API_URL}/api/comunicado-venda/${comunicacaoId}`, {
+      headers: { 'chaveAcesso': CHAVE_ACESSO },
+    });
+    const data = await r.json().catch(() => null);
+    if (!r.ok || !data) return null;
+    return data;
+  } catch (e) {
+    console.error(`Erro ao consultar comunicação de venda ${comunicacaoId}:`, e.message);
+    return null;
+  }
+}
+
+// Gera (se ainda não houver cache válido) o comprovante em PDF de uma
+// comunicação de venda já transmitida/comunicada e cacheia por 7 dias — usado
+// tanto pelo botão "Transmitir" quanto pela sincronização automática em
+// GET /api/queries. Retorna {token, expiresAt} do cache (novo ou existente).
+async function cacheComunicacaoVendaPdf(queryId, userId, params) {
+  const existing = await pool.query(
+    `SELECT token, expires_at FROM pdf_cache WHERE query_id=$1 AND expires_at > NOW()`, [queryId]
+  );
+  if (existing.rows.length) return { token: existing.rows[0].token, expiresAt: existing.rows[0].expires_at };
+
+  const service = SERVICES.find(s => s.id === 'inserir-comunicacao-venda');
+  const pdfBuf = await buildComunicacaoVendaPdfBuffer(service, null, params);
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+  await pool.query(
+    `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+    [queryId, userId, token, pdfBuf.toString('base64'), expiresAt]
+  );
+  await pool.query(`UPDATE queries SET result_type='pdf' WHERE id=$1`, [queryId]);
+  return { token, expiresAt };
+}
+
 // Botão "Transmitir" de "Meus Comunicados de Venda" — finaliza na Chekaki uma
 // comunicação já inserida (situação inicial "importado" → "comunicado"; sem
-// transmitir, a comunicação de venda não é considerada concluída). Usa o "id"
-// salvo em result_data no momento do Inserir Comunicação Venda (ver resultData
-// em /api/query). Sem custo adicional: a cobrança já ocorreu no Inserir.
+// transmitir, a comunicação de venda não é considerada concluída). Usa o
+// "comunicacao_id" salvo em result_data no momento do Inserir Comunicação
+// Venda (ver resultData em /api/query). Sem custo adicional: a cobrança já
+// ocorreu no Inserir.
 app.post('/api/queries/:id/comunicacao-venda-transmitir', requireAuth, async (req, res) => {
   try {
     const qr = await pool.query(
-      `SELECT id, service_id, result_data FROM queries WHERE id=$1 AND user_id=$2`,
+      `SELECT id, service_id, result_data, params FROM queries WHERE id=$1 AND user_id=$2`,
       [req.params.id, req.user.id]
     );
     if (!qr.rows.length || qr.rows[0].service_id !== 'inserir-comunicacao-venda')
@@ -2365,7 +2439,7 @@ app.post('/api/queries/:id/comunicacao-venda-transmitir', requireAuth, async (re
 
     let meta = {};
     try { meta = JSON.parse(qr.rows[0].result_data || '{}'); } catch {}
-    const comunicacaoId = meta.id;
+    const comunicacaoId = meta.comunicacao_id;
     if (!comunicacaoId)
       return res.status(400).json({ error: 'Esta comunicação ainda não tem um identificador da Chekaki vinculado. Tente novamente em alguns instantes.' });
 
@@ -2386,9 +2460,124 @@ app.post('/api/queries/:id/comunicacao-venda-transmitir', requireAuth, async (re
     // marca um flag próprio, garantido, para não permitir transmitir de novo.
     const merged = { ...meta, ...(upData || {}), _transmitido: true };
     await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), qr.rows[0].id]);
+
+    // Só agora (comunicação já "comunicada" na Chekaki) gera o comprovante em PDF
+    // e cacheia por 7 dias — antes da transmissão o botão "PDF" fica indisponível
+    // em "Meus Comunicados de Venda" (ver renderMeusComunicadosVenda).
+    try {
+      let params = {};
+      try { params = JSON.parse(qr.rows[0].params || '{}'); } catch {}
+      await cacheComunicacaoVendaPdf(qr.rows[0].id, req.user.id, params);
+    } catch (e) {
+      console.error('Erro ao gerar/cachear PDF da comunicação de venda transmitida:', e.message);
+    }
+
     res.json({ success: true, result: merged });
   } catch (err) {
     console.error('Erro ao transmitir comunicação de venda:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// GET /api/queries/:id/comunicacao-venda-motivos — busca na Chekaki os motivos
+// de cancelamento disponíveis para uma comunicação já transmitida (mesma
+// tarifa do serviço avulso "Motivos de Cancelamento" no catálogo). Usado para
+// popular a escolha antes de confirmar o Cancelar em "Meus Comunicados de Venda".
+app.get('/api/queries/:id/comunicacao-venda-motivos', requireAuth, async (req, res) => {
+  try {
+    const qr = await pool.query(
+      `SELECT result_data FROM queries WHERE id=$1 AND user_id=$2 AND service_id='inserir-comunicacao-venda'`,
+      [req.params.id, req.user.id]
+    );
+    if (!qr.rows.length) return res.status(404).json({ error: 'Comunicação de venda não encontrada.' });
+
+    let meta = {};
+    try { meta = JSON.parse(qr.rows[0].result_data || '{}'); } catch {}
+    if (!meta._transmitido) return res.status(400).json({ error: 'Esta comunicação ainda não foi transmitida.' });
+    if (meta._cancelado) return res.status(400).json({ error: 'Esta comunicação já foi cancelada.' });
+    const protocolo = meta.protocolo;
+    if (!protocolo) return res.status(400).json({ error: 'Protocolo não encontrado para esta comunicação.' });
+
+    const svc = SERVICES.find(s => s.id === 'motivos-cancelamento');
+    const price = parseFloat((svc.basePrice * MARKUP).toFixed(2));
+    const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.user.id]);
+    const user = ur.rows[0];
+    if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+    if (parseFloat(user.credits) < price)
+      return res.status(400).json({ error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}` });
+
+    const upRes = await fetch(`${BASE_API_URL}/motivos-cancelamento/${protocolo}`, {
+      headers: { 'chaveAcesso': CHAVE_ACESSO },
+    });
+    const upData = await upRes.json().catch(() => null);
+    if (!upRes.ok || !Array.isArray(upData?.motivos))
+      return res.status(502).json({ error: upData?.error || 'Erro ao buscar motivos de cancelamento.' });
+
+    await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
+    await pool.query(
+      `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3)`,
+      [req.user.id, price, 'Consulta: Motivos de Cancelamento']
+    );
+    res.json({ success: true, motivos: upData.motivos, charged: price });
+  } catch (err) {
+    console.error('Erro ao buscar motivos de cancelamento:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// POST /api/queries/:id/comunicacao-venda-cancelar — cancela na Chekaki uma
+// comunicação já transmitida (mesma tarifa do serviço avulso "Cancelar
+// Comunicação Venda" no catálogo). Ação irreversível na Chekaki.
+app.post('/api/queries/:id/comunicacao-venda-cancelar', requireAuth, async (req, res) => {
+  try {
+    const idMotivo = parseInt(req.body?.id_motivo_cancelamento, 10);
+    if (!Number.isInteger(idMotivo) || idMotivo <= 0)
+      return res.status(400).json({ error: 'Informe o motivo do cancelamento.' });
+
+    const qr = await pool.query(
+      `SELECT result_data FROM queries WHERE id=$1 AND user_id=$2 AND service_id='inserir-comunicacao-venda'`,
+      [req.params.id, req.user.id]
+    );
+    if (!qr.rows.length) return res.status(404).json({ error: 'Comunicação de venda não encontrada.' });
+
+    let meta = {};
+    try { meta = JSON.parse(qr.rows[0].result_data || '{}'); } catch {}
+    if (!meta._transmitido) return res.status(400).json({ error: 'Esta comunicação ainda não foi transmitida.' });
+    if (meta._cancelado) return res.status(400).json({ error: 'Esta comunicação já foi cancelada.' });
+    const comunicacaoId = meta.comunicacao_id;
+    const protocolo = meta.protocolo;
+    if (!comunicacaoId || !protocolo)
+      return res.status(400).json({ error: 'Identificador ou protocolo da comunicação não encontrado.' });
+
+    const svc = SERVICES.find(s => s.id === 'cancelar-comunicacao-venda');
+    const price = parseFloat((svc.basePrice * MARKUP).toFixed(2));
+    const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.user.id]);
+    const user = ur.rows[0];
+    if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+    if (parseFloat(user.credits) < price)
+      return res.status(400).json({ error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}` });
+
+    const upRes = await fetch(`${BASE_API_URL}/cancelar-comunicacao-venda`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO },
+      body: JSON.stringify({ id: comunicacaoId, protocolo, id_motivo_cancelamento: idMotivo }),
+    });
+    const upData = await upRes.json().catch(() => null);
+    if (!upRes.ok) {
+      const errMsg = upData?.error || upData?.erro || `Erro HTTP ${upRes.status}.`;
+      return res.status(upRes.status).json({ error: errMsg });
+    }
+
+    await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
+    await pool.query(
+      `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3)`,
+      [req.user.id, price, 'Consulta: Cancelar Comunicação Venda']
+    );
+    const merged = { ...meta, ...(upData || {}), _cancelado: true };
+    await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), qr.rows[0].id]);
+    res.json({ success: true, result: merged });
+  } catch (err) {
+    console.error('Erro ao cancelar comunicação de venda:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
   }
 });
@@ -3118,19 +3307,6 @@ app.post('/api/query', requireAuth, async (req, res) => {
       }
     }
 
-    // Inserir Comunicação Venda: o retorno de sucesso deixa de ser exibido como
-    // JSON — monta o PDF do comprovante a partir do JSON retornado, no mesmo
-    // padrão visual do relatório de Débitos por Estado.
-    let vendaPdfBuf = null;
-    if (serviceId === 'inserir-comunicacao-venda' && !willBePdfOrHtml && genericParseOk) {
-      try {
-        vendaPdfBuf = await buildComunicacaoVendaPdfBuffer(service, genericData, params);
-      } catch (e) {
-        console.error(`[${serviceId}] erro ao gerar PDF do comprovante:`, e.message);
-        return res.status(500).json({ error: 'Erro ao gerar o PDF do comprovante.' });
-      }
-    }
-
     // ── Debita créditos somente após validar resposta ─────────────────────────
     await pool.query(
       'UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]
@@ -3141,22 +3317,23 @@ app.post('/api/query', requireAuth, async (req, res) => {
     );
     // Guarda o corpo JSON retornado (quando não é PDF/HTML) para o histórico poder
     // reexibir o mesmo resultado depois, sem precisar refazer (e recobrar) a consulta.
-    // Exceção: Inserir Comunicação Venda vira PDF (vendaPdfBuf), mas o JSON de origem
-    // (com o "id" da Chekaki) precisa ficar salvo mesmo assim — é o que habilita o
-    // botão "Transmitir" em "Meus Comunicados de Venda" sem precisar reabrir o PDF.
-    const resultData = vendaPdfBuf ? JSON.stringify(genericData)
-      : willBePdfOrHtml ? null
+    // Exceção: Inserir Comunicação Venda não vira PDF aqui — o comprovante só é
+    // gerado depois, quando o usuário transmite (ver /comunicacao-venda-transmitir),
+    // porque antes disso a comunicação ainda está "importada", não "comunicada".
+    // O JSON de origem (com o "id" da Chekaki) fica salvo mesmo assim — é o que
+    // habilita o botão "Transmitir" em "Meus Comunicados de Venda".
+    const resultData = willBePdfOrHtml ? null
       : JSON.stringify(genericParseOk ? genericData : { resposta: bodyStr });
     const qRow = await pool.query(
       `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type, result_data)
        VALUES ($1,$2,$3,$4,'success',$5,$6,$7,$8) RETURNING id`,
       [req.user.id, serviceId, service.name, JSON.stringify(params || {}),
        price, txRow.rows[0].id,
-       htmlBuf ? 'html' : (isRealPdf || base64PdfBuf || dcDebitoPdfBuf || dcMotorPdfBuf || vendaPdfBuf) ? 'pdf' : 'json',
+       htmlBuf ? 'html' : (isRealPdf || base64PdfBuf || dcDebitoPdfBuf || dcMotorPdfBuf) ? 'pdf' : 'json',
        resultData]
     );
     // ── Envia PDF + salva no cache por 7 dias ────────────────────────────────
-    const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null) || dcDebitoPdfBuf || dcMotorPdfBuf || vendaPdfBuf;
+    const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null) || dcDebitoPdfBuf || dcMotorPdfBuf;
 
     if (ATPVE_UFS.some(uf => serviceId === `intencao-venda-${uf}`)) {
       const atpveUf = serviceId.split('-')[2];
@@ -3280,6 +3457,17 @@ app.post('/api/query', requireAuth, async (req, res) => {
             console.error('Erro ao notificar CRLV-e Agendado via WhatsApp:', e.message);
           }
         }
+      }
+
+      // Inserir Comunicação Venda: não expõe o JSON bruto da Chekaki (traz um campo
+      // de situação tipo "importado" que confundiria o usuário) — o comprovante em
+      // PDF só é gerado depois, na transmissão (ver /comunicacao-venda-transmitir).
+      if (serviceId === 'inserir-comunicacao-venda') {
+        return res.json({
+          success: true,
+          result: { status: 'Comunicação de venda inserida com sucesso! Vá em "Meus Comunicados de Venda" e clique em "Transmitir" para finalizar — o comprovante em PDF fica disponível após a transmissão.' },
+          charged: price,
+        });
       }
 
       return res.json({ success: true, result: data, charged: price });
