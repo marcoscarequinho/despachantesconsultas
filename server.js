@@ -2582,9 +2582,13 @@ app.post('/api/queries/:id/comunicacao-venda-cancelar', requireAuth, async (req,
   }
 });
 
-// ── POST /api/query ───────────────────────────────────────────────────────────
-app.post('/api/query', requireAuth, async (req, res) => {
-  const { serviceId, params } = req.body;
+// Núcleo do catálogo "Nova Consulta" — extraído para função reutilizável (em
+// vez de ler req.user.id/req.body direto) para poder ser chamado tanto pelo
+// painel (cookie JWT, ver app.post('/api/query') abaixo) quanto pela API
+// externa de chave (ver app.post('/api/v1/:serviceId')), debitando sempre o
+// userId explícito recebido — no painel é req.user.id, na API é o dono da
+// chave (req.apiUser.id).
+async function processCatalogQuery(userId, serviceId, params, res) {
   if (!serviceId) return res.status(400).json({ error: 'Serviço não informado.' });
 
   const service = SERVICES.find(s => s.id === serviceId);
@@ -2592,7 +2596,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
   if (MG_AUTO_SERVICES[serviceId]) {
     try {
-      return await handleMgInfosimplesAuto(req, res, service, params);
+      return await handleMgInfosimplesAuto({ user: { id: userId } }, res, service, params);
     } catch (err) {
       console.error(`Erro em /api/query [${serviceId}]:`, err.message);
       return res.status(500).json({ error: 'Erro interno. Tente novamente.' });
@@ -2603,7 +2607,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
   try {
     const ur = await pool.query(
-      'SELECT credits, active, phone, name, email FROM users WHERE id=$1', [req.user.id]
+      'SELECT credits, active, phone, name, email FROM users WHERE id=$1', [userId]
     );
     const user = ur.rows[0];
     if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
@@ -2614,15 +2618,15 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
     // ── Serviços manuais (upload de arquivo pelo super admin — resultado não vem na hora) ──
     if (MANUAL_SERVICE_IDS.includes(serviceId)) {
-      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
+      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]);
       const txRow = await pool.query(
         `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
-        [req.user.id, price, `Consulta: ${service.name}`]
+        [userId, price, `Consulta: ${service.name}`]
       );
       await pool.query(
         `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
          VALUES ($1,$2,$3,$4,'pendente',$5,$6,'pdf') RETURNING id`,
-        [req.user.id, serviceId, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id]
+        [userId, serviceId, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id]
       );
 
       await notifyAdminNewQuery(user, service, price, params);
@@ -3309,11 +3313,11 @@ app.post('/api/query', requireAuth, async (req, res) => {
 
     // ── Debita créditos somente após validar resposta ─────────────────────────
     await pool.query(
-      'UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]
+      'UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]
     );
     const txRow = await pool.query(
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
-      [req.user.id, price, `Consulta: ${service.name}`]
+      [userId, price, `Consulta: ${service.name}`]
     );
     // Guarda o corpo JSON retornado (quando não é PDF/HTML) para o histórico poder
     // reexibir o mesmo resultado depois, sem precisar refazer (e recobrar) a consulta.
@@ -3327,7 +3331,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
     const qRow = await pool.query(
       `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type, result_data)
        VALUES ($1,$2,$3,$4,'success',$5,$6,$7,$8) RETURNING id`,
-      [req.user.id, serviceId, service.name, JSON.stringify(params || {}),
+      [userId, serviceId, service.name, JSON.stringify(params || {}),
        price, txRow.rows[0].id,
        htmlBuf ? 'html' : (isRealPdf || base64PdfBuf || dcDebitoPdfBuf || dcMotorPdfBuf) ? 'pdf' : 'json',
        resultData]
@@ -3342,7 +3346,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       // extra/LAUDOCAR), garante e notifica aqui mesmo — do contrário o bloco
       // abaixo (pdfToSend) já cuida de cachear e mandar por WhatsApp.
       if (match && !pdfToSend) {
-        await ensureAtpvePdfCached(atpveUf, qRow.rows[0].id, req.user.id, match, user.phone);
+        await ensureAtpvePdfCached(atpveUf, qRow.rows[0].id, userId, match, user.phone);
       }
     }
     await notifyAdminNewQuery(user, service, price, params);
@@ -3354,7 +3358,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
       await pool.query(
         `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at)
          VALUES ($1,$2,$3,$4,$5)`,
-        [qRow.rows[0].id, req.user.id, token, dataToCache.toString('base64'), expiresAt]
+        [qRow.rows[0].id, userId, token, dataToCache.toString('base64'), expiresAt]
       ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
       if (pdfToSend) {
         // Envia PDF via WhatsApp para CRLV-e Digital (instantâneo)
@@ -3416,7 +3420,7 @@ app.post('/api/query', requireAuth, async (req, res) => {
           await pool.query(
             `INSERT INTO crlv_agendado_pending (pedido_id, user_id, phone, service_id, uf, placa)
              VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (pedido_id) DO NOTHING`,
-            [String(pedidoId), req.user.id, user.phone, serviceId, uf, placa]
+            [String(pedidoId), userId, user.phone, serviceId, uf, placa]
           ).catch(e => console.error('Erro ao enfileirar CRLV-e Agendado:', e.message));
         }
       }
@@ -3478,6 +3482,37 @@ app.post('/api/query', requireAuth, async (req, res) => {
     console.error('Erro em /api/query:', err.message);
     res.status(500).json({ error: 'Erro interno. Tente novamente.' });
   }
+}
+
+// ── POST /api/query ────────────────────────────────────────────────────────
+app.post('/api/query', requireAuth, (req, res) =>
+  processCatalogQuery(req.user.id, req.body.serviceId, req.body.params, res));
+
+// Grupos/serviços do catálogo "Nova Consulta" fora do alcance da API de chave
+// (/api/v1): ATPV-e exige documentos/fotos e um fluxo próprio no painel, e os
+// serviços "manuais" (upload de PDF pelo super admin) não respondem na hora —
+// não há hoje uma rota de API para o cliente buscar esse resultado depois.
+const V1_EXCLUDED_GROUPS = ['Intenção de Venda (ATPVE)'];
+function isV1Eligible(serviceId) {
+  const svc = SERVICES.find(s => s.id === serviceId);
+  if (!svc) return false;
+  if (V1_EXCLUDED_GROUPS.includes(svc.group)) return false;
+  if (MANUAL_SERVICE_IDS.includes(svc.id)) return false;
+  return true;
+}
+
+// ── POST /api/v1/:serviceId — catálogo "Nova Consulta" para clientes com chave
+// de API ─────────────────────────────────────────────────────────────────────
+// Mesmo núcleo (processCatalogQuery) e mesmo preço do painel (basePrice *
+// markup), mas autenticado por chave em vez de cookie JWT, e debitando sempre
+// da conta vinculada à chave — chave Geral (pós-paga, sem usuário) não serve
+// aqui, só para os endpoints DETRAN/MG (ver runExternalInfosimplesQuery).
+app.post('/api/v1/:serviceId', requireApiKey, (req, res) => {
+  if (!req.apiUser)
+    return res.status(403).json({ error: 'Esta chave é do tipo Geral e não pode ser usada para o catálogo de Nova Consulta.' });
+  if (!isV1Eligible(req.params.serviceId))
+    return res.status(404).json({ error: 'Serviço não disponível pela API.' });
+  return processCatalogQuery(req.apiUser.id, req.params.serviceId, req.body, res);
 });
 
 // ── POST /api/query-v2 (API Datacube — aba "Opção 2 Nova Consulta") ───────────

@@ -135,6 +135,13 @@
       </svg>
       Tabela de Preços
     </div>
+    <div class="nav-item" data-section="apidocs" onclick="showSection('apidocs')">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M10 20l4-16m4 4l4 4-4 4M6 8l-4 4 4 4"/>
+      </svg>
+      Integração API
+    </div>
     <div class="nav-item" data-section="affiliate" onclick="showSection('affiliate')">
       <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -874,6 +881,32 @@
       <div id="prices-content" class="space-y-6"></div>
     </section>
 
+    <!-- ── INTEGRAÇÃO API ──────────────────────────────────────────────── -->
+    <section id="section-apidocs" class="dash-section hidden space-y-5">
+
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Integração API</h2>
+        <p class="text-sm text-gray-500">Endpoints do catálogo "Nova Consulta" para integrar via API. Requer uma chave de API (peça ao suporte) — cada chamada é cobrada do saldo da conta vinculada à chave, no mesmo valor da consulta no painel.</p>
+      </div>
+
+      <div class="card bg-amber-50 border border-amber-200 flex gap-3">
+        <span class="text-amber-600 text-xl flex-shrink-0 mt-0.5">💡</span>
+        <p class="text-sm text-amber-800">
+          Envie a chave no header <code class="bg-white px-1 rounded">X-API-Key</code> (ou <code class="bg-white px-1 rounded">Authorization: Bearer</code>).
+          Serviços de "Intenção de Venda (ATPVE)" e os de conferência manual (upload de PDF pela equipe) não estão disponíveis por essa API.
+        </p>
+      </div>
+
+      <div class="card space-y-4">
+        <div>
+          <label class="label">Serviço</label>
+          <select id="apidoc-service-select" onchange="showApiDocFor(this.value)" class="input-field"></select>
+        </div>
+
+        <div id="apidoc-detail" class="space-y-3"></div>
+      </div>
+    </section>
+
     <!-- ── INDICAÇÕES ───────────────────────────────────────────────────── -->
     <section id="section-affiliate" class="dash-section hidden space-y-5 max-w-2xl">
 
@@ -1161,6 +1194,7 @@ function showSection(id) {
   }
   if (id === 'history')   renderHistoryTable();
   if (id === 'prices')    renderPrices();
+  if (id === 'apidocs')   renderApiDocs();
   if (id === 'affiliate') loadAffiliate();
 }
 
@@ -2017,6 +2051,144 @@ function inputTypeLabel(t) {
     veiculos_documento:  'Entrada: CPF/CNPJ',
   };
   return map[t] || t;
+}
+
+// ── Integração API ───────────────────────────────────────────────────────────
+// Reaproveita allServices (já carregado em init(), ver /api/services) e espelha
+// o mesmo formato de parâmetros de buildParams() (mais abaixo), só que com
+// valores de exemplo fixos em vez de ler do formulário — usado para montar o
+// exemplo de código Node.js. Os grupos/serviços de fora do alcance da API
+// (ATPVE e conferência manual) precisam ser filtrados aqui também porque o
+// servidor não devolve um flag para isso em /api/services.
+function renderApiDocs() {
+  const sel = document.getElementById('apidoc-service-select');
+  const groups = {};
+  allServices.forEach(s => {
+    if (s.group === 'Intenção de Venda (ATPVE)') return;
+    if (s.group === 'Número CRV (Apenas antigos)') return;
+    if (s.id === 'crlv-agendado-rj-reemissao') return;
+    if (!groups[s.group]) groups[s.group] = [];
+    groups[s.group].push(s);
+  });
+  sel.innerHTML = Object.entries(groups).map(([group, svcs]) => `
+    <optgroup label="${escapeHtml(group)}">
+      ${svcs.map(s => `<option value="${s.id}">${escapeHtml(s.name)} — ${fmt(s.price)}</option>`).join('')}
+    </optgroup>`).join('');
+  if (sel.value) showApiDocFor(sel.value);
+}
+
+function apiExampleParams(inputType) {
+  const map = {
+    placa:               { placa: 'ABC1D23' },
+    placa_uf:            { placa: 'ABC1D23', uf: 'RJ' },
+    placa_uf_select:     { placa: 'ABC1D23', uf: 'RJ' },
+    placa_renavam_cpfcnpj_uf_select: { placa: 'ABC1D23', renavam: '00000000000', cpf_cnpj: '00000000000', uf: 'RJ' },
+    motor:               { motor: '1234567890' },
+    chassi:              { chassi: '9BWZZZ377VT004251' },
+    cpfcnpj:             { cpfCnpj: '00000000000' },
+    protocolo:           { protocolo: '0000000000' },
+    protocolo_get:       { protocolo: '0000000000' },
+    id_only:             { id: '12345' },
+    id_get:              { id: '12345' },
+    pedido_id_get:       { pedido_id: '12345' },
+    placa_renavam:       { placa: 'ABC1D23', renavam: '00000000000' },
+    placa_renavam_cpf:   { placa: 'ABC1D23', renavam: '00000000000', cpf: '00000000000' },
+    crlv_agendado_placa: { placa: 'ABC1D23' },
+    crlv_agendado_cpf:   { placa: 'ABC1D23', renavam: '00000000000', cpf: '00000000000' },
+    crv_full: {
+      placa: 'ABC1D23', renavam: '00000000000',
+      crv: { numero: '123456789012', codigo_seguranca: '00000000000', numero_via: '1', data_emissao: '01/01/2020', uf_emissao: 'RJ' },
+    },
+    valida_crv:          { placa: 'ABC1D23', renavam: '00000000000', uf: 'RJ', crv: '00000000000' },
+    cancelar_venda:      { id: '12345', protocolo: '0000000000', id_motivo_cancelamento: '1' },
+    debito_doc:          { placa: 'ABC1D23', renavam: '00000000000', documento: '00000000000' },
+    debito_chassi:       { placa: 'ABC1D23', renavam: '00000000000', chassi: '9BWZZZ377VT004251' },
+    debito_renavam:      { renavam: '00000000000' },
+    cnh_nome_cpf:        { nome: 'NOME COMPLETO', cpf: '00000000000' },
+    cnh_al:              { cpf: '00000000000', data_nascimento: '01/01/1990', cod_municipio_nascimento: '3304557', uf_nascimento: 'RJ' },
+    cnh_cpf_formulario:  { cpf: '00000000000', formulario: '00000000000' },
+    cnh_only:            { cnh: '00000000000' },
+    cnh_cpf_cnh:         { cpf: '00000000000', cnh: '00000000000' },
+    cnh_cpf_renach:      { cpf: '00000000000', renach: '00000000000' },
+    cnh_pr:              { cpf: '00000000000', cnh: '00000000000', data_validade_cnh: '01/01/2030' },
+    cnh_se:              { cnh: '00000000000', registro: '00000000000', data_nascimento: '01/01/1990' },
+    cnh_cpf_nascimento:  { cpf: '00000000000', data_nascimento: '01/01/1990' },
+    veiculos_documento:  { documento: '00000000000' },
+    venda: {
+      vendedor:  { tipo_pessoa: 'F', cpf: '00000000000', nome: 'NOME DO VENDEDOR' },
+      comprador: {
+        tipo_pessoa: 'F', cpf: '00000000000', nome: 'NOME DO COMPRADOR',
+        endereco: { cep: '00000000', logradouro: 'RUA EXEMPLO', numero: '100', bairro: 'CENTRO', complemento: '', cidade: '3304557' },
+      },
+      venda: { data: '01/01/2026', valor: '15000', comprador_solicitante: 'S' },
+      veiculo: {
+        placa: 'ABC1D23', renavam: '00000000000',
+        ano_fabricacao: '2015', ano_modelo: '2016',
+        crv: { numero: '123456789012', codigo_seguranca: '00000000000', numero_via: '1', data_emissao: '01/01/2020', uf_emissao: 'RJ' },
+      },
+    },
+  };
+  return map[inputType] || {};
+}
+
+function showApiDocFor(serviceId) {
+  const s = allServices.find(x => x.id === serviceId);
+  const wrap = document.getElementById('apidoc-detail');
+  if (!s) { wrap.innerHTML = ''; return; }
+
+  const url = `${window.location.origin}/api/v1/${s.id}`;
+  const bodyExample = JSON.stringify(apiExampleParams(s.inputType), null, 2);
+  const code = `const API_KEY = 'mcd_SUA_CHAVE_AQUI';
+
+const res = await fetch('${url}', {
+  method: 'POST',
+  headers: {
+    'X-API-Key': API_KEY,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify(${bodyExample}),
+});
+
+if ((res.headers.get('content-type') || '').includes('application/pdf')) {
+  const buffer = Buffer.from(await res.arrayBuffer());
+  require('fs').writeFileSync('resultado.pdf', buffer);
+  console.log('PDF salvo em resultado.pdf');
+} else {
+  const data = await res.json();
+  console.log(data);
+}`;
+
+  wrap.innerHTML = `
+    <div class="grid sm:grid-cols-2 gap-3">
+      <div class="p-3 bg-gray-50 rounded-lg border border-gray-100">
+        <div class="text-xs text-gray-400">Preço</div>
+        <div class="font-semibold text-gray-800">${fmt(s.price)}</div>
+      </div>
+      <div class="p-3 bg-gray-50 rounded-lg border border-gray-100">
+        <div class="text-xs text-gray-400">Entrada</div>
+        <div class="font-semibold text-gray-800 text-sm">${inputTypeLabel(s.inputType)}</div>
+      </div>
+    </div>
+    <div>
+      <div class="text-xs text-gray-400 mb-1">Endpoint</div>
+      <code class="block text-xs bg-gray-900 text-green-400 rounded-lg px-3 py-2 overflow-x-auto">POST ${escapeHtml(url)}</code>
+    </div>
+    <div>
+      <div class="flex items-center justify-between mb-1">
+        <div class="text-xs text-gray-400">Exemplo em Node.js</div>
+        <button type="button" onclick="copyApiDocCode(this)" class="text-xs bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded font-medium">📋 Copiar</button>
+      </div>
+      <pre id="apidoc-code" class="text-xs bg-gray-900 text-gray-100 rounded-lg p-3 overflow-x-auto whitespace-pre">${escapeHtml(code)}</pre>
+    </div>`;
+}
+
+function copyApiDocCode(btnEl) {
+  const code = document.getElementById('apidoc-code').textContent;
+  navigator.clipboard.writeText(code).then(() => {
+    const original = btnEl.textContent;
+    btnEl.textContent = '✅ Copiado!';
+    setTimeout(() => { btnEl.textContent = original; }, 1500);
+  });
 }
 
 function quickSelect(serviceId) {
