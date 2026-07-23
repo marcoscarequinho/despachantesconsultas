@@ -383,6 +383,7 @@
               <option value="user">Cliente específico (pré-paga)</option>
               <option value="general">Geral — pós-paga (cobrança por WhatsApp)</option>
             </select>
+            <p id="ak-type-scope" class="text-xs text-gray-500 mt-1"></p>
           </div>
           <div class="md:col-span-1" id="ak-user-wrap">
             <label class="label">Cliente (conta debitada) *</label>
@@ -755,7 +756,7 @@ function showSection(id) {
   if (id === 'queries'  && !allQueries.length)  loadQueries();
   if (id === 'services' && !allServices.length) loadServices();
   if (id === 'manual')  loadManualQueries();
-  if (id === 'api-keys') loadApiKeys();
+  if (id === 'api-keys') { loadApiKeys(); toggleApiKeyType(); }
   if (id === 'avulsas') loadPublicOrders();
   if (id === 'api-cobrancas') loadApiCharges();
 }
@@ -846,6 +847,9 @@ function renderApiKeys(keys) {
 function toggleApiKeyType() {
   const general = document.getElementById('ak-type').value === 'general';
   document.getElementById('ak-user-wrap').style.display = general ? 'none' : '';
+  document.getElementById('ak-type-scope').textContent = general
+    ? '🔒 Funciona só nos 2 endpoints DETRAN/MG (R$ 5,00, cobrança por WhatsApp).'
+    : '✅ Funciona nos 2 endpoints DETRAN/MG (R$ 5,00) e em todo o catálogo "Nova Consulta" (preço normal da tabela) — mesma chave, mesmo saldo.';
 }
 
 async function createApiKey() {
