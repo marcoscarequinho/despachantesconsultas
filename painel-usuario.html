@@ -26,8 +26,6 @@
     .badge-red   { display:inline-flex;align-items:center;padding:.2rem .6rem;border-radius:9999px;font-size:.75rem;font-weight:600;background:#fee2e2;color:#991b1b; }
     .badge-blue  { display:inline-flex;align-items:center;padding:.2rem .6rem;border-radius:9999px;font-size:.75rem;font-weight:600;background:#dbeafe;color:#1e40af; }
     .badge-amber { display:inline-flex;align-items:center;padding:.2rem .6rem;border-radius:9999px;font-size:.75rem;font-weight:600;background:#fef3c7;color:#92400e; }
-    .toast { position:fixed;bottom:1.5rem;right:1.5rem;z-index:9999;background:#1f2937;color:white;padding:.8rem 1.25rem;border-radius:.6rem;font-size:.875rem;box-shadow:0 4px 16px rgba(0,0,0,.2);transform:translateY(0);opacity:1;transition:all .3s; }
-    .toast.hide { transform:translateY(8px);opacity:0; }
     #sidebar { transition:transform .25s ease; }
     @media(max-width:768px) { #sidebar { transform:translateX(-100%); } #sidebar.open { transform:translateX(0); } }
     .table-row:hover td { background:#f9fafb; }
@@ -1091,8 +1089,18 @@
   </svg>
 </a>
 
-<!-- TOAST -->
-<div id="toast" class="toast hide"></div>
+<!-- TOAST (popup) -->
+<div id="toast-modal" class="fixed inset-0 z-[9999] hidden items-center justify-center p-4" style="background:rgba(0,0,0,.6);" onclick="if(event.target===this) closeToast()">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden">
+    <div class="px-5 py-5 flex items-start gap-3">
+      <div id="toast-icon" class="text-2xl flex-shrink-0"></div>
+      <div id="toast-msg" class="text-sm text-gray-700 leading-relaxed pt-0.5"></div>
+    </div>
+    <div class="px-5 py-3 border-t border-gray-100 flex justify-end">
+      <button onclick="closeToast()" class="text-xs bg-gray-800 hover:bg-gray-900 text-white px-4 py-1.5 rounded font-medium">OK</button>
+    </div>
+  </div>
+</div>
 
 <!-- BANNER FLUTUANTE: PRAZO CRV ANTIGO -->
 <div id="banner-crv-antigo" class="crv-banner hidden" role="status">
@@ -1163,6 +1171,7 @@ let allQueries  = [];
 let selectedCat = null;
 let selectedSvc = null;
 let lastPdfBlob = null;
+let editingComunicacaoVendaQueryId = null;
 
 const sectionTitles = {
   overview:  'Visão Geral',
@@ -1198,11 +1207,17 @@ const fmtDate = s => {
 
 // ── Toast ──────────────────────────────────────────────────────────────────────
 function toast(msg, type = 'success') {
-  const el = document.getElementById('toast');
-  el.textContent = (type === 'success' ? '✅ ' : '❌ ') + msg;
-  el.classList.remove('hide');
-  clearTimeout(el._t);
-  el._t = setTimeout(() => el.classList.add('hide'), 3500);
+  document.getElementById('toast-icon').textContent = type === 'success' ? '✅' : '❌';
+  document.getElementById('toast-msg').textContent = msg;
+  const modal = document.getElementById('toast-modal');
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+}
+
+function closeToast() {
+  const modal = document.getElementById('toast-modal');
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
 }
 
 // ── Sidebar ────────────────────────────────────────────────────────────────────
@@ -1784,6 +1799,7 @@ function renderMeusComunicadosVenda() {
         </div>
         <div class="text-right flex-shrink-0 flex items-center gap-2 flex-wrap justify-end">
           <div class="text-sm font-semibold text-red-500">-${fmt(q.amount)}</div>
+          ${!jaTransmitido && !cancelada && meta.comunicacao_id ? `<button type="button" onclick="alterarComunicacaoVenda(${q.id})" class="text-xs bg-amber-500 hover:bg-amber-600 text-white px-2 py-1 rounded font-medium">✏️ Alterar</button>` : ''}
           ${!jaTransmitido && meta.comunicacao_id ? `<button type="button" onclick="transmitirComunicacaoVenda(${q.id}, this)" class="text-xs bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded font-medium">📤 Transmitir</button>` : ''}
           ${jaTransmitido && !cancelada ? `<button type="button" onclick="cancelarComunicacaoVenda(${q.id}, this)" class="text-xs bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded font-medium">❌ Cancelar</button>` : ''}
           ${jaTransmitido
@@ -1800,6 +1816,61 @@ function renderMeusComunicadosVenda() {
 function transmitirComunicacaoVenda(queryId, btnEl) {
   if (!confirm('Confirma a transmissão desta comunicação de venda? Depois de transmitida ela não pode ser desfeita por aqui.')) return;
   runAtpveAction('comunicacao-venda-transmitir', queryId, btnEl, 'Transmitindo...', 'Comunicação de venda transmitida com sucesso!');
+}
+
+// Botão "Alterar" — reabre o formulário de Inserir Comunicação de Venda
+// pré-preenchido com os dados já salvos, para corrigir algo (ex.: data da
+// venda errada) antes de transmitir, sem precisar entrar na Chekaki direto.
+// submitQuery() detecta editingComunicacaoVendaQueryId e envia para
+// /api/queries/:id/comunicacao-venda-alterar em vez de criar uma nova consulta.
+function alterarComunicacaoVenda(queryId) {
+  const q = allQueries.find(x => x.id === queryId);
+  if (!q) return;
+  let p = {};
+  try { p = JSON.parse(q.params || '{}'); } catch {}
+  const svc = allServices.find(s => s.id === 'inserir-comunicacao-venda');
+  if (!svc) return;
+
+  editingComunicacaoVendaQueryId = queryId;
+  selectedSvc = svc;
+  document.getElementById('form-service-name').textContent = '✏️ Alterar Comunicação de Venda';
+  document.getElementById('form-service-price').textContent = 'Grátis';
+  document.getElementById('form-slow-note').classList.add('hidden');
+  renderFormFields('venda', svc);
+  preencherFormVenda(p);
+  document.getElementById('query-submit-text').textContent = 'Salvar Alterações';
+  document.getElementById('service-selector-wrap').classList.add('hidden');
+  document.getElementById('query-form-wrap').classList.remove('hidden');
+  document.getElementById('query-result-wrap').classList.add('hidden');
+  document.getElementById('form-error').classList.add('hidden');
+  document.getElementById('query-form-wrap').scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
+
+function preencherFormVenda(p) {
+  const set = (id, val) => { const el = document.getElementById('f-' + id); if (el) el.value = val ?? ''; };
+  const v = p.vendedor || {}, c = p.comprador || {}, end = c.endereco || {};
+  const vda = p.venda  || {}, veic = p.veiculo || {}, crv = veic.crv || {};
+  set('v_cpf', v.cpf || v.cnpj);
+  set('v_nome', v.nome);
+  set('c_cpf', c.cpf || c.cnpj);
+  set('c_nome', c.nome);
+  set('c_cep', end.cep);
+  set('c_cidade', end.cidade);
+  set('c_logradouro', end.logradouro);
+  set('c_numero', end.numero);
+  set('c_bairro', end.bairro);
+  set('c_uf', end.uf);
+  set('venda_data', vda.data);
+  set('venda_valor', vda.valor);
+  set('placa', veic.placa);
+  set('renavam', veic.renavam);
+  set('ano_fab', veic.ano_fabricacao);
+  set('ano_mod', veic.ano_modelo);
+  set('crv_numero', crv.numero);
+  set('crv_codigo', crv.codigo_seguranca);
+  set('crv_via', crv.numero_via);
+  set('crv_data', crv.data_emissao);
+  set('crv_uf', crv.uf_emissao);
 }
 
 // Cancelar (pago, mesma tarifa dos serviços avulsos "Motivos de Cancelamento" e
@@ -2729,11 +2800,13 @@ async function autocompletarCep(cep) {
 
 function resetForm(showCats = true) {
   selectedSvc = null;
+  editingComunicacaoVendaQueryId = null;
   document.getElementById('query-form-wrap').classList.add('hidden');
   document.getElementById('query-result-wrap').classList.add('hidden');
   document.getElementById('service-selector-wrap').classList.add('hidden');
   document.getElementById('form-error').classList.add('hidden');
   document.getElementById('query-form').reset();
+  document.getElementById('query-submit-text').textContent = 'Realizar Consulta';
   if (showCats) {
     document.querySelectorAll('.service-cat').forEach(el => el.classList.remove('selected'));
   }
@@ -2751,6 +2824,29 @@ async function submitQuery(e) {
   if (validationError) { showFormError(validationError); return; }
 
   setQueryLoading(true);
+
+  // Modo "Alterar" (botão ✏️ Alterar em Meus Comunicados de Venda): reenvia o
+  // payload completo para /comunicacao-venda/salvar/:id na Chekaki em vez de
+  // criar uma nova consulta — sem cobrança adicional.
+  if (editingComunicacaoVendaQueryId) {
+    try {
+      const r = await fetch(`/api/queries/${editingComunicacaoVendaQueryId}/comunicacao-venda-alterar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      const d = await r.json();
+      if (!r.ok) { showFormError(d.error || 'Erro ao alterar comunicação de venda.'); return; }
+      resetForm(false);
+      toast('Comunicação de venda alterada com sucesso!');
+      await loadQueries();
+    } catch {
+      showFormError('Erro de conexão. Verifique sua internet e tente novamente.');
+    } finally {
+      setQueryLoading(false);
+    }
+    return;
+  }
 
   try {
     const res = await fetch('/api/query', {
@@ -2919,7 +3015,9 @@ function validateParams(inputType, p) {
 
 function setQueryLoading(on) {
   document.getElementById('query-submit').disabled = on;
-  document.getElementById('query-submit-text').textContent = on ? 'Processando...' : 'Realizar Consulta';
+  document.getElementById('query-submit-text').textContent = on
+    ? 'Processando...'
+    : (editingComunicacaoVendaQueryId ? 'Salvar Alterações' : 'Realizar Consulta');
   document.getElementById('query-spinner').classList.toggle('hidden', !on);
 }
 
