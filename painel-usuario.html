@@ -347,6 +347,19 @@
         </div>
       </div>
 
+      <!-- Destaque: CRLV-e Rio de Janeiro -->
+      <div class="flex justify-center">
+        <button type="button" onclick="selectCrlvRj()"
+          class="w-full max-w-md flex items-center gap-4 rounded-xl border-2 border-orange-300 bg-gradient-to-r from-orange-50 to-white p-4 text-left shadow-sm hover:shadow-md hover:border-orange-400 transition-all">
+          <div class="w-14 h-14 rounded-full bg-orange-100 flex items-center justify-center text-3xl flex-shrink-0">📄</div>
+          <div class="min-w-0 flex-1">
+            <div class="font-bold text-gray-800">CRLV-e Rio de Janeiro</div>
+            <div class="text-sm text-orange-700 font-medium">⚡ Emissão Instantânea</div>
+          </div>
+          <div class="price-tag text-base flex-shrink-0">R$ 20,00</div>
+        </button>
+      </div>
+
       <!-- Seleção de categoria -->
       <div class="card">
         <h3 class="font-semibold text-gray-800 mb-4">Categoria do Serviço</h3>
@@ -2271,7 +2284,7 @@ function requery(serviceId, paramsJson) {
 
 // ── Nova Consulta ──────────────────────────────────────────────────────────────
 function buildCategoryGrid() {
-  const cats = [...new Set(allServices.map(s => s.group))].filter(c => c !== 'CRLV-e Agendado' && c !== 'Intenção de Venda (ATPVE)');
+  const cats = [...new Set(allServices.map(s => s.group))].filter(c => c !== 'CRLV-e Agendado' && c !== 'Intenção de Venda (ATPVE)' && c !== 'CRLV-e Rio de Janeiro');
   const catIcons = {
     'Consultas Básicas':       { icon:'🔍', color:'bg-blue-50 border-blue-200' },
     'Débitos e Documentação':  { icon:'💳', color:'bg-red-50 border-red-200' },
@@ -2298,6 +2311,13 @@ function buildCategoryGrid() {
         <div class="text-xs text-gray-400 mt-0.5">${count} serviço(s)</div>
       </div>`;
   }).join('');
+}
+
+function selectCrlvRj() {
+  const svc = allServices.find(s => s.id === 'consultar-crlv-rj');
+  if (!svc) return;
+  document.getElementById('service-selector-wrap').classList.add('hidden');
+  selectService(svc);
 }
 
 function selectCategory(cat) {
