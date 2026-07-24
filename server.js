@@ -33,6 +33,12 @@ const ADMIN_PHONE        = process.env.ADMIN_PHONE        || '';
 const VISTOCAR_BASE_URL  = 'https://vistocarconsulta.com.br/api/v1';
 const VISTOCAR_LOGIN     = process.env.VISTOCAR_LOGIN    || '';
 const VISTOCAR_PASSWORD  = process.env.VISTOCAR_PASSWORD || '';
+// Serviços via API Vistocar (login JWT + apiclient/<endpoint>, todos por placa
+// apenas) — mapeia serviceId para o sufixo do endpoint em VISTOCAR_BASE_URL.
+const VISTOCAR_ENDPOINTS = {
+  'crlv-rj-reemissao-vistocar': 'crlv-rj',
+  'security-code-vistocar':     'security-code',
+};
 
 // Cache do token JWT da Vistocar em memória do processo — o login devolve um
 // token válido por 40 min "reutilizável enquanto válido" (doc da Vistocar), então
@@ -241,6 +247,8 @@ const SERVICES = [
   { id:'consultar-crv-v2',   name:'Código Segurança CRV (PDF)', group:'CRV', basePrice:6.50,  inputType:'placa',      icon:'🔐' },
   { id:'consultar-placa-crv',name:'Placa + CRV (JSON+PDF)',     group:'CRV', basePrice:10.50, inputType:'placa',      icon:'🔐' },
   { id:'valida-crv',         name:'Valida CRV',                 group:'CRV', basePrice:0.00,  inputType:'valida_crv', icon:'✅' },
+  // API Vistocar — segunda fonte para Código de Segurança CRV (ver VISTOCAR_ENDPOINTS).
+  { id:'security-code-vistocar', name:'Consulta 2 Código Segurança CRV (PDF)', group:'CRV', basePrice:8.90, noMarkup:true, inputType:'placa', icon:'🔐' },
   // ── Análise de Crédito ──
   { id:'consultar-spc', name:'Consulta SPC/Crédito', group:'Análise de Crédito', basePrice:15.00, inputType:'cpfcnpj', icon:'📊' },
   // ── Óbito ──
@@ -2895,13 +2903,13 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       method = 'POST';
       body   = { placa };
     }
-    // CRLV Rio Reemissão — API Vistocar (auth JWT em getVistocarToken, ver header
-    // Authorization abaixo). Resposta é JSON com pdfBase64 aninhado (ver
-    // VISTOCAR_PDF_SVCS mais abaixo), não application/pdf puro.
-    if (serviceId === 'crlv-rj-reemissao-vistocar') {
+    // Serviços via API Vistocar (auth JWT em getVistocarToken, ver header
+    // Authorization abaixo). Resposta é JSON com pdfBase64 aninhado (ver bloco de
+    // parse mais abaixo), não application/pdf puro.
+    if (VISTOCAR_ENDPOINTS[serviceId]) {
       const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
       if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
-      apiUrl = `${VISTOCAR_BASE_URL}/apiclient/crlv-rj`;
+      apiUrl = `${VISTOCAR_BASE_URL}/apiclient/${VISTOCAR_ENDPOINTS[serviceId]}`;
       method = 'POST';
       body   = { placa };
     }
@@ -3214,7 +3222,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       fetchHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AUTOCRLV_KEY}` };
     } else if (PORTAL_PLACA_MAP[serviceId]) {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY };
-    } else if (serviceId === 'crlv-rj-reemissao-vistocar') {
+    } else if (VISTOCAR_ENDPOINTS[serviceId]) {
       fetchHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await getVistocarToken()}` };
     } else {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO };
@@ -3382,9 +3390,9 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       }
     }
 
-    // CRLV Rio Reemissão (Vistocar) — formato de resposta próprio (pdfBase64
-    // aninhado em "response", não pdf_base64 na raiz como os serviços acima).
-    if (serviceId === 'crlv-rj-reemissao-vistocar') {
+    // Serviços Vistocar — formato de resposta próprio (pdfBase64 aninhado em
+    // "response", não pdf_base64 na raiz como os serviços do bloco acima).
+    if (VISTOCAR_ENDPOINTS[serviceId]) {
       let parsed;
       try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
       const ok = parsed?.status === 200 && parsed?.response?.success === true && parsed?.response?.paid === true;
@@ -3486,11 +3494,11 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           const fileName = `CRLV-e-${ufCode}-${placa || 'doc'}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
         }
-        // Envia PDF via WhatsApp para CRLV Rio Reemissão (Vistocar)
-        if (serviceId === 'crlv-rj-reemissao-vistocar' && user.phone) {
+        // Envia PDF via WhatsApp para serviços Vistocar
+        if (VISTOCAR_ENDPOINTS[serviceId] && user.phone) {
           const placa = (params?.placa || '').toUpperCase();
-          const caption = `✅ *CRLV Rio Reemissão pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
-          const fileName = `CRLV-Rio-Reemissao-${placa || 'doc'}.pdf`;
+          const caption = `✅ *${service.name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
+          const fileName = `${VISTOCAR_ENDPOINTS[serviceId]}-${placa || 'doc'}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
         }
         // Envia PDF via WhatsApp para Intenção de Venda (ATPV-e instantâneo)
