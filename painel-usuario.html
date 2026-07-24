@@ -346,15 +346,24 @@
       </div>
 
       <!-- Destaque: CRLV-e Rio de Janeiro -->
-      <div class="flex justify-center">
-        <button type="button" onclick="selectCrlvRj()"
-          class="w-full max-w-md flex items-center gap-4 rounded-xl border-2 border-orange-300 bg-gradient-to-r from-orange-50 to-white p-4 text-left shadow-sm hover:shadow-md hover:border-orange-400 transition-all">
+      <div class="flex flex-wrap justify-center gap-3">
+        <button type="button" onclick="openHeroService('consultar-crlv-rj')"
+          class="w-full sm:w-auto sm:min-w-[280px] flex items-center gap-4 rounded-xl border-2 border-orange-300 bg-gradient-to-r from-orange-50 to-white p-4 text-left shadow-sm hover:shadow-md hover:border-orange-400 transition-all">
           <div class="w-14 h-14 rounded-full bg-orange-100 flex items-center justify-center text-3xl flex-shrink-0">📄</div>
           <div class="min-w-0 flex-1">
             <div class="font-bold text-gray-800">CRLV-e Rio de Janeiro</div>
             <div class="text-sm text-orange-700 font-medium">⚡ Emissão Instantânea</div>
           </div>
           <div class="price-tag text-base flex-shrink-0">R$ 20,00</div>
+        </button>
+        <button type="button" onclick="openHeroService('crlv-rj-reemissao-vistocar')"
+          class="w-full sm:w-auto sm:min-w-[280px] flex items-center gap-4 rounded-xl border-2 border-orange-300 bg-gradient-to-r from-orange-50 to-white p-4 text-left shadow-sm hover:shadow-md hover:border-orange-400 transition-all">
+          <div class="w-14 h-14 rounded-full bg-orange-100 flex items-center justify-center text-3xl flex-shrink-0">📄</div>
+          <div class="min-w-0 flex-1">
+            <div class="font-bold text-gray-800">CRLV Rio Reemissão</div>
+            <div class="text-sm text-orange-700 font-medium">⚡ Emissão Instantânea</div>
+          </div>
+          <div class="price-tag text-base flex-shrink-0">R$ 60,00</div>
         </button>
       </div>
 
@@ -2384,8 +2393,8 @@ function buildCategoryGrid() {
   }).join('');
 }
 
-function selectCrlvRj() {
-  const svc = allServices.find(s => s.id === 'consultar-crlv-rj');
+function openHeroService(serviceId) {
+  const svc = allServices.find(s => s.id === serviceId);
   if (!svc) return;
   document.getElementById('service-selector-wrap').classList.add('hidden');
   selectService(svc);
