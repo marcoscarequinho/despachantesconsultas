@@ -1490,11 +1490,11 @@ app.get('/api/pdf/:token', requireAuth, async (req, res) => {
 // `details.details.msg` em vez de expor no nível raiz — desce a cadeia de
 // `details` para achar a mensagem mais específica disponível.
 function extractApiErrorMsg(data) {
-  let msg = data?.error || data?.message || data?.msg;
+  let msg = data?.error || data?.message || data?.msg || data?.erro || data?.mensagem;
   let current = data;
   while (current?.details && typeof current.details === 'object') {
     current = current.details;
-    msg = current?.msg || current?.message || current?.error || msg;
+    msg = current?.msg || current?.message || current?.error || current?.erro || current?.mensagem || msg;
   }
   return msg || JSON.stringify(data);
 }
@@ -3382,7 +3382,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         }
         base64PdfBuf = Buffer.from(await pdfRes.arrayBuffer());
       } else {
-        const errMsg = parsed?.mensagem || parsed?.message || 'PDF não retornado pela API.';
+        const errMsg = parsed?.erro || parsed?.mensagem || parsed?.message || 'PDF não retornado pela API.';
         console.error(`[${serviceId}] resposta inesperada da despbrasil: ${JSON.stringify(parsed)}`);
         return res.status(422).json({ error: errMsg });
       }
