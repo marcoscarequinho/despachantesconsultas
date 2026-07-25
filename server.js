@@ -37,8 +37,9 @@ const ADMIN_PHONE        = process.env.ADMIN_PHONE        || '';
 const DESPBRASIL_BASE_URL = 'https://despbrasil.com.br/functions/apiConsulta';
 const DESPBRASIL_KEY      = process.env.DESPBRASIL_KEY || '';
 const DESPBRASIL_SVCS = {
-  'crlv-rj-reemissao-vistocar': { servico: 'crlv_turbo',       extra: { uf: 'RJ' } },
-  'security-code-vistocar':     { servico: 'codigo_seguranca' },
+  'crlv-rj-reemissao-vistocar':  { servico: 'crlv_turbo',       extra: { uf: 'RJ' } },
+  'security-code-vistocar':      { servico: 'codigo_seguranca' },
+  'consulta-renavam-despbrasil': { servico: 'consulta_renavam' },
 };
 
 async function sendWhatsApp(phone, message) {
@@ -186,6 +187,8 @@ const SERVICES = [
   { id:'consultar-atpve-v1',             name:'Reemissão ATPV-e (Placa)',     group:'Débitos e Documentação', basePrice:13.50, inputType:'placa_renavam', icon:'📄' },
   { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:25.00, inputType:'placa',        icon:'🔢' },
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa_renavam',icon:'📝' },
+  // API despbrasil.com.br (serviço "consulta_renavam") — ver DESPBRASIL_SVCS.
+  { id:'consulta-renavam-despbrasil', name:'Consulta RENAVAM', group:'Débitos e Documentação', basePrice:2.00, noMarkup:true, inputType:'placa', icon:'🔎' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // API despbrasil.com.br (serviço "crlv_turbo") — Reemissão de CRLV-e RJ, resposta em JSON
