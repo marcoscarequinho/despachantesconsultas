@@ -37,7 +37,7 @@ const ADMIN_PHONE        = process.env.ADMIN_PHONE        || '';
 const DESPBRASIL_BASE_URL = 'https://despbrasil.com.br/functions/apiConsulta';
 const DESPBRASIL_KEY      = process.env.DESPBRASIL_KEY || '';
 const DESPBRASIL_SVCS = {
-  'crlv-rj-reemissao-vistocar': { servico: 'crlv_turbo',       extra: { uf: 'RJ' } },
+  'crlv-rj-reemissao': { servico: 'crlv_turbo', extra: { uf: 'RJ' } },
   'security-code-vistocar':     { servico: 'codigo_seguranca' },
 };
 
@@ -190,7 +190,8 @@ const SERVICES = [
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // API despbrasil.com.br (serviço "crlv_turbo") — Reemissão de CRLV-e RJ, resposta em JSON
   // com URL do PDF pronto (ver bloco DESPBRASIL_SVCS em processCatalogQuery).
-  { id:'crlv-rj-reemissao-vistocar', name:'CRLV Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:59.80, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
+  { id:'crlv-rj-reemissao', name:'CRLV Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:59.80, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj',
+    slowNote:'⚠️ Atenção: Reemissão do CRLVe não sai se o veículo tiver intenção de venda e/ou comunicação de venda.' },
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
