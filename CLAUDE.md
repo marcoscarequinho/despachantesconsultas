@@ -33,6 +33,7 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 | AutoCRLV | `https://autocrlv.com.br` | Bearer (`AUTOCRLV_KEY`) |
 | Infosimples | `https://api.infosimples.com/api/v2/consultas` | `INFOSIMPLES_TOKEN` |
 | Vistocar | `https://vistocarconsulta.com.br` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`) |
+| Despbrasil (CRLV Rio Reemissão) | `https://despbrasil.com.br/functions/apiConsulta` | header `chaveAcesso` (`DESPBRASIL_KEY`) |
 | Mercado Pago (PIX) | `https://api.mercadopago.com` | `MP_ACCESS_TOKEN` |
 | Z-API (WhatsApp) | `https://api.z-api.io` | `ZAPI_*` |
 
@@ -64,4 +65,4 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 
 ## Variáveis de ambiente (.env)
 
-`DATABASE_URL`, `JWT_SECRET`, `CHAVE_ACESSO`, `MP_ACCESS_TOKEN`, `AUTOCRLV_KEY`, `PORTAL_DESP_KEY`, `DATACUBE_TOKEN`, `INFOSIMPLES_TOKEN`, `VISTOCAR_LOGIN`, `VISTOCAR_PASSWORD`, `ZAPI_INSTANCE_ID`, `ZAPI_TOKEN`, `ZAPI_CLIENT_TOKEN`, `WEBHOOK_BASE_URL`, `ADMIN_PHONE`. O `.env` existe localmente e não é commitado.
+`DATABASE_URL`, `JWT_SECRET`, `CHAVE_ACESSO`, `MP_ACCESS_TOKEN`, `AUTOCRLV_KEY`, `PORTAL_DESP_KEY`, `DATACUBE_TOKEN`, `INFOSIMPLES_TOKEN`, `VISTOCAR_LOGIN`, `VISTOCAR_PASSWORD`, `DESPBRASIL_KEY`, `ZAPI_INSTANCE_ID`, `ZAPI_TOKEN`, `ZAPI_CLIENT_TOKEN`, `WEBHOOK_BASE_URL`, `ADMIN_PHONE`. O `.env` existe localmente e não é commitado.

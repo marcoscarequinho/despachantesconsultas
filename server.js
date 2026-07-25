@@ -36,9 +36,13 @@ const VISTOCAR_PASSWORD  = process.env.VISTOCAR_PASSWORD || '';
 // Serviços via API Vistocar (login JWT + apiclient/<endpoint>, todos por placa
 // apenas) — mapeia serviceId para o sufixo do endpoint em VISTOCAR_BASE_URL.
 const VISTOCAR_ENDPOINTS = {
-  'crlv-rj-reemissao-vistocar': 'crlv-rj',
-  'security-code-vistocar':     'security-code',
+  'security-code-vistocar': 'security-code',
 };
+// API despbrasil.com.br — CRLV Rio Reemissão (serviço "crlv_turbo"). Auth por
+// header chaveAcesso (fixo, sem login); resposta traz a URL do PDF pronto em
+// "arquivo_url" (buscamos o arquivo no processCatalogQuery, ver DESPBRASIL_SVCS).
+const DESPBRASIL_BASE_URL = 'https://despbrasil.com.br/functions/apiConsulta';
+const DESPBRASIL_KEY      = process.env.DESPBRASIL_KEY || '';
 
 // Cache do token JWT da Vistocar em memória do processo — o login devolve um
 // token válido por 40 min "reutilizável enquanto válido" (doc da Vistocar), então
@@ -210,10 +214,9 @@ const SERVICES = [
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa_renavam',icon:'📝' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
-  // API Vistocar (vistocarconsulta.com.br) — login JWT + apiclient/homologacao/crlv-rj (nome do
-  // path é o de produção mesmo, confirmado). Reemissão de CRLV-e RJ, resposta em JSON com PDF em
-  // base64 (ver bloco VISTOCAR_PDF_SVCS em processCatalogQuery).
-  { id:'crlv-rj-reemissao-vistocar', name:'CRLV Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:60.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
+  // API despbrasil.com.br (serviço "crlv_turbo") — Reemissão de CRLV-e RJ, resposta em JSON
+  // com URL do PDF pronto (ver bloco DESPBRASIL_SVCS em processCatalogQuery).
+  { id:'crlv-rj-reemissao-vistocar', name:'CRLV Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:59.80, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -2913,6 +2916,15 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       method = 'POST';
       body   = { placa };
     }
+    // CRLV Rio Reemissão — API despbrasil.com.br (auth por header chaveAcesso fixo,
+    // ver fetchHeaders abaixo). Resposta é JSON com a URL do PDF pronto em "arquivo_url".
+    if (serviceId === 'crlv-rj-reemissao-vistocar') {
+      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      apiUrl = DESPBRASIL_BASE_URL;
+      method = 'POST';
+      body   = { servico: 'crlv_turbo', placa, uf: 'RJ' };
+    }
     // ATPV-e por chassi
     if (serviceId === 'consultar-atpve') {
       const chassi = (params?.chassi || '').toUpperCase().replace(/\s/g, '');
@@ -3224,6 +3236,8 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY };
     } else if (VISTOCAR_ENDPOINTS[serviceId]) {
       fetchHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await getVistocarToken()}` };
+    } else if (serviceId === 'crlv-rj-reemissao-vistocar') {
+      fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': DESPBRASIL_KEY };
     } else {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO };
     }
@@ -3405,6 +3419,26 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       }
     }
 
+    // CRLV Rio Reemissão (despbrasil.com.br) — resposta traz "arquivo_url" com o
+    // PDF pronto (não base64), então baixamos aqui para poder cachear/enviar no
+    // mesmo fluxo dos demais serviços em PDF.
+    if (serviceId === 'crlv-rj-reemissao-vistocar') {
+      let parsed;
+      try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
+      if (parsed?.sucesso && parsed?.arquivo_url) {
+        const pdfRes = await fetch(parsed.arquivo_url);
+        if (!pdfRes.ok) {
+          console.error(`[${serviceId}] falha ao baixar arquivo_url: HTTP ${pdfRes.status}`);
+          return res.status(422).json({ error: 'Falha ao obter o PDF gerado pela API.' });
+        }
+        base64PdfBuf = Buffer.from(await pdfRes.arrayBuffer());
+      } else {
+        const errMsg = parsed?.mensagem || parsed?.message || 'PDF não retornado pela API.';
+        console.error(`[${serviceId}] resposta inesperada da despbrasil: ${JSON.stringify(parsed)}`);
+        return res.status(422).json({ error: errMsg });
+      }
+    }
+
     // Serviços que retornam HTML — capturado para servir via /api/html/:token
     let htmlBuf = null;
 
@@ -3499,6 +3533,13 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           const placa = (params?.placa || '').toUpperCase();
           const caption = `✅ *${service.name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
           const fileName = `${VISTOCAR_ENDPOINTS[serviceId]}-${placa || 'doc'}.pdf`;
+          await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
+        }
+        // Envia PDF via WhatsApp para CRLV Rio Reemissão (despbrasil.com.br)
+        if (serviceId === 'crlv-rj-reemissao-vistocar' && user.phone) {
+          const placa = (params?.placa || '').toUpperCase();
+          const caption = `✅ *${service.name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
+          const fileName = `crlv-rj-${placa || 'doc'}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
         }
         // Envia PDF via WhatsApp para Intenção de Venda (ATPV-e instantâneo)
