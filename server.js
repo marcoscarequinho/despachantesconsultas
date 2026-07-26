@@ -39,6 +39,7 @@ const DESPBRASIL_KEY      = process.env.DESPBRASIL_KEY || '';
 const DESPBRASIL_SVCS = {
   'crlv-rj-reemissao': { servico: 'crlv_turbo', extra: { uf: 'RJ' } },
   'security-code-vistocar':     { servico: 'codigo_seguranca' },
+  'verificar-crlv':    { servico: 'verificar_crlv' },
 };
 
 async function sendWhatsApp(phone, message) {
@@ -176,6 +177,8 @@ const SERVICES = [
   { id:'consultar-cnh',          name:'Consultar CNH',              group:'Consultas Básicas', basePrice:11.43,  inputType:'cpfcnpj',     icon:'🪪' },
   // API Datacube (form-urlencoded) — valor fixo de R$3,00, ver bloco dc-decodificar-motor em /api/query.
   { id:'dc-decodificar-motor',   name:'Decodificação de Motor',     group:'Consultas Básicas', basePrice:3.00,   noMarkup:true, inputType:'motor', icon:'🔧', dcPath:'/veiculos/decodificar-motor' },
+  // API despbrasil.com.br (serviço "verificar_crlv") — ver DESPBRASIL_SVCS.
+  { id:'verificar-crlv',         name:'Verificar CRLV e Último Licenciamento', group:'Consultas Básicas', basePrice:3.00, noMarkup:true, inputType:'placa', icon:'📑' },
   // ── Débitos e Documentação ──
   { id:'consulta-debitos-portal',          name:'Consulta de Débitos',          group:'Débitos e Documentação', basePrice:1.0714, inputType:'placa',       icon:'💳' },
   { id:'consultar-licenciamento',         name:'Licenciamento + BIN',          group:'Débitos e Documentação', basePrice:10.00, inputType:'placa',        icon:'📋' },
