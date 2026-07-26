@@ -39,11 +39,6 @@ const recursos = [
         description: 'Acesse todas as consultas realizadas, recargas, comissões e extratos financeiros no seu painel.'
     },
     {
-        icon: '🤝',
-        title: 'Programa de Afiliados',
-        description: 'Indique novos usuários e ganhe comissão sobre os depósitos aprovados realizados por eles.'
-    },
-    {
         icon: '🔐',
         title: 'Código de Segurança',
         description: 'Geração de código de segurança do veículo (CRV) para validações e procedimentos oficiais.'
@@ -85,10 +80,6 @@ const faqData = [
     {
         question: 'Existe mensalidade ou taxa de manutenção?',
         answer: 'Não. A plataforma funciona 100% no modelo pré-pago. Você só paga pelas consultas e emissões que efetivamente realizar. Não há mensalidade, anuidade, taxa de manutenção ou qualquer cobrança recorrente. Seus créditos não expiram.'
-    },
-    {
-        question: 'Como funciona o programa de afiliados?',
-        answer: 'Após criar sua conta, você terá acesso a um link exclusivo de afiliado no painel. Compartilhe esse link com seus contatos. Quando alguém se cadastrar através do seu link e fizer depósitos aprovados, você ganha uma comissão percentual sobre cada depósito. Importante: cadastros pelo mesmo IP não geram comissão (regra antifraude).'
     },
     {
         question: 'Despachantes podem oferecer serviços próprios na plataforma?',
