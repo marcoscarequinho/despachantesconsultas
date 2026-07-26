@@ -40,6 +40,7 @@ const DESPBRASIL_SVCS = {
   'crlv-rj-reemissao': { servico: 'crlv_turbo', extra: { uf: 'RJ' } },
   'security-code-vistocar':     { servico: 'codigo_seguranca' },
   'verificar-crlv':    { servico: 'verificar_crlv' },
+  'consulta-renavam':  { servico: 'consulta_renavam' },
 };
 
 async function sendWhatsApp(phone, message) {
@@ -179,6 +180,8 @@ const SERVICES = [
   { id:'dc-decodificar-motor',   name:'Decodificação de Motor',     group:'Consultas Básicas', basePrice:3.00,   noMarkup:true, inputType:'motor', icon:'🔧', dcPath:'/veiculos/decodificar-motor' },
   // API despbrasil.com.br (serviço "verificar_crlv") — ver DESPBRASIL_SVCS.
   { id:'verificar-crlv',         name:'Verificar CRLV e Último Licenciamento', group:'Consultas Básicas', basePrice:3.00, noMarkup:true, inputType:'placa', icon:'📑' },
+  // API despbrasil.com.br (serviço "consulta_renavam") — ver DESPBRASIL_SVCS.
+  { id:'consulta-renavam',       name:'Consulta RENAVAM',                     group:'Consultas Básicas', basePrice:3.00, noMarkup:true, inputType:'placa', icon:'🧾' },
   // ── Débitos e Documentação ──
   { id:'consulta-debitos-portal',          name:'Consulta de Débitos',          group:'Débitos e Documentação', basePrice:1.0714, inputType:'placa',       icon:'💳' },
   { id:'consultar-licenciamento',         name:'Licenciamento + BIN',          group:'Débitos e Documentação', basePrice:10.00, inputType:'placa',        icon:'📋' },
@@ -1944,6 +1947,39 @@ function buildVerificarCrlvPdfBuffer(service, data, params) {
   });
 }
 
+// ── Geração de PDF — Consulta RENAVAM (despbrasil devolve os dados em "dados",
+// sem um arquivo pronto útil para esse serviço) ────────────────────────────────
+function buildConsultaRenavamPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+
+      pdfReportHeader(doc, 'CONSULTA RENAVAM', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Placa', maskPlacaDisplay(params?.placa)]]);
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'RESULTADO');
+      const pairs = itemToPairs(data);
+      if (pairs.length) pdfFieldGrid(doc, pairs);
+      else pdfEmptyNotice(doc, 'Nenhum dado retornado para essa placa.');
+      doc.moveDown(0.4);
+
+      pdfReportFooter(doc, now);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── Geração de PDF — CNH (Datacube retorna JSON, não PDF pronto) ───────────────
 function buildCnhPdfBuffer(service, data, params) {
   return new Promise((resolve, reject) => {
@@ -3404,10 +3440,10 @@ async function processCatalogQuery(userId, serviceId, params, res) {
 
     // Serviços despbrasil.com.br — resposta traz "arquivo_url" com o PDF pronto
     // (não base64), então baixamos aqui para poder cachear/enviar no mesmo fluxo
-    // dos demais serviços em PDF. Exceção: "verificar-crlv" monta o próprio PDF a
-    // partir do JSON em "dados" (mesmo padrão visual do relatório de Débitos por
-    // Estado), em vez de usar o arquivo pronto da despbrasil.
-    let verificarCrlvPdfBuf = null;
+    // dos demais serviços em PDF. Exceção: "verificar-crlv" e "consulta-renavam"
+    // montam o próprio PDF a partir do JSON em "dados" (mesmo padrão visual do
+    // relatório de Débitos por Estado), em vez de usar o arquivo pronto da despbrasil.
+    let despbrasilJsonPdfBuf = null;
     if (serviceId === 'verificar-crlv') {
       let parsed;
       try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
@@ -3417,7 +3453,21 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         return res.status(422).json({ error: errMsg });
       }
       try {
-        verificarCrlvPdfBuf = await buildVerificarCrlvPdfBuffer(service, parsed.dados, params);
+        despbrasilJsonPdfBuf = await buildVerificarCrlvPdfBuffer(service, parsed.dados, params);
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+      }
+    } else if (serviceId === 'consulta-renavam') {
+      let parsed;
+      try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
+      if (!parsed?.sucesso || !parsed?.dados) {
+        const errMsg = parsed?.erro || parsed?.mensagem || parsed?.message || 'Nenhum resultado encontrado para essa consulta.';
+        console.error(`[${serviceId}] resposta inesperada da despbrasil: ${JSON.stringify(parsed)}`);
+        return res.status(422).json({ error: errMsg });
+      }
+      try {
+        despbrasilJsonPdfBuf = await buildConsultaRenavamPdfBuffer(service, parsed.dados, params);
       } catch (e) {
         console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
         return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
@@ -3445,7 +3495,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     // Serviços genéricos (não-PDF, não-HTML): recusa cobrar se a API não retornou
     // nenhum dado relevante (corpo vazio, JSON vazio/nulo ou com indicador de falha).
     let genericData = null, genericParseOk = false;
-    const willBePdfOrHtml = isRealPdf || base64PdfBuf || htmlBuf || dcDebitoPdfBuf || dcMotorPdfBuf || verificarCrlvPdfBuf;
+    const willBePdfOrHtml = isRealPdf || base64PdfBuf || htmlBuf || dcDebitoPdfBuf || dcMotorPdfBuf || despbrasilJsonPdfBuf;
     if (!willBePdfOrHtml) {
       const trimmed = bodyStr.trim();
       if (!trimmed) {
@@ -3492,11 +3542,11 @@ async function processCatalogQuery(userId, serviceId, params, res) {
        VALUES ($1,$2,$3,$4,'success',$5,$6,$7,$8) RETURNING id`,
       [userId, serviceId, service.name, JSON.stringify(params || {}),
        price, txRow.rows[0].id,
-       htmlBuf ? 'html' : (isRealPdf || base64PdfBuf || dcDebitoPdfBuf || dcMotorPdfBuf || verificarCrlvPdfBuf) ? 'pdf' : 'json',
+       htmlBuf ? 'html' : (isRealPdf || base64PdfBuf || dcDebitoPdfBuf || dcMotorPdfBuf || despbrasilJsonPdfBuf) ? 'pdf' : 'json',
        resultData]
     );
     // ── Envia PDF + salva no cache por 7 dias ────────────────────────────────
-    const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null) || dcDebitoPdfBuf || dcMotorPdfBuf || verificarCrlvPdfBuf;
+    const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null) || dcDebitoPdfBuf || dcMotorPdfBuf || despbrasilJsonPdfBuf;
 
     if (ATPVE_UFS.some(uf => serviceId === `intencao-venda-${uf}`)) {
       const atpveUf = serviceId.split('-')[2];
