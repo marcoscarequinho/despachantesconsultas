@@ -931,7 +931,7 @@
         <span class="text-amber-600 text-xl flex-shrink-0 mt-0.5">💡</span>
         <p class="text-sm text-amber-800">
           Envie a chave no header <code class="bg-white px-1 rounded">X-API-Key</code> (ou <code class="bg-white px-1 rounded">Authorization: Bearer</code>).
-          Serviços de "Intenção de Venda (ATPVE)" e os de conferência manual (upload de PDF pela equipe) não estão disponíveis por essa API.
+          Apenas os serviços de conferência manual (upload de PDF pela equipe) não estão disponíveis por essa API.
         </p>
       </div>
 
@@ -2234,14 +2234,13 @@ function inputTypeLabel(t) {
 // Reaproveita allServices (já carregado em init(), ver /api/services) e espelha
 // o mesmo formato de parâmetros de buildParams() (mais abaixo), só que com
 // valores de exemplo fixos em vez de ler do formulário — usado para montar o
-// exemplo de código Node.js. Os grupos/serviços de fora do alcance da API
-// (ATPVE e conferência manual) precisam ser filtrados aqui também porque o
-// servidor não devolve um flag para isso em /api/services.
+// exemplo de código Node.js. Os serviços de conferência manual (upload de PDF
+// pela equipe) precisam ser filtrados aqui também porque o servidor não devolve
+// um flag para isso em /api/services.
 function renderApiDocs() {
   const sel = document.getElementById('apidoc-service-select');
   const groups = {};
   allServices.forEach(s => {
-    if (s.group === 'Intenção de Venda (ATPVE)') return;
     if (s.group === 'Número CRV (Apenas antigos)') return;
     if (s.id === 'crlv-agendado-rj-reemissao') return;
     if (!groups[s.group]) groups[s.group] = [];
@@ -2304,8 +2303,34 @@ function apiExampleParams(inputType) {
         crv: { numero: '123456789012', codigo_seguranca: '00000000000', numero_via: '1', data_emissao: '01/01/2020', uf_emissao: 'RJ' },
       },
     },
+    atpve_rj_cadastro: atpveCadastroExample('RJ', 'RIO DE JANEIRO'),
+    atpve_sp_cadastro: atpveCadastroExample('SP', 'SÃO PAULO'),
+    atpve_ms_cadastro: atpveCadastroExample('MS', 'CAMPO GRANDE'),
+    intencao_venda_mg: {
+      email_vendedor: 'vendedor@email.com', cpf_vendedor: '00000000000',
+      placa: 'ABC1D23', renavam: '00000000000', chassi: '9BWZZZ377VT004251',
+      crv: '123456789012', valor_venda: '15000',
+      cpf_comprador: '00000000000', nome_comprador: 'NOME DO COMPRADOR', email_comprador: 'comprador@email.com',
+    },
+    atpve_mg: { placa: 'ABC1D23', renavam: '00000000000' },
   };
   return map[inputType] || {};
+}
+
+// Corpo de exemplo do cadastro de Intenção de Venda (RJ/SP/MS) — mesmos campos
+// obrigatórios nos 3 estados (ver ATPVE_UFS em processCatalogQuery no server),
+// só muda a UF/cidade de exemplo.
+function atpveCadastroExample(uf, cidade) {
+  return {
+    placa: 'ABC1D23', renavam: '00000000000', ano_fabricacao: '2020', ano_modelo: '2020',
+    chassi: '9BWZZZ377VT004251', kilometragem: '50000',
+    crv_numero: '123456789012', crv_numero_via: '1', crv_uf_emissao: uf, crv_data_emissao: '01/01/2020',
+    vendedor_tipo_pessoa: 'F', vendedor_documento: '00000000000', vendedor_nome: 'NOME DO VENDEDOR', vendedor_email: 'vendedor@email.com',
+    venda_cidade: cidade, venda_valor: '15000', venda_data: '01/01/2026',
+    comprador_tipo_pessoa: 'F', comprador_documento: '00000000000', comprador_nome: 'NOME DO COMPRADOR', comprador_email: 'comprador@email.com',
+    comprador_cep: '00000000', comprador_logradouro: 'RUA EXEMPLO', comprador_numero: '100',
+    comprador_bairro: 'CENTRO', comprador_cidade: cidade, comprador_uf: uf,
+  };
 }
 
 function showApiDocFor(serviceId) {

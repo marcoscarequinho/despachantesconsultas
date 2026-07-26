@@ -666,6 +666,17 @@ async function initDB() {
       created_at        TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_service_prices (
+      id          SERIAL PRIMARY KEY,
+      user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      service_id  VARCHAR(100) NOT NULL,
+      price       NUMERIC(10,2) NOT NULL,
+      created_at  TIMESTAMPTZ DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(user_id, service_id)
+    );
+  `);
   console.log('✅ Tabelas prontas');
 }
 
@@ -1170,13 +1181,22 @@ app.put('/api/profile', requireAuth, async (req, res) => {
 });
 
 // ── GET /api/services ─────────────────────────────────────────────────────────
-app.get('/api/services', requireAuth, (req, res) => {
-  res.json({
-    services: SERVICES.map(s => ({
-      ...s,
-      price: parseFloat((s.basePrice * (s.noMarkup ? 1 : MARKUP)).toFixed(2)),
-    })),
-  });
+app.get('/api/services', requireAuth, async (req, res) => {
+  try {
+    const overridesR = await pool.query(
+      'SELECT service_id, price FROM user_service_prices WHERE user_id=$1', [req.user.id]
+    );
+    const overrides = {};
+    overridesR.rows.forEach(row => { overrides[row.service_id] = parseFloat(row.price); });
+    res.json({
+      services: SERVICES.map(s => ({
+        ...s,
+        price: overrides[s.id] ?? parseFloat((s.basePrice * (s.noMarkup ? 1 : MARKUP)).toFixed(2)),
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
 });
 
 // ── GET /api/services/public (sem auth — homepage) ────────────────────────────
@@ -2343,7 +2363,7 @@ async function handleMgInfosimplesAuto(req, res, service, params) {
   const isvc = SERVICES_V3.find(s => s.id === cfg.infosimplesId);
   if (!isvc) return res.status(500).json({ error: 'Serviço não configurado.' });
 
-  const price = parseFloat((service.basePrice * (service.noMarkup ? 1 : MARKUP)).toFixed(2));
+  const price = await getUserServicePrice(req.user.id, service);
 
   const missingLabels = isvc.params
     .filter(p => p.required && !(params?.[p.name] ?? '').toString().trim())
@@ -2729,7 +2749,7 @@ app.get('/api/queries/:id/comunicacao-venda-motivos', requireAuth, async (req, r
     if (!protocolo) return res.status(400).json({ error: 'Protocolo não encontrado para esta comunicação.' });
 
     const svc = SERVICES.find(s => s.id === 'motivos-cancelamento');
-    const price = parseFloat((svc.basePrice * MARKUP).toFixed(2));
+    const price = await getUserServicePrice(req.user.id, svc);
     const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.user.id]);
     const user = ur.rows[0];
     if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
@@ -2780,7 +2800,7 @@ app.post('/api/queries/:id/comunicacao-venda-cancelar', requireAuth, async (req,
       return res.status(400).json({ error: 'Identificador ou protocolo da comunicação não encontrado.' });
 
     const svc = SERVICES.find(s => s.id === 'cancelar-comunicacao-venda');
-    const price = parseFloat((svc.basePrice * MARKUP).toFixed(2));
+    const price = await getUserServicePrice(req.user.id, svc);
     const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.user.id]);
     const user = ur.rows[0];
     if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
@@ -2812,6 +2832,19 @@ app.post('/api/queries/:id/comunicacao-venda-cancelar', requireAuth, async (req,
   }
 });
 
+// Preço efetivo de um serviço do catálogo "Nova Consulta" para um usuário
+// específico: usa o valor fixo cadastrado em user_service_prices quando existe
+// (ver rotas /api/admin/users/:id/service-prices), senão cai no cálculo padrão
+// (basePrice + markup, ou basePrice puro quando noMarkup).
+async function getUserServicePrice(userId, service) {
+  const r = await pool.query(
+    'SELECT price FROM user_service_prices WHERE user_id=$1 AND service_id=$2',
+    [userId, service.id]
+  );
+  if (r.rows.length) return parseFloat(r.rows[0].price);
+  return parseFloat((service.basePrice * (service.noMarkup ? 1 : MARKUP)).toFixed(2));
+}
+
 // Núcleo do catálogo "Nova Consulta" — extraído para função reutilizável (em
 // vez de ler req.user.id/req.body direto) para poder ser chamado tanto pelo
 // painel (cookie JWT, ver app.post('/api/query') abaixo) quanto pela API
@@ -2833,7 +2866,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     }
   }
 
-  const price = parseFloat((service.basePrice * (service.noMarkup ? 1 : MARKUP)).toFixed(2));
+  const price = await getUserServicePrice(userId, service);
 
   try {
     const ur = await pool.query(
@@ -3705,10 +3738,11 @@ app.post('/api/query', requireAuth, (req, res) =>
   processCatalogQuery(req.user.id, req.body.serviceId, req.body.params, res));
 
 // Grupos/serviços do catálogo "Nova Consulta" fora do alcance da API de chave
-// (/api/v1): ATPV-e exige documentos/fotos e um fluxo próprio no painel, e os
-// serviços "manuais" (upload de PDF pelo super admin) não respondem na hora —
-// não há hoje uma rota de API para o cliente buscar esse resultado depois.
-const V1_EXCLUDED_GROUPS = ['Intenção de Venda (ATPVE)'];
+// (/api/v1): os serviços "manuais" (upload de PDF pelo super admin) não
+// respondem na hora — não há hoje uma rota de API para o cliente buscar esse
+// resultado depois. "Intenção de Venda (ATPVE)" já é 100% automatizado (RJ/SP/MS
+// via Chekaki, MG via Infosimples) e por isso está liberado pela API.
+const V1_EXCLUDED_GROUPS = [];
 function isV1Eligible(serviceId) {
   const svc = SERVICES.find(s => s.id === serviceId);
   if (!svc) return false;
@@ -5459,6 +5493,64 @@ app.delete('/api/admin/users/:id', requireAuth, requireSuperAdmin, async (req, r
     return res.status(400).json({ error: 'Não é possível excluir sua própria conta.' });
   try {
     await pool.query('DELETE FROM users WHERE id=$1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ── ADMIN: GET /api/admin/users/:id/service-prices ───────────────────────────
+// Lista os preços personalizados já cadastrados para o usuário, com o nome do
+// serviço e o preço padrão do catálogo para comparação na tela do admin.
+app.get('/api/admin/users/:id/service-prices', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(
+      'SELECT service_id, price, updated_at FROM user_service_prices WHERE user_id=$1 ORDER BY updated_at DESC',
+      [req.params.id]
+    );
+    const prices = r.rows.map(row => {
+      const svc = SERVICES.find(s => s.id === row.service_id);
+      return {
+        service_id:    row.service_id,
+        service_name:  svc?.name || row.service_id,
+        service_group: svc?.group || '-',
+        default_price: svc ? parseFloat((svc.basePrice * (svc.noMarkup ? 1 : MARKUP)).toFixed(2)) : null,
+        price:         parseFloat(row.price),
+        updated_at:    row.updated_at,
+      };
+    });
+    res.json({ prices });
+  } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ── ADMIN: POST /api/admin/users/:id/service-prices ──────────────────────────
+// Cria ou atualiza o preço fixo de um serviço específico para este usuário
+// (substitui o valor padrão do catálogo enquanto a exceção existir).
+app.post('/api/admin/users/:id/service-prices', requireAuth, requireSuperAdmin, async (req, res) => {
+  const { service_id, price } = req.body;
+  const svc = SERVICES.find(s => s.id === service_id);
+  if (!svc) return res.status(400).json({ error: 'Serviço inválido.' });
+  const parsedPrice = parseFloat(price);
+  if (isNaN(parsedPrice) || parsedPrice < 0) return res.status(400).json({ error: 'Preço inválido.' });
+  try {
+    const userExists = await pool.query('SELECT id FROM users WHERE id=$1', [req.params.id]);
+    if (!userExists.rows.length) return res.status(404).json({ error: 'Usuário não encontrado.' });
+    await pool.query(
+      `INSERT INTO user_service_prices (user_id, service_id, price)
+       VALUES ($1,$2,$3)
+       ON CONFLICT (user_id, service_id) DO UPDATE SET price=$3, updated_at=NOW()`,
+      [req.params.id, service_id, parsedPrice]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ── ADMIN: DELETE /api/admin/users/:id/service-prices/:serviceId ─────────────
+// Remove a exceção de preço — o usuário volta a pagar o valor padrão do catálogo.
+app.delete('/api/admin/users/:id/service-prices/:serviceId', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    await pool.query(
+      'DELETE FROM user_service_prices WHERE user_id=$1 AND service_id=$2',
+      [req.params.id, req.params.serviceId]
+    );
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
 });
