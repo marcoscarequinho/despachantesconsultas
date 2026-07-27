@@ -43,6 +43,40 @@ const DESPBRASIL_SVCS = {
   'consulta-renavam':  { servico: 'consulta_renavam' },
 };
 
+// API Vistocar (vistocarconsulta.com.br) — login JWT (VISTOCAR_LOGIN/VISTOCAR_PASSWORD)
+// + POST em apiclient/<endpoint> com Bearer, corpo só com "placa". Resposta é JSON
+// (não PDF pronto) — o relatório é montado a partir do JSON, no mesmo padrão visual
+// do relatório de Débitos por Estado (ver buildVistocarDebitosPdfBuffer).
+const VISTOCAR_BASE_URL = 'https://vistocarconsulta.com.br/api/v1';
+const VISTOCAR_LOGIN    = process.env.VISTOCAR_LOGIN    || '';
+const VISTOCAR_PASSWORD = process.env.VISTOCAR_PASSWORD || '';
+const VISTOCAR_ENDPOINTS = {
+  'consultar-debitos-documentos': 'debitos-cod-barra',
+  'consultar-veicular-completa':  'completa',
+};
+
+// Cache do token JWT da Vistocar em memória do processo — o login devolve um token
+// válido por 40 min (doc da Vistocar), então evitamos logar a cada consulta. Renova
+// sozinho quando faltam menos de 2 min (margem de segurança), contando os 40 min a
+// partir do login local em vez de parsear o campo "expiresIn" da resposta.
+let vistocarToken = null;
+let vistocarTokenExpiresAt = 0;
+async function getVistocarToken() {
+  if (vistocarToken && Date.now() < vistocarTokenExpiresAt) return vistocarToken;
+  const r = await fetch(`${VISTOCAR_BASE_URL}/auth/apiclient/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ login: VISTOCAR_LOGIN, password: VISTOCAR_PASSWORD }),
+  });
+  const data = await r.json().catch(() => null);
+  if (!r.ok || !data?.data?.token) {
+    throw new Error(data?.message || `Falha no login Vistocar (HTTP ${r.status}).`);
+  }
+  vistocarToken = data.data.token;
+  vistocarTokenExpiresAt = Date.now() + 38 * 60 * 1000;
+  return vistocarToken;
+}
+
 async function sendWhatsApp(phone, message) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !phone) return false;
   const digits = phone.replace(/\D/g, '');
@@ -192,6 +226,10 @@ const SERVICES = [
   { id:'consultar-atpve-v1',             name:'Reemissão ATPV-e (Placa)',     group:'Débitos e Documentação', basePrice:13.50, inputType:'placa_renavam', icon:'📄' },
   { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:25.00, inputType:'placa',        icon:'🔢' },
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa_renavam',icon:'📝' },
+  // API Vistocar (vistocarconsulta.com.br) — resposta em JSON com registros de multas/IPVA;
+  // relatório montado a partir do JSON no mesmo padrão visual de Débitos por Estado
+  // (ver VISTOCAR_ENDPOINTS e buildVistocarDebitosPdfBuffer).
+  { id:'consultar-debitos-documentos',    name:'Débitos e Documentação',       group:'Débitos e Documentação', basePrice:9.00,  inputType:'placa',        icon:'📑' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // API despbrasil.com.br (serviço "crlv_turbo") — Reemissão de CRLV-e RJ, resposta em JSON
@@ -340,6 +378,9 @@ const SERVICES = [
   // o PDF é montado a partir do JSON retornado (ver buildBinEstadualPdfBuffer),
   // no mesmo padrão visual do relatório de Débitos por Estado.
   { id:'dc-bin-estadual', name:'Base Estadual (BIN)', group:'Consulta Completa', basePrice:9.90, noMarkup:true, inputType:'placa', icon:'🚗', dcPath:'/veiculos/bin-estadual' },
+  // API Vistocar (vistocarconsulta.com.br) — veículo + proprietário + gravames +
+  // leilão num relatório único (ver VISTOCAR_ENDPOINTS e buildVeicularCompletaPdfBuffer).
+  { id:'consultar-veicular-completa', name:'Veicular Completa', group:'Consulta Completa', basePrice:19.00, inputType:'placa', icon:'🚗' },
   // ── Número CRV (Apenas antigos) — processamento manual (entrega via upload no admin) ──
   { id:'crv-antigo-rio', name:'Consulta CRV antigo Rio', group:'Número CRV (Apenas antigos)', basePrice:500.00, inputType:'placa', icon:'📁', uf:'rj', noMarkup:true },
   { id:'crv-antigo-ce', name:'Consulta CRV antigo CE', group:'Número CRV (Apenas antigos)', basePrice:55.00,  inputType:'placa', icon:'📁', uf:'ce' },
@@ -1843,6 +1884,175 @@ function buildDebitoPdfBuffer(service, data, params) {
   });
 }
 
+// ── Geração de PDF — Débitos e Documentação (Vistocar retorna JSON, não PDF
+// pronto) ── Formato de resposta próprio da Vistocar: lista única "registros"
+// (mistura multas/IPVA/licenciamentos, distinguidos pelo campo "tipo"), cada um
+// com um array "detalhes" de pares chave/valor — em vez das listas separadas
+// (multas/ipvas/...) que a Datacube devolve. Reaproveita o mesmo padrão visual
+// do relatório de Débitos por Estado (pdfBar/pdfSubBar/pdfFieldGrid).
+function buildVistocarDebitosPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const { left, width } = pdfContentBox(doc);
+      const now = new Date();
+
+      pdfReportHeader(doc, 'DÉBITOS E DOCUMENTAÇÃO', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Placa', maskPlacaDisplay(params?.placa)]]);
+      doc.moveDown(0.4);
+
+      const registros = Array.isArray(data?.registros) ? data.registros : [];
+      const total = sumNumField(registros, ['valor', 'subtotal']);
+
+      pdfEnsureSpace(doc, 36);
+      const boxY = doc.y;
+      const boxH = 28;
+      doc.rect(left, boxY, width, boxH).fill('#f97316');
+      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9.5)
+        .text('TOTAL ESTIMADO DE DÉBITOS', left + 12, boxY + 9);
+      doc.fontSize(13).text(fmtMoneyBRL(total), left, boxY + 7, { width: width - 12, align: 'right' });
+      doc.y = boxY + boxH + 4;
+      doc.fillColor('#9ca3af').fontSize(7).font('Helvetica-Oblique')
+        .text('Soma dos valores encontrados nesta consulta — pode não refletir juros, descontos ou acréscimos legais atualizados.', left, doc.y, { width });
+      doc.fillColor('#111827').font('Helvetica').fontSize(10);
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'DÉBITOS ENCONTRADOS');
+      if (!registros.length) {
+        pdfEmptyNotice(doc, 'Nenhum débito encontrado para essa placa.');
+      } else {
+        registros.forEach((reg, idx) => {
+          pdfSubBar(doc, `${idx + 1}. ${reg.descricao || 'Débito'}`);
+          const pairs = [
+            ['Valor', fmtMoneyBRL(reg.valor)],
+            ['Vencimento', reg.dataVencimento || '-'],
+            ['Status', reg.statusPagamento || '-'],
+          ];
+          if (reg.codigoBarra) pairs.push(['Código de Barras', reg.codigoBarra]);
+          if (reg.linhaDigitavel) pairs.push(['Linha Digitável', reg.linhaDigitavel]);
+          pdfFieldGrid(doc, pairs);
+          if (Array.isArray(reg.detalhes) && reg.detalhes.length) {
+            pdfFieldGrid(doc, reg.detalhes.map(d => [d.chave, (d.valor === null || d.valor === undefined || d.valor === '') ? 'Nada consta' : String(d.valor)]));
+          }
+          doc.moveDown(0.35);
+        });
+      }
+
+      pdfReportFooter(doc, now);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+// ── Geração de PDF — Veicular Completa (Vistocar retorna JSON, não PDF pronto) ──
+// Resposta traz "dadosVeicular" (veículo + proprietário aninhado com contatos/
+// endereços + restrições + débitos + gravames) e "leilao" (ocorrências de leilão).
+// Cada bloco vira uma seção própria, no mesmo padrão visual do relatório de
+// Débitos por Estado (pdfBar/pdfSubBar/pdfFieldGrid/pdfDebtSection).
+function buildVeicularCompletaPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+
+      pdfReportHeader(doc, 'VEICULAR COMPLETA', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Placa', maskPlacaDisplay(params?.placa)]]);
+      doc.moveDown(0.4);
+
+      const v = data?.dadosVeicular || {};
+
+      pdfBar(doc, 'VEÍCULO');
+      const veicPairs = itemToPairs(v);
+      if (veicPairs.length) pdfFieldGrid(doc, veicPairs);
+      else pdfEmptyNotice(doc, 'Sem dados do veículo.');
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'PROPRIETÁRIO');
+      const prop = v.proprietario || {};
+      const propPairs = itemToPairs(prop);
+      if (propPairs.length) pdfFieldGrid(doc, propPairs);
+      else pdfEmptyNotice(doc, 'Sem dados do proprietário.');
+      doc.moveDown(0.3);
+
+      pdfSubBar(doc, 'Contatos');
+      const telefones = Array.isArray(prop.contatos?.telefones) ? prop.contatos.telefones.join(', ') : '';
+      const emails = Array.isArray(prop.contatos?.emails) ? prop.contatos.emails.join(', ') : '';
+      pdfFieldGrid(doc, [
+        ['Telefones', telefones || 'Nada consta'],
+        ['E-mails', emails || 'Nada consta'],
+      ]);
+      doc.moveDown(0.3);
+
+      pdfSubBar(doc, 'Endereços');
+      if (Array.isArray(prop.enderecos) && prop.enderecos.length) {
+        pdfDebtSection(doc, prop.enderecos, 'Endereço');
+      } else {
+        pdfEmptyNotice(doc, 'Nenhum endereço encontrado.');
+      }
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'RESTRIÇÕES');
+      const restPairs = itemToPairs(v.restricoes);
+      if (restPairs.length) pdfFieldGrid(doc, restPairs);
+      else pdfEmptyNotice(doc, 'Sem dados de restrições.');
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'DÉBITOS');
+      const debitos = v.debitos || {};
+      const debitosTotal = sumNumField([debitos], ['dpvat', 'ipva', 'licenciamento', 'multa']);
+      const debPairs = Object.keys(debitos).map(k =>
+        [humanizeKey(k), typeof debitos[k] === 'number' ? fmtMoneyBRL(debitos[k]) : (debitos[k] ?? 'Nada consta')]
+      );
+      if (debPairs.length) pdfFieldGrid(doc, debPairs);
+      else pdfEmptyNotice(doc, 'Sem dados de débitos.');
+      doc.fillColor('#6b7280').fontSize(9).font('Helvetica-Bold')
+        .text(`Total estimado de débitos: ${fmtMoneyBRL(debitosTotal)}`);
+      doc.fillColor('#111827').font('Helvetica').fontSize(10);
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'GRAVAMES');
+      if (Array.isArray(v.gravames) && v.gravames.length) {
+        pdfDebtSection(doc, v.gravames, 'Gravame');
+      } else {
+        pdfEmptyNotice(doc, 'Nenhum gravame encontrado.');
+      }
+      doc.moveDown(0.4);
+
+      const leilao = data?.leilao || {};
+      pdfBar(doc, 'LEILÃO');
+      const leilaoPairs = itemToPairs(leilao);
+      if (leilaoPairs.length) pdfFieldGrid(doc, leilaoPairs);
+      else pdfEmptyNotice(doc, 'Sem dados de leilão.');
+      if (Array.isArray(leilao.ocorrencias) && leilao.ocorrencias.length) {
+        doc.moveDown(0.3);
+        pdfSubBar(doc, 'Ocorrências de Leilão');
+        pdfDebtSection(doc, leilao.ocorrencias, 'Ocorrência');
+      }
+
+      pdfReportFooter(doc, now);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── Geração de PDF — Dívida Ativa (Datacube retorna JSON, não PDF pronto) ──────
 function buildDividaAtivaPdfBuffer(service, data, params) {
   return new Promise((resolve, reject) => {
@@ -3068,6 +3278,16 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     if (serviceId === 'consultar-cnh') {
       body = { cpf: (params?.cpfCnpj || '').replace(/\D/g, '') };
     }
+    // Serviços via API Vistocar (auth JWT em getVistocarToken, ver header
+    // Authorization abaixo). Resposta é JSON com "registros" (ver bloco de parse
+    // mais abaixo), não PDF pronto — vira relatório via buildVistocarDebitosPdfBuffer.
+    if (VISTOCAR_ENDPOINTS[serviceId]) {
+      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      apiUrl = `${VISTOCAR_BASE_URL}/apiclient/${VISTOCAR_ENDPOINTS[serviceId]}`;
+      method = 'POST';
+      body   = { placa };
+    }
     // Débitos por Estado / Dívida Ativa — API Datacube (form-urlencoded, retorna JSON que vira PDF)
     const isDcDebito = serviceId.startsWith('dc-debito-');
     const isDcDividaAtiva = serviceId.startsWith('dc-dividaativa-');
@@ -3305,6 +3525,8 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY };
     } else if (DESPBRASIL_SVCS[serviceId]) {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': DESPBRASIL_KEY };
+    } else if (VISTOCAR_ENDPOINTS[serviceId]) {
+      fetchHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await getVistocarToken()}` };
     } else {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO };
     }
@@ -3519,6 +3741,45 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         const errMsg = parsed?.erro || parsed?.mensagem || parsed?.message || 'PDF não retornado pela API.';
         console.error(`[${serviceId}] resposta inesperada da despbrasil: ${JSON.stringify(parsed)}`);
         return res.status(422).json({ error: errMsg });
+      }
+    }
+
+    // Serviços Vistocar — não PDF pronto, o relatório é montado a partir do JSON,
+    // no mesmo padrão visual do relatório de Débitos por Estado. Cada endpoint tem
+    // um envelope de resposta próprio, então o parse/validação é feito por serviceId.
+    if (VISTOCAR_ENDPOINTS[serviceId]) {
+      let parsed;
+      try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
+      if (serviceId === 'consultar-debitos-documentos') {
+        // Envelope timestamp/status/message com "response.registros"; só cobra se
+        // a Vistocar confirmar sucesso e pagamento da consulta (paid:true).
+        const ok = parsed?.status === 200 && parsed?.response?.success === true && parsed?.response?.paid === true;
+        if (!ok) {
+          const errMsg = parsed?.message || parsed?.response?.msg || 'Nenhum resultado encontrado para essa consulta.';
+          console.error(`[${serviceId}] resposta inesperada da Vistocar: ${JSON.stringify(parsed)}`);
+          return res.status(422).json({ error: errMsg });
+        }
+        try {
+          dcDebitoPdfBuf = await buildVistocarDebitosPdfBuffer(service, parsed.response, params);
+        } catch (e) {
+          console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+        }
+      } else if (serviceId === 'consultar-veicular-completa') {
+        // Envelope próprio, sem wrapper "response" (success/statusCode/msg direto na
+        // raiz, com "dadosVeicular" e "leilao").
+        const ok = parsed?.success === true && parsed?.dadosVeicular;
+        if (!ok) {
+          const errMsg = parsed?.msg || 'Nenhum resultado encontrado para essa consulta.';
+          console.error(`[${serviceId}] resposta inesperada da Vistocar: ${JSON.stringify(parsed)}`);
+          return res.status(422).json({ error: errMsg });
+        }
+        try {
+          dcDebitoPdfBuf = await buildVeicularCompletaPdfBuffer(service, parsed, params);
+        } catch (e) {
+          console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+        }
       }
     }
 
