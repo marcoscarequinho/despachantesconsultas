@@ -53,6 +53,7 @@ const VISTOCAR_PASSWORD = process.env.VISTOCAR_PASSWORD || '';
 const VISTOCAR_ENDPOINTS = {
   'consultar-debitos-documentos': 'debitos-cod-barra',
   'consultar-veicular-completa':  'completa',
+  'crlv-rj-reemissao-2':          'crlv-rj',
 };
 
 // Cache do token JWT da Vistocar em memória do processo — o login devolve um token
@@ -236,6 +237,9 @@ const SERVICES = [
   // com URL do PDF pronto (ver bloco DESPBRASIL_SVCS em processCatalogQuery).
   { id:'crlv-rj-reemissao', name:'CRLV Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:59.80, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj',
     slowNote:'⚠️ Atenção: Reemissão do CRLVe não sai se o veículo tiver intenção de venda e/ou comunicação de venda.' },
+  // API Vistocar (vistocarconsulta.com.br) — segunda fonte para Reemissão de CRLV-e RJ,
+  // resposta em JSON com PDF pronto em base64 (ver VISTOCAR_ENDPOINTS).
+  { id:'crlv-rj-reemissao-2', name:'CRLV 2 Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -3780,6 +3784,17 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
           return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
         }
+      } else if (serviceId === 'crlv-rj-reemissao-2') {
+        // Envelope status/message com "response.pdfBase64" — PDF pronto, sem
+        // relatório a montar (mesmo padrão dos serviços em PDF_BASE64_SVCS).
+        const ok = parsed?.status === 200 && parsed?.response?.success === true
+          && parsed?.response?.paid === true && parsed?.response?.pdfBase64;
+        if (!ok) {
+          const errMsg = parsed?.message || parsed?.response?.msg || 'Nenhum resultado encontrado para essa consulta.';
+          console.error(`[${serviceId}] resposta inesperada da Vistocar: ${JSON.stringify(parsed)}`);
+          return res.status(422).json({ error: errMsg });
+        }
+        base64PdfBuf = Buffer.from(parsed.response.pdfBase64, 'base64');
       }
     }
 
