@@ -371,7 +371,7 @@
     <section id="section-api-keys" class="admin-section hidden space-y-4">
       <div>
         <h2 class="text-xl font-bold text-gray-800">Chaves de API</h2>
-        <p class="text-sm text-gray-500">Gere chaves para clientes externos consumirem a API (/api/v1). Chave vinculada a um cliente debita do saldo dele: R$ 5,00 fixo nos 2 endpoints DETRAN/MG (Intenção de Venda e ATPV-e), ou o preço normal do catálogo em cada serviço do "Nova Consulta" (ver Integração API no painel do cliente). Chave Geral só funciona nos 2 endpoints DETRAN/MG.</p>
+        <p class="text-sm text-gray-500">Gere chaves para clientes externos consumirem a API (/api/v1). Chave vinculada a um cliente debita do saldo dele: R$ 5,00 fixo nos 2 endpoints DETRAN/MG (Intenção de Venda e ATPV-e), R$ 28,00 fixo em CRLV 2 Rio Reemissão, ou o preço normal do catálogo em cada serviço do "Nova Consulta" (ver Integração API no painel do cliente). Chave Geral só funciona nesses 3 endpoints fixos (DETRAN/MG e CRLV 2 Rio Reemissão).</p>
       </div>
 
       <div class="card space-y-4">
@@ -397,7 +397,7 @@
             <button onclick="createApiKey()" id="ak-create-btn" class="btn-primary w-full">🔑 Gerar Chave</button>
           </div>
         </div>
-        <p class="text-xs text-gray-400">Chave <strong>geral</strong> não debita nenhuma conta: cada consulta feita com ela aparece na página <strong>💰 Cobranças API</strong>, onde você envia o PIX de R$ 5,00 pelo WhatsApp do cliente final.</p>
+        <p class="text-xs text-gray-400">Chave <strong>geral</strong> não debita nenhuma conta: cada consulta feita com ela aparece na página <strong>💰 Cobranças API</strong>, onde você envia o PIX (R$ 5,00 nos endpoints DETRAN/MG ou R$ 28,00 em CRLV 2 Rio Reemissão) pelo WhatsApp do cliente final.</p>
 
         <div id="ak-new-key-box" class="hidden p-4 bg-amber-50 border border-amber-300 rounded-lg space-y-2">
           <p class="text-sm font-semibold text-amber-800">⚠️ Copie a chave agora — por segurança ela não será exibida novamente:</p>
@@ -499,7 +499,7 @@
     <section id="section-api-cobrancas" class="admin-section hidden space-y-4">
       <div>
         <h2 class="text-xl font-bold text-gray-800">Cobranças API</h2>
-        <p class="text-sm text-gray-500">Placas consultadas pelas chaves de API <strong>gerais</strong> (pós-pagas). Digite o WhatsApp do cliente ao lado da placa e envie a cobrança PIX de R$ 5,00 — QR Code + copia e cola direto no zap.</p>
+        <p class="text-sm text-gray-500">Placas consultadas pelas chaves de API <strong>gerais</strong> (pós-pagas). Digite o WhatsApp do cliente ao lado da placa e envie a cobrança PIX — R$ 5,00 nos endpoints DETRAN/MG ou R$ 28,00 em CRLV 2 Rio Reemissão — QR Code + copia e cola direto no zap.</p>
       </div>
 
       <div class="card p-0 overflow-hidden">
@@ -512,7 +512,7 @@
                 <th class="px-4 py-3 text-left font-semibold text-gray-600">Serviço</th>
                 <th class="px-4 py-3 text-left font-semibold text-gray-600">Placa</th>
                 <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">Renavam</th>
-                <th class="px-4 py-3 text-left font-semibold text-gray-600">Cobrança (R$ 5,00)</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Cobrança</th>
               </tr>
             </thead>
             <tbody id="api-cobrancas-tbody" class="divide-y divide-gray-50">
@@ -897,8 +897,8 @@ function toggleApiKeyType() {
   const general = document.getElementById('ak-type').value === 'general';
   document.getElementById('ak-user-wrap').style.display = general ? 'none' : '';
   document.getElementById('ak-type-scope').textContent = general
-    ? '🔒 Funciona só nos 2 endpoints DETRAN/MG (R$ 5,00, cobrança por WhatsApp).'
-    : '✅ Funciona nos 2 endpoints DETRAN/MG (R$ 5,00) e em todo o catálogo "Nova Consulta" (preço normal da tabela) — mesma chave, mesmo saldo.';
+    ? '🔒 Funciona só nos endpoints DETRAN/MG (R$ 5,00) e CRLV 2 Rio Reemissão (R$ 28,00), cobrança por WhatsApp.'
+    : '✅ Funciona nos endpoints DETRAN/MG (R$ 5,00), CRLV 2 Rio Reemissão e em todo o catálogo "Nova Consulta" (preço normal da tabela) — mesma chave, mesmo saldo.';
 }
 
 async function createApiKey() {
@@ -981,10 +981,11 @@ function renderChargeCell(q) {
           <button onclick="cobrarApiQuery(${q.id}, this)" class="btn-ghost text-xs">📲 Reenviar</button>
         </div>
       </div>`;
+  const precoTxt = (q.price ?? 5).toFixed(2).replace('.', ',');
   return `
     <div class="flex flex-wrap items-center gap-1">
       <input id="charge-phone-${q.id}" type="tel" class="input-field w-36 text-xs py-1.5" placeholder="WhatsApp c/ DDD" maxlength="13">
-      <button onclick="cobrarApiQuery(${q.id}, this)" class="btn-primary text-xs py-1.5 px-2 whitespace-nowrap">📲 Cobrar R$ 5</button>
+      <button onclick="cobrarApiQuery(${q.id}, this)" class="btn-primary text-xs py-1.5 px-2 whitespace-nowrap">📲 Cobrar R$ ${precoTxt}</button>
     </div>`;
 }
 
@@ -1020,6 +1021,7 @@ async function verificarApiCharge(id) {
 const AVULSA_SERVICE_NAMES = {
   'is-detran-mg-atpve':              'ATPV-e MG',
   'is-detran-mg-reg-intencao-venda': 'Intenção de Venda MG',
+  'crlv-rj-reemissao-2':             'CRLV 2 Rio Reemissão',
 };
 const AVULSA_STATUS_BADGES = {
   PENDING: '<span class="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">PIX não pago</span>',

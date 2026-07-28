@@ -3819,12 +3819,79 @@ function isV1Eligible(serviceId) {
   return true;
 }
 
+// Preço fixo da consulta pós-paga (chave Geral) de CRLV 2 Rio Reemissão pela
+// API — diferente do preço do painel (R$ 55,00) e do preço fixo das rotas
+// DETRAN/MG (EXTERNAL_API_PRICE, R$ 5,00); valor comercial definido para os
+// contratos de API. Usado também na tela Cobranças API do admin (ver
+// externalApiPriceFor logo abaixo, junto às rotas DETRAN/MG).
+const CRLV_RJ_REEMISSAO_2_API_PRICE = 28.00;
+
+// Roda a consulta de CRLV 2 Rio Reemissão para chave Geral (pós-paga): não
+// debita ninguém, registra em api_general_queries para cobrança posterior
+// (página Cobranças API do admin) e devolve o PDF pronto na hora — mesmo
+// contrato de resposta do endpoint pré-pago (processCatalogQuery).
+async function runVistocarCrlvRj2General(req, res) {
+  const placa = (req.body?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+  if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+
+  try {
+    let parsed;
+    try {
+      const apiRes = await fetch(`${VISTOCAR_BASE_URL}/apiclient/crlv-rj`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await getVistocarToken()}` },
+        body: JSON.stringify({ plate: placa }),
+      });
+      const bodyStr = await apiRes.text();
+      try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
+    } catch (e) {
+      console.error('Erro na API Vistocar [crlv-rj-reemissao-2 externo]:', e.message);
+      return res.status(502).json({ error: 'Erro ao consultar a API. Tente novamente.' });
+    }
+
+    const ok = parsed?.status === 200 && parsed?.response?.success === true
+      && parsed?.response?.paid === true && parsed?.response?.pdfBase64;
+    if (!ok) {
+      const errMsg = parsed?.message || parsed?.response?.msg || 'Nenhum resultado encontrado para essa consulta.';
+      console.error(`[crlv-rj-reemissao-2 externo] resposta inesperada da Vistocar: ${JSON.stringify(parsed)}`);
+      return res.status(422).json({ error: errMsg });
+    }
+    const pdfBuffer = Buffer.from(parsed.response.pdfBase64, 'base64');
+
+    await pool.query(
+      `INSERT INTO api_general_queries (api_key_id, service_id, params, result_data)
+       VALUES ($1,$2,$3,$4)`,
+      [req.apiKey.id, 'crlv-rj-reemissao-2', JSON.stringify({ placa }), JSON.stringify({ success: true })]
+    );
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="crlv-rj-reemissao-2-${placa}.pdf"`);
+    return res.send(pdfBuffer);
+  } catch (err) {
+    console.error('Erro em API externa [crlv-rj-reemissao-2]:', err.message);
+    res.status(500).json({ error: 'Erro interno. Tente novamente.' });
+  }
+}
+
+// ── POST /api/v1/crlv-rj-reemissao-2 — único serviço do catálogo liberado
+// para chave Geral (pós-paga, R$ 28,00 via runVistocarCrlvRj2General acima).
+// Registrada ANTES da rota genérica /api/v1/:serviceId para interceptar esse
+// serviceId específico também para chaves Gerais; chave vinculada cai no
+// mesmo fluxo pré-pago de sempre (processCatalogQuery, preço do painel).
+app.post('/api/v1/crlv-rj-reemissao-2', requireApiKey, (req, res) => {
+  if (!req.apiUser) return runVistocarCrlvRj2General(req, res);
+  if (!isV1Eligible('crlv-rj-reemissao-2'))
+    return res.status(404).json({ error: 'Serviço não disponível pela API.' });
+  return processCatalogQuery(req.apiUser.id, 'crlv-rj-reemissao-2', req.body, res);
+});
+
 // ── POST /api/v1/:serviceId — catálogo "Nova Consulta" para clientes com chave
 // de API ─────────────────────────────────────────────────────────────────────
 // Mesmo núcleo (processCatalogQuery) e mesmo preço do painel (basePrice *
 // markup), mas autenticado por chave em vez de cookie JWT, e debitando sempre
 // da conta vinculada à chave — chave Geral (pós-paga, sem usuário) não serve
-// aqui, só para os endpoints DETRAN/MG (ver runExternalInfosimplesQuery).
+// aqui, só para os endpoints DETRAN/MG e CRLV 2 Rio Reemissão (ver
+// runExternalInfosimplesQuery e runVistocarCrlvRj2General acima).
 app.post('/api/v1/:serviceId', requireApiKey, (req, res) => {
   if (!req.apiUser)
     return res.status(403).json({ error: 'Esta chave é do tipo Geral e não pode ser usada para o catálogo de Nova Consulta.' });
@@ -4303,6 +4370,14 @@ app.post('/api/query-v3', requireAuth, async (req, res) => {
 // o markup do painel; valor comercial definido para os contratos de API.
 const EXTERNAL_API_PRICE = 5.00;
 
+// Preço por serviço nas rotas de API externa que aceitam chave Geral (pós-paga)
+// e aparecem em Cobranças API — DETRAN/MG usa o preço fixo padrão acima; CRLV 2
+// Rio Reemissão (fora do SERVICES_V3, via Vistocar) tem preço comercial próprio
+// (ver CRLV_RJ_REEMISSAO_2_API_PRICE / runVistocarCrlvRj2General).
+function externalApiPriceFor(serviceId) {
+  return serviceId === 'crlv-rj-reemissao-2' ? CRLV_RJ_REEMISSAO_2_API_PRICE : EXTERNAL_API_PRICE;
+}
+
 async function runExternalInfosimplesQuery(req, res, serviceId) {
   const service = SERVICES_V3.find(s => s.id === serviceId);
   if (!service) return res.status(500).json({ error: 'Serviço não configurado.' });
@@ -4479,6 +4554,7 @@ app.get('/api/admin/api-cobrancas', requireAuth, requireSuperAdmin, async (req, 
         placa: p.placa || null, renavam: p.renavam || null,
         charge_phone: q.charge_phone, charge_status: q.charge_status,
         charge_sent_at: q.charge_sent_at, created_at: q.created_at,
+        price: externalApiPriceFor(q.service_id),
       };
     }));
   } catch {
@@ -4501,10 +4577,12 @@ app.post('/api/admin/api-cobrancas/:id/cobrar', requireAuth, requireSuperAdmin, 
 
     let placa = '';
     try { placa = (JSON.parse(q.params || '{}').placa || '').toUpperCase(); } catch {}
-    const svcName = SERVICES_V3.find(s => s.id === q.service_id)?.name || q.service_id;
+    const svcName = SERVICES_V3.find(s => s.id === q.service_id)?.name
+      || SERVICES.find(s => s.id === q.service_id)?.name || q.service_id;
+    const price = externalApiPriceFor(q.service_id);
 
     const payment = await mpReq('POST', '/v1/payments', {
-      transaction_amount: EXTERNAL_API_PRICE,
+      transaction_amount: price,
       description: `Consulta API — ${svcName}${placa ? ' ' + placa : ''}`,
       payment_method_id: 'pix',
       payer: { email: `cliente-${phone}@despachantesconsultas.com.br`, first_name: 'Cliente', last_name: 'API' },
@@ -4521,7 +4599,7 @@ app.post('/api/admin/api-cobrancas/:id/cobrar', requireAuth, requireSuperAdmin, 
     );
 
     const caption = [
-      `💳 *PIX de ${fmtMoneyBRL(EXTERNAL_API_PRICE)} — MC Despachadoria*`,
+      `💳 *PIX de ${fmtMoneyBRL(price)} — MC Despachadoria*`,
       `🧾 Serviço: ${svcName}`,
       ...(placa ? [`🔤 Placa: ${placa}`] : []),
       ``,
@@ -4534,7 +4612,7 @@ app.post('/api/admin/api-cobrancas/:id/cobrar', requireAuth, requireSuperAdmin, 
     const detalhes = [
       ...(placa ? [`🔤 *Placa: ${placa}*`] : []),
       `🧾 ${svcName}`,
-      `💰 Valor: ${fmtMoneyBRL(EXTERNAL_API_PRICE)}`,
+      `💰 Valor: ${fmtMoneyBRL(price)}`,
       ``,
       `👇 Código PIX copia e cola:`,
     ].join('\n');
