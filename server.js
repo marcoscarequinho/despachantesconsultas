@@ -3679,6 +3679,13 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           const fileName = `${DESPBRASIL_SVCS[serviceId].servico}-${placa || 'doc'}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
         }
+        // Envia PDF via WhatsApp para serviços Vistocar (CRLV RJ Reemissão 2)
+        if (VISTOCAR_ENDPOINTS[serviceId] && user.phone) {
+          const placa = (params?.placa || '').toUpperCase();
+          const caption = `✅ *${service.name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
+          const fileName = `${serviceId}-${placa || 'doc'}.pdf`;
+          await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
+        }
         // Envia PDF via WhatsApp para Intenção de Venda (ATPV-e instantâneo)
         if (ATPVE_UFS.some(uf => serviceId === `intencao-venda-${uf}`) && user.phone) {
           const ufUpper = serviceId.split('-')[2].toUpperCase();
