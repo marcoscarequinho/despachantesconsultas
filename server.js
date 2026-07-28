@@ -3290,7 +3290,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
       apiUrl = `${VISTOCAR_BASE_URL}/apiclient/${VISTOCAR_ENDPOINTS[serviceId]}`;
       method = 'POST';
-      body   = { placa };
+      body   = { plate: placa };
     }
     // Débitos por Estado / Dívida Ativa — API Datacube (form-urlencoded, retorna JSON que vira PDF)
     const isDcDebito = serviceId.startsWith('dc-debito-');
