@@ -251,10 +251,7 @@ const SERVICES = [
   { id:'crlv-agendado-df', name:'CRLV-e Agendado Distrito Federal (DF)',   group:'CRLV-e Agendado', basePrice:38.50,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'df' },
   { id:'crlv-agendado-es', name:'CRLV-e Agendado Espírito Santo (ES)',     group:'CRLV-e Agendado', basePrice:20.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'es' },
   { id:'crlv-agendado-pb', name:'CRLV-e Agendado Paraíba (PB)',            group:'CRLV-e Agendado', basePrice:35.00,  inputType:'crlv_agendado_cpf',   icon:'⏳', uf:'pb' },
-  // Processamento manual (entrega via upload no admin, ver MANUAL_SERVICE_IDS) —
-  // igual ao fluxo de "Número CRV (Apenas antigos)", mas mantido no grupo CRLV-e Agendado.
-  { id:'crlv-agendado-pe', name:'CRLV-e Agendado Pernambuco (PE)',         group:'CRLV-e Agendado', basePrice:45.00, noMarkup:true, inputType:'placa', icon:'📁', uf:'pe',
-    slowNote:'⏳ Esse CRLV-e entrega em até 1h30 (uma hora e trinta minutos) para pedidos feitos entre 9h30 e 17h00, de segunda a sexta-feira.' },
+  { id:'crlv-agendado-pe', name:'CRLV-e Agendado Pernambuco (PE)',         group:'CRLV-e Agendado', basePrice:45.00, noMarkup:true, inputType:'crlv_agendado_placa', icon:'⏳', uf:'pe' },
   { id:'crlv-agendado-pr', name:'CRLV-e Agendado Paraná (PR)',             group:'CRLV-e Agendado', basePrice:15.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'pr' },
   { id:'crlv-agendado-rn', name:'CRLV-e Agendado Rio Grande do Norte (RN)',group:'CRLV-e Agendado', basePrice:55.00,  inputType:'crlv_agendado_cpf',   icon:'⏳', uf:'rn' },
   { id:'crlv-agendado-sc', name:'CRLV-e Agendado Santa Catarina (SC)',     group:'CRLV-e Agendado', basePrice:60.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'sc' },
@@ -414,7 +411,7 @@ const SERVICES = [
 // Serviços desta categoria não retornam resultado na hora: o pedido fica
 // pendente até o super admin subir o PDF manualmente (ver /api/admin/manual-queries).
 const MANUAL_UPLOAD_GROUP = 'Número CRV (Apenas antigos)';
-const MANUAL_SERVICE_IDS  = [...SERVICES.filter(s => s.group === MANUAL_UPLOAD_GROUP).map(s => s.id), 'crlv-agendado-rj-reemissao', 'crlv-agendado-pe'];
+const MANUAL_SERVICE_IDS  = [...SERVICES.filter(s => s.group === MANUAL_UPLOAD_GROUP).map(s => s.id), 'crlv-agendado-rj-reemissao'];
 
 // ── SERVICES_V2 — API Datacube (api.consultasdeveiculos.com) ──────────────────
 // Catálogo completamente separado do SERVICES/autocrlv/chekaki acima. Preços em
