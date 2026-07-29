@@ -32,12 +32,11 @@ const WEBHOOK_BASE_URL   = (process.env.WEBHOOK_BASE_URL  || '').replace(/\/$/, 
 const ADMIN_PHONE        = process.env.ADMIN_PHONE        || '';
 // API despbrasil.com.br — auth por header chaveAcesso (fixo); resposta traz a URL
 // do PDF pronto em "arquivo_url" (buscamos o arquivo no processCatalogQuery, ver
-// DESPBRASIL_SVCS). Mapeia serviceId para o "servico" da despbrasil + campos extras
-// do payload além de placa (ex.: uf no CRLV Rio Reemissão).
+// DESPBRASIL_SVCS). Mapeia serviceId para o "servico" da despbrasil (campo "extra"
+// opcional acrescenta dados ao payload além da placa).
 const DESPBRASIL_BASE_URL = 'https://despbrasil.com.br/functions/apiConsulta';
 const DESPBRASIL_KEY      = process.env.DESPBRASIL_KEY || '';
 const DESPBRASIL_SVCS = {
-  'crlv-rj-reemissao': { servico: 'crlv_turbo', extra: { uf: 'RJ' } },
   'security-code-vistocar':     { servico: 'codigo_seguranca' },
   'verificar-crlv':    { servico: 'verificar_crlv' },
   'consulta-renavam':  { servico: 'consulta_renavam' },
@@ -51,6 +50,7 @@ const VISTOCAR_LOGIN    = process.env.VISTOCAR_LOGIN    || '';
 const VISTOCAR_PASSWORD = process.env.VISTOCAR_PASSWORD || '';
 const VISTOCAR_ENDPOINTS = {
   'crlv-rj-reemissao-2': 'crlv-rj',
+  'security-code-vistocar-2': 'security-code',
 };
 
 // Cache do token JWT da Vistocar em memória do processo — o login devolve um token
@@ -226,11 +226,7 @@ const SERVICES = [
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa_renavam',icon:'📝' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
-  // API despbrasil.com.br (serviço "crlv_turbo") — Reemissão de CRLV-e RJ, resposta em JSON
-  // com URL do PDF pronto (ver bloco DESPBRASIL_SVCS em processCatalogQuery).
-  { id:'crlv-rj-reemissao', name:'CRLV Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:59.80, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj',
-    slowNote:'⚠️ Atenção: Reemissão do CRLVe não sai se o veículo tiver intenção de venda e/ou comunicação de venda.' },
-  // API Vistocar (vistocarconsulta.com.br) — segunda fonte para Reemissão de CRLV-e RJ,
+  // API Vistocar (vistocarconsulta.com.br) — fonte para Reemissão de CRLV-e RJ,
   // resposta em JSON com PDF pronto em base64 (ver VISTOCAR_ENDPOINTS).
   { id:'crlv-rj-reemissao-2', name:'CRLV 2 Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // ── CRLV-e Digital (instantâneo) ──
@@ -267,6 +263,9 @@ const SERVICES = [
   // API despbrasil.com.br (serviço "codigo_seguranca") — segunda fonte para Código de
   // Segurança CRV (ver DESPBRASIL_SVCS).
   { id:'security-code-vistocar', name:'Consulta 2 Código Segurança CRV (PDF)', group:'CRV', basePrice:7.99, noMarkup:true, inputType:'placa', icon:'🔐' },
+  // API Vistocar (vistocarconsulta.com.br) — terceira fonte para Código de Segurança
+  // CRV, resposta em JSON com PDF pronto em base64 (ver VISTOCAR_ENDPOINTS).
+  { id:'security-code-vistocar-2', name:'Consulta 3 Código Segurança CRV (PDF)', group:'CRV', basePrice:8.10, noMarkup:true, inputType:'placa', icon:'🔐' },
   // ── Análise de Crédito ──
   { id:'consultar-spc', name:'Consulta SPC/Crédito', group:'Análise de Crédito', basePrice:15.00, inputType:'cpfcnpj', icon:'📊' },
   // ── Óbito ──
