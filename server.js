@@ -257,7 +257,6 @@ const SERVICES = [
   { id:'crlv-agendado-sc', name:'CRLV-e Agendado Santa Catarina (SC)',     group:'CRLV-e Agendado', basePrice:60.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'sc' },
   { id:'crlv-agendado-status', name:'CRLV Agendado — Ver Status',          group:'CRLV-e Agendado', basePrice:0.00,   inputType:'pedido_id_get',       icon:'🔄' },
   // ── CRV ──
-  { id:'consultar-crv-v2',   name:'Código Segurança CRV (PDF)', group:'CRV', basePrice:6.50,  inputType:'placa',      icon:'🔐' },
   { id:'consultar-placa-crv',name:'Placa + CRV (JSON+PDF)',     group:'CRV', basePrice:10.50, inputType:'placa',      icon:'🔐' },
   { id:'valida-crv',         name:'Valida CRV',                 group:'CRV', basePrice:0.00,  inputType:'valida_crv', icon:'✅' },
   // API despbrasil.com.br (serviço "codigo_seguranca") — segunda fonte para Código de
@@ -3502,7 +3501,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     }
 
     // serviços que retornam JSON com pdf_base64
-    const PDF_BASE64_SVCS = ['consultar-placa-crv', 'consultar-crv-v2', 'consulta-debitos-portal'];
+    const PDF_BASE64_SVCS = ['consultar-placa-crv', 'consulta-debitos-portal'];
     let base64PdfBuf = null;
     if (PDF_BASE64_SVCS.includes(serviceId)) {
       let parsed;
