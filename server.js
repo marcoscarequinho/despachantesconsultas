@@ -253,7 +253,8 @@ const SERVICES = [
   { id:'crlv-agendado-pb', name:'CRLV-e Agendado Paraíba (PB)',            group:'CRLV-e Agendado', basePrice:35.00,  inputType:'crlv_agendado_cpf',   icon:'⏳', uf:'pb' },
   // Processamento manual (entrega via upload no admin, ver MANUAL_SERVICE_IDS) —
   // igual ao fluxo de "Número CRV (Apenas antigos)", mas mantido no grupo CRLV-e Agendado.
-  { id:'crlv-agendado-pe', name:'CRLV-e Agendado Pernambuco (PE)',         group:'CRLV-e Agendado', basePrice:45.00, noMarkup:true, inputType:'placa', icon:'📁', uf:'pe' },
+  { id:'crlv-agendado-pe', name:'CRLV-e Agendado Pernambuco (PE)',         group:'CRLV-e Agendado', basePrice:45.00, noMarkup:true, inputType:'placa', icon:'📁', uf:'pe',
+    slowNote:'⏳ Esse CRLV-e entrega em até 1h30 (uma hora e trinta minutos) para pedidos feitos entre 9h30 e 17h00, de segunda a sexta-feira.' },
   { id:'crlv-agendado-pr', name:'CRLV-e Agendado Paraná (PR)',             group:'CRLV-e Agendado', basePrice:15.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'pr' },
   { id:'crlv-agendado-rn', name:'CRLV-e Agendado Rio Grande do Norte (RN)',group:'CRLV-e Agendado', basePrice:55.00,  inputType:'crlv_agendado_cpf',   icon:'⏳', uf:'rn' },
   { id:'crlv-agendado-sc', name:'CRLV-e Agendado Santa Catarina (SC)',     group:'CRLV-e Agendado', basePrice:60.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'sc' },
