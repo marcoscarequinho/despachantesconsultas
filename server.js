@@ -5910,6 +5910,8 @@ const BROADCAST_MESSAGE =
 // desativado por estar sendo denunciado como spam no WhatsApp.
 // Grupos vêm da Z-API com isGroup:true e phone no formato "<id>-group"
 // (não usam o sufixo "@g.us" do protocolo interno do WhatsApp).
+// Retorna { phone, name } de cada grupo — o "name" permite filtrar grupos
+// específicos no broadcast prioritário (ver BROADCAST_PRIORITY_GROUPS).
 async function fetchZApiDestinations() {
   const headers = ZAPI_CLIENT_TOKEN ? { 'Client-Token': ZAPI_CLIENT_TOKEN } : {};
   const base = `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}`;
@@ -5922,7 +5924,7 @@ async function fetchZApiDestinations() {
     }
   }
 
-  // Chave = ID único; valor = ID de grupo pronto para envio
+  // Chave = ID único (phone do grupo)
   const destinations = new Map();
 
   for (let page = 1; page <= 5; page++) {
@@ -5932,7 +5934,7 @@ async function fetchZApiDestinations() {
     const list = Array.isArray(data) ? data : (data.value || data.chats || []);
     list.forEach(c => {
       const phone = String(c.phone || '');
-      if (c.isGroup === true && phone) destinations.set(phone, phone);
+      if (c.isGroup === true && phone) destinations.set(phone, { phone, name: c.name || c.chatName || '' });
     });
     if (list.length < 500) break;
   }
@@ -5966,15 +5968,23 @@ async function sendBroadcastImage(dest, base64Png, caption) {
   }
 }
 
-async function runWhatsAppBroadcast() {
+// Grupos com disparo prioritário de 2 em 2 horas (além do disparo geral de 2 em 2
+// dias, que continua valendo para todos os grupos, inclusive estes).
+const BROADCAST_PRIORITY_GROUPS = ['PORTAL⚔️DESPACHANTES', 'SERVIÇOS, OFERTAS E AMIGOS'];
+
+async function runWhatsAppBroadcast(groupNames) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN) throw new Error('Z-API não configurada');
-  const dests = await fetchZApiDestinations();
+  let dests = await fetchZApiDestinations();
+  if (groupNames?.length) {
+    const wanted = new Set(groupNames.map(n => n.trim().toUpperCase()));
+    dests = dests.filter(d => wanted.has((d.name || '').trim().toUpperCase()));
+  }
   console.log(`📢 Broadcast: ${dests.length} grupos`);
   const imageBase64 = fs.readFileSync(BROADCAST_IMAGE_PATH).toString('base64');
   let sent = 0, failed = 0;
   for (const dest of dests) {
     try {
-      await sendBroadcastImage(dest, imageBase64, BROADCAST_MESSAGE);
+      await sendBroadcastImage(dest.phone, imageBase64, BROADCAST_MESSAGE);
       sent++;
     } catch {
       failed++;
@@ -6007,6 +6017,33 @@ app.post('/api/admin/broadcast-whatsapp', requireAuth, requireSuperAdmin, async 
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('Erro no broadcast manual:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/cron/broadcast-whatsapp-priority (Vercel Cron — de 2 em 2 horas) ─
+// Mesmo disparo, mas só para os grupos em BROADCAST_PRIORITY_GROUPS.
+app.get('/api/cron/broadcast-whatsapp-priority', async (req, res) => {
+  const secret = process.env.CRON_SECRET || '';
+  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const result = await runWhatsAppBroadcast(BROADCAST_PRIORITY_GROUPS);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Erro no cron broadcast prioritário:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/admin/broadcast-whatsapp-priority (teste manual pelo admin) ────
+app.post('/api/admin/broadcast-whatsapp-priority', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const result = await runWhatsAppBroadcast(BROADCAST_PRIORITY_GROUPS);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Erro no broadcast prioritário manual:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

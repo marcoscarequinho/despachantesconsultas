@@ -15,6 +15,10 @@
       "schedule": "0 11 */2 * *"
     },
     {
+      "path": "/api/cron/broadcast-whatsapp-priority",
+      "schedule": "0 */2 * * *"
+    },
+    {
       "path": "/api/cron/crlv-agendado-status",
       "schedule": "*/15 * * * *"
     },
