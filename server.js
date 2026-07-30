@@ -229,6 +229,10 @@ const SERVICES = [
   // API Vistocar (vistocarconsulta.com.br) — fonte para Reemissão de CRLV-e RJ,
   // resposta em JSON com PDF pronto em base64 (ver VISTOCAR_ENDPOINTS).
   { id:'crlv-rj-reemissao-2', name:'CRLV 2 Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
+  // Backup manual da CRLV 2 Rio Reemissão (acima): quando a API estiver fora do ar, o
+  // cliente usa esta em vez de esperar — vira fila de upload manual (MANUAL_SERVICE_IDS
+  // já inclui este id fixo, ver abaixo), sai em até 1h.
+  { id:'crlv-agendado-rj-reemissao', name:'CRLV Rio Reemissão Agendado', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📁', uf:'rj' },
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },

@@ -339,6 +339,14 @@
       </div>
 
       <!-- Destaque: CRLV-e Rio de Janeiro -->
+      <div class="flex gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+        <span class="text-amber-500 text-lg flex-shrink-0 mt-0.5">⚠️</span>
+        <p class="text-xs text-amber-800 leading-relaxed">
+          <strong>Atenção —</strong> Só use a consulta <strong>"CRLV Rio Reemissão Agendado"</strong> se a
+          <strong>"CRLV 2 Rio Reemissão"</strong> (reemissão imediata) estiver fora do ar. Ela não é via API — é por
+          <strong>upload manual</strong> (igual à "Número CRV (Apenas antigos)"), com o PDF disponível em até <strong>1 hora</strong>.
+        </p>
+      </div>
       <div class="flex flex-wrap justify-center gap-3">
         <button type="button" onclick="openHeroService('consultar-crlv-rj')"
           class="w-full sm:w-auto sm:min-w-[280px] flex items-center gap-4 rounded-xl border-2 border-orange-300 bg-gradient-to-r from-orange-50 to-white p-4 text-left shadow-sm hover:shadow-md hover:border-orange-400 transition-all">
@@ -375,6 +383,15 @@
             <div class="text-sm text-orange-700 font-medium">⚡ Emissão Instantânea</div>
           </div>
           <div class="price-tag text-base flex-shrink-0">R$ 18,90</div>
+        </button>
+        <button type="button" onclick="openHeroService('crlv-agendado-rj-reemissao')"
+          class="w-full sm:w-auto sm:min-w-[280px] flex items-center gap-4 rounded-xl border-2 border-orange-300 bg-gradient-to-r from-orange-50 to-white p-4 text-left shadow-sm hover:shadow-md hover:border-orange-400 transition-all">
+          <div class="w-14 h-14 rounded-full bg-orange-100 flex items-center justify-center text-3xl flex-shrink-0">📁</div>
+          <div class="min-w-0 flex-1">
+            <div class="font-bold text-gray-800">CRLV Rio Reemissão Agendado</div>
+            <div class="text-sm text-orange-700 font-medium">🕐 Sai em até 1 hora</div>
+          </div>
+          <div class="price-tag text-base flex-shrink-0">R$ 55,00</div>
         </button>
       </div>
 
@@ -2744,6 +2761,15 @@ function renderFormFields(inputType, svc) {
       <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 mb-2">
         📁 <strong>Serviço Manual:</strong> não há emissão automática. Nossa equipe vai localizar o documento
         e o PDF ficará disponível para download aqui no seu painel assim que estiver pronto.
+      </div>`);
+  }
+
+  if (svc && svc.id === 'crlv-agendado-rj-reemissao') {
+    wrap.insertAdjacentHTML('afterbegin', `
+      <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 mb-2">
+        📁 <strong>Serviço Manual:</strong> só use esta opção se a "CRLV 2 Rio Reemissão" (imediata) estiver fora do ar.
+        Não há emissão automática — nossa equipe localiza o documento e o PDF ficará disponível para download
+        aqui no seu painel em até <strong>1 hora</strong>.
       </div>`);
   }
 
