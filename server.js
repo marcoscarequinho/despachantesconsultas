@@ -735,6 +735,54 @@ app.use(express.static(path.join(__dirname), { etag: false, lastModified: false,
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const cleanDoc = (v) => v.replace(/[\.\-\/]/g, '').trim();
 
+// Validação de dígitos verificadores de CPF (algoritmo oficial da Receita Federal).
+function isValidCPF(cpf) {
+  const d = cpf.replace(/\D/g, '');
+  if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
+  let sum = 0;
+  for (let i = 0; i < 9; i++) sum += parseInt(d[i], 10) * (10 - i);
+  let dv1 = 11 - (sum % 11);
+  if (dv1 >= 10) dv1 = 0;
+  if (dv1 !== parseInt(d[9], 10)) return false;
+  sum = 0;
+  for (let i = 0; i < 10; i++) sum += parseInt(d[i], 10) * (11 - i);
+  let dv2 = 11 - (sum % 11);
+  if (dv2 >= 10) dv2 = 0;
+  return dv2 === parseInt(d[10], 10);
+}
+
+// Validação de dígitos verificadores de CNPJ (algoritmo oficial da Receita Federal).
+function isValidCNPJ(cnpj) {
+  const d = cnpj.replace(/\D/g, '');
+  if (d.length !== 14 || /^(\d)\1{13}$/.test(d)) return false;
+  const calcDv = (base) => {
+    const weights = base.length === 12
+      ? [5,4,3,2,9,8,7,6,5,4,3,2]
+      : [6,5,4,3,2,9,8,7,6,5,4,3,2];
+    const sum = base.split('').reduce((acc, digit, i) => acc + parseInt(digit, 10) * weights[i], 0);
+    const rest = sum % 11;
+    return rest < 2 ? 0 : 11 - rest;
+  };
+  if (calcDv(d.slice(0, 12)) !== parseInt(d[12], 10)) return false;
+  return calcDv(d.slice(0, 13)) === parseInt(d[13], 10);
+}
+
+// CPF (11 dígitos) ou CNPJ (14 dígitos) válido conforme dígito verificador.
+function isValidDoc(doc) {
+  const d = (doc || '').replace(/\D/g, '');
+  if (d.length === 11) return isValidCPF(d);
+  if (d.length === 14) return isValidCNPJ(d);
+  return false;
+}
+
+// Telefone BR: DDD (11-99) + fixo (8 dígitos) ou celular (9 dígitos).
+function isValidPhoneBR(phone) {
+  const d = (phone || '').replace(/\D/g, '');
+  if (d.length !== 10 && d.length !== 11) return false;
+  const ddd = parseInt(d.slice(0, 2), 10);
+  return ddd >= 11 && ddd <= 99;
+}
+
 function generateAffiliateCode(name) {
   const base = name.split(' ')[0].toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5);
   const rand = Math.random().toString(36).substring(2, 6).toUpperCase();
@@ -819,11 +867,17 @@ async function requireApiKey(req, res, next) {
 app.post('/api/auth/register', async (req, res) => {
   const { name, cpf_cnpj, email, phone, password, role, referral_code } = req.body;
 
-  if (!name || !cpf_cnpj || !email || !password)
+  if (!name || !cpf_cnpj || !email || !phone || !password)
     return res.status(400).json({ error: 'Preencha todos os campos obrigatórios.' });
 
   if (password.length < 8)
     return res.status(400).json({ error: 'A senha deve ter ao menos 8 caracteres.' });
+
+  if (!isValidDoc(cpf_cnpj))
+    return res.status(400).json({ error: 'CPF ou CNPJ inválido.' });
+
+  if (!isValidPhoneBR(phone))
+    return res.status(400).json({ error: 'Telefone inválido. Informe com DDD, ex.: (21) 90000-0000.' });
 
   const doc = cleanDoc(cpf_cnpj);
   const mail = email.toLowerCase().trim();
@@ -1133,10 +1187,14 @@ app.get('/api/reseller/clients', requireAuth, requireReseller, async (req, res) 
 app.post('/api/reseller/clients', requireAuth, requireReseller, async (req, res) => {
   const { name, cpf_cnpj, email, phone, password } = req.body;
 
-  if (!name || !cpf_cnpj || !email || !password)
+  if (!name || !cpf_cnpj || !email || !phone || !password)
     return res.status(400).json({ error: 'Preencha todos os campos obrigatórios.' });
   if (password.length < 8)
     return res.status(400).json({ error: 'A senha deve ter ao menos 8 caracteres.' });
+  if (!isValidDoc(cpf_cnpj))
+    return res.status(400).json({ error: 'CPF ou CNPJ inválido.' });
+  if (!isValidPhoneBR(phone))
+    return res.status(400).json({ error: 'Telefone inválido. Informe com DDD, ex.: (21) 90000-0000.' });
 
   const doc  = cleanDoc(cpf_cnpj);
   const mail = email.toLowerCase().trim();
@@ -5558,6 +5616,10 @@ app.post('/api/admin/users', requireAuth, requireSuperAdmin, async (req, res) =>
     return res.status(400).json({ error: 'Preencha todos os campos obrigatórios.' });
   if (password.length < 8)
     return res.status(400).json({ error: 'Senha deve ter ao menos 8 caracteres.' });
+  if (!isValidDoc(cpf_cnpj))
+    return res.status(400).json({ error: 'CPF ou CNPJ inválido.' });
+  if (phone && !isValidPhoneBR(phone))
+    return res.status(400).json({ error: 'Telefone inválido. Informe com DDD, ex.: (21) 90000-0000.' });
   const doc = cleanDoc(cpf_cnpj); const mail = email.toLowerCase().trim();
   try {
     const dup = await pool.query('SELECT id FROM users WHERE email=$1 OR cpf_cnpj=$2', [mail, doc]);
