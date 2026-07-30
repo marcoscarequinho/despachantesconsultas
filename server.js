@@ -5976,8 +5976,13 @@ async function runWhatsAppBroadcast(groupNames) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN) throw new Error('Z-API não configurada');
   let dests = await fetchZApiDestinations();
   if (groupNames?.length) {
-    const wanted = new Set(groupNames.map(n => n.trim().toUpperCase()));
-    dests = dests.filter(d => wanted.has((d.name || '').trim().toUpperCase()));
+    // startsWith em vez de igualdade exata: nomes de grupo no WhatsApp costumam
+    // ter emojis/sufixos extras (ex.: "PORTAL⚔️DESPACHANTES🇧🇷📌").
+    const wanted = groupNames.map(n => n.trim().toUpperCase());
+    dests = dests.filter(d => {
+      const name = (d.name || '').trim().toUpperCase();
+      return wanted.some(w => name.startsWith(w));
+    });
   }
   console.log(`📢 Broadcast: ${dests.length} grupos`);
   const imageBase64 = fs.readFileSync(BROADCAST_IMAGE_PATH).toString('base64');
