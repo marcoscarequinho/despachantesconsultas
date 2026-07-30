@@ -2161,6 +2161,7 @@ function inputTypeLabel(t) {
     motor:               'Entrada: Número do Motor',
     chassi:              'Entrada: Chassi',
     cpfcnpj:             'Entrada: CPF/CNPJ',
+    dc_cpf:              'Entrada: CPF',
     crv_full:            'Entrada: Placa + Renavam + Dados CRV',
     valida_crv:          'Entrada: Placa + Renavam + UF + CRV',
     crlv_agendado_placa: 'Entrada: Placa (assíncrono)',
@@ -2221,6 +2222,7 @@ function apiExampleParams(inputType) {
     motor:               { motor: '1234567890' },
     chassi:              { chassi: '9BWZZZ377VT004251' },
     cpfcnpj:             { cpfCnpj: '00000000000' },
+    dc_cpf:              { cpf: '00000000000' },
     protocolo:           { protocolo: '0000000000' },
     protocolo_get:       { protocolo: '0000000000' },
     id_only:             { id: '12345' },
@@ -2671,6 +2673,8 @@ function renderFormFields(inputType, svc) {
 
     cpfcnpj: field('cpfcnpj', 'CPF ou CNPJ', 'text', '000.000.000-00'),
 
+    dc_cpf: field('cpf', 'CPF', 'text', '000.000.000-00'),
+
     crv_full: placaField + renavamField + `
       <div class="grid grid-cols-2 gap-3">
         ${field('crv_numero','Número CRV','text','123456789012')}
@@ -2967,6 +2971,7 @@ function buildParams(inputType) {
   if (inputType === 'motor')             return { motor: g('motor') };
   if (inputType === 'chassi')            return { chassi: g('chassi') };
   if (inputType === 'cpfcnpj')          return { cpfCnpj: cd(g('cpfcnpj')) };
+  if (inputType === 'dc_cpf')           return { cpf: cd(g('cpf')) };
   if (inputType === 'protocolo' || inputType === 'protocolo_get')
                                          return { protocolo: g('protocolo') };
   if (inputType === 'id_only' || inputType === 'id_get')

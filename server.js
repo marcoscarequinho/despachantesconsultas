@@ -224,6 +224,10 @@ const SERVICES = [
   { id:'consultar-atpve-v1',             name:'Reemissão ATPV-e (Placa)',     group:'Débitos e Documentação', basePrice:13.50, inputType:'placa_renavam', icon:'📄' },
   { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:25.00, inputType:'placa',        icon:'🔢' },
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa_renavam',icon:'📝' },
+  // API Datacube (form-urlencoded) — movido da Opção 2 (grupo Cadastros) para valor
+  // fixo de R$5,00, noMarkup:true. O PDF é montado a partir do JSON retornado (ver
+  // buildLocalizacaoCpfPdfBuffer).
+  { id:'dc-cadastro-localizacao-cpf',     name:'Localização CPF',              group:'Débitos e Documentação', basePrice:5.00, noMarkup:true, inputType:'dc_cpf', icon:'📍', dcPath:'/pessoas/localizacao' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // API Vistocar (vistocarconsulta.com.br) — fonte para Reemissão de CRLV-e RJ,
@@ -468,7 +472,8 @@ const SERVICES_V2 = [
   { id:'dc-cadastro-empresas-cpf',    name:'Empresas do CPF',           group:'Cadastros', basePrice:0.313, inputType:'dc_cpf',      icon:'🗂️', dcPath:'/pessoas/empresas' },
   { id:'dc-cadastro-nome-cpf',        name:'Nome do CPF',               group:'Cadastros', basePrice:0.234, inputType:'dc_cpf',      icon:'🗂️', dcPath:'/pessoas/nome' },
   { id:'dc-cadastro-dados-cpf',       name:'Dados Cadastrais do CPF',   group:'Cadastros', basePrice:1.380, inputType:'dc_cpf',      icon:'🗂️', dcPath:'/pessoas/cadastro' },
-  { id:'dc-cadastro-localizacao-cpf', name:'Localização CPF',           group:'Cadastros', basePrice:1.381, inputType:'dc_cpf',      icon:'🗂️', dcPath:'/pessoas/localizacao' },
+  // "Localização CPF" (dc-cadastro-localizacao-cpf) foi movida para Nova Consulta /
+  // Débitos e Documentação, ver SERVICES acima.
   { id:'dc-cadastro-localizacao-v3',  name:'Localização CPF V3',        group:'Cadastros', basePrice:2.844, inputType:'dc_cpf',      icon:'🗂️', dcPath:'/pessoas/localizacao_v3' },
   { id:'dc-cadastro-telefone',        name:'Pessoas por Telefone',      group:'Cadastros', basePrice:0.706, inputType:'dc_telefone', icon:'🗂️', dcPath:'/pessoas/telefone' },
   { id:'dc-cadastro-cnpj',            name:'Dados do CNPJ',             group:'Cadastros', basePrice:0.234, inputType:'dc_cnpj',     icon:'🗂️', dcPath:'/empresas/informacoes' },
@@ -2029,6 +2034,38 @@ function buildMotorPdfBuffer(service, data, params) {
   });
 }
 
+// ── Geração de PDF — Localização CPF (Datacube retorna JSON, não PDF pronto) ───
+// Usa o renderizador genérico porque a resposta pode trazer o endereço direto no
+// objeto raiz ou aninhado (ex.: lista de endereços), variando conforme o CPF.
+function buildLocalizacaoCpfPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+
+      pdfReportHeader(doc, 'LOCALIZAÇÃO CPF', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['CPF', maskDocDisplay(params?.cpf)]]);
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'RESULTADO');
+      pdfRenderGenericObject(doc, data);
+      doc.moveDown(0.4);
+
+      pdfReportFooter(doc, now);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── Geração de PDF — Verificar CRLV e Último Licenciamento (despbrasil devolve
 // os dados em "dados", sem um arquivo pronto útil para esse serviço) ──────────
 function buildVerificarCrlvPdfBuffer(service, data, params) {
@@ -3209,6 +3246,18 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       body   = new URLSearchParams({ auth_token: DATACUBE_TOKEN, motor });
     }
 
+    // Localização CPF — API Datacube (form-urlencoded; movido da Opção 2 para valor
+    // fixo de R$5,00, noMarkup:true). O PDF é montado a partir do JSON retornado
+    // (ver buildLocalizacaoCpfPdfBuffer).
+    const isDcLocalizacaoCpf = serviceId === 'dc-cadastro-localizacao-cpf';
+    if (isDcLocalizacaoCpf) {
+      const cpf = (params?.cpf || '').replace(/\D/g, '');
+      if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+      apiUrl = `${DATACUBE_API_URL}${service.dcPath}`;
+      method = 'POST';
+      body   = new URLSearchParams({ auth_token: DATACUBE_TOKEN, cpf });
+    }
+
     // CNH — API Datacube (form-urlencoded, retorna JSON genérico — sem PDF, cada UF
     // tem um formato de retorno próprio e não vale a pena montar um relatório único)
     const isDcCnh = serviceId.startsWith('dc-cnh-');
@@ -3398,7 +3447,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       body   = new URLSearchParams({ auth_token: DATACUBE_TOKEN, placa });
     }
 
-    const isDatacubeForm = isDcDebito || isDcDividaAtiva || isDcCnh || isDcVeiculosDoc || isDcRouboFurto || isDcHistoricoProprietario || isDcHistoricoGravames || isDcLeilao || isDcConsulta0km || isDcBinEstadual || serviceId === 'dc-decodificar-motor';
+    const isDatacubeForm = isDcDebito || isDcDividaAtiva || isDcCnh || isDcVeiculosDoc || isDcRouboFurto || isDcHistoricoProprietario || isDcHistoricoGravames || isDcLeilao || isDcConsulta0km || isDcBinEstadual || isDcLocalizacaoCpf || serviceId === 'dc-decodificar-motor';
 
     let fetchHeaders;
     if (isDatacubeForm) {
@@ -3555,6 +3604,15 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         // mesmo padrão visual do relatório de Débitos por Estado.
         try {
           dcDebitoPdfBuf = await buildBinEstadualPdfBuffer(service, parsed.result ?? parsed, params);
+        } catch (e) {
+          console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+        }
+      } else if (isDcLocalizacaoCpf) {
+        // Localização CPF: monta o PDF do relatório a partir do JSON, no mesmo
+        // padrão visual do relatório de Débitos por Estado.
+        try {
+          dcDebitoPdfBuf = await buildLocalizacaoCpfPdfBuffer(service, parsed.result ?? parsed, params);
         } catch (e) {
           console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
           return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
