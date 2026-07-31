@@ -4439,6 +4439,13 @@ app.post('/api/query-v2', requireAuth, async (req, res) => {
     if (service.returnsPdf) {
       const found = findAndStripBase64Pdf(resultV2);
       if (found.pdf) { pdfBase64 = found.pdf; resultV2 = found.data; }
+      // documentos-crlve-rj-flash é documentado como assíncrono (pode devolver só
+      // um request_uid/task_id sem o PDF pronto ainda) — nunca cobra sem o
+      // documento em mãos.
+      if (!pdfBase64) {
+        console.error(`[${serviceId}] resposta sem PDF (possível tarefa assíncrona pendente): ${JSON.stringify(apiData)}`);
+        return res.status(422).json({ error: 'Documento ainda não está pronto. Tente novamente em alguns instantes.' });
+      }
     }
 
     await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
