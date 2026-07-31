@@ -827,10 +827,21 @@ function requireReseller(req, res, next) {
 
 const SUPER_ADMIN_EMAILS = ['contato@mygmail.com.br', 'contato@mcdetranrj.com'];
 
+// Não existe coluna/valor de "role" para admin — o admin é definido pelo e-mail
+// (SUPER_ADMIN_EMAILS). Usado tanto pelo middleware requireSuperAdmin quanto por
+// checagens pontuais (ex.: serviços adminOnly em SERVICES_V2).
+async function isSuperAdmin(userId) {
+  try {
+    const r = await pool.query('SELECT email FROM users WHERE id=$1', [userId]);
+    return r.rows.length > 0 && SUPER_ADMIN_EMAILS.includes(r.rows[0].email);
+  } catch {
+    return false;
+  }
+}
+
 async function requireSuperAdmin(req, res, next) {
   try {
-    const r = await pool.query('SELECT email FROM users WHERE id=$1', [req.user.id]);
-    if (!r.rows.length || !SUPER_ADMIN_EMAILS.includes(r.rows[0].email))
+    if (!(await isSuperAdmin(req.user.id)))
       return res.status(403).json({ error: 'Acesso restrito ao super administrador.' });
     next();
   } catch {
@@ -1316,10 +1327,11 @@ app.get('/api/services/public', (req, res) => {
 });
 
 // ── GET /api/services-v2 (catálogo Datacube — aba "Opção 2 Nova Consulta") ────
-app.get('/api/services-v2', requireAuth, (req, res) => {
+app.get('/api/services-v2', requireAuth, async (req, res) => {
+  const admin = await isSuperAdmin(req.user.id);
   res.json({
     services: SERVICES_V2
-      .filter(s => !s.adminOnly || req.user.role === 'admin')
+      .filter(s => !s.adminOnly || admin)
       .map(s => ({
         ...s,
         price: parseFloat((s.basePrice * (s.noMarkup ? 1 : MARKUP)).toFixed(2)),
@@ -4058,7 +4070,7 @@ app.post('/api/query-v2', requireAuth, async (req, res) => {
 
   const service = SERVICES_V2.find(s => s.id === serviceId);
   if (!service) return res.status(400).json({ error: 'Serviço inválido.' });
-  if (service.adminOnly && req.user.role !== 'admin')
+  if (service.adminOnly && !(await isSuperAdmin(req.user.id)))
     return res.status(403).json({ error: 'Serviço disponível apenas para administradores.' });
 
   const price = parseFloat((service.basePrice * (service.noMarkup ? 1 : MARKUP)).toFixed(2));
