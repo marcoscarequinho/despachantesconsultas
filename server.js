@@ -492,6 +492,9 @@ const SERVICES_V2 = [
   // ── Comunicação de Venda — preços com o mesmo MARKUP (40%) do resto do sistema ──
   { id:'dc-comunicado-venda',           name:'Comunicação de Venda',           group:'Comunicação de Venda', basePrice:39.063, inputType:'dc_comunicado_venda',           icon:'📤', dcPath:'/veiculos/comunicado_venda_v2' },
   { id:'dc-comunicado-venda-cancelar',  name:'Cancelar Comunicação de Venda',  group:'Comunicação de Venda', basePrice:0.000,  inputType:'dc_cancelar_comunicado_venda',  icon:'📤', dcPath:'/veiculos/cancelar_comunicado_venda_v2' },
+
+  // ── CRLVe — em teste, visível apenas para admin (ver adminOnly em /api/services-v2 e /api/query-v2) ──
+  { id:'dc-crlve-rj-flash', name:'CRLV-e RJ Flash', group:'CRLVe', basePrice:20.000, inputType:'dc_placa', icon:'⚡', dcPath:'/veiculos/documentos-crlve-rj-flash', adminOnly:true, returnsPdf:true },
 ];
 
 // ── SERVICES_V3 — API Infosimples (api.infosimples.com) ───────────────────────
@@ -1315,10 +1318,12 @@ app.get('/api/services/public', (req, res) => {
 // ── GET /api/services-v2 (catálogo Datacube — aba "Opção 2 Nova Consulta") ────
 app.get('/api/services-v2', requireAuth, (req, res) => {
   res.json({
-    services: SERVICES_V2.map(s => ({
-      ...s,
-      price: parseFloat((s.basePrice * (s.noMarkup ? 1 : MARKUP)).toFixed(2)),
-    })),
+    services: SERVICES_V2
+      .filter(s => !s.adminOnly || req.user.role === 'admin')
+      .map(s => ({
+        ...s,
+        price: parseFloat((s.basePrice * (s.noMarkup ? 1 : MARKUP)).toFixed(2)),
+      })),
   });
 });
 
@@ -4018,6 +4023,32 @@ app.post('/api/v1/:serviceId', requireApiKey, (req, res) => {
   return processCatalogQuery(req.apiUser.id, req.params.serviceId, req.body, res);
 });
 
+// Alguns serviços SERVICES_V2 (ver flag returnsPdf, ex.: dc-crlve-rj-flash)
+// devolvem o documento pronto como PDF em base64 dentro do JSON, em vez de
+// campos estruturados. Em vez de depender do nome exato do campo (que muda
+// por endpoint), detecta pela assinatura base64 de "%PDF-" (JVBERi0) e
+// devolve tanto o base64 extraído quanto uma cópia do objeto com esse campo
+// substituído por um placeholder, para o result_data salvo não ficar gigante.
+function findAndStripBase64Pdf(obj) {
+  if (!obj || typeof obj !== 'object') return { pdf: null, data: obj };
+  const clone = Array.isArray(obj) ? [...obj] : { ...obj };
+  for (const k of Object.keys(clone)) {
+    const v = clone[k];
+    if (typeof v === 'string' && v.startsWith('JVBERi0')) {
+      clone[k] = '[PDF]';
+      return { pdf: v, data: clone };
+    }
+    if (v && typeof v === 'object') {
+      const nested = findAndStripBase64Pdf(v);
+      if (nested.pdf) {
+        clone[k] = nested.data;
+        return { pdf: nested.pdf, data: clone };
+      }
+    }
+  }
+  return { pdf: null, data: clone };
+}
+
 // ── POST /api/query-v2 (API Datacube — aba "Opção 2 Nova Consulta") ───────────
 // Fluxo isolado do /api/query: usa o mesmo saldo/tabelas do usuário, mas nunca
 // toca em SERVICES, MANUAL_SERVICE_IDS ou nas integrações chekaki/autocrlv.
@@ -4027,6 +4058,8 @@ app.post('/api/query-v2', requireAuth, async (req, res) => {
 
   const service = SERVICES_V2.find(s => s.id === serviceId);
   if (!service) return res.status(400).json({ error: 'Serviço inválido.' });
+  if (service.adminOnly && req.user.role !== 'admin')
+    return res.status(403).json({ error: 'Serviço disponível apenas para administradores.' });
 
   const price = parseFloat((service.basePrice * (service.noMarkup ? 1 : MARKUP)).toFixed(2));
 
@@ -4389,19 +4422,36 @@ app.post('/api/query-v2', requireAuth, async (req, res) => {
       return res.status(apiRes.status && apiRes.status >= 400 ? apiRes.status : 502).json({ error: errMsg });
     }
 
+    let resultV2 = apiData.result ?? apiData;
+    let pdfBase64 = null;
+    if (service.returnsPdf) {
+      const found = findAndStripBase64Pdf(resultV2);
+      if (found.pdf) { pdfBase64 = found.pdf; resultV2 = found.data; }
+    }
+
     await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
     const txRow = await pool.query(
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
       [req.user.id, price, `Consulta: ${service.name} (Opção 2)`]
     );
-    const resultV2 = apiData.result ?? apiData;
-    await pool.query(
+    const qRow = await pool.query(
       `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type, result_data)
-       VALUES ($1,$2,$3,$4,'success',$5,$6,'json',$7)`,
-      [req.user.id, service.id, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id, JSON.stringify(resultV2)]
+       VALUES ($1,$2,$3,$4,'success',$5,$6,$7,$8) RETURNING id`,
+      [req.user.id, service.id, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id,
+       pdfBase64 ? 'pdf' : 'json', JSON.stringify(resultV2)]
     );
 
-    return res.json({ success: true, result: resultV2, charged: price });
+    let pdfToken = null;
+    if (pdfBase64) {
+      pdfToken = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, req.user.id, pdfToken, pdfBase64, expiresAt]
+      ).catch(e => console.error('Erro ao salvar pdf_cache (v2):', e.message));
+    }
+
+    return res.json({ success: true, result: resultV2, charged: price, ...(pdfToken ? { pdf_token: pdfToken } : {}) });
   } catch (err) {
     console.error('Erro em /api/query-v2:', err.message);
     res.status(500).json({ error: 'Erro interno. Tente novamente.' });

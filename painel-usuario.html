@@ -617,6 +617,13 @@
           </details>
         </div>
 
+        <!-- PDF pronto (serviços com returnsPdf, ex.: CRLVe) -->
+        <div id="result-pdf-wrap-v2" class="hidden result-card p-4 text-center">
+          <a id="result-pdf-link-v2" href="#" target="_blank" class="btn-primary w-full justify-center">
+            📥 Baixar PDF
+          </a>
+        </div>
+
         <!-- Preview automático da imagem gerada -->
         <div id="result-png-wrap-v2" class="hidden result-card p-4 text-center space-y-2">
           <p class="text-xs text-gray-500">Imagem gerada automaticamente — toque e segure (ou clique com o botão direito) para salvar</p>
@@ -3241,6 +3248,7 @@ function buildCategoryGridV2() {
     'Cadastros':           { icon:'🗂️', color:'bg-indigo-50 border-indigo-200' },
     'Orgãos':              { icon:'🏢', color:'bg-cyan-50 border-cyan-200' },
     'Comunicação de Venda':{ icon:'📤', color:'bg-emerald-50 border-emerald-200' },
+    'CRLVe':                { icon:'⚡', color:'bg-orange-50 border-orange-200' },
   };
 
   document.getElementById('category-grid-v2').innerHTML = cats.map(cat => {
@@ -3860,6 +3868,15 @@ function showJsonResultV2(data, svc, params) {
     </div>`).join('');
 
   document.getElementById('result-json-raw-v2').textContent = JSON.stringify(result, null, 2);
+
+  const pdfWrap = document.getElementById('result-pdf-wrap-v2');
+  if (data.pdf_token) {
+    document.getElementById('result-pdf-link-v2').href = `/api/pdf/${data.pdf_token}`;
+    pdfWrap.classList.remove('hidden');
+  } else {
+    pdfWrap.classList.add('hidden');
+  }
+
   document.getElementById('query-result-wrap-v2').scrollIntoView({ behavior:'smooth' });
   toast('Consulta concluída com sucesso!');
 
