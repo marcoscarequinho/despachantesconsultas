@@ -40,6 +40,7 @@ const DESPBRASIL_SVCS = {
   'security-code-vistocar':     { servico: 'codigo_seguranca' },
   'verificar-crlv':    { servico: 'verificar_crlv' },
   'consulta-renavam':  { servico: 'consulta_renavam' },
+  'consultar-atpve-v1': { servico: 'atpv_e' },
 };
 
 // API Vistocar (vistocarconsulta.com.br) — login JWT (VISTOCAR_LOGIN/VISTOCAR_PASSWORD)
@@ -220,8 +221,7 @@ const SERVICES = [
   { id:'consultar-gravame',               name:'Consulta Gravame',             group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa',        icon:'🏦' },
   { id:'consultar-historico-proprietario',name:'Histórico de Proprietários',   group:'Débitos e Documentação', basePrice:9.99,  inputType:'placa',        icon:'👥' },
   { id:'renajud',                         name:'RENAJUD',                      group:'Débitos e Documentação', basePrice:9.50,  inputType:'placa',        icon:'⚖️' },
-  { id:'consultar-atpve',                 name:'Reemissão ATPV-e (Chassi)',    group:'Débitos e Documentação', basePrice:13.50, inputType:'chassi',       icon:'📄' },
-  { id:'consultar-atpve-v1',             name:'Reemissão ATPV-e (Placa)',     group:'Débitos e Documentação', basePrice:13.50, inputType:'placa_renavam', icon:'📄' },
+  { id:'consultar-atpve-v1',             name:'Reemissão ATPV-e (Placa)',     group:'Débitos e Documentação', basePrice:13.50, inputType:'placa',        icon:'📄' },
   { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:25.00, inputType:'placa',        icon:'🔢' },
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa_renavam',icon:'📝' },
   // API Datacube (form-urlencoded) — movido da Opção 2 (grupo Cadastros) para valor
@@ -3187,24 +3187,6 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       apiUrl = DESPBRASIL_BASE_URL;
       method = 'POST';
       body   = { servico: DESPBRASIL_SVCS[serviceId].servico, placa, ...(DESPBRASIL_SVCS[serviceId].extra || {}) };
-    }
-    // ATPV-e por chassi
-    if (serviceId === 'consultar-atpve') {
-      const chassi = (params?.chassi || '').toUpperCase().replace(/\s/g, '');
-      if (chassi.length !== 17)
-        return res.status(400).json({ error: 'Chassi deve ter exatamente 17 caracteres.' });
-      body = { chassi };
-    }
-    // ATPV-e por placa + renavam → mesmo endpoint da nova API
-    if (serviceId === 'consultar-atpve-v1') {
-      const placa   = (params?.placa   || '').toUpperCase().replace(/\s|-/g, '');
-      const renavam = (params?.renavam || '').replace(/\D/g, '');
-      if (placa.length < 7)
-        return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
-      if (renavam.length < 9 || renavam.length > 11)
-        return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
-      apiUrl = `${BASE_API_URL}/consultar-atpve`;
-      body = { placa, renavam };
     }
     // Intenção de Venda (RJ/SP/MS) — registra a venda e emite o ATPV-e na hora
     // (substitui o antigo fluxo manual de upload de documentos). A API devolve o
