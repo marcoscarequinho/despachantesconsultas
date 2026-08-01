@@ -8,6 +8,8 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const PDFDocument = require('pdfkit');
+const pdfParse = require('pdf-parse');
+const QRCode = require('qrcode');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -2152,6 +2154,247 @@ function buildConsultaRenavamPdfBuffer(service, data, params) {
   });
 }
 
+// ── Extração de campos — "Número ATPV-E" (despbrasil só devolve o PDF pronto em
+// arquivo_url, sem JSON estruturado; extraímos o texto desse PDF — sempre no
+// formato "Rótulo: valor", um por linha — para remontar o documento no layout
+// oficial do ATPVe digital, ver buildNumeroAtpvePdfBuffer). Chave normalizada
+// (minúscula, sem acento/espaço) para casar com os nomes usados abaixo.
+// Usa pdf-parse@1.1.1 (não a v2) de propósito: a v2 empacota um pdf.js que
+// instancia `new DOMMatrix` no topo do módulo pra suportar renderização, e
+// trava com "DOMMatrix is not defined" ao ser importado no runtime Node da
+// Vercel (sem @napi-rs/canvas disponível) — derrubando o servidor inteiro. A
+// v1.1.1 usa um pdf.js antigo, só de texto, sem essa dependência.
+async function extractAtpveFieldsFromPdf(pdfBuf) {
+  const { text } = await pdfParse(pdfBuf);
+  const fields = {};
+  for (const rawLine of String(text || '').split('\n')) {
+    const line = rawLine.trim();
+    const m = line.match(/^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ /]*?):\s*(.+)$/);
+    if (!m) continue;
+    const key = m[1].trim().toLowerCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9]/g, '');
+    fields[key] = m[2].trim();
+  }
+  return fields;
+}
+
+// Célula com borda (rótulo pequeno em cima + valor em negrito embaixo), no
+// espírito das caixas do formulário oficial do ATPVe/CRV digital.
+function pdfOfficialBox(doc, x, y, w, h, label, value, placeholder = 'Não informado') {
+  doc.strokeColor('#9ca3af').lineWidth(0.6).rect(x, y, w, h).stroke();
+  doc.fillColor('#6b7280').font('Helvetica').fontSize(6.5)
+    .text(label, x + 5, y + 4, { width: w - 10 });
+  doc.fillColor('#111827').font('Helvetica-Bold').fontSize(9)
+    .text(value || placeholder, x + 5, y + 15, { width: w - 10, height: h - 19, ellipsis: true });
+}
+
+// ── Geração de PDF — Número ATPV-E, no layout do documento oficial
+// "Autorização para Transferência de Propriedade de Veículo - Digital"
+// (DENATRAN), em vez do relatório genérico que a despbrasil devolve pronto.
+// Campos que o layout oficial tem mas essa consulta não retorna (ano
+// fabricação/modelo, marca/modelo/versão, cor, CAT, código de segurança do
+// CRV, data de emissão do CRV, nome/município/UF do vendedor, local da venda)
+// ficam como "Não informado" — ver pdfOfficialBox. O QR code é só informativo
+// (resume os identificadores da consulta), não é um canal oficial de
+// validação do DENATRAN.
+async function buildNumeroAtpvePdfBuffer(service, fields, params) {
+  const placaRaw = (params?.placa || fields.placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+  const qrText = [
+    `ATPVe: ${fields.numeroatpve || '-'}`,
+    `CRV: ${fields.numerocrv || '-'}`,
+    `Placa: ${placaRaw || '-'}`,
+    `Renavam: ${fields.renavam || '-'}`,
+  ].join(' | ');
+  const qrPngBuf = await QRCode.toBuffer(qrText, { type: 'png', margin: 1, width: 240 });
+
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 36 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+
+      const left = doc.page.margins.left;
+      const contentW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      let y = doc.page.margins.top;
+
+      // Cabeçalho
+      doc.rect(left, y, contentW, 44).fill('#1f2937');
+      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9)
+        .text('REPÚBLICA FEDERATIVA DO BRASIL', left + 10, y + 7);
+      doc.font('Helvetica').fontSize(7)
+        .text('MINISTÉRIO DA INFRAESTRUTURA', left + 10, y + 20)
+        .text('DEPARTAMENTO NACIONAL DE TRÂNSITO - DENATRAN', left + 10, y + 30);
+      doc.font('Helvetica-Bold').fontSize(9)
+        .text('MC Despachadoria Consultas', left, y + 16, { width: contentW - 10, align: 'right' });
+      y += 44 + 6;
+
+      const ufDetran = fields.ufintencaovenda || '-';
+      doc.fillColor('#111827').font('Helvetica-Bold').fontSize(8)
+        .text(`DETRAN - ${ufDetran}`, left, y);
+      y += 12;
+
+      doc.font('Helvetica-Bold').fontSize(11)
+        .text('AUTORIZAÇÃO PARA TRANSFERÊNCIA DE PROPRIEDADE DE VEÍCULO - DIGITAL', left, y, { width: contentW, align: 'center' });
+      y += 20;
+      doc.moveTo(left, y).lineTo(left + contentW, y).strokeColor('#111827').lineWidth(1).stroke();
+      y += 8;
+
+      const colGap = 14;
+      const colW = (contentW - colGap) / 2;
+      const rightX = left + colW + colGap;
+      let ly = y, ry = y;
+
+      // ── Coluna esquerda: dados do veículo / ATPVe ──
+      const qrSize = 70;
+      pdfOfficialBox(doc, left, ly, colW - qrSize - 6, 30, 'CÓDIGO RENAVAM', fields.renavam);
+      doc.image(qrPngBuf, left + colW - qrSize, ly, { width: qrSize, height: qrSize });
+      ly += 34;
+
+      pdfOfficialBox(doc, left, ly, colW, 26, 'PLACA', placaRaw);
+      ly += 30;
+
+      pdfOfficialBox(doc, left, ly, colW / 2 - 3, 26, 'ANO FABRICAÇÃO', null);
+      pdfOfficialBox(doc, left + colW / 2 + 3, ly, colW / 2 - 3, 26, 'ANO MODELO', null);
+      ly += 30;
+
+      pdfOfficialBox(doc, left, ly, colW, 26, 'MARCA / MODELO / VERSÃO', null);
+      ly += 30;
+
+      pdfOfficialBox(doc, left, ly, colW, 22, 'CAT', null);
+      ly += 26;
+
+      pdfOfficialBox(doc, left, ly, colW / 2 - 3, 26, 'COR PREDOMINANTE', null);
+      pdfOfficialBox(doc, left + colW / 2 + 3, ly, colW / 2 - 3, 26, 'CHASSI', fields.chassi);
+      ly += 30;
+
+      pdfOfficialBox(doc, left, ly, colW / 2 - 3, 26, 'NÚMERO CRV', fields.numerocrv);
+      pdfOfficialBox(doc, left + colW / 2 + 3, ly, colW / 2 - 3, 26, 'CÓDIGO DE SEGURANÇA CRV', null);
+      ly += 30;
+
+      pdfOfficialBox(doc, left, ly, colW / 2 - 3, 26, 'NÚMERO ATPVe', fields.numeroatpve);
+      pdfOfficialBox(doc, left + colW / 2 + 3, ly, colW / 2 - 3, 26, 'DATA EMISSÃO DO CRV', null);
+      ly += 30;
+
+      pdfOfficialBox(doc, left, ly, colW, 26, 'HODÔMETRO', fields.hodometro);
+      ly += 30;
+
+      // ── Coluna direita: vendedor + condições da venda ──
+      doc.rect(rightX, ry, colW, 16).fill('#1e40af');
+      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8)
+        .text('IDENTIFICAÇÃO DO VENDEDOR', rightX + 6, ry + 4);
+      ry += 20;
+
+      pdfOfficialBox(doc, rightX, ry, colW, 26, 'NOME', null);
+      ry += 30;
+
+      pdfOfficialBox(doc, rightX, ry, colW * 0.6 - 3, 26, 'CPF/CNPJ', maskDocDisplay(fields.documentovendedor));
+      pdfOfficialBox(doc, rightX + colW * 0.6 + 3, ry, colW * 0.4 - 3, 26, 'E-MAIL', fields.emailvendedor);
+      ry += 30;
+
+      pdfOfficialBox(doc, rightX, ry, colW * 0.75 - 3, 30, 'MUNICÍPIO DE DOMICÍLIO OU RESIDÊNCIA', null);
+      pdfOfficialBox(doc, rightX + colW * 0.75 + 3, ry, colW * 0.25 - 3, 30, 'UF', null, '-');
+      ry += 34;
+
+      const valorVenda = fields.valorvenda ? `R$ ${fields.valorvenda}` : 'Não informado';
+      doc.rect(rightX, ry, colW, 20).fill('#f3f4f6');
+      doc.fillColor('#111827').font('Helvetica-Bold').fontSize(8.5)
+        .text(`Valor declarado na venda: ${valorVenda}`, rightX + 6, ry + 6);
+      ry += 26;
+
+      doc.fillColor('#374151').font('Helvetica').fontSize(6.5)
+        .text('Autoriza o órgão ou entidade executivo de trânsito dos Estados ou do Distrito Federal a transferir o registro deste veículo para o comprador identificado.', rightX, ry, { width: colW });
+      ry += 20;
+
+      const dataVenda = fields.datahoraregistrointencaovenda
+        ? fields.datahoraregistrointencaovenda.split(' ')[0]
+        : null;
+      pdfOfficialBox(doc, rightX, ry, colW * 0.5 - 3, 24, 'LOCAL', null);
+      pdfOfficialBox(doc, rightX + colW * 0.5 + 3, ry, colW * 0.5 - 3, 24, 'DATA DECLARADA DA VENDA', dataVenda);
+      ry += 34;
+
+      doc.moveTo(rightX, ry).lineTo(rightX + colW, ry).strokeColor('#9ca3af').lineWidth(0.6).stroke();
+      doc.fillColor('#6b7280').font('Helvetica').fontSize(6.5)
+        .text('ASSINATURA DO PROPRIETÁRIO (VENDEDOR)', rightX, ry + 3, { width: colW, align: 'center' });
+      ry += 16;
+
+      y = Math.max(ly, ry) + 10;
+
+      // ── Segunda seção: comprador + autenticação/mensagens ──
+      let ly2 = y, ry2 = y;
+
+      doc.rect(left, ly2, colW, 16).fill('#1e40af');
+      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8)
+        .text('IDENTIFICAÇÃO DO COMPRADOR', left + 6, ly2 + 4);
+      ly2 += 20;
+
+      pdfOfficialBox(doc, left, ly2, colW, 26, 'NOME', fields.nomecomprador);
+      ly2 += 30;
+
+      pdfOfficialBox(doc, left, ly2, colW * 0.6 - 3, 26, 'CPF/CNPJ', maskDocDisplay(fields.documentocomprador));
+      pdfOfficialBox(doc, left + colW * 0.6 + 3, ly2, colW * 0.4 - 3, 26, 'E-MAIL', fields.emailcomprador);
+      ly2 += 30;
+
+      pdfOfficialBox(doc, left, ly2, colW * 0.75 - 3, 30, 'MUNICÍPIO DE DOMICÍLIO OU RESIDÊNCIA', fields.municipiocomprador);
+      pdfOfficialBox(doc, left + colW * 0.75 + 3, ly2, colW * 0.25 - 3, 30, 'UF', fields.ufcomprador);
+      ly2 += 34;
+
+      const endereco = [fields.nomelogradourocomprador, fields.numeroimovelcomprador]
+        .filter(Boolean).join(', ') || null;
+      const bairroCep = [fields.bairroimovelcomprador, fields.cepimovelcomprador ? `CEP: ${fields.cepimovelcomprador}` : null]
+        .filter(Boolean).join(' - ') || null;
+      const enderecoValue = [endereco, bairroCep].filter(Boolean).join('\n') || null;
+      pdfOfficialBox(doc, left, ly2, colW, 42, 'ENDEREÇO DE DOMICÍLIO OU RESIDÊNCIA', enderecoValue);
+      ly2 += 48;
+
+      doc.moveTo(left, ly2).lineTo(left + colW, ly2).strokeColor('#9ca3af').lineWidth(0.6).stroke();
+      doc.fillColor('#6b7280').font('Helvetica').fontSize(6.5)
+        .text('ASSINATURA DO COMPRADOR', left, ly2 + 3, { width: colW, align: 'center' });
+      ly2 += 20;
+
+      // Autenticação das assinaturas — caixa vazia, igual ao layout oficial.
+      doc.strokeColor('#9ca3af').lineWidth(0.6).rect(rightX, ry2, colW, 60).stroke();
+      doc.fillColor('#6b7280').font('Helvetica-Bold').fontSize(6.5)
+        .text('AUTENTICAÇÃO DAS ASSINATURAS', rightX + 6, ry2 + 4);
+      ry2 += 66;
+
+      // Mensagens DENATRAN — aproveitado para os campos da ATPVe que não têm
+      // slot no formulário oficial impresso (status, data/hora do registro, UF).
+      const mensagens = [
+        fields.statusintencaovenda ? `Status da intenção de venda: ${fields.statusintencaovenda}` : null,
+        fields.datahoraregistrointencaovenda ? `Registrada em: ${fields.datahoraregistrointencaovenda}` : null,
+        fields.ufintencaovenda ? `UF da intenção de venda: ${fields.ufintencaovenda}` : null,
+      ].filter(Boolean).join('\n') || 'Sem mensagens.';
+      doc.strokeColor('#9ca3af').lineWidth(0.6).rect(rightX, ry2, colW, 60).stroke();
+      doc.fillColor('#6b7280').font('Helvetica-Bold').fontSize(6.5)
+        .text('MENSAGENS DENATRAN', rightX + 6, ry2 + 4);
+      doc.fillColor('#111827').font('Helvetica').fontSize(7.5)
+        .text(mensagens, rightX + 6, ry2 + 16, { width: colW - 12 });
+      ry2 += 66;
+
+      y = Math.max(ly2, ry2) + 10;
+
+      doc.fillColor('#9ca3af').font('Helvetica').fontSize(7)
+        .text('Versão do layout: 2.0', left, y, { width: contentW, align: 'right' });
+      y += 14;
+
+      doc.moveTo(left, y).lineTo(left + contentW, y).strokeColor('#e5e7eb').lineWidth(0.75).stroke();
+      y += 6;
+      doc.fillColor('#374151').font('Helvetica-Bold').fontSize(6.5)
+        .text('* Importante', left, y, { width: contentW });
+      doc.font('Helvetica').fillColor('#6b7280').fontSize(6.5)
+        .text('Documento remontado pela MC Despachadoria Consultas a partir dos dados retornados nesta consulta — não substitui a via original emitida pelo DETRAN. Campos não retornados por esta consulta aparecem como "Não informado".', left, doc.y + 2, { width: contentW });
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── Geração de PDF — CNH (Datacube retorna JSON, não PDF pronto) ───────────────
 function buildCnhPdfBuffer(service, data, params) {
   return new Promise((resolve, reject) => {
@@ -3719,6 +3962,31 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       }
       try {
         despbrasilJsonPdfBuf = await buildConsultaRenavamPdfBuffer(service, parsed.dados, params);
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+      }
+    } else if (serviceId === 'consultar-Numero-ATPVE') {
+      // A despbrasil não retorna JSON estruturado pra esse serviço — só o PDF
+      // pronto em "arquivo_url". Baixamos, extraímos o texto (extractAtpveFieldsFromPdf)
+      // e remontamos no layout oficial do ATPVe digital (buildNumeroAtpvePdfBuffer)
+      // em vez de repassar o PDF genérico da despbrasil.
+      let parsed;
+      try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
+      if (!parsed?.sucesso || !parsed?.arquivo_url) {
+        const errMsg = parsed?.erro || parsed?.mensagem || parsed?.message || 'PDF não retornado pela API.';
+        console.error(`[${serviceId}] resposta inesperada da despbrasil: ${JSON.stringify(parsed)}`);
+        return res.status(422).json({ error: errMsg });
+      }
+      try {
+        const pdfRes = await fetch(parsed.arquivo_url);
+        if (!pdfRes.ok) {
+          console.error(`[${serviceId}] falha ao baixar arquivo_url: HTTP ${pdfRes.status}`);
+          return res.status(422).json({ error: 'Falha ao obter o PDF gerado pela API.' });
+        }
+        const sourcePdfBuf = Buffer.from(await pdfRes.arrayBuffer());
+        const fields = await extractAtpveFieldsFromPdf(sourcePdfBuf);
+        despbrasilJsonPdfBuf = await buildNumeroAtpvePdfBuffer(service, fields, params);
       } catch (e) {
         console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
         return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
