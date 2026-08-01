@@ -3533,6 +3533,13 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         }
       } catch {}
       console.error(`Erro API [${serviceId}] HTTP ${apiRes.status}: ${errMsg}`);
+      // Reemissão ATPV-e (despbrasil): na prática todo erro aqui significa que não
+      // há documento disponível para reemitir nessa placa — a mensagem crua da
+      // despbrasil vem em caixa alta e soa como erro de sistema, então troca por
+      // algo mais claro para o cliente final (o erro original já foi logado acima).
+      if (serviceId === 'consultar-atpve-v1') {
+        errMsg = 'Não encontramos ATPV-e disponível para reemissão nessa placa no momento. Tente novamente mais tarde ou fale com o suporte.';
+      }
       return res.status(apiRes.status).json({ error: errMsg });
     }
 
