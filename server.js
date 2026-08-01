@@ -41,6 +41,7 @@ const DESPBRASIL_SVCS = {
   'verificar-crlv':    { servico: 'verificar_crlv' },
   'consulta-renavam':  { servico: 'consulta_renavam' },
   'consultar-atpve-v1': { servico: 'atpv_e' },
+  'consultar-Numero-ATPVE': { servico: 'numero_atpve' },
 };
 
 // API Vistocar (vistocarconsulta.com.br) — login JWT (VISTOCAR_LOGIN/VISTOCAR_PASSWORD)
@@ -3533,12 +3534,14 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         }
       } catch {}
       console.error(`Erro API [${serviceId}] HTTP ${apiRes.status}: ${errMsg}`);
-      // Reemissão ATPV-e (despbrasil): na prática todo erro aqui significa que não
-      // há documento disponível para reemitir nessa placa — a mensagem crua da
-      // despbrasil vem em caixa alta e soa como erro de sistema, então troca por
-      // algo mais claro para o cliente final (o erro original já foi logado acima).
+      // ATPV-e via despbrasil (Reemissão por Placa e Número ATPV-E): na prática
+      // todo erro aqui significa que não há documento disponível para essa placa
+      // — a mensagem crua da despbrasil vem em caixa alta e soa como erro de
+      // sistema, então troca por algo mais claro (o erro original já foi logado).
       if (serviceId === 'consultar-atpve-v1') {
         errMsg = 'Não encontramos ATPV-e disponível para reemissão nessa placa no momento. Tente novamente mais tarde ou fale com o suporte.';
+      } else if (serviceId === 'consultar-Numero-ATPVE') {
+        errMsg = 'Não encontramos o número do ATPV-E para essa placa no momento. Tente novamente mais tarde ou fale com o suporte.';
       }
       return res.status(apiRes.status).json({ error: errMsg });
     }
