@@ -9,6 +9,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const PDFDocument = require('pdfkit');
 const pdfParse = require('pdf-parse');
+const { PDFDocument: PDFLibDocument, StandardFonts: PDFLibStandardFonts, rgb } = require('pdf-lib');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -2223,218 +2224,127 @@ function extractVistocarSecurityFields(text, knownRenavam) {
   return fields;
 }
 
-// Célula com borda (rótulo pequeno em cima + valor em negrito embaixo), no
-// espírito das caixas do formulário oficial do ATPVe/CRV digital.
-function pdfOfficialBox(doc, x, y, w, h, label, value, placeholder = 'Não informado') {
-  doc.strokeColor('#9ca3af').lineWidth(0.6).rect(x, y, w, h).stroke();
-  doc.fillColor('#6b7280').font('Helvetica').fontSize(6.5)
-    .text(label, x + 5, y + 4, { width: w - 10 });
-  doc.fillColor('#111827').font('Helvetica-Bold').fontSize(9)
-    .text(value || placeholder, x + 5, y + 15, { width: w - 10, height: h - 19, ellipsis: true });
+const ATPVE_TEMPLATE_PATH = path.join(__dirname, 'assets', 'atpve-template.pdf');
+
+// Escreve um valor sobre o template do ATPVe: apaga a área com um retângulo
+// (branco por padrão, ou "bg" pra casar com caixas preenchidas como "Valor
+// declarado na venda") e desenha o texto novo por cima. Coordenadas (x/top/
+// bottom/maxX) medidas diretamente no PDF de referência (pdfplumber), origem
+// no topo da página — convertidas aqui pra o sistema do pdf-lib (origem
+// embaixo). Encolhe a fonte (até um mínimo) e trunca com "…" como último
+// recurso pra caber na largura da célula, igual ao padrão dos outros
+// relatórios do sistema.
+function pdfOverlayValue(page, pageH, font, text, { x, top, bottom, maxX, size = 10, bg = null, align = 'left' }) {
+  const value = (text ?? '').toString().trim();
+  const rectY = pageH - bottom - 1;
+  const rectH = (bottom - top) + 2;
+  page.drawRectangle({
+    x: x - 1, y: rectY, width: (maxX - x) + 2, height: rectH,
+    color: bg ? rgb(bg[0], bg[1], bg[2]) : rgb(1, 1, 1),
+  });
+  if (!value) return;
+
+  const maxW = maxX - x;
+  let fSize = size;
+  let display = value;
+  while (font.widthOfTextAtSize(display, fSize) > maxW && fSize > 6) fSize -= 0.5;
+  if (font.widthOfTextAtSize(display, fSize) > maxW) {
+    while (display.length > 1 && font.widthOfTextAtSize(display + '…', fSize) > maxW) {
+      display = display.slice(0, -1);
+    }
+    display = display + '…';
+  }
+
+  const baseline = pageH - bottom + 2;
+  const drawX = align === 'right' ? (maxX - font.widthOfTextAtSize(display, fSize)) : x;
+  page.drawText(display, { x: drawX, y: baseline, size: fSize, font, color: rgb(0.067, 0.094, 0.153) });
 }
 
-// Título de seção em texto simples (negrito, preto, sem tarja de cor), igual
-// ao layout do documento oficial — ver buildNumeroAtpvePdfBuffer.
-function pdfPlainSectionTitle(doc, x, y, w, text) {
-  doc.fillColor('#111827').font('Helvetica-Bold').fontSize(8)
-    .text(text, x, y, { width: w });
-}
-
-const ATPVE_QRCODE_PATH = path.join(__dirname, 'assets', 'atpve-qrcode.png');
-
-// ── Geração de PDF — Número ATPV-E, no layout do documento oficial
-// "Autorização para Transferência de Propriedade de Veículo - Digital"
-// (DENATRAN), em vez do relatório genérico que a despbrasil devolve pronto.
-// Preto/cinza/branco apenas — sem tarjas coloridas nem marca da empresa, pra
-// ficar fiel ao documento oficial. O QR code é a imagem original extraída do
-// modelo de referência (assets/atpve-qrcode.png), reutilizada igual em todas
-// as consultas — não é gerado por consulta nem é um canal de validação
-// funcional do DENATRAN. Campos que a despbrasil não retorna (ano fabricação/
-// modelo, marca/modelo/versão, cor, CAT, código de segurança do CRV, data de
-// emissão do CRV, nome/município/UF do vendedor) vêm de duas consultas
-// complementares (ver runNumeroAtpveSupplementaryQueries) já mescladas em
-// "fields" antes de chegar aqui; o que ainda faltar fica "Não informado".
+// ── Geração de PDF — Número ATPV-E, sobrepondo os dados desta consulta no
+// próprio PDF de referência do documento oficial "Autorização para
+// Transferência de Propriedade de Veículo - Digital" (DENATRAN) — ver
+// assets/atpve-template.pdf. Usar o PDF real como base (em vez de remontar o
+// layout do zero com pdfkit) garante que tamanho/posição do QR code, das
+// caixas, das linhas de assinatura e das fontes fiquem idênticos ao
+// documento oficial — só o texto dinâmico é sobrescrito, nas coordenadas
+// exatas medidas no PDF de referência (pdfplumber). Campos que a despbrasil
+// não retorna (ano fabricação/modelo, marca/modelo/versão, cor, CAT, código
+// de segurança do CRV, data de emissão do CRV, nome/UF do vendedor) vêm da
+// consulta complementar Proprietário Atual (v2) / Consulta 3 Código
+// Segurança CRV, já mescladas em "fields" antes de chegar aqui — ver
+// runNumeroAtpveSupplementaryQueries. LOCAL usa o município/UF do comprador
+// (mesma fonte da despbrasil, sem consulta extra).
 async function buildNumeroAtpvePdfBuffer(service, fields, params) {
   const placaRaw = (params?.placa || fields.placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
-  return new Promise((resolve, reject) => {
-    try {
-      const doc = new PDFDocument({ size: 'A4', margin: 36 });
-      const chunks = [];
-      doc.on('data', c => chunks.push(c));
-      doc.on('end', () => resolve(Buffer.concat(chunks)));
-      doc.on('error', reject);
+  const templateBytes = await fs.promises.readFile(ATPVE_TEMPLATE_PATH);
+  const pdfDoc = await PDFLibDocument.load(templateBytes);
+  const page = pdfDoc.getPages()[0];
+  const pageH = page.getHeight();
+  const courier = await pdfDoc.embedFont(PDFLibStandardFonts.CourierBold);
+  const helv = await pdfDoc.embedFont(PDFLibStandardFonts.HelveticaBold);
 
-      const left = doc.page.margins.left;
-      const contentW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
-      let y = doc.page.margins.top;
+  const V = (text, opts) => pdfOverlayValue(page, pageH, courier, text, opts);
 
-      // Cabeçalho (preto — igual ao documento oficial, sem info da empresa)
-      doc.rect(left, y, contentW, 44).fill('#000000');
-      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9)
-        .text('REPÚBLICA FEDERATIVA DO BRASIL', left + 10, y + 10);
-      doc.font('Helvetica').fontSize(7)
-        .text('MINISTÉRIO DA INFRAESTRUTURA', left + 10, y + 23)
-        .text('DEPARTAMENTO NACIONAL DE TRÂNSITO - DENATRAN', left + 10, y + 33);
-      y += 44 + 6;
+  // Coluna esquerda — veículo / ATPVe
+  V(fields.renavam, { x: 14.5, top: 104.7, bottom: 114.7, maxX: 143 });
+  V(placaRaw, { x: 14.5, top: 139.7, bottom: 149.7, maxX: 143 });
+  V(fields.anofabricacao, { x: 14.5, top: 177.7, bottom: 187.7, maxX: 76 });
+  V(fields.anomodelo, { x: 86.2, top: 177.7, bottom: 187.7, maxX: 143 });
+  V(fields.marcamodeloversao, { x: 14.5, top: 216.7, bottom: 226.7, maxX: 276 });
+  V(fields.categoria, { x: 14.5, top: 251.7, bottom: 261.7, maxX: 276 });
+  V(fields.cor, { x: 14.5, top: 286.7, bottom: 296.7, maxX: 132 });
+  V(fields.chassi, { x: 138.5, top: 286.7, bottom: 296.7, maxX: 276 });
+  V(fields.numerocrv, { x: 14.5, top: 326.7, bottom: 336.7, maxX: 132 });
+  V(fields.codigosegurancacrv, { x: 138.5, top: 326.7, bottom: 336.7, maxX: 276 });
+  V(fields.numeroatpve, { x: 14.5, top: 366.7, bottom: 376.7, maxX: 132 });
+  V(fields.datacrv, { x: 138.5, top: 366.7, bottom: 376.7, maxX: 276 });
+  V(fields.hodometro, { x: 14.5, top: 399.7, bottom: 409.7, maxX: 276 });
 
-      const ufDetran = fields.ufintencaovenda || '-';
-      doc.fillColor('#111827').font('Helvetica-Bold').fontSize(8)
-        .text(`DETRAN - ${ufDetran}`, left, y);
-      y += 12;
+  // Coluna esquerda — comprador
+  V(fields.nomecomprador, { x: 14.5, top: 460.7, bottom: 470.7, maxX: 276 });
+  V(maskDocDisplay(fields.documentocomprador), { x: 14.5, top: 497.7, bottom: 507.7, maxX: 123 });
+  V(fields.emailcomprador, { x: 128.5, top: 494.7, bottom: 504.7, maxX: 276 });
+  V(fields.municipiocomprador, { x: 14.5, top: 534.7, bottom: 544.7, maxX: 227 });
+  V(fields.ufcomprador, { x: 233.5, top: 534.7, bottom: 544.7, maxX: 276 });
+  const endereco = [fields.nomelogradourocomprador, fields.numeroimovelcomprador].filter(Boolean).join(', ');
+  const bairroCep = [fields.bairroimovelcomprador, fields.cepimovelcomprador ? `CEP: ${fields.cepimovelcomprador}` : null]
+    .filter(Boolean).join(' - ');
+  V(endereco, { x: 14.5, top: 568.7, bottom: 578.7, maxX: 276 });
+  V(bairroCep, { x: 14.5, top: 577.7, bottom: 587.7, maxX: 276 });
 
-      doc.font('Helvetica-Bold').fontSize(11)
-        .text('AUTORIZAÇÃO PARA TRANSFERÊNCIA DE PROPRIEDADE DE VEÍCULO - DIGITAL', left, y, { width: contentW, align: 'center' });
-      y += 20;
-      doc.moveTo(left, y).lineTo(left + contentW, y).strokeColor('#111827').lineWidth(1).stroke();
-      y += 8;
+  // Coluna direita — vendedor + condições da venda
+  V(fields.nomevendedor, { x: 318, top: 80.2, bottom: 90.2, maxX: 575 });
+  V(maskDocDisplay(fields.documentovendedor), { x: 320, top: 121.7, bottom: 131.7, maxX: 429 });
+  V(fields.emailvendedor, { x: 434, top: 118.7, bottom: 128.7, maxX: 575 });
+  V(fields.municipiovendedor, { x: 320, top: 156.7, bottom: 166.7, maxX: 534 });
+  V(fields.ufvendedor, { x: 540, top: 156.7, bottom: 166.7, maxX: 575 });
+  // Caixa cinza (0.8,0.8,0.8) no original — mantém a mesma cor de fundo ao sobrescrever.
+  V(fields.valorvenda, { x: 415, top: 200.2, bottom: 210.2, maxX: 573, bg: [0.8, 0.8, 0.8] });
+  // LOCAL = município/UF do comprador (mesma fonte da despbrasil, sem consulta extra).
+  const local = [fields.municipiocomprador, fields.ufcomprador].filter(Boolean).join(' - ');
+  V(local, { x: 347.2, top: 271.9, bottom: 281.9, maxX: 573 });
+  const dataVenda = fields.datahoraregistrointencaovenda ? fields.datahoraregistrointencaovenda.split(' ')[0] : null;
+  V(dataVenda, { x: 403.9, top: 303.1, bottom: 313.1, maxX: 573 });
 
-      const colGap = 14;
-      const colW = (contentW - colGap) / 2;
-      const rightX = left + colW + colGap;
-      let ly = y, ry = y;
+  // "DETRAN - UF": origem de onde o veículo foi emplacado (não a UF da
+  // intenção de venda) — fonte Helvetica pequena, casando com o rótulo estático.
+  pdfOverlayValue(page, pageH, helv, fields.ufemplacamento || fields.ufvendedor || fields.ufintencaovenda,
+    { x: 42.5, top: 50.8, bottom: 56.9, maxX: 60, size: 6.1 });
 
-      // ── Coluna esquerda: dados do veículo / ATPVe ──
-      const qrSize = 70;
-      pdfOfficialBox(doc, left, ly, colW - qrSize - 6, 30, 'CÓDIGO RENAVAM', fields.renavam);
-      doc.image(ATPVE_QRCODE_PATH, left + colW - qrSize, ly, { width: qrSize, height: qrSize });
-      ly += 34;
-
-      pdfOfficialBox(doc, left, ly, colW, 26, 'PLACA', placaRaw);
-      ly += 30;
-
-      pdfOfficialBox(doc, left, ly, colW / 2 - 3, 26, 'ANO FABRICAÇÃO', fields.anofabricacao);
-      pdfOfficialBox(doc, left + colW / 2 + 3, ly, colW / 2 - 3, 26, 'ANO MODELO', fields.anomodelo);
-      ly += 30;
-
-      pdfOfficialBox(doc, left, ly, colW, 26, 'MARCA / MODELO / VERSÃO', fields.marcamodeloversao);
-      ly += 30;
-
-      pdfOfficialBox(doc, left, ly, colW, 22, 'CAT', fields.categoria);
-      ly += 26;
-
-      pdfOfficialBox(doc, left, ly, colW / 2 - 3, 26, 'COR PREDOMINANTE', fields.cor);
-      pdfOfficialBox(doc, left + colW / 2 + 3, ly, colW / 2 - 3, 26, 'CHASSI', fields.chassi);
-      ly += 30;
-
-      pdfOfficialBox(doc, left, ly, colW / 2 - 3, 26, 'NÚMERO CRV', fields.numerocrv);
-      pdfOfficialBox(doc, left + colW / 2 + 3, ly, colW / 2 - 3, 26, 'CÓDIGO DE SEGURANÇA CRV', fields.codigosegurancacrv);
-      ly += 30;
-
-      pdfOfficialBox(doc, left, ly, colW / 2 - 3, 26, 'NÚMERO ATPVe', fields.numeroatpve);
-      pdfOfficialBox(doc, left + colW / 2 + 3, ly, colW / 2 - 3, 26, 'DATA EMISSÃO DO CRV', fields.datacrv);
-      ly += 30;
-
-      pdfOfficialBox(doc, left, ly, colW, 26, 'HODÔMETRO', fields.hodometro);
-      ly += 30;
-
-      // ── Coluna direita: vendedor + condições da venda ──
-      pdfPlainSectionTitle(doc, rightX, ry, colW, 'IDENTIFICAÇÃO DO VENDEDOR');
-      ry += 16;
-
-      pdfOfficialBox(doc, rightX, ry, colW, 26, 'NOME', fields.nomevendedor);
-      ry += 30;
-
-      pdfOfficialBox(doc, rightX, ry, colW * 0.6 - 3, 26, 'CPF/CNPJ', maskDocDisplay(fields.documentovendedor));
-      pdfOfficialBox(doc, rightX + colW * 0.6 + 3, ry, colW * 0.4 - 3, 26, 'E-MAIL', fields.emailvendedor);
-      ry += 30;
-
-      pdfOfficialBox(doc, rightX, ry, colW * 0.75 - 3, 30, 'MUNICÍPIO DE DOMICÍLIO OU RESIDÊNCIA', fields.municipiovendedor);
-      pdfOfficialBox(doc, rightX + colW * 0.75 + 3, ry, colW * 0.25 - 3, 30, 'UF', fields.ufvendedor, '-');
-      ry += 34;
-
-      const valorVenda = fields.valorvenda ? `R$ ${fields.valorvenda}` : 'Não informado';
-      doc.strokeColor('#9ca3af').lineWidth(0.6).rect(rightX, ry, colW, 20).stroke();
-      doc.fillColor('#111827').font('Helvetica-Bold').fontSize(8.5)
-        .text(`Valor declarado na venda: ${valorVenda}`, rightX + 6, ry + 6);
-      ry += 26;
-
-      doc.fillColor('#374151').font('Helvetica').fontSize(6.5)
-        .text('Autoriza o órgão ou entidade executivo de trânsito dos Estados ou do Distrito Federal a transferir o registro deste veículo para o comprador identificado.', rightX, ry, { width: colW });
-      ry += 20;
-
-      const dataVenda = fields.datahoraregistrointencaovenda
-        ? fields.datahoraregistrointencaovenda.split(' ')[0]
-        : null;
-      pdfOfficialBox(doc, rightX, ry, colW * 0.5 - 3, 24, 'LOCAL', null);
-      pdfOfficialBox(doc, rightX + colW * 0.5 + 3, ry, colW * 0.5 - 3, 24, 'DATA DECLARADA DA VENDA', dataVenda);
-      ry += 34;
-
-      doc.moveTo(rightX, ry).lineTo(rightX + colW, ry).strokeColor('#9ca3af').lineWidth(0.6).stroke();
-      doc.fillColor('#6b7280').font('Helvetica').fontSize(6.5)
-        .text('ASSINATURA DO PROPRIETÁRIO (VENDEDOR)', rightX, ry + 3, { width: colW, align: 'center' });
-      ry += 16;
-
-      y = Math.max(ly, ry) + 10;
-
-      // ── Segunda seção: comprador + autenticação/mensagens ──
-      let ly2 = y, ry2 = y;
-
-      pdfPlainSectionTitle(doc, left, ly2, colW, 'IDENTIFICAÇÃO DO COMPRADOR');
-      ly2 += 16;
-
-      pdfOfficialBox(doc, left, ly2, colW, 26, 'NOME', fields.nomecomprador);
-      ly2 += 30;
-
-      pdfOfficialBox(doc, left, ly2, colW * 0.6 - 3, 26, 'CPF/CNPJ', maskDocDisplay(fields.documentocomprador));
-      pdfOfficialBox(doc, left + colW * 0.6 + 3, ly2, colW * 0.4 - 3, 26, 'E-MAIL', fields.emailcomprador);
-      ly2 += 30;
-
-      pdfOfficialBox(doc, left, ly2, colW * 0.75 - 3, 30, 'MUNICÍPIO DE DOMICÍLIO OU RESIDÊNCIA', fields.municipiocomprador);
-      pdfOfficialBox(doc, left + colW * 0.75 + 3, ly2, colW * 0.25 - 3, 30, 'UF', fields.ufcomprador);
-      ly2 += 34;
-
-      const endereco = [fields.nomelogradourocomprador, fields.numeroimovelcomprador]
-        .filter(Boolean).join(', ') || null;
-      const bairroCep = [fields.bairroimovelcomprador, fields.cepimovelcomprador ? `CEP: ${fields.cepimovelcomprador}` : null]
-        .filter(Boolean).join(' - ') || null;
-      const enderecoValue = [endereco, bairroCep].filter(Boolean).join('\n') || null;
-      pdfOfficialBox(doc, left, ly2, colW, 42, 'ENDEREÇO DE DOMICÍLIO OU RESIDÊNCIA', enderecoValue);
-      ly2 += 48;
-
-      doc.moveTo(left, ly2).lineTo(left + colW, ly2).strokeColor('#9ca3af').lineWidth(0.6).stroke();
-      doc.fillColor('#6b7280').font('Helvetica').fontSize(6.5)
-        .text('ASSINATURA DO COMPRADOR', left, ly2 + 3, { width: colW, align: 'center' });
-      ly2 += 20;
-
-      // Autenticação das assinaturas — caixa vazia, igual ao layout oficial.
-      doc.strokeColor('#9ca3af').lineWidth(0.6).rect(rightX, ry2, colW, 60).stroke();
-      doc.fillColor('#6b7280').font('Helvetica-Bold').fontSize(6.5)
-        .text('AUTENTICAÇÃO DAS ASSINATURAS', rightX + 6, ry2 + 4);
-      ry2 += 66;
-
-      // Mensagens DENATRAN — aproveitado para os campos da ATPVe que não têm
-      // slot no formulário oficial impresso (status, data/hora do registro, UF).
-      const mensagens = [
-        fields.statusintencaovenda ? `Status da intenção de venda: ${fields.statusintencaovenda}` : null,
-        fields.datahoraregistrointencaovenda ? `Registrada em: ${fields.datahoraregistrointencaovenda}` : null,
-        fields.ufintencaovenda ? `UF da intenção de venda: ${fields.ufintencaovenda}` : null,
-      ].filter(Boolean).join('\n') || 'Sem mensagens.';
-      doc.strokeColor('#9ca3af').lineWidth(0.6).rect(rightX, ry2, colW, 60).stroke();
-      doc.fillColor('#6b7280').font('Helvetica-Bold').fontSize(6.5)
-        .text('MENSAGENS DENATRAN', rightX + 6, ry2 + 4);
-      doc.fillColor('#111827').font('Helvetica').fontSize(7.5)
-        .text(mensagens, rightX + 6, ry2 + 16, { width: colW - 12 });
-      ry2 += 66;
-
-      y = Math.max(ly2, ry2) + 10;
-
-      doc.fillColor('#9ca3af').font('Helvetica').fontSize(7)
-        .text('Versão do layout: 2.0', left, y, { width: contentW, align: 'right' });
-      y += 14;
-
-      doc.moveTo(left, y).lineTo(left + contentW, y).strokeColor('#e5e7eb').lineWidth(0.75).stroke();
-      y += 6;
-      doc.fillColor('#374151').font('Helvetica-Bold').fontSize(6.5)
-        .text('* Importante', left, y, { width: contentW });
-      doc.font('Helvetica').fillColor('#6b7280').fontSize(6.5)
-        .text('Documento remontado a partir dos dados retornados nesta consulta — não substitui a via original emitida pelo DETRAN. Campos não retornados aparecem como "Não informado".', left, doc.y + 2, { width: contentW });
-
-      doc.end();
-    } catch (e) {
-      reject(e);
-    }
+  // Mensagens DENATRAN — o template não tem nada abaixo do título nessa
+  // caixa; aproveitada para os campos da ATPVe que não têm slot no
+  // formulário oficial impresso (status, data/hora do registro).
+  const mensagens = [
+    fields.statusintencaovenda ? `Status da intenção de venda: ${fields.statusintencaovenda}` : null,
+    fields.datahoraregistrointencaovenda ? `Registrada em: ${fields.datahoraregistrointencaovenda}` : null,
+  ].filter(Boolean);
+  mensagens.forEach((line, i) => {
+    page.drawText(line, { x: 32.9, y: pageH - (665 + i * 10), size: 7, font: helv, color: rgb(0.4, 0.4, 0.4) });
   });
+
+  const bytes = await pdfDoc.save();
+  return Buffer.from(bytes);
 }
 
 // ── Consultas complementares da "Número ATPV-E" — Proprietário Atual (v2) via
@@ -2463,8 +2373,12 @@ async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam) {
       if (f.cor) merged.cor = f.cor;
       if (f.datadocrv) merged.datacrv = f.datadocrv;
       if (f.nomedoproprietario) merged.nomevendedor = f.nomedoproprietario;
-      if (f.municipio) merged.municipiovendedor = f.municipio;
-      if (f.ufjurisdicao) merged.ufvendedor = f.ufjurisdicao;
+      // "DADOS DO EMPLACAMENTO" (município/UF de registro do veículo) — usado
+      // tanto pro domicílio exibido do vendedor quanto pro "DETRAN - UF" do
+      // cabeçalho, que deve refletir a origem de onde o veículo foi
+      // emplacado, não a UF da intenção de venda.
+      if (f.municipio) { merged.municipiovendedor = f.municipio; merged.municipioemplacamento = f.municipio; }
+      if (f.ufjurisdicao) { merged.ufvendedor = f.ufjurisdicao; merged.ufemplacamento = f.ufjurisdicao; }
     } else {
       console.error(`[consultar-Numero-ATPVE] Proprietário Atual (v2) sem PDF válido (HTTP ${r.status}).`);
     }
