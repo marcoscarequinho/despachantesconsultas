@@ -2575,6 +2575,9 @@ async function handleMgInfosimplesAuto(req, res, service, params) {
 // um PDF é cacheado aqui (ou seja, é a primeira vez que fica disponível) e
 // notifyPhone é informado, também envia por WhatsApp — cobre o caso em que o
 // cadastro original não devolveu PDF na hora e por isso o envio síncrono não rodou.
+// Também é o único lugar que efetivamente debita o usuário (ver claim atômico
+// abaixo) — a consulta só é cobrada quando o PDF já está confirmadamente em
+// mãos, nunca antes (ver processCatalogQuery e runAtpvePendingCheck).
 async function ensureAtpvePdfCached(uf, queryId, userId, fresh, notifyPhone) {
   if (!fresh?.pdf_disponivel || !fresh?.id) return;
   try {
@@ -2588,6 +2591,26 @@ async function ensureAtpvePdfCached(uf, queryId, userId, fresh, notifyPhone) {
     });
     if (!pr.ok || !(pr.headers.get('content-type') || '').includes('application/pdf')) return;
     const buf = Buffer.from(await pr.arrayBuffer());
+
+    // Só cobra agora que o PDF está confirmadamente em mãos — nunca antes (ver
+    // processCatalogQuery). Claim atômico evita cobrar duas vezes se o cron e um
+    // clique em "Atualizar" caírem juntos aqui; pedidos do modelo antigo (já
+    // com status 'success') simplesmente não batem no WHERE e seguem direto
+    // para o cache/envio abaixo, sem cobrar de novo.
+    const claimed = await pool.query(
+      `UPDATE queries SET status='success' WHERE id=$1 AND status='aguardando_pdf' RETURNING amount`,
+      [queryId]
+    );
+    if (claimed.rows.length) {
+      const amount = parseFloat(claimed.rows[0].amount);
+      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [amount, userId]);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, amount, `Consulta: Intenção de Venda ${uf.toUpperCase()}`]
+      );
+      await pool.query('UPDATE queries SET transaction_id=$1 WHERE id=$2', [txRow.rows[0].id, queryId]);
+    }
+
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
     await pool.query(
@@ -3771,6 +3794,47 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       }
     }
 
+    // ── Intenção de Venda (ATPVE): cobrança condicionada à confirmação do PDF ──
+    // A Chekaki aceita o cadastro mesmo quando o ATPV-e ainda não está pronto
+    // (verificação extra/LAUDOCAR) — cobrar nesse momento violaria a regra de
+    // nunca cobrar sem resultado. Por isso este serviço não entra no débito
+    // genérico abaixo: registra a consulta como 'aguardando_pdf' sem debitar,
+    // tenta confirmar na hora (o caso comum, instantâneo) e só cobra de fato
+    // quando o PDF é confirmado — na hora ou depois, sempre via
+    // ensureAtpvePdfCached (chamada também pelo cron runAtpvePendingCheck e
+    // pelos botões Registrar/Atualizar em "Meus ATPV-e").
+    if (ATPVE_UFS.some(uf => serviceId === `intencao-venda-${uf}`)) {
+      const atpveUf = serviceId.split('-')[2];
+      const placa = String(params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
+         VALUES ($1,$2,$3,$4,'aguardando_pdf',$5,'pdf',$6) RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify(params || {}), price, JSON.stringify({ placa })]
+      );
+      const queryId = qRow.rows[0].id;
+      const match = await correlateAtpveRecord(atpveUf, queryId, placa);
+      if (match?.pdf_disponivel) {
+        await ensureAtpvePdfCached(atpveUf, queryId, userId, match, user.phone);
+      }
+      await notifyAdminNewQuery(user, service, price, params);
+
+      const after = await pool.query('SELECT status FROM queries WHERE id=$1', [queryId]);
+      const charged = after.rows[0]?.status === 'success';
+      if (charged) {
+        return res.json({
+          success: true,
+          result: { status: 'ATPV-e emitido com sucesso! O documento já está disponível no seu histórico e foi enviado pelo WhatsApp.' },
+          charged: price,
+        });
+      }
+      return res.json({
+        success: true,
+        pending: true,
+        result: { status: 'Cadastro registrado! Seu ATPV-e está em processamento — assim que sair, você será cobrado automaticamente e receberá o documento pelo WhatsApp e aqui no histórico.' },
+        charged: 0,
+      });
+    }
+
     // ── Debita créditos somente após validar resposta ─────────────────────────
     await pool.query(
       'UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]
@@ -3799,16 +3863,6 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     // ── Envia PDF + salva no cache por 7 dias ────────────────────────────────
     const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null) || dcDebitoPdfBuf || dcMotorPdfBuf || despbrasilJsonPdfBuf;
 
-    if (ATPVE_UFS.some(uf => serviceId === `intencao-venda-${uf}`)) {
-      const atpveUf = serviceId.split('-')[2];
-      const match = await correlateAtpveRecord(atpveUf, qRow.rows[0].id, body.placa);
-      // Se o cadastro não devolveu o PDF na hora (placa passou por verificação
-      // extra/LAUDOCAR), garante e notifica aqui mesmo — do contrário o bloco
-      // abaixo (pdfToSend) já cuida de cachear e mandar por WhatsApp.
-      if (match && !pdfToSend) {
-        await ensureAtpvePdfCached(atpveUf, qRow.rows[0].id, userId, match, user.phone);
-      }
-    }
     await notifyAdminNewQuery(user, service, price, params);
 
     if (pdfToSend || htmlBuf) {
@@ -3842,15 +3896,6 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           const caption = `✅ *${service.name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
           const fileName = `${serviceId}-${placa || 'doc'}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
-        }
-        // Envia PDF via WhatsApp para Intenção de Venda (ATPV-e instantâneo)
-        if (ATPVE_UFS.some(uf => serviceId === `intencao-venda-${uf}`) && user.phone) {
-          const ufUpper = serviceId.split('-')[2].toUpperCase();
-          const placa = (params?.placa || '').toUpperCase();
-          const caption = `✅ *ATPV-e ${ufUpper} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
-          const fileName = `ATPVE-${ufUpper}-${placa || 'doc'}.pdf`;
-          await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(e =>
-            console.error(`Erro ao enviar ATPV-e ${ufUpper} por WhatsApp (cadastro síncrono):`, e.message));
         }
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="${serviceId}-${Date.now()}.pdf"`);
@@ -6415,59 +6460,62 @@ app.post('/api/admin/crlv-agendado-status-check', requireAuth, requireSuperAdmin
   }
 });
 
-// Varre as Intenções de Venda (RJ/SP/MS) recentes que ainda não têm PDF disponível
-// localmente (ex.: situação PROCESSANDO no momento do cadastro) e reconsulta cada
-// uma na Chekaki — mesmo problema do CRLV-e Agendado: o Cadastrar às vezes não
-// devolve o documento pronto na hora, e sem essa varredura periódica o usuário só
-// receberia o PDF/WhatsApp se clicasse manualmente em "Atualizar".
+// Varre as Intenções de Venda (RJ/SP/MS) recentes que ainda estão 'aguardando_pdf'
+// (cobrança condicionada — ver processCatalogQuery) e reconsulta cada uma na
+// Chekaki. Cobre dois casos: (1) o cadastro devolveu id mas o PDF ainda não
+// tinha saído (verificação extra/LAUDOCAR) — reconsulta por id; (2) a correlação
+// inicial por placa falhou (corrida com a listagem da Chekaki) e nunca chegou a
+// ter id — tenta correlacionar de novo. Sem essa varredura periódica o usuário só
+// receberia o PDF/cobrança se clicasse manualmente em "Atualizar". A cobrança em
+// si só acontece dentro de ensureAtpvePdfCached, quando o PDF é confirmado — por
+// isso não há estorno aqui: se o prazo estourar sem confirmação, a consulta é só
+// marcada como 'cancelado' (nunca foi cobrada).
 async function runAtpvePendingCheck() {
-  // Janela alargada até cobrir folga do prazo de estorno (ASYNC_PDF_REFUND_HOURS)
-  // — senão uma query que nunca recebe o PDF sairia da varredura antes de ser
-  // estornada e ficaria cobrada para sempre sem documento.
   const { rows } = await pool.query(
-    `SELECT q.id AS query_id, q.user_id, q.service_id, q.result_data, q.amount, q.created_at, u.phone
+    `SELECT q.id AS query_id, q.user_id, q.service_id, q.result_data, q.created_at, u.phone
      FROM queries q JOIN users u ON u.id = q.user_id
      WHERE q.service_id IN ('intencao-venda-rj','intencao-venda-sp','intencao-venda-ms')
-       AND q.status <> 'estornado'
+       AND q.status = 'aguardando_pdf'
        AND q.created_at > NOW() - INTERVAL '7 days'
      ORDER BY q.created_at DESC LIMIT 200`
   );
-  let checked = 0, notified = 0, refunded = 0;
+  let checked = 0, notified = 0, cancelled = 0;
   for (const row of rows) {
     const uf = row.service_id.split('-')[2];
     let meta = {};
     try { meta = JSON.parse(row.result_data || '{}'); } catch {}
-    if (!meta.id || meta.pdf_disponivel === true) continue; // sem id vinculado, ou já tinha PDF (já deve estar cacheado)
 
     checked++;
     try {
-      const fresh = await fetchAtpveById(uf, meta.id);
+      const fresh = meta.id
+        ? await fetchAtpveById(uf, meta.id)
+        : await correlateAtpveRecord(uf, row.query_id, meta.placa);
       if (fresh) {
-        const merged = { ...meta, ...fresh };
-        await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), row.query_id]);
-        if (fresh.pdf_disponivel) {
-          const before = await pool.query(
-            `SELECT 1 FROM pdf_cache WHERE query_id=$1 AND expires_at > NOW()`, [row.query_id]
-          );
-          if (!before.rows.length) {
-            await ensureAtpvePdfCached(uf, row.query_id, row.user_id, merged, row.phone);
-            notified++;
-          }
+        // fetchAtpveById não grava sozinho (correlateAtpveRecord já grava por
+        // conta própria) — persiste o merge só nesse caminho.
+        const merged = meta.id ? { ...meta, ...fresh } : fresh;
+        if (meta.id) {
+          await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), row.query_id]);
+        }
+        if (merged.pdf_disponivel) {
+          await ensureAtpvePdfCached(uf, row.query_id, row.user_id, merged, row.phone);
+          notified++;
           continue;
         }
       }
 
-      // PDF ainda não ficou pronto — se já passou do prazo, estorna e para de
-      // reconsultar (evita cobrar para sempre por uma intenção de venda que
-      // nunca sai da verificação extra/LAUDOCAR).
+      // Ainda sem PDF — se já passou do prazo, desiste e marca como cancelado
+      // (sem cobrar nada, já que a cobrança só acontece quando o PDF sai).
       const ageMs = Date.now() - new Date(row.created_at).getTime();
       if (ageMs > ASYNC_PDF_REFUND_HOURS * 3600 * 1000) {
-        const ok = await refundQuery(row.query_id, row.user_id, parseFloat(row.amount),
-          `Intenção de Venda (${uf.toUpperCase()}) não ficou pronta em ${ASYNC_PDF_REFUND_HOURS}h`);
-        if (ok) {
-          refunded++;
+        const cancelledRow = await pool.query(
+          `UPDATE queries SET status='cancelado' WHERE id=$1 AND status='aguardando_pdf' RETURNING id`,
+          [row.query_id]
+        );
+        if (cancelledRow.rows.length) {
+          cancelled++;
           if (row.phone) {
-            const msg = `⚠️ *Intenção de Venda (ATPVE) — ${uf.toUpperCase()}*\n\nO documento não ficou disponível dentro do prazo esperado. O valor pago foi estornado para o seu saldo. Se precisar, tente novamente ou fale com o suporte.`;
+            const msg = `⚠️ *Intenção de Venda (ATPVE) — ${uf.toUpperCase()}*\n\nNão conseguimos confirmar a emissão do documento dentro do prazo esperado. Você não foi cobrado por essa tentativa. Se precisar, tente novamente ou fale com o suporte.`;
             await sendWhatsApp(row.phone, msg).catch(() => {});
           }
         }
@@ -6477,8 +6525,8 @@ async function runAtpvePendingCheck() {
     }
     await new Promise(r => setTimeout(r, 400));
   }
-  console.log(`✅ Checagem ATPV-e pendentes: ${checked} verificados, ${notified} avisados, ${refunded} estornados`);
-  return { checked, notified, refunded, total: rows.length };
+  console.log(`✅ Checagem ATPV-e pendentes: ${checked} verificados, ${notified} avisados, ${cancelled} cancelados`);
+  return { checked, notified, cancelled, total: rows.length };
 }
 
 // ── GET /api/cron/atpve-rj-status (Vercel Cron) — nome histórico, hoje varre

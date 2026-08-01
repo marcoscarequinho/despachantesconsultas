@@ -1559,6 +1559,22 @@ function renderMeusAtpve() {
     // COMUNICADA (5) ou foi excluído — aí sim a Chekaki não oferece mais essas ações.
     const situacaoCodigo = String(meta.situacao_codigo || '');
     const podeRegistrarOuExcluir = !!meta.id && situacaoCodigo !== '5' && situacaoCodigo !== 'excluida';
+    // Cobrança só acontece quando o PDF é confirmado (ver ensureAtpvePdfCached no
+    // servidor) — 'aguardando_pdf'/'cancelado' significam que nada foi debitado.
+    const aguardando = q.status === 'aguardando_pdf';
+    const cancelado   = q.status === 'cancelado';
+    const amountDisplay = aguardando
+      ? `<span class="badge-amber">⏳ Aguardando</span>`
+      : cancelado
+        ? `<span class="badge-red">❌ Não cobrado</span>`
+        : `<div class="text-sm font-semibold text-red-500">-${fmt(q.amount)}</div>`;
+    const pdfDisplay = q.pdf_token
+      ? `<a href="/api/pdf/${q.pdf_token}" target="_blank" class="text-xs bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded font-medium">📥 PDF</a>`
+      : aguardando
+        ? `<span class="text-xs text-amber-600">Aguardando emissão...</span>`
+        : cancelado
+          ? `<span class="text-xs text-gray-400">Não emitido</span>`
+          : `<span class="text-xs text-gray-400">PDF expirado</span>`;
     return `
     <div class="py-2 border-b border-gray-50 last:border-0">
       <div class="flex items-center justify-between gap-3 flex-wrap">
@@ -1571,13 +1587,11 @@ function renderMeusAtpve() {
           ${situacao ? `<div class="text-xs text-blue-600 mt-0.5">${escapeHtml(String(situacao))}</div>` : ''}
         </div>
         <div class="text-right flex-shrink-0 flex items-center gap-2 flex-wrap justify-end">
-          <div class="text-sm font-semibold text-red-500">-${fmt(q.amount)}</div>
+          ${amountDisplay}
           ${podeRegistrarOuExcluir ? `<button type="button" onclick="registrarAtpve('${uf}', ${q.id}, this)" class="text-xs bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded font-medium">✅ Registrar</button>` : ''}
           ${meta.id ? `<button type="button" onclick="atualizarAtpve('${uf}', ${q.id}, this)" class="text-xs bg-gray-600 hover:bg-gray-700 text-white px-2 py-1 rounded font-medium">🔄 Atualizar</button>` : ''}
           ${podeRegistrarOuExcluir ? `<button type="button" onclick="excluirAtpve('${uf}', ${q.id}, this)" class="text-xs bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded font-medium">🗑️ Excluir</button>` : ''}
-          ${q.pdf_token
-            ? `<a href="/api/pdf/${q.pdf_token}" target="_blank" class="text-xs bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded font-medium">📥 PDF</a>`
-            : `<span class="text-xs text-gray-400">PDF expirado</span>`}
+          ${pdfDisplay}
         </div>
       </div>
     </div>`;
@@ -2015,7 +2029,9 @@ function renderRecentQueries() {
         </div>
       </div>
       <div class="text-right flex-shrink-0 ml-3 flex flex-col items-end gap-1">
-        <div class="text-sm font-semibold text-red-500">-${fmt(q.amount)}</div>
+        ${q.status === 'aguardando_pdf' || q.status === 'cancelado'
+          ? ''
+          : `<div class="text-sm font-semibold text-red-500">-${fmt(q.amount)}</div>`}
         ${q.pdf_token
           ? q.result_type === 'html'
             ? `<a href="/api/html/${q.pdf_token}" target="_blank"
@@ -2030,6 +2046,10 @@ function renderRecentQueries() {
             ? `<span class="badge-amber">⏳ Pendente</span>`
             : q.status === 'estornado'
               ? `<span class="badge-red">↩️ Estornado</span>`
+            : q.status === 'aguardando_pdf'
+              ? `<span class="badge-amber">⏳ Aguardando emissão</span>`
+            : q.status === 'cancelado'
+              ? `<span class="badge-red">❌ Não emitido</span>`
             : q.result_type === 'json' && q.service_id
               ? `<button type="button"
                    onclick="viewSavedResult(${q.id}, ${JSON.stringify(q.service_id).replace(/"/g,"&quot;")}, ${JSON.stringify(q.params || '{}').replace(/"/g,"&quot;")})"
@@ -2101,6 +2121,10 @@ function renderHistoryTable() {
               ? `<span class="badge-amber">⏳ Pendente</span>`
             : q.status === 'estornado'
               ? `<span class="badge-red">↩️ Estornado</span>`
+            : q.status === 'aguardando_pdf'
+              ? `<span class="badge-amber">⏳ Aguardando emissão</span>`
+            : q.status === 'cancelado'
+              ? `<span class="badge-red">❌ Não emitido</span>`
             : q.result_type === 'json' && q.service_id
               ? `<button type="button"
                    onclick="viewSavedResult(${q.id}, ${JSON.stringify(q.service_id).replace(/"/g,"&quot;")}, ${JSON.stringify(q.params || '{}').replace(/"/g,"&quot;")})"
@@ -2110,7 +2134,7 @@ function renderHistoryTable() {
               : `<span class="badge-${q.result_type === 'pdf' ? 'blue' : 'green'}">${q.result_type.toUpperCase()}</span>`
           }
         </td>
-        <td class="px-5 py-3 text-right font-semibold text-red-500 text-sm">-${fmt(q.amount)}</td>
+        <td class="px-5 py-3 text-right font-semibold text-red-500 text-sm">${q.status === 'aguardando_pdf' || q.status === 'cancelado' ? '—' : '-' + fmt(q.amount)}</td>
       </tr>`;
   }).join('');
 }
