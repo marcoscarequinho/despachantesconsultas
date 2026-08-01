@@ -9,7 +9,6 @@ const fs = require('fs');
 const crypto = require('crypto');
 const PDFDocument = require('pdfkit');
 const pdfParse = require('pdf-parse');
-const QRCode = require('qrcode');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -225,7 +224,12 @@ const SERVICES = [
   { id:'consultar-historico-proprietario',name:'Histórico de Proprietários',   group:'Débitos e Documentação', basePrice:9.99,  inputType:'placa',        icon:'👥' },
   { id:'renajud',                         name:'RENAJUD',                      group:'Débitos e Documentação', basePrice:9.50,  inputType:'placa',        icon:'⚖️' },
   { id:'consultar-atpve-v1',             name:'Reemissão ATPV-e (Placa)',     group:'Débitos e Documentação', basePrice:13.50, inputType:'placa',        icon:'📄' },
-  { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:25.00, inputType:'placa',        icon:'🔢' },
+  // Preço reajustado (era R$25,00 base / R$35,00 final): a consulta agora
+  // encadeia mais duas consultas pagas (Proprietário Atual v2 via Chekaki e
+  // Consulta 3 Código Segurança CRV via Vistocar) pra completar os campos que
+  // a despbrasil não retorna — ver runNumeroAtpveSupplementaryQueries. Preço
+  // fixo (noMarkup) cobrindo o custo das 3 consultas + margem.
+  { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:99.00, noMarkup:true, inputType:'placa', icon:'🔢' },
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa_renavam',icon:'📝' },
   // API Datacube (form-urlencoded) — movido da Opção 2 (grupo Cadastros) para valor
   // fixo de R$5,00, noMarkup:true. O PDF é montado a partir do JSON retornado (ver
@@ -2179,6 +2183,46 @@ async function extractAtpveFieldsFromPdf(pdfBuf) {
   return fields;
 }
 
+// ── Extração de campos — "Proprietário Atual (v2)" (Chekaki devolve um PDF
+// pronto, mas em formato "Rótulo:" numa linha e o valor sozinho na linha
+// seguinte, diferente do formato "Rótulo: valor" da despbrasil acima). Usada
+// para completar ano de fabricação/modelo, marca/modelo, cor, categoria (CAT),
+// data do CRV e nome/município/UF do vendedor no layout do ATPVe — ver
+// runNumeroAtpveSupplementaryQueries.
+async function extractLinePairFieldsFromPdf(pdfBuf) {
+  const { text } = await pdfParse(pdfBuf);
+  const lines = String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
+  const fields = {};
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (!lines[i].endsWith(':')) continue;
+    const key = lines[i].slice(0, -1).trim().toLowerCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9]/g, '');
+    if (key) fields[key] = lines[i + 1];
+  }
+  return fields;
+}
+
+// ── Extração de campos — "Consulta 3 Código Segurança CRV (PDF)" (Vistocar).
+// O PDF é o cartão oficial da Carteira Digital de Trânsito (SENATRAN): os
+// campos ficam desenhados em posições absolutas (sem "Rótulo: valor" em
+// sequência), então o texto extraído sai com renavam+placa+anos colados numa
+// linha só. Como já sabemos renavam/placa por outras fontes, identificamos o
+// código de segurança (11 dígitos, diferente do renavam) e a marca/modelo
+// (linha com "/") por padrão, em vez de tentar separar a linha colada.
+function extractVistocarSecurityFields(text, knownRenavam) {
+  const fields = {};
+  for (const rawLine of String(text || '').split('\n')) {
+    const line = rawLine.trim();
+    if (!fields.codigosegurancacrv && /^\d{9,12}$/.test(line) && line !== knownRenavam) {
+      fields.codigosegurancacrv = line;
+    } else if (!fields.marcamodeloversao && /^[A-Za-z0-9]+\/[A-Za-z0-9 ]+$/.test(line)) {
+      fields.marcamodeloversao = line;
+    }
+  }
+  return fields;
+}
+
 // Célula com borda (rótulo pequeno em cima + valor em negrito embaixo), no
 // espírito das caixas do formulário oficial do ATPVe/CRV digital.
 function pdfOfficialBox(doc, x, y, w, h, label, value, placeholder = 'Não informado') {
@@ -2189,25 +2233,29 @@ function pdfOfficialBox(doc, x, y, w, h, label, value, placeholder = 'Não infor
     .text(value || placeholder, x + 5, y + 15, { width: w - 10, height: h - 19, ellipsis: true });
 }
 
+// Título de seção em texto simples (negrito, preto, sem tarja de cor), igual
+// ao layout do documento oficial — ver buildNumeroAtpvePdfBuffer.
+function pdfPlainSectionTitle(doc, x, y, w, text) {
+  doc.fillColor('#111827').font('Helvetica-Bold').fontSize(8)
+    .text(text, x, y, { width: w });
+}
+
+const ATPVE_QRCODE_PATH = path.join(__dirname, 'assets', 'atpve-qrcode.png');
+
 // ── Geração de PDF — Número ATPV-E, no layout do documento oficial
 // "Autorização para Transferência de Propriedade de Veículo - Digital"
 // (DENATRAN), em vez do relatório genérico que a despbrasil devolve pronto.
-// Campos que o layout oficial tem mas essa consulta não retorna (ano
-// fabricação/modelo, marca/modelo/versão, cor, CAT, código de segurança do
-// CRV, data de emissão do CRV, nome/município/UF do vendedor, local da venda)
-// ficam como "Não informado" — ver pdfOfficialBox. O QR code é só informativo
-// (resume os identificadores da consulta), não é um canal oficial de
-// validação do DENATRAN.
+// Preto/cinza/branco apenas — sem tarjas coloridas nem marca da empresa, pra
+// ficar fiel ao documento oficial. O QR code é a imagem original extraída do
+// modelo de referência (assets/atpve-qrcode.png), reutilizada igual em todas
+// as consultas — não é gerado por consulta nem é um canal de validação
+// funcional do DENATRAN. Campos que a despbrasil não retorna (ano fabricação/
+// modelo, marca/modelo/versão, cor, CAT, código de segurança do CRV, data de
+// emissão do CRV, nome/município/UF do vendedor) vêm de duas consultas
+// complementares (ver runNumeroAtpveSupplementaryQueries) já mescladas em
+// "fields" antes de chegar aqui; o que ainda faltar fica "Não informado".
 async function buildNumeroAtpvePdfBuffer(service, fields, params) {
   const placaRaw = (params?.placa || fields.placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-
-  const qrText = [
-    `ATPVe: ${fields.numeroatpve || '-'}`,
-    `CRV: ${fields.numerocrv || '-'}`,
-    `Placa: ${placaRaw || '-'}`,
-    `Renavam: ${fields.renavam || '-'}`,
-  ].join(' | ');
-  const qrPngBuf = await QRCode.toBuffer(qrText, { type: 'png', margin: 1, width: 240 });
 
   return new Promise((resolve, reject) => {
     try {
@@ -2221,15 +2269,13 @@ async function buildNumeroAtpvePdfBuffer(service, fields, params) {
       const contentW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
       let y = doc.page.margins.top;
 
-      // Cabeçalho
-      doc.rect(left, y, contentW, 44).fill('#1f2937');
+      // Cabeçalho (preto — igual ao documento oficial, sem info da empresa)
+      doc.rect(left, y, contentW, 44).fill('#000000');
       doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9)
-        .text('REPÚBLICA FEDERATIVA DO BRASIL', left + 10, y + 7);
+        .text('REPÚBLICA FEDERATIVA DO BRASIL', left + 10, y + 10);
       doc.font('Helvetica').fontSize(7)
-        .text('MINISTÉRIO DA INFRAESTRUTURA', left + 10, y + 20)
-        .text('DEPARTAMENTO NACIONAL DE TRÂNSITO - DENATRAN', left + 10, y + 30);
-      doc.font('Helvetica-Bold').fontSize(9)
-        .text('MC Despachadoria Consultas', left, y + 16, { width: contentW - 10, align: 'right' });
+        .text('MINISTÉRIO DA INFRAESTRUTURA', left + 10, y + 23)
+        .text('DEPARTAMENTO NACIONAL DE TRÂNSITO - DENATRAN', left + 10, y + 33);
       y += 44 + 6;
 
       const ufDetran = fields.ufintencaovenda || '-';
@@ -2251,56 +2297,54 @@ async function buildNumeroAtpvePdfBuffer(service, fields, params) {
       // ── Coluna esquerda: dados do veículo / ATPVe ──
       const qrSize = 70;
       pdfOfficialBox(doc, left, ly, colW - qrSize - 6, 30, 'CÓDIGO RENAVAM', fields.renavam);
-      doc.image(qrPngBuf, left + colW - qrSize, ly, { width: qrSize, height: qrSize });
+      doc.image(ATPVE_QRCODE_PATH, left + colW - qrSize, ly, { width: qrSize, height: qrSize });
       ly += 34;
 
       pdfOfficialBox(doc, left, ly, colW, 26, 'PLACA', placaRaw);
       ly += 30;
 
-      pdfOfficialBox(doc, left, ly, colW / 2 - 3, 26, 'ANO FABRICAÇÃO', null);
-      pdfOfficialBox(doc, left + colW / 2 + 3, ly, colW / 2 - 3, 26, 'ANO MODELO', null);
+      pdfOfficialBox(doc, left, ly, colW / 2 - 3, 26, 'ANO FABRICAÇÃO', fields.anofabricacao);
+      pdfOfficialBox(doc, left + colW / 2 + 3, ly, colW / 2 - 3, 26, 'ANO MODELO', fields.anomodelo);
       ly += 30;
 
-      pdfOfficialBox(doc, left, ly, colW, 26, 'MARCA / MODELO / VERSÃO', null);
+      pdfOfficialBox(doc, left, ly, colW, 26, 'MARCA / MODELO / VERSÃO', fields.marcamodeloversao);
       ly += 30;
 
-      pdfOfficialBox(doc, left, ly, colW, 22, 'CAT', null);
+      pdfOfficialBox(doc, left, ly, colW, 22, 'CAT', fields.categoria);
       ly += 26;
 
-      pdfOfficialBox(doc, left, ly, colW / 2 - 3, 26, 'COR PREDOMINANTE', null);
+      pdfOfficialBox(doc, left, ly, colW / 2 - 3, 26, 'COR PREDOMINANTE', fields.cor);
       pdfOfficialBox(doc, left + colW / 2 + 3, ly, colW / 2 - 3, 26, 'CHASSI', fields.chassi);
       ly += 30;
 
       pdfOfficialBox(doc, left, ly, colW / 2 - 3, 26, 'NÚMERO CRV', fields.numerocrv);
-      pdfOfficialBox(doc, left + colW / 2 + 3, ly, colW / 2 - 3, 26, 'CÓDIGO DE SEGURANÇA CRV', null);
+      pdfOfficialBox(doc, left + colW / 2 + 3, ly, colW / 2 - 3, 26, 'CÓDIGO DE SEGURANÇA CRV', fields.codigosegurancacrv);
       ly += 30;
 
       pdfOfficialBox(doc, left, ly, colW / 2 - 3, 26, 'NÚMERO ATPVe', fields.numeroatpve);
-      pdfOfficialBox(doc, left + colW / 2 + 3, ly, colW / 2 - 3, 26, 'DATA EMISSÃO DO CRV', null);
+      pdfOfficialBox(doc, left + colW / 2 + 3, ly, colW / 2 - 3, 26, 'DATA EMISSÃO DO CRV', fields.datacrv);
       ly += 30;
 
       pdfOfficialBox(doc, left, ly, colW, 26, 'HODÔMETRO', fields.hodometro);
       ly += 30;
 
       // ── Coluna direita: vendedor + condições da venda ──
-      doc.rect(rightX, ry, colW, 16).fill('#1e40af');
-      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8)
-        .text('IDENTIFICAÇÃO DO VENDEDOR', rightX + 6, ry + 4);
-      ry += 20;
+      pdfPlainSectionTitle(doc, rightX, ry, colW, 'IDENTIFICAÇÃO DO VENDEDOR');
+      ry += 16;
 
-      pdfOfficialBox(doc, rightX, ry, colW, 26, 'NOME', null);
+      pdfOfficialBox(doc, rightX, ry, colW, 26, 'NOME', fields.nomevendedor);
       ry += 30;
 
       pdfOfficialBox(doc, rightX, ry, colW * 0.6 - 3, 26, 'CPF/CNPJ', maskDocDisplay(fields.documentovendedor));
       pdfOfficialBox(doc, rightX + colW * 0.6 + 3, ry, colW * 0.4 - 3, 26, 'E-MAIL', fields.emailvendedor);
       ry += 30;
 
-      pdfOfficialBox(doc, rightX, ry, colW * 0.75 - 3, 30, 'MUNICÍPIO DE DOMICÍLIO OU RESIDÊNCIA', null);
-      pdfOfficialBox(doc, rightX + colW * 0.75 + 3, ry, colW * 0.25 - 3, 30, 'UF', null, '-');
+      pdfOfficialBox(doc, rightX, ry, colW * 0.75 - 3, 30, 'MUNICÍPIO DE DOMICÍLIO OU RESIDÊNCIA', fields.municipiovendedor);
+      pdfOfficialBox(doc, rightX + colW * 0.75 + 3, ry, colW * 0.25 - 3, 30, 'UF', fields.ufvendedor, '-');
       ry += 34;
 
       const valorVenda = fields.valorvenda ? `R$ ${fields.valorvenda}` : 'Não informado';
-      doc.rect(rightX, ry, colW, 20).fill('#f3f4f6');
+      doc.strokeColor('#9ca3af').lineWidth(0.6).rect(rightX, ry, colW, 20).stroke();
       doc.fillColor('#111827').font('Helvetica-Bold').fontSize(8.5)
         .text(`Valor declarado na venda: ${valorVenda}`, rightX + 6, ry + 6);
       ry += 26;
@@ -2326,10 +2370,8 @@ async function buildNumeroAtpvePdfBuffer(service, fields, params) {
       // ── Segunda seção: comprador + autenticação/mensagens ──
       let ly2 = y, ry2 = y;
 
-      doc.rect(left, ly2, colW, 16).fill('#1e40af');
-      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8)
-        .text('IDENTIFICAÇÃO DO COMPRADOR', left + 6, ly2 + 4);
-      ly2 += 20;
+      pdfPlainSectionTitle(doc, left, ly2, colW, 'IDENTIFICAÇÃO DO COMPRADOR');
+      ly2 += 16;
 
       pdfOfficialBox(doc, left, ly2, colW, 26, 'NOME', fields.nomecomprador);
       ly2 += 30;
@@ -2386,13 +2428,73 @@ async function buildNumeroAtpvePdfBuffer(service, fields, params) {
       doc.fillColor('#374151').font('Helvetica-Bold').fontSize(6.5)
         .text('* Importante', left, y, { width: contentW });
       doc.font('Helvetica').fillColor('#6b7280').fontSize(6.5)
-        .text('Documento remontado pela MC Despachadoria Consultas a partir dos dados retornados nesta consulta — não substitui a via original emitida pelo DETRAN. Campos não retornados por esta consulta aparecem como "Não informado".', left, doc.y + 2, { width: contentW });
+        .text('Documento remontado a partir dos dados retornados nesta consulta — não substitui a via original emitida pelo DETRAN. Campos não retornados aparecem como "Não informado".', left, doc.y + 2, { width: contentW });
 
       doc.end();
     } catch (e) {
       reject(e);
     }
   });
+}
+
+// ── Consultas complementares da "Número ATPV-E" — Proprietário Atual (v2) via
+// Chekaki (consultar-placa-v2) e Consulta 3 Código Segurança CRV via Vistocar
+// (security-code-vistocar-2), para completar os campos que a despbrasil não
+// retorna. Melhor esforço: falha em qualquer uma delas não derruba a consulta
+// principal do ATPVe, só deixa os campos correspondentes como "Não informado"
+// (o preço de R$99 já reflete o custo das 3 consultas encadeadas, ver
+// SERVICES/consultar-Numero-ATPVE).
+async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam) {
+  const merged = {};
+
+  try {
+    const r = await fetch(`${BASE_API_URL}/consultar-placa-v2`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', chaveAcesso: CHAVE_ACESSO },
+      body: JSON.stringify({ placa }),
+    });
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (r.ok && buf.slice(0, 4).toString('latin1') === '%PDF') {
+      const f = await extractLinePairFieldsFromPdf(buf);
+      if (f.anodefabricacao) merged.anofabricacao = f.anodefabricacao;
+      if (f.anodomodelo) merged.anomodelo = f.anodomodelo;
+      if (f.marcamodelo) merged.marcamodeloversao = f.marcamodelo;
+      if (f.categoria) merged.categoria = f.categoria;
+      if (f.cor) merged.cor = f.cor;
+      if (f.datadocrv) merged.datacrv = f.datadocrv;
+      if (f.nomedoproprietario) merged.nomevendedor = f.nomedoproprietario;
+      if (f.municipio) merged.municipiovendedor = f.municipio;
+      if (f.ufjurisdicao) merged.ufvendedor = f.ufjurisdicao;
+    } else {
+      console.error(`[consultar-Numero-ATPVE] Proprietário Atual (v2) sem PDF válido (HTTP ${r.status}).`);
+    }
+  } catch (e) {
+    console.error('[consultar-Numero-ATPVE] erro na consulta complementar Proprietário Atual (v2):', e.message);
+  }
+
+  try {
+    const token = await getVistocarToken();
+    const r = await fetch(`${VISTOCAR_BASE_URL}/apiclient/security-code`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ plate: placa }),
+    });
+    const parsed = await r.json();
+    const ok = r.ok && parsed?.response?.success === true && parsed?.response?.paid === true && parsed?.response?.pdfBase64;
+    if (ok) {
+      const buf = Buffer.from(parsed.response.pdfBase64, 'base64');
+      const { text } = await pdfParse(buf);
+      const f = extractVistocarSecurityFields(text, knownRenavam);
+      if (f.codigosegurancacrv) merged.codigosegurancacrv = f.codigosegurancacrv;
+      if (f.marcamodeloversao) merged.marcamodeloversao = f.marcamodeloversao;
+    } else {
+      console.error(`[consultar-Numero-ATPVE] Consulta 3 Código Segurança CRV sem PDF válido: ${parsed?.message || parsed?.response?.msg || 'resposta inesperada'}`);
+    }
+  } catch (e) {
+    console.error('[consultar-Numero-ATPVE] erro na consulta complementar Código Segurança CRV:', e.message);
+  }
+
+  return merged;
 }
 
 // ── Geração de PDF — CNH (Datacube retorna JSON, não PDF pronto) ───────────────
@@ -3986,6 +4088,12 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         }
         const sourcePdfBuf = Buffer.from(await pdfRes.arrayBuffer());
         const fields = await extractAtpveFieldsFromPdf(sourcePdfBuf);
+        // Completa ano fabricação/modelo, marca/modelo, cor, CAT, código de
+        // segurança do CRV e dados do vendedor com duas consultas extras
+        // (Proprietário Atual v2 + Consulta 3 Código Segurança CRV) — preço já
+        // reajustado pra cobrir as 3 consultas encadeadas (ver catálogo).
+        const placaUpper = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+        Object.assign(fields, await runNumeroAtpveSupplementaryQueries(placaUpper, fields.renavam));
         despbrasilJsonPdfBuf = await buildNumeroAtpvePdfBuffer(service, fields, params);
       } catch (e) {
         console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
