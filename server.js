@@ -572,6 +572,8 @@ async function initDB() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ip_address VARCHAR(45);`);
   await pool.query(`ALTER TABLE queries ADD COLUMN IF NOT EXISTS whatsapp_sent_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE queries ADD COLUMN IF NOT EXISTS result_data TEXT;`);
+  await pool.query(`ALTER TABLE crlv_agendado_pending ADD COLUMN IF NOT EXISTS query_id INTEGER REFERENCES queries(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE crlv_agendado_pending ADD COLUMN IF NOT EXISTS amount NUMERIC(10,2);`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pdf_cache (
       id         SERIAL PRIMARY KEY,
@@ -2994,6 +2996,26 @@ async function getUserServicePrice(userId, service) {
   return parseFloat((service.basePrice * (service.noMarkup ? 1 : MARKUP)).toFixed(2));
 }
 
+// Estorna os créditos de uma consulta que foi cobrada mas nunca entregou o
+// resultado (ex.: PDF assíncrono — CRLV-e Agendado / Intenção de Venda com
+// verificação extra — que nunca ficou pronto dentro do prazo). Idempotente:
+// o guard "status <> 'estornado'" no UPDATE garante que só credita de volta
+// uma vez mesmo se o cron rodar em cima da mesma query mais de uma vez.
+async function refundQuery(queryId, userId, amount, reason) {
+  if (!queryId || !userId || !(amount > 0)) return false;
+  const marked = await pool.query(
+    `UPDATE queries SET status='estornado' WHERE id=$1 AND status <> 'estornado' RETURNING id`,
+    [queryId]
+  );
+  if (!marked.rows.length) return false;
+  await pool.query('UPDATE users SET credits = credits + $1 WHERE id=$2', [amount, userId]);
+  await pool.query(
+    `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'refund',$2,$3)`,
+    [userId, amount, `Estorno: ${reason}`]
+  );
+  return true;
+}
+
 // Núcleo do catálogo "Nova Consulta" — extraído para função reutilizável (em
 // vez de ler req.user.id/req.body direto) para poder ser chamado tanto pelo
 // painel (cookie JWT, ver app.post('/api/query') abaixo) quanto pela API
@@ -3870,9 +3892,9 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         // usuário voltar e clicar em "Ver Status" manualmente).
         if (pedidoId && pedidoId !== '-') {
           await pool.query(
-            `INSERT INTO crlv_agendado_pending (pedido_id, user_id, phone, service_id, uf, placa)
-             VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (pedido_id) DO NOTHING`,
-            [String(pedidoId), userId, user.phone, serviceId, uf, placa]
+            `INSERT INTO crlv_agendado_pending (pedido_id, user_id, phone, service_id, uf, placa, query_id, amount)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (pedido_id) DO NOTHING`,
+            [String(pedidoId), userId, user.phone, serviceId, uf, placa, qRow.rows[0].id, price]
           ).catch(e => console.error('Erro ao enfileirar CRLV-e Agendado:', e.message));
         }
       }
@@ -5977,6 +5999,38 @@ app.post('/api/admin/manual-queries/:id/upload', requireAuth, requireSuperAdmin,
   }
 });
 
+// ── ADMIN: POST /api/admin/manual-queries/:id/reject ──────────────────────────
+// Usado quando o documento não pôde ser localizado/emitido — estorna os
+// créditos ao cliente em vez de deixar o pedido cobrado para sempre sem PDF.
+app.post('/api/admin/manual-queries/:id/reject', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const qr = await pool.query(
+      `SELECT q.id, q.user_id, q.service_id, q.service_name, q.status, q.amount, u.phone
+       FROM queries q JOIN users u ON u.id = q.user_id WHERE q.id=$1`,
+      [req.params.id]
+    );
+    if (!qr.rows.length) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    const query = qr.rows[0];
+    if (!MANUAL_SERVICE_IDS.includes(query.service_id))
+      return res.status(400).json({ error: 'Este pedido não é de um serviço manual.' });
+    if (query.status !== 'pendente')
+      return res.status(400).json({ error: 'Este pedido já foi concluído ou estornado.' });
+
+    const ok = await refundQuery(query.id, query.user_id, parseFloat(query.amount),
+      `Pedido manual não pôde ser atendido: ${query.service_name}`);
+    if (!ok) return res.status(400).json({ error: 'Não foi possível estornar este pedido.' });
+
+    if (query.phone) {
+      const msg = `⚠️ *${query.service_name}*\n\nNão conseguimos localizar/emitir o documento para este pedido. O valor pago foi estornado para o seu saldo. Se precisar, tente novamente ou fale com o suporte.`;
+      await sendWhatsApp(query.phone, msg).catch(() => {});
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Erro ao recusar/estornar pedido manual:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
 // ── ADMIN: POST /api/admin/manual-queries/:id/resend-whatsapp ────────────────
 app.post('/api/admin/manual-queries/:id/resend-whatsapp', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
@@ -6267,10 +6321,15 @@ async function checkCrlvAgendadoStatus(pedidoId) {
   return { podeBaixar, pdfPath, placa, uf };
 }
 
+// Prazo máximo que um pedido assíncrono (CRLV-e Agendado, Intenção de Venda em
+// verificação extra) fica pendente antes do cron desistir e estornar
+// automaticamente os créditos — nunca fica cobrado para sempre sem o documento.
+const ASYNC_PDF_REFUND_HOURS = 48;
+
 async function runCrlvAgendadoPendingCheck() {
   await pool.query(`DELETE FROM crlv_agendado_pending WHERE created_at < NOW() - INTERVAL '20 days'`).catch(() => {});
   const { rows: pendentes } = await pool.query('SELECT * FROM crlv_agendado_pending ORDER BY created_at ASC LIMIT 200');
-  let notified = 0, checked = 0;
+  let notified = 0, checked = 0, refunded = 0;
   for (const row of pendentes) {
     checked++;
     try {
@@ -6294,7 +6353,31 @@ async function runCrlvAgendadoPendingCheck() {
             await pool.query('INSERT INTO crlv_agendado_notifications (pedido_id) VALUES ($1) ON CONFLICT DO NOTHING', [row.pedido_id]);
             await pool.query('DELETE FROM crlv_agendado_pending WHERE pedido_id=$1', [row.pedido_id]);
             notified++;
+            continue;
           }
+        }
+      }
+
+      // Documento ainda não ficou pronto — se já passou do prazo, estorna e
+      // para de tentar (evita cobrar para sempre por um pedido que nunca sai).
+      const ageMs = Date.now() - new Date(row.created_at).getTime();
+      if (ageMs > ASYNC_PDF_REFUND_HOURS * 3600 * 1000) {
+        if (!row.query_id || !row.amount) {
+          // Pedido enfileirado antes desta migração (sem query_id/amount) — não
+          // dá para estornar com segurança. Mantém na fila (não apaga) até o
+          // admin resolver manualmente ou a limpeza de 20 dias remover.
+          console.error(`CRLV-e Agendado pedido ${row.pedido_id} vencido (${ASYNC_PDF_REFUND_HOURS}h) sem query_id/amount — não estornado automaticamente.`);
+        } else {
+          const ok = await refundQuery(row.query_id, row.user_id, parseFloat(row.amount),
+            `CRLV-e Agendado (pedido ${row.pedido_id}) não ficou pronto em ${ASYNC_PDF_REFUND_HOURS}h`);
+          if (ok) {
+            refunded++;
+            if (row.phone) {
+              const msg = `⚠️ *CRLV-e Agendado — Pedido ${row.pedido_id}*\n\nO documento não ficou disponível dentro do prazo esperado. O valor pago foi estornado para o seu saldo. Se precisar, tente novamente ou fale com o suporte.`;
+              await sendWhatsApp(row.phone, msg).catch(() => {});
+            }
+          }
+          await pool.query('DELETE FROM crlv_agendado_pending WHERE pedido_id=$1', [row.pedido_id]);
         }
       }
     } catch (e) {
@@ -6302,8 +6385,8 @@ async function runCrlvAgendadoPendingCheck() {
     }
     await new Promise(r => setTimeout(r, 500));
   }
-  console.log(`✅ Checagem CRLV-e Agendado: ${checked} verificados, ${notified} avisados`);
-  return { checked, notified, pending: pendentes.length };
+  console.log(`✅ Checagem CRLV-e Agendado: ${checked} verificados, ${notified} avisados, ${refunded} estornados`);
+  return { checked, notified, refunded, pending: pendentes.length };
 }
 
 // ── GET /api/cron/crlv-agendado-status (Vercel Cron) ──────────────────────────
@@ -6338,14 +6421,18 @@ app.post('/api/admin/crlv-agendado-status-check', requireAuth, requireSuperAdmin
 // devolve o documento pronto na hora, e sem essa varredura periódica o usuário só
 // receberia o PDF/WhatsApp se clicasse manualmente em "Atualizar".
 async function runAtpvePendingCheck() {
+  // Janela alargada até cobrir folga do prazo de estorno (ASYNC_PDF_REFUND_HOURS)
+  // — senão uma query que nunca recebe o PDF sairia da varredura antes de ser
+  // estornada e ficaria cobrada para sempre sem documento.
   const { rows } = await pool.query(
-    `SELECT q.id AS query_id, q.user_id, q.service_id, q.result_data, u.phone
+    `SELECT q.id AS query_id, q.user_id, q.service_id, q.result_data, q.amount, q.created_at, u.phone
      FROM queries q JOIN users u ON u.id = q.user_id
      WHERE q.service_id IN ('intencao-venda-rj','intencao-venda-sp','intencao-venda-ms')
-       AND q.created_at > NOW() - INTERVAL '3 days'
+       AND q.status <> 'estornado'
+       AND q.created_at > NOW() - INTERVAL '7 days'
      ORDER BY q.created_at DESC LIMIT 200`
   );
-  let checked = 0, notified = 0;
+  let checked = 0, notified = 0, refunded = 0;
   for (const row of rows) {
     const uf = row.service_id.split('-')[2];
     let meta = {};
@@ -6355,16 +6442,34 @@ async function runAtpvePendingCheck() {
     checked++;
     try {
       const fresh = await fetchAtpveById(uf, meta.id);
-      if (!fresh) continue;
-      const merged = { ...meta, ...fresh };
-      await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), row.query_id]);
-      if (fresh.pdf_disponivel) {
-        const before = await pool.query(
-          `SELECT 1 FROM pdf_cache WHERE query_id=$1 AND expires_at > NOW()`, [row.query_id]
-        );
-        if (!before.rows.length) {
-          await ensureAtpvePdfCached(uf, row.query_id, row.user_id, merged, row.phone);
-          notified++;
+      if (fresh) {
+        const merged = { ...meta, ...fresh };
+        await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), row.query_id]);
+        if (fresh.pdf_disponivel) {
+          const before = await pool.query(
+            `SELECT 1 FROM pdf_cache WHERE query_id=$1 AND expires_at > NOW()`, [row.query_id]
+          );
+          if (!before.rows.length) {
+            await ensureAtpvePdfCached(uf, row.query_id, row.user_id, merged, row.phone);
+            notified++;
+          }
+          continue;
+        }
+      }
+
+      // PDF ainda não ficou pronto — se já passou do prazo, estorna e para de
+      // reconsultar (evita cobrar para sempre por uma intenção de venda que
+      // nunca sai da verificação extra/LAUDOCAR).
+      const ageMs = Date.now() - new Date(row.created_at).getTime();
+      if (ageMs > ASYNC_PDF_REFUND_HOURS * 3600 * 1000) {
+        const ok = await refundQuery(row.query_id, row.user_id, parseFloat(row.amount),
+          `Intenção de Venda (${uf.toUpperCase()}) não ficou pronta em ${ASYNC_PDF_REFUND_HOURS}h`);
+        if (ok) {
+          refunded++;
+          if (row.phone) {
+            const msg = `⚠️ *Intenção de Venda (ATPVE) — ${uf.toUpperCase()}*\n\nO documento não ficou disponível dentro do prazo esperado. O valor pago foi estornado para o seu saldo. Se precisar, tente novamente ou fale com o suporte.`;
+            await sendWhatsApp(row.phone, msg).catch(() => {});
+          }
         }
       }
     } catch (e) {
@@ -6372,8 +6477,8 @@ async function runAtpvePendingCheck() {
     }
     await new Promise(r => setTimeout(r, 400));
   }
-  console.log(`✅ Checagem ATPV-e pendentes: ${checked} verificados, ${notified} avisados`);
-  return { checked, notified, total: rows.length };
+  console.log(`✅ Checagem ATPV-e pendentes: ${checked} verificados, ${notified} avisados, ${refunded} estornados`);
+  return { checked, notified, refunded, total: rows.length };
 }
 
 // ── GET /api/cron/atpve-rj-status (Vercel Cron) — nome histórico, hoje varre

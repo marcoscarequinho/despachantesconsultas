@@ -2028,6 +2028,8 @@ function renderRecentQueries() {
                </a>`
           : q.status === 'pendente'
             ? `<span class="badge-amber">⏳ Pendente</span>`
+            : q.status === 'estornado'
+              ? `<span class="badge-red">↩️ Estornado</span>`
             : q.result_type === 'json' && q.service_id
               ? `<button type="button"
                    onclick="viewSavedResult(${q.id}, ${JSON.stringify(q.service_id).replace(/"/g,"&quot;")}, ${JSON.stringify(q.params || '{}').replace(/"/g,"&quot;")})"
@@ -2097,6 +2099,8 @@ function renderHistoryTable() {
                  </div>`
             : q.status === 'pendente'
               ? `<span class="badge-amber">⏳ Pendente</span>`
+            : q.status === 'estornado'
+              ? `<span class="badge-red">↩️ Estornado</span>`
             : q.result_type === 'json' && q.service_id
               ? `<button type="button"
                    onclick="viewSavedResult(${q.id}, ${JSON.stringify(q.service_id).replace(/"/g,"&quot;")}, ${JSON.stringify(q.params || '{}').replace(/"/g,"&quot;")})"

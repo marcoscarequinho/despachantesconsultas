@@ -1721,8 +1721,9 @@ function renderManualQueries() {
     let placa = '—';
     try { placa = JSON.parse(q.params || '{}').placa || '—'; } catch {}
     const pendente = q.status === 'pendente';
+    const estornado = q.status === 'estornado';
     let whatsappStatus = '';
-    if (!pendente) {
+    if (q.status === 'concluido') {
       if (q.whatsapp_sent_at) {
         whatsappStatus = `<div class="text-xs text-green-600 mt-1">✅ WhatsApp enviado</div>`;
       } else if (!q.user_phone) {
@@ -1732,6 +1733,8 @@ function renderManualQueries() {
           <button onclick="resendWhatsapp(${q.id}, this)" class="text-xs text-blue-600 hover:underline mt-0.5">🔁 Reenviar</button>`;
       }
     }
+    const badgeClass = pendente ? 'badge-amber' : estornado ? 'badge-red' : 'badge-green';
+    const badgeText = pendente ? '⏳ Pendente' : estornado ? '↩️ Estornado' : '✅ Concluído';
     return `
     <tr class="table-row">
       <td class="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">${fmtDate(q.created_at)}</td>
@@ -1739,17 +1742,38 @@ function renderManualQueries() {
       <td class="px-4 py-3 text-sm text-gray-700">${q.service_name}</td>
       <td class="px-4 py-3 text-sm text-gray-700 font-mono hidden md:table-cell">${placa}</td>
       <td class="px-4 py-3 text-center">
-        <span class="${pendente ? 'badge-amber' : 'badge-green'}">${pendente ? '⏳ Pendente' : '✅ Concluído'}</span>
+        <span class="${badgeClass}">${badgeText}</span>
         ${whatsappStatus}
       </td>
       <td class="px-4 py-3 text-right font-semibold text-gray-700 text-sm">${fmt(q.amount)}</td>
       <td class="px-4 py-3 text-center">
         ${pendente
-          ? `<button onclick="openManualUpload(${q.id}, ${JSON.stringify(q.user_name + ' — ' + q.service_name + ' (placa ' + placa + ')').replace(/"/g,'&quot;')})" class="action-btn bg-blue-600 hover:bg-blue-700 text-white">📤 Upload</button>`
+          ? `<div class="flex gap-1.5 justify-center">
+              <button onclick="openManualUpload(${q.id}, ${JSON.stringify(q.user_name + ' — ' + q.service_name + ' (placa ' + placa + ')').replace(/"/g,'&quot;')})" class="action-btn bg-blue-600 hover:bg-blue-700 text-white">📤 Upload</button>
+              <button onclick="rejectManualQuery(${q.id}, this)" class="action-btn bg-red-600 hover:bg-red-700 text-white">↩️ Estornar</button>
+            </div>`
           : `<span class="text-xs text-gray-400">—</span>`}
       </td>
     </tr>`;
   }).join('');
+}
+
+async function rejectManualQuery(id, btn) {
+  if (!confirm('Estornar este pedido? O cliente receberá de volta o valor pago e será avisado pelo WhatsApp.')) return;
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = 'Estornando...';
+  try {
+    const r = await fetch(`/api/admin/manual-queries/${id}/reject`, { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Erro ao estornar.', 'error'); btn.disabled = false; btn.textContent = original; return; }
+    toast('Pedido estornado — cliente notificado.');
+    allManualQueries = [];
+    refreshCurrentSection();
+  } catch {
+    toast('Erro de conexão.', 'error');
+    btn.disabled = false; btn.textContent = original;
+  }
 }
 
 async function resendWhatsapp(id, btn) {
