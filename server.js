@@ -3539,7 +3539,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       // — a mensagem crua da despbrasil vem em caixa alta e soa como erro de
       // sistema, então troca por algo mais claro (o erro original já foi logado).
       if (serviceId === 'consultar-atpve-v1') {
-        errMsg = 'Não encontramos ATPV-e disponível para reemissão nessa placa no momento. Tente novamente mais tarde ou fale com o suporte.';
+        errMsg = 'Não encontramos ATPV-e disponível para reemissão nessa placa no momento. É possível que essa ATPV-e tenha comunicação de venda ou tenha sido gerada pelo app eCNH — nesses casos a segunda via não sai por aqui. Tente a consulta "Número da ATPV-E", que funciona mesmo com comunicação de venda ou emissão pelo eCNH.';
       } else if (serviceId === 'consultar-Numero-ATPVE') {
         errMsg = 'Não encontramos o número do ATPV-E para essa placa no momento. Tente novamente mais tarde ou fale com o suporte.';
       }
