@@ -230,7 +230,7 @@ const SERVICES = [
   // Consulta 3 Código Segurança CRV via Vistocar) pra completar os campos que
   // a despbrasil não retorna — ver runNumeroAtpveSupplementaryQueries. Preço
   // fixo (noMarkup) cobrindo o custo das 3 consultas + margem.
-  { id:'consultar-Numero-ATPVE',          name:'Número ATPV-E',                group:'Débitos e Documentação', basePrice:99.00, noMarkup:true, inputType:'placa', icon:'🔢' },
+  { id:'consultar-Numero-ATPVE',          name:'Reemissão da ATPVe Com Comunicação de Venda', group:'Débitos e Documentação', basePrice:99.00, noMarkup:true, inputType:'placa', icon:'🔢' },
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa_renavam',icon:'📝' },
   // API Datacube (form-urlencoded) — movido da Opção 2 (grupo Cadastros) para valor
   // fixo de R$5,00, noMarkup:true. O PDF é montado a partir do JSON retornado (ver
@@ -2314,7 +2314,10 @@ async function buildNumeroAtpvePdfBuffer(service, fields, params) {
   V(bairroCep, { x: 14.5, top: 577.7, bottom: 587.7, maxX: 276 });
 
   // Coluna direita — vendedor + condições da venda
-  V(fields.nomevendedor, { x: 318, top: 80.2, bottom: 90.2, maxX: 575 });
+  // Layout 2.1 (SENATRAN): a linha do nome do vendedor ficou ~4,6pt mais baixa
+  // dentro da célula em relação ao layout 2.0 (DENATRAN) — medido no PDF de
+  // referência oficial mais recente.
+  V(fields.nomevendedor, { x: 318, top: 84.7, bottom: 94.7, maxX: 575 });
   V(maskDocDisplay(fields.documentovendedor), { x: 320, top: 121.7, bottom: 131.7, maxX: 429 });
   V(fields.emailvendedor, { x: 434, top: 118.7, bottom: 128.7, maxX: 575 });
   V(fields.municipiovendedor, { x: 320, top: 156.7, bottom: 166.7, maxX: 534 });
@@ -2322,10 +2325,18 @@ async function buildNumeroAtpvePdfBuffer(service, fields, params) {
   // Caixa cinza (0.8,0.8,0.8) no original — mantém a mesma cor de fundo ao sobrescrever.
   V(fields.valorvenda, { x: 415, top: 200.2, bottom: 210.2, maxX: 573, bg: [0.8, 0.8, 0.8] });
   // LOCAL = município/UF do comprador (mesma fonte da despbrasil, sem consulta extra).
+  // O retângulo de "apagar" do V() cobre a linha impressa do template nesses dois
+  // campos (ela fica dentro da faixa top/bottom da célula) — sem redesenhá-la depois
+  // o valor fica "flutuando" solto, em vez de escrito sobre o traço, como no oficial.
+  // Coordenadas da linha medidas no PDF de referência (pdfplumber, mesma origem dos V()).
   const local = [fields.municipiocomprador, fields.ufcomprador].filter(Boolean).join(' - ');
   V(local, { x: 347.2, top: 271.9, bottom: 281.9, maxX: 573 });
+  page.drawLine({ start: { x: 337.096, y: pageH - 281.255 }, end: { x: 573.364, y: pageH - 281.255 }, thickness: 0.71, color: rgb(0, 0, 0) });
+  // Layout 2.1: a linha de "DATA DECLARADA DA VENDA" ficou rente ao rótulo
+  // (sem o respiro que tinha no layout 2.0) — mesma lógica, coordenadas novas.
   const dataVenda = fields.datahoraregistrointencaovenda ? fields.datahoraregistrointencaovenda.split(' ')[0] : null;
-  V(dataVenda, { x: 403.9, top: 303.1, bottom: 313.1, maxX: 573 });
+  V(dataVenda, { x: 403.9, top: 298.8, bottom: 308.8, maxX: 573 });
+  page.drawLine({ start: { x: 390.189, y: pageH - 308.184 }, end: { x: 573.194, y: pageH - 308.184 }, thickness: 1.02, color: rgb(0, 0, 0) });
 
   // "DETRAN - UF": origem de onde o veículo foi emplacado (não a UF da
   // intenção de venda) — fonte Helvetica pequena, casando com o rótulo estático.
@@ -3798,7 +3809,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       // — a mensagem crua da despbrasil vem em caixa alta e soa como erro de
       // sistema, então troca por algo mais claro (o erro original já foi logado).
       if (serviceId === 'consultar-atpve-v1') {
-        errMsg = 'Não encontramos ATPV-e disponível para reemissão nessa placa no momento. É possível que essa ATPV-e tenha comunicação de venda ou tenha sido gerada pelo app eCNH — nesses casos a segunda via não sai por aqui. Tente a consulta "Número da ATPV-E", que funciona mesmo com comunicação de venda ou emissão pelo eCNH.';
+        errMsg = 'Não encontramos ATPV-e disponível para reemissão nessa placa no momento. É possível que essa ATPV-e tenha comunicação de venda ou tenha sido gerada pelo app eCNH — nesses casos a segunda via não sai por aqui. Tente a consulta "Reemissão da ATPVe Com Comunicação de Venda", que funciona mesmo com comunicação de venda ou emissão pelo eCNH.';
       } else if (serviceId === 'consultar-Numero-ATPVE') {
         errMsg = 'Não encontramos o número do ATPV-E para essa placa no momento. Tente novamente mais tarde ou fale com o suporte.';
       }
