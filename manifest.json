@@ -1,0 +1,16 @@
+{
+  "name": "DESPACHANTES CONSULTAS",
+  "short_name": "Despachantes",
+  "description": "Consultas veiculares e emissão de CRLV-e/ATPV-e digital para despachantes, lojistas e escritórios jurídicos.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "lang": "pt-BR",
+  "icons": [
+    { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/logo-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/logo-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -3,7 +3,7 @@
   "functions": {
     "api/index.js": {
       "maxDuration": 800,
-      "includeFiles": "{*.html,*.css,*.js,*.txt,*.xml,*.ico,*.png}"
+      "includeFiles": "{*.html,*.css,*.js,*.txt,*.xml,*.ico,*.png,*.apk,manifest.json}"
     }
   },
   "rewrites": [
