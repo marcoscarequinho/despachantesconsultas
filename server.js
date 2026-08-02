@@ -6483,6 +6483,7 @@ const BROADCAST_MESSAGE =
 ✅ PAGAMENTO INSTANTÂNEO: PIX: QRcod, copia e Cola, na tela.
 ✅ Faça Recarga via PIX no valor que quiser.
 🔎 Nossos Serviços:
+🛑Agora temos consulta ATPVe com comunicação de venda, Saindo na hora
 🛑Agora temos Intenção de venda para os seguintes Estados, RJ, SP, MG e MS
 🛑Numero do CRV Antigo, dos Estados: RJ, SP, MG, CE, ES, BA, RN, PE, PB, e outros, total de 21 Estados veja em seu painel🛑
 ✅ Sem mensalidade. Pague só pelo que usar.
