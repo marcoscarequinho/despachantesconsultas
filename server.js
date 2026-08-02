@@ -751,6 +751,10 @@ app.get('/consulta-avulsa.html', (req, res) => {
   const qs = req.originalUrl.split('?')[1];
   res.redirect('/consulta-avulsa' + (qs ? '?' + qs : ''));
 });
+// express.static ignora dotfiles por padrão (é isso que impede o .env de vazar
+// via HTTP) — abre uma exceção só pra essa subpasta, exigida pelo Android pra
+// verificar o Digital Asset Links do app TWA (assetlinks.json).
+app.use('/.well-known', express.static(path.join(__dirname, '.well-known'), { dotfiles: 'allow', etag: false, lastModified: false, setHeaders: (res) => res.set('Cache-Control', 'no-store') }));
 app.use(express.static(path.join(__dirname), { etag: false, lastModified: false, setHeaders: (res) => res.set('Cache-Control', 'no-store') }));
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "br.com.despachantesconsultas.app",
+      "sha256_cert_fingerprints": [
+        "09:09:3E:CF:54:2C:0E:F0:33:63:89:54:7B:68:EE:74:14:99:0F:9B:90:2B:E0:7F:65:14:C4:84:0A:74:20:30"
+      ]
+    }
+  }
+]
