@@ -223,6 +223,7 @@ const SERVICES = [
   { id:'consultar-gravame',               name:'Consulta Gravame',             group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa',        icon:'🏦' },
   { id:'consultar-historico-proprietario',name:'Histórico de Proprietários',   group:'Débitos e Documentação', basePrice:9.99,  inputType:'placa',        icon:'👥' },
   { id:'renajud',                         name:'RENAJUD',                      group:'Débitos e Documentação', basePrice:9.50,  inputType:'placa',        icon:'⚖️' },
+  { id:'consultar-atpve',                 name:'Reemissão ATPV-e (Chassi)',    group:'Débitos e Documentação', basePrice:13.50, inputType:'chassi',        icon:'📄' },
   { id:'consultar-atpve-v1',             name:'Reemissão ATPV-e (Placa)',     group:'Débitos e Documentação', basePrice:13.50, inputType:'placa_renavam', icon:'📄' },
   // Preço reajustado (era R$25,00 base / R$35,00 final): a consulta agora
   // encadeia mais duas consultas pagas (Proprietário Atual v2 via Chekaki e
@@ -3465,6 +3466,14 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       method = 'POST';
       body   = { servico: DESPBRASIL_SVCS[serviceId].servico, placa, ...(DESPBRASIL_SVCS[serviceId].extra || {}) };
     }
+    // ATPV-e por chassi via Chekaki — mesmo endpoint de consultar-atpve-v1
+    // (aceita chassi OU placa+renavam, nunca os dois juntos no corpo).
+    if (serviceId === 'consultar-atpve') {
+      const chassi = (params?.chassi || '').toUpperCase().replace(/\s/g, '');
+      if (chassi.length !== 17)
+        return res.status(400).json({ error: 'Chassi deve ter exatamente 17 caracteres.' });
+      body = { chassi };
+    }
     // ATPV-e por placa + renavam via Chekaki (volta do despbrasil pra API antiga —
     // BASE_API_URL/consultar-atpve, mesmo endpoint de antes do commit 9305042).
     if (serviceId === 'consultar-atpve-v1') {
@@ -3822,12 +3831,12 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         }
       } catch {}
       console.error(`Erro API [${serviceId}] HTTP ${apiRes.status}: ${errMsg}`);
-      // ATPV-e via despbrasil (Reemissão por Placa e Número ATPV-E): na prática
-      // todo erro aqui significa que não há documento disponível para essa placa
-      // — a mensagem crua da despbrasil vem em caixa alta e soa como erro de
+      // Reemissão por Chassi/Placa (Chekaki) e Número ATPV-E (despbrasil): na
+      // prática todo erro aqui significa que não há documento disponível para
+      // essa placa/chassi — a mensagem crua da upstream soa como erro de
       // sistema, então troca por algo mais claro (o erro original já foi logado).
-      if (serviceId === 'consultar-atpve-v1') {
-        errMsg = 'Não encontramos ATPV-e disponível para reemissão nessa placa no momento. É possível que essa ATPV-e tenha comunicação de venda ou tenha sido gerada pelo app eCNH — nesses casos a segunda via não sai por aqui. Tente a consulta "Reemissão da ATPVe Com Comunicação de Venda", que funciona mesmo com comunicação de venda ou emissão pelo eCNH.';
+      if (serviceId === 'consultar-atpve' || serviceId === 'consultar-atpve-v1') {
+        errMsg = 'Não encontramos ATPV-e disponível para reemissão nessa placa no momento. É possível que essa ATPV-e tenha comunicação de venda ou tenha sido gerada pelo app eCNH — nesses casos a segunda via não sai por aqui. Tente a consulta "Reemissão da ATPVe Com Comunicação de Venda".';
       } else if (serviceId === 'consultar-Numero-ATPVE') {
         errMsg = 'Não encontramos o número do ATPV-E para essa placa no momento. Tente novamente mais tarde ou fale com o suporte.';
       }
