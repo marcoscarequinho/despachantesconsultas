@@ -231,7 +231,8 @@ const SERVICES = [
   // a despbrasil não retorna — ver runNumeroAtpveSupplementaryQueries. Preço
   // fixo (noMarkup) cobrindo o custo das 3 consultas + margem.
   { id:'consultar-Numero-ATPVE',          name:'Reemissão da ATPVe Com Comunicação de Venda', group:'Débitos e Documentação', basePrice:99.00, noMarkup:true, inputType:'placa', icon:'🔢',
-    slowNote:'Devido ao formato como esta ATPVe é gerada, o QR Code não faz leitura — todas as demais informações deste documento são reais. Fica a seu critério.' },
+    slowNote:'Devido ao formato como esta ATPVe é gerada, o QR Code não faz leitura — todas as demais informações deste documento são reais. Fica a seu critério.',
+    modeloUrl:'/assets/modelo-atpve.pdf' },
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa_renavam',icon:'📝' },
   // API Datacube (form-urlencoded) — movido da Opção 2 (grupo Cadastros) para valor
   // fixo de R$5,00, noMarkup:true. O PDF é montado a partir do JSON retornado (ver

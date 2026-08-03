@@ -2489,7 +2489,10 @@ function selectService(svc) {
     slowNote.className = isWarning
       ? 'bg-amber-50 border border-amber-300 text-amber-800 rounded-lg px-4 py-3 text-sm font-medium'
       : 'bg-blue-50 border border-blue-200 text-blue-800 rounded-lg px-4 py-3 text-sm';
-    slowNote.textContent = (isWarning ? '⚠️ ' : '') + svc.slowNote;
+    const noteText = (isWarning ? '⚠️ ' : '') + svc.slowNote;
+    slowNote.innerHTML = escapeHtml(noteText) + (svc.modeloUrl
+      ? ` <a href="${svc.modeloUrl}" target="_blank" rel="noopener" class="underline font-semibold whitespace-nowrap">Visualize modelo da ATPVe</a>`
+      : '');
   }
   renderFormFields(svc.inputType, svc);
   document.getElementById('query-form-wrap').classList.remove('hidden');
