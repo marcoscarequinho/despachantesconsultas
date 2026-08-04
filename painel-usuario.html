@@ -592,6 +592,8 @@
         </div>
 
         <form id="query-form-v2" onsubmit="submitQueryV2(event)" class="space-y-4">
+          <div id="form-slow-note-v2"
+            class="hidden bg-blue-50 border border-blue-200 text-blue-800 rounded-lg px-4 py-3 text-sm"></div>
           <div id="form-fields-v2" class="space-y-4"></div>
 
           <div id="form-error-v2"
@@ -3289,6 +3291,13 @@ function selectServiceV2(svc) {
   selectedSvcV2 = svc;
   document.getElementById('form-service-name-v2').textContent = svc.icon + ' ' + svc.name;
   document.getElementById('form-service-price-v2').textContent = fmt(svc.price);
+  const slowNoteV2 = document.getElementById('form-slow-note-v2');
+  slowNoteV2.classList.toggle('hidden', !svc.slowNote);
+  if (svc.slowNote) {
+    slowNoteV2.innerHTML = escapeHtml(svc.slowNote) + (svc.noteUrl
+      ? ` <a href="${svc.noteUrl}" target="_blank" rel="noopener" class="underline font-semibold whitespace-nowrap">Ver histórico na Datacube</a>`
+      : '');
+  }
   renderFormFieldsV2(svc.inputType);
   document.getElementById('query-form-wrap-v2').classList.remove('hidden');
   document.getElementById('query-result-wrap-v2').classList.add('hidden');

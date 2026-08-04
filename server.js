@@ -47,13 +47,16 @@ const DESPBRASIL_SVCS = {
 
 // API Vistocar (vistocarconsulta.com.br) — login JWT (VISTOCAR_LOGIN/VISTOCAR_PASSWORD)
 // + POST em apiclient/<endpoint> com Bearer, corpo { plate: "ABC1D23" } (campo em
-// inglês, não "placa"). Resposta é JSON com PDF pronto em base64.
+// inglês, não "placa"). A maioria devolve JSON com PDF pronto em base64 — exceção:
+// "vistocar-completa" devolve um relatório JSON estruturado (sem PDF pronto), montado
+// em PDF por buildVeicularCompletaPdfBuffer (ver tratamento de resposta específico).
 const VISTOCAR_BASE_URL = 'https://vistocarconsulta.com.br/api/v1';
 const VISTOCAR_LOGIN    = process.env.VISTOCAR_LOGIN    || '';
 const VISTOCAR_PASSWORD = process.env.VISTOCAR_PASSWORD || '';
 const VISTOCAR_ENDPOINTS = {
   'crlv-rj-reemissao-2': 'crlv-rj',
   'security-code-vistocar-2': 'security-code',
+  'vistocar-completa': 'completa',
 };
 
 // Cache do token JWT da Vistocar em memória do processo — o login devolve um token
@@ -238,6 +241,9 @@ const SERVICES = [
   // fixo de R$5,00, noMarkup:true. O PDF é montado a partir do JSON retornado (ver
   // buildLocalizacaoCpfPdfBuffer).
   { id:'dc-cadastro-localizacao-cpf',     name:'Localização CPF',              group:'Débitos e Documentação', basePrice:5.00, noMarkup:true, inputType:'dc_cpf', icon:'📍', dcPath:'/pessoas/localizacao' },
+  // Localização CPF V3 — também movida da Opção 2 (grupo Cadastros), mesmo relatório
+  // em PDF da Localização CPF acima (buildLocalizacaoCpfPdfBuffer), valor fixo R$8,00.
+  { id:'dc-cadastro-localizacao-v3',      name:'Localização CPF V3',           group:'Débitos e Documentação', basePrice:8.00, noMarkup:true, inputType:'dc_cpf', icon:'📍', dcPath:'/pessoas/localizacao_v3' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // API Vistocar (vistocarconsulta.com.br) — fonte para Reemissão de CRLV-e RJ,
@@ -391,6 +397,12 @@ const SERVICES = [
   // o PDF é montado a partir do JSON retornado (ver buildBinEstadualPdfBuffer),
   // no mesmo padrão visual do relatório de Débitos por Estado.
   { id:'dc-bin-estadual', name:'Base Estadual (BIN)', group:'Consulta Completa', basePrice:9.90, noMarkup:true, inputType:'placa', icon:'🚗', dcPath:'/veiculos/bin-estadual' },
+  // ── Veicular Completa (API Vistocar — vistocarconsulta.com.br) ───────────────
+  // Diferente dos itens acima (Datacube): usa a auth JWT da Vistocar (getVistocarToken,
+  // ver VISTOCAR_ENDPOINTS) e devolve um relatório JSON completo (veículo, proprietário,
+  // restrições, débitos, gravames e leilão) sem PDF pronto — montado a partir do JSON
+  // por buildVeicularCompletaPdfBuffer, no mesmo padrão visual dos demais relatórios.
+  { id:'vistocar-completa', name:'Veicular Completa', group:'Consulta Completa', basePrice:25.00, noMarkup:true, inputType:'placa', icon:'🚗' },
   // ── Número CRV (Apenas antigos) — processamento manual (entrega via upload no admin) ──
   // slowNote: mesmo aviso de prazo que antes aparecia num popup global, agora exibido
   // só ao selecionar uma consulta deste grupo (ver form-slow-note em painel-usuario.html).
@@ -484,9 +496,9 @@ const SERVICES_V2 = [
   { id:'dc-cadastro-empresas-cpf',    name:'Empresas do CPF',           group:'Cadastros', basePrice:0.313, inputType:'dc_cpf',      icon:'🗂️', dcPath:'/pessoas/empresas' },
   { id:'dc-cadastro-nome-cpf',        name:'Nome do CPF',               group:'Cadastros', basePrice:0.234, inputType:'dc_cpf',      icon:'🗂️', dcPath:'/pessoas/nome' },
   { id:'dc-cadastro-dados-cpf',       name:'Dados Cadastrais do CPF',   group:'Cadastros', basePrice:1.380, inputType:'dc_cpf',      icon:'🗂️', dcPath:'/pessoas/cadastro' },
-  // "Localização CPF" (dc-cadastro-localizacao-cpf) foi movida para Nova Consulta /
-  // Débitos e Documentação, ver SERVICES acima.
-  { id:'dc-cadastro-localizacao-v3',  name:'Localização CPF V3',        group:'Cadastros', basePrice:2.844, inputType:'dc_cpf',      icon:'🗂️', dcPath:'/pessoas/localizacao_v3' },
+  // "Localização CPF" (dc-cadastro-localizacao-cpf) e "Localização CPF V3"
+  // (dc-cadastro-localizacao-v3) foram movidas para Nova Consulta / Débitos e
+  // Documentação, ver SERVICES acima.
   { id:'dc-cadastro-telefone',        name:'Pessoas por Telefone',      group:'Cadastros', basePrice:0.706, inputType:'dc_telefone', icon:'🗂️', dcPath:'/pessoas/telefone' },
   { id:'dc-cadastro-cnpj',            name:'Dados do CNPJ',             group:'Cadastros', basePrice:0.234, inputType:'dc_cnpj',     icon:'🗂️', dcPath:'/empresas/informacoes' },
   { id:'dc-cadastro-municipios-serpro',name:'Municípios - Código Serpro',group:'Cadastros', basePrice:0.391, inputType:'dc_uf',       icon:'🗂️', dcPath:'/demografia/municipios-serpro' },
@@ -506,7 +518,11 @@ const SERVICES_V2 = [
   { id:'dc-comunicado-venda-cancelar',  name:'Cancelar Comunicação de Venda',  group:'Comunicação de Venda', basePrice:0.000,  inputType:'dc_cancelar_comunicado_venda',  icon:'📤', dcPath:'/veiculos/cancelar_comunicado_venda_v2' },
 
   // ── CRLVe — em teste, visível apenas para admin (ver adminOnly em /api/services-v2 e /api/query-v2) ──
-  { id:'dc-crlve-rj-flash', name:'CRLV-e RJ Flash', group:'CRLVe', basePrice:20.000, inputType:'dc_placa', icon:'⚡', dcPath:'/veiculos/documentos-crlve-rj-flash', adminOnly:true, returnsPdf:true },
+  // Endpoint assíncrono na Datacube: se a resposta ainda não trouxer o PDF pronto
+  // (tarefa em processamento), o pedido não pode ser acompanhado por aqui — só no
+  // histórico do próprio painel da Datacube (login do admin na Datacube, não do cliente).
+  { id:'dc-crlve-rj-flash', name:'CRLV-e RJ Flash', group:'CRLVe', basePrice:20.000, inputType:'dc_placa', icon:'⚡', dcPath:'/veiculos/documentos-crlve-rj-flash', adminOnly:true, returnsPdf:true,
+    slowNote:'Este endpoint é assíncrono: se a resposta não vier com o PDF pronto, acompanhe o status (Processando/Concluído/Negado) no histórico da Datacube.', noteUrl:'https://painel.consultasdeveiculos.com/historico' },
 ];
 
 // ── SERVICES_V3 — API Infosimples (api.infosimples.com) ───────────────────────
@@ -2727,6 +2743,169 @@ function buildBinEstadualPdfBuffer(service, data, params) {
   });
 }
 
+// ── Geração de PDF — Veicular Completa (API Vistocar retorna JSON, não PDF pronto) ──
+function boolLabel(v) {
+  return v === true ? 'Sim' : v === false ? 'Não' : 'Nada consta';
+}
+
+function buildVeicularCompletaPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const { left, width } = pdfContentBox(doc);
+      const now = new Date();
+      const v = data?.dadosVeicular || {};
+      const prop = v.proprietario || {};
+      const contatos = prop.contatos || {};
+
+      pdfReportHeader(doc, 'VEICULAR COMPLETA', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Placa', maskPlacaDisplay(params?.placa)]]);
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'VEÍCULO');
+      pdfFieldGrid(doc, [
+        ['Placa', v.placa ? v.placa.toUpperCase() : '-'],
+        ['Chassi', v.chassi || '-'],
+        ['Número do Motor', v.numeroMotor || '-'],
+        ['Renavam', v.renavam || '-'],
+        ['UF da Placa', v.ufPlaca || '-'],
+        ['Município da Placa', v.municipioPlaca || '-'],
+        ['Status', v.status || '-'],
+        ['Marca/Modelo', v.marcaModelo || '-'],
+        ['Tipo de Veículo', v.tipoVeiculo || '-'],
+        ['Espécie', v.especie || '-'],
+        ['Categoria', v.categoria || '-'],
+        ['Cor', v.cor || '-'],
+        ['Combustível', v.combustivel || '-'],
+        ['Procedência', v.procedencia || '-'],
+        ['Ano Fabricação', v.anoFabricacao ?? '-'],
+        ['Ano Modelo', v.anoModelo ?? '-'],
+        ['Potência', v.potencia ?? '-'],
+        ['Cilindrada', v.cilindrada ?? '-'],
+        ['Capacidade de Passageiros', v.capacidadePassageiros ?? '-'],
+        ['Capacidade de Carga (Kg)', v.capacidadeCargaKg ?? '-'],
+        ['Peso Bruto Total', v.pesoBrutoTotal ?? '-'],
+        ['Capacidade Máx. de Tração', v.capacidadeMaximaTracao ?? '-'],
+        ['Capacidade do Tanque (L)', v.capacidadeTanqueLitros ?? '-'],
+        ['Qtd. de Eixos', v.quantidadeEixos ?? '-'],
+        ['Chassi Remarcado', boolLabel(v.chassiRemarcado)],
+      ]);
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'LICENCIAMENTO');
+      pdfFieldGrid(doc, [
+        ['Situação', v.situacaoLicenciamento || '-'],
+        ['Licenciado até', v.licenciadoAte || '-'],
+        ['Ano Último Licenciamento', v.anoUltimoLicenciamento ?? '-'],
+        ['Documento Faturado', v.tipoDocumentoFaturado || '-'],
+        ['Nº Documento Faturado', maskDocDisplay(v.numeroDocumentoFaturado)],
+        ['UF de Faturamento', v.ufFaturamento || '-'],
+      ]);
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'PROPRIETÁRIO');
+      pdfFieldGrid(doc, [
+        ['Nome', prop.nome || '-'],
+        ['Nome Legal', prop.nomeLegal || '-'],
+        ['Documento', maskDocDisplay(prop.documento)],
+        ['Tipo de Documento', prop.tipoDocumento || '-'],
+        ['Nome da Mãe', prop.nomeMae || '-'],
+        ['Nome do Pai', prop.nomePai || '-'],
+        ['Situação', prop.situacao || '-'],
+        ['Porte', prop.porte || '-'],
+        ['Natureza Jurídica', [prop.naturezaJuridicaCodigo, prop.naturezaJuridicaDescricao].filter(Boolean).join(' - ') || '-'],
+        ['Telefones', (contatos.telefones || []).join(', ') || 'Nada consta'],
+        ['E-mails', (contatos.emails || []).join(', ') || 'Nada consta'],
+      ]);
+      doc.moveDown(0.4);
+
+      pdfSubBar(doc, 'Endereços');
+      const enderecos = Array.isArray(prop.enderecos) ? prop.enderecos : [];
+      if (enderecos.length) pdfDebtSection(doc, enderecos, 'Endereço');
+      else pdfEmptyNotice(doc, 'Nenhum endereço encontrado.');
+
+      const r = v.restricoes || {};
+      pdfBar(doc, 'RESTRIÇÕES');
+      pdfFieldGrid(doc, [
+        ['Roubo ou Furto', boolLabel(r.rouboOuFurto)],
+        ['Sinistro', boolLabel(r.sinistro)],
+        ['Recall', boolLabel(r.recall)],
+        ['Restrição Renainf', boolLabel(r.restricaoRenainf)],
+        ['Restrição Renajud', boolLabel(r.restricaoRenajud)],
+        ['Restrição RFB', boolLabel(r.restricaoRfb)],
+        ['Restrição Administrativa', boolLabel(r.administrativa)],
+        ['Anúncio de Venda', boolLabel(r.anuncioVenda)],
+        ['Intenção de Venda', boolLabel(r.intencaoVenda)],
+        ['Ocorrência', r.ocorrencia || '-'],
+        ['Restrição 1', r.restricao1 || '-'],
+        ['Restrição 2', r.restricao2 || '-'],
+        ['Restrição 3', r.restricao3 || '-'],
+        ['Restrição 4', r.restricao4 || '-'],
+      ]);
+      doc.moveDown(0.4);
+
+      const deb = v.debitos || {};
+      const totalDebitos = ['dpvat', 'ipva', 'licenciamento', 'multa']
+        .reduce((acc, k) => acc + (Number(deb[k]) || 0), 0);
+      pdfBar(doc, 'DÉBITOS');
+      pdfEnsureSpace(doc, 36);
+      const boxY = doc.y;
+      const boxH = 28;
+      doc.rect(left, boxY, width, boxH).fill('#f97316');
+      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9.5)
+        .text('TOTAL ESTIMADO DE DÉBITOS', left + 12, boxY + 9);
+      doc.fontSize(13).text(fmtMoneyBRL(totalDebitos), left, boxY + 7, { width: width - 12, align: 'right' });
+      doc.y = boxY + boxH + 4;
+      doc.fillColor('#111827').font('Helvetica').fontSize(10);
+      doc.moveDown(0.3);
+      pdfFieldGrid(doc, [
+        ['DPVAT', fmtMoneyBRL(deb.dpvat)],
+        ['IPVA', fmtMoneyBRL(deb.ipva)],
+        ['Licenciamento', fmtMoneyBRL(deb.licenciamento)],
+        ['Multa', fmtMoneyBRL(deb.multa)],
+      ]);
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'GRAVAMES');
+      const gravames = Array.isArray(v.gravames) ? v.gravames : [];
+      if (gravames.length) pdfDebtSection(doc, gravames, 'Gravame');
+      else pdfEmptyNotice(doc);
+
+      const leilao = data?.leilao;
+      pdfBar(doc, 'LEILÃO');
+      if (leilao?.baseDisponivel) {
+        pdfFieldGrid(doc, [
+          ['Marca/Modelo', leilao.marcaModelo || '-'],
+          ['Ano Fabricação', leilao.anoFabricacao || '-'],
+          ['Ano Modelo', leilao.anoModelo || '-'],
+          ['Placa', leilao.placa || '-'],
+          ['Chassi', leilao.chassi || '-'],
+          ['Renavam', leilao.renavam || '-'],
+        ]);
+        doc.moveDown(0.3);
+        const ocorrencias = Array.isArray(leilao.ocorrencias) ? leilao.ocorrencias : [];
+        if (ocorrencias.length) pdfDebtSection(doc, ocorrencias, 'Ocorrência de Leilão');
+        else pdfEmptyNotice(doc, 'Sem ocorrências de leilão encontradas.');
+      } else {
+        pdfEmptyNotice(doc, 'Base de leilão indisponível para esta consulta.');
+      }
+      doc.moveDown(0.4);
+
+      pdfReportFooter(doc, now);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── Geração de PDF — Inserir Comunicação Venda (API retorna JSON, não PDF pronto) ──
 function buildComunicacaoVendaPdfBuffer(service, data, params) {
   return new Promise((resolve, reject) => {
@@ -3589,10 +3768,10 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       body   = new URLSearchParams({ auth_token: DATACUBE_TOKEN, motor });
     }
 
-    // Localização CPF — API Datacube (form-urlencoded; movido da Opção 2 para valor
-    // fixo de R$5,00, noMarkup:true). O PDF é montado a partir do JSON retornado
-    // (ver buildLocalizacaoCpfPdfBuffer).
-    const isDcLocalizacaoCpf = serviceId === 'dc-cadastro-localizacao-cpf';
+    // Localização CPF (e V3) — API Datacube (form-urlencoded; movidas da Opção 2 para
+    // valor fixo de R$5,00, noMarkup:true). O PDF é montado a partir do JSON retornado
+    // (ver buildLocalizacaoCpfPdfBuffer). Só muda o dcPath entre as duas versões.
+    const isDcLocalizacaoCpf = serviceId === 'dc-cadastro-localizacao-cpf' || serviceId === 'dc-cadastro-localizacao-v3';
     if (isDcLocalizacaoCpf) {
       const cpf = (params?.cpf || '').replace(/\D/g, '');
       if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
@@ -3963,8 +4142,19 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       } else if (isDcLocalizacaoCpf) {
         // Localização CPF: monta o PDF do relatório a partir do JSON, no mesmo
         // padrão visual do relatório de Débitos por Estado.
+        // A v3 (dc-cadastro-localizacao-v3) devolve "result" como array com um único
+        // objeto { historicos: {nomes, enderecos, emails, telefones, celulares},
+        // participacao_empresas } (ver documentação Datacube) — sem desembrulhar, o
+        // renderizador genérico tratava o índice "0" como campo e o relatório saía
+        // vazio ("0"); e sem subir os campos de "historicos" pra raiz, cada um deles
+        // (sendo listas) também seria descartado por só ter 1 nível de recursão.
         try {
-          dcDebitoPdfBuf = await buildLocalizacaoCpfPdfBuffer(service, parsed.result ?? parsed, params);
+          const localizacaoResult = parsed.result ?? parsed;
+          let localizacaoData = Array.isArray(localizacaoResult) ? (localizacaoResult[0] ?? {}) : localizacaoResult;
+          if (localizacaoData?.historicos && typeof localizacaoData.historicos === 'object') {
+            localizacaoData = { ...localizacaoData.historicos, participacao_empresas: localizacaoData.participacao_empresas };
+          }
+          dcDebitoPdfBuf = await buildLocalizacaoCpfPdfBuffer(service, localizacaoData, params);
         } catch (e) {
           console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
           return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
@@ -4069,19 +4259,38 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       }
     }
 
-    // Serviço Vistocar (CRLV RJ Reemissão 2) — resposta em JSON com PDF pronto
-    // em base64 (mesmo padrão dos serviços em PDF_BASE64_SVCS).
+    // Serviço Vistocar (CRLV RJ Reemissão 2, Código de Segurança) — resposta em JSON
+    // com PDF pronto em base64 (mesmo padrão dos serviços em PDF_BASE64_SVCS).
+    // Exceção: "vistocar-completa" devolve um relatório JSON estruturado, sem PDF
+    // pronto — o PDF é montado aqui a partir do JSON (ver buildVeicularCompletaPdfBuffer).
     if (VISTOCAR_ENDPOINTS[serviceId]) {
       let parsed;
       try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
-      const ok = parsed?.status === 200 && parsed?.response?.success === true
-        && parsed?.response?.paid === true && parsed?.response?.pdfBase64;
-      if (!ok) {
-        const errMsg = parsed?.message || parsed?.response?.msg || 'Nenhum resultado encontrado para essa consulta.';
-        console.error(`[${serviceId}] resposta inesperada da Vistocar: ${JSON.stringify(parsed)}`);
-        return res.status(422).json({ error: errMsg });
+      if (serviceId === 'vistocar-completa') {
+        // Mesmo padrão de envelope dos outros endpoints Vistocar: status/message no
+        // nível raiz, dados de verdade dentro de "response" (aqui: success/dadosVeicular).
+        const ok = parsed?.status === 200 && parsed?.response?.success === true && parsed?.response?.dadosVeicular;
+        if (!ok) {
+          const errMsg = parsed?.message || parsed?.response?.msg || 'Nenhum resultado encontrado para essa consulta.';
+          console.error(`[${serviceId}] resposta inesperada da Vistocar: ${JSON.stringify(parsed)}`);
+          return res.status(422).json({ error: errMsg });
+        }
+        try {
+          dcDebitoPdfBuf = await buildVeicularCompletaPdfBuffer(service, parsed.response, params);
+        } catch (e) {
+          console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+        }
+      } else {
+        const ok = parsed?.status === 200 && parsed?.response?.success === true
+          && parsed?.response?.paid === true && parsed?.response?.pdfBase64;
+        if (!ok) {
+          const errMsg = parsed?.message || parsed?.response?.msg || 'Nenhum resultado encontrado para essa consulta.';
+          console.error(`[${serviceId}] resposta inesperada da Vistocar: ${JSON.stringify(parsed)}`);
+          return res.status(422).json({ error: errMsg });
+        }
+        base64PdfBuf = Buffer.from(parsed.response.pdfBase64, 'base64');
       }
-      base64PdfBuf = Buffer.from(parsed.response.pdfBase64, 'base64');
     }
 
     // Serviços que retornam HTML — capturado para servir via /api/html/:token
@@ -4216,6 +4425,12 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           const placa = (params?.placa || '').toUpperCase();
           const caption = `✅ *${service.name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
           const fileName = `${serviceId}-${placa || 'doc'}.pdf`;
+          await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
+        }
+        // Envia PDF via WhatsApp para Localização CPF (e V3)
+        if (isDcLocalizacaoCpf && user.phone) {
+          const caption = `✅ *${service.name} pronto!*\n🪪 CPF: ${maskDocDisplay(params?.cpf)}\n\nDocumento gerado pela MC Despachadoria.`;
+          const fileName = `${serviceId}-${(params?.cpf || 'doc').replace(/\D/g, '')}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
         }
         res.setHeader('Content-Type', 'application/pdf');
@@ -6580,7 +6795,11 @@ async function sendBroadcastImage(dest, base64Png, caption) {
 
 // Grupos com disparo prioritário de 2 em 2 horas (além do disparo geral de 2 em 2
 // dias, que continua valendo para todos os grupos, inclusive estes).
-const BROADCAST_PRIORITY_GROUPS = ['PORTAL⚔️DESPACHANTES', 'SERVIÇOS, OFERTAS E AMIGOS'];
+// PORTAL⚔️DESPACHANTES roda só em horário comercial (seg-sex, 10h-18h BRT) — ver
+// schedule do cron em vercel.json (13-21h UTC = 10h-18h BRT, sem horário de verão).
+// SERVIÇOS, OFERTAS E AMIGOS continua de 2 em 2 horas o dia todo, todos os dias.
+const BROADCAST_GROUP_PORTAL = 'PORTAL⚔️DESPACHANTES';
+const BROADCAST_GROUP_SERVICOS = 'SERVIÇOS, OFERTAS E AMIGOS';
 
 async function runWhatsAppBroadcast(groupNames) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN) throw new Error('Z-API não configurada');
@@ -6636,15 +6855,15 @@ app.post('/api/admin/broadcast-whatsapp', requireAuth, requireSuperAdmin, async 
   }
 });
 
-// ── GET /api/cron/broadcast-whatsapp-priority (Vercel Cron — de 2 em 2 horas) ─
-// Mesmo disparo, mas só para os grupos em BROADCAST_PRIORITY_GROUPS.
+// ── GET /api/cron/broadcast-whatsapp-priority (Vercel Cron — de 2 em 2 horas, todo dia) ─
+// Só para o grupo SERVIÇOS, OFERTAS E AMIGOS.
 app.get('/api/cron/broadcast-whatsapp-priority', async (req, res) => {
   const secret = process.env.CRON_SECRET || '';
   if (secret && req.headers.authorization !== `Bearer ${secret}`) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
-    const result = await runWhatsAppBroadcast(BROADCAST_PRIORITY_GROUPS);
+    const result = await runWhatsAppBroadcast([BROADCAST_GROUP_SERVICOS]);
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('Erro no cron broadcast prioritário:', err.message);
@@ -6655,10 +6874,37 @@ app.get('/api/cron/broadcast-whatsapp-priority', async (req, res) => {
 // ── POST /api/admin/broadcast-whatsapp-priority (teste manual pelo admin) ────
 app.post('/api/admin/broadcast-whatsapp-priority', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
-    const result = await runWhatsAppBroadcast(BROADCAST_PRIORITY_GROUPS);
+    const result = await runWhatsAppBroadcast([BROADCAST_GROUP_SERVICOS]);
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('Erro no broadcast prioritário manual:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/cron/broadcast-whatsapp-portal (Vercel Cron — de 2 em 2 horas,
+// seg-sex, 10h-18h BRT) ── Só para o grupo PORTAL⚔️DESPACHANTES.
+app.get('/api/cron/broadcast-whatsapp-portal', async (req, res) => {
+  const secret = process.env.CRON_SECRET || '';
+  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const result = await runWhatsAppBroadcast([BROADCAST_GROUP_PORTAL]);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Erro no cron broadcast portal:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/admin/broadcast-whatsapp-portal (teste manual pelo admin) ──────
+app.post('/api/admin/broadcast-whatsapp-portal', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const result = await runWhatsAppBroadcast([BROADCAST_GROUP_PORTAL]);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Erro no broadcast portal manual:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
