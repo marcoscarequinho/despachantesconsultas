@@ -2184,27 +2184,90 @@ function buildConsultaRenavamPdfBuffer(service, data, params) {
 }
 
 // ── Extração de campos — "Número ATPV-E" (despbrasil só devolve o PDF pronto em
-// arquivo_url, sem JSON estruturado; extraímos o texto desse PDF — sempre no
-// formato "Rótulo: valor", um por linha — para remontar o documento no layout
-// oficial do ATPVe digital, ver buildNumeroAtpvePdfBuffer). Chave normalizada
-// (minúscula, sem acento/espaço) para casar com os nomes usados abaixo.
+// arquivo_url, sem JSON estruturado). O PDF é um formulário visual (rótulo numa
+// linha, TODOS os valores num bloco separado mais abaixo, na mesma ordem em que
+// os rótulos apareceram) — não "Rótulo: valor" na mesma linha. Extraímos o texto
+// linearizado (ordem de desenho do PDF, não posição visual) e usamos como âncora
+// a última repetição do aviso estático "As assinaturas deverão ser autenticadas
+// ..." (ignora acento — a despbrasil às vezes devolve esse texto sem til/cedilha)
+// pra achar onde o bloco de rótulos termina e o bloco de valores começa; a partir
+// daí os valores vêm sempre na mesma ordem fixa (medida num PDF real de
+// referência). Validação leve (CPF/CNPJ, datas, só dígitos) evita gravar um valor
+// no campo errado se a ordem um dia mudar — nesse caso o campo fica em branco em
+// vez de trocado.
 // Usa pdf-parse@1.1.1 (não a v2) de propósito: a v2 empacota um pdf.js que
 // instancia `new DOMMatrix` no topo do módulo pra suportar renderização, e
 // trava com "DOMMatrix is not defined" ao ser importado no runtime Node da
 // Vercel (sem @napi-rs/canvas disponível) — derrubando o servidor inteiro. A
 // v1.1.1 usa um pdf.js antigo, só de texto, sem essa dependência.
+function atpveSplitLastUf(s) {
+  const t = (s || '').trim();
+  if (t.length < 3) return [t, ''];
+  return [t.slice(0, -2).trim(), t.slice(-2)];
+}
+function atpveIsCpfCnpj(s) {
+  const d = (s || '').replace(/\D/g, '');
+  return d.length === 11 || d.length === 14;
+}
+function atpveIsDateBr(s) { return /^\d{2}\/\d{2}\/\d{4}$/.test((s || '').trim()); }
+function atpveIsDigits(s) { return /^\d+$/.test((s || '').trim()); }
+
 async function extractAtpveFieldsFromPdf(pdfBuf) {
   const { text } = await pdfParse(pdfBuf);
-  const fields = {};
-  for (const rawLine of String(text || '').split('\n')) {
-    const line = rawLine.trim();
-    const m = line.match(/^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ /]*?):\s*(.+)$/);
-    if (!m) continue;
-    const key = m[1].trim().toLowerCase()
-      .normalize('NFD').replace(/[̀-ͯ]/g, '')
-      .replace(/[^a-z0-9]/g, '');
-    fields[key] = m[2].trim();
+  const lines = String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
+  const noAccent = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+  let startIdx = -1;
+  for (let idx = lines.length - 1; idx >= 0; idx--) {
+    if (noAccent(lines[idx]).startsWith('as assinaturas devera')) { startIdx = idx; break; }
   }
+  if (startIdx === -1) return {};
+  let i = startIdx + 1;
+  while (i < lines.length && /^(as assinaturas devera|autorizo o|o registro deste)/.test(noAccent(lines[i]))) i++;
+
+  const v = lines.slice(i);
+  const fields = {};
+  let p = 0;
+  const next = () => v[p++];
+
+  fields.renavam = next();
+  fields.placa = next();
+  const anos = next() || '';
+  fields.anofabricacao = anos.slice(0, 4);
+  fields.anomodelo = anos.slice(4, 8);
+  fields.marcamodeloversao = next();
+  fields.categoria = next();
+  const corChassi = next() || '';
+  fields.chassi = corChassi.slice(-17);
+  fields.cor = corChassi.slice(0, -17).trim();
+  const crvPair = (next() || '').split(/\s+/).filter(Boolean);
+  fields.numerocrv = crvPair[0];
+  fields.codigosegurancacrv = crvPair[1];
+  const atpvePair = (next() || '').split(/\s+/).filter(Boolean);
+  fields.numeroatpve = atpvePair[0];
+  fields.datacrv = atpvePair[1];
+  fields.hodometro = next();
+  fields.nomevendedor = next();
+  fields.documentovendedor = next();
+  fields.emailvendedor = next();
+  [fields.municipiovendedor, fields.ufvendedor] = atpveSplitLastUf(next());
+  fields.nomecomprador = next();
+  fields.documentocomprador = next();
+  fields.emailcomprador = next();
+  [fields.municipiocomprador, fields.ufcomprador] = atpveSplitLastUf(next());
+  fields.nomelogradourocomprador = next();
+  fields.bairroimovelcomprador = next();
+  fields.valorvenda = next();
+  next(); // LOCAL (uf) — não usado: LOCAL é derivado de municipiocomprador/ufcomprador em buildNumeroAtpvePdfBuffer
+  fields.datahoraregistrointencaovenda = next();
+  next(); // LOCAL (município) — idem
+
+  if (!atpveIsDigits(fields.renavam)) delete fields.renavam;
+  if (!atpveIsCpfCnpj(fields.documentovendedor)) delete fields.documentovendedor;
+  if (!atpveIsCpfCnpj(fields.documentocomprador)) delete fields.documentocomprador;
+  if (fields.datahoraregistrointencaovenda && !atpveIsDateBr(fields.datahoraregistrointencaovenda.split(' ')[0]))
+    delete fields.datahoraregistrointencaovenda;
+
   return fields;
 }
 
