@@ -2446,6 +2446,45 @@ async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam) {
   return merged;
 }
 
+// ── "Reemissão da ATPVe Com Comunicação de Venda" — versão avulsa (consulta-avulsa,
+// pública/sem cadastro). Reaproveita o mesmo pipeline despbrasil → extractAtpveFieldsFromPdf
+// → runNumeroAtpveSupplementaryQueries → buildNumeroAtpvePdfBuffer da versão logada
+// (ver /api/query, serviceId 'consultar-Numero-ATPVE'), mas sobrescreve comprador,
+// vendedor (nome+CPF) e data da venda com o que o cliente informou no formulário —
+// cobre vendas particulares ainda não registradas oficialmente no DETRAN. O valor
+// declarado da venda NÃO é sobrescrito: continua vindo da consulta real (pode sair
+// vazio, igual já acontece hoje na versão logada quando a fonte não retorna o campo).
+async function runPublicAtpveComunicacaoVenda(params) {
+  const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+
+  const r = await fetch(DESPBRASIL_BASE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', chaveAcesso: DESPBRASIL_KEY },
+    body: JSON.stringify({ servico: DESPBRASIL_SVCS['consultar-Numero-ATPVE'].servico, placa }),
+  });
+  const parsed = await r.json().catch(() => null);
+  if (!r.ok || !parsed?.sucesso || !parsed?.arquivo_url) {
+    console.error(`[atpve-comunicacao-venda avulsa] resposta inesperada da despbrasil: ${JSON.stringify(parsed)}`);
+    throw new Error('Não encontramos o número do ATPV-E para essa placa no momento. Tente novamente mais tarde ou fale com o suporte.');
+  }
+
+  const pdfRes = await fetch(parsed.arquivo_url);
+  if (!pdfRes.ok) throw new Error('Falha ao obter o PDF gerado pela API.');
+  const sourcePdfBuf = Buffer.from(await pdfRes.arrayBuffer());
+
+  const fields = await extractAtpveFieldsFromPdf(sourcePdfBuf);
+  Object.assign(fields, await runNumeroAtpveSupplementaryQueries(placa, fields.renavam));
+
+  fields.nomecomprador = params.nome_comprador;
+  fields.documentocomprador = params.cpf_comprador;
+  fields.nomevendedor = params.nome_vendedor;
+  fields.documentovendedor = params.cpf_vendedor;
+  fields.datahoraregistrointencaovenda = params.data_venda;
+
+  const service = SERVICES.find(s => s.id === 'consultar-Numero-ATPVE');
+  return buildNumeroAtpvePdfBuffer(service, fields, { placa });
+}
+
 // ── Geração de PDF — CNH (Datacube retorna JSON, não PDF pronto) ───────────────
 function buildCnhPdfBuffer(service, data, params) {
   return new Promise((resolve, reject) => {
@@ -5527,9 +5566,15 @@ app.put('/api/admin/access-codes/:id/toggle', requireAuth, requireSuperAdmin, as
 // executada na Infosimples depois do pagamento ser aprovado no Mercado Pago —
 // mesma regra do restante do sistema: nunca consultar sem receber.
 const PUBLIC_PAY_SERVICES = {
-  'atpve':          'is-detran-mg-atpve',
-  'intencao-venda': 'is-detran-mg-reg-intencao-venda',
 };
+
+// "Reemissão da ATPVe Com Comunicação de Venda" avulsa — não usa Infosimples
+// (ver runPublicAtpveComunicacaoVenda), por isso fica fora do PUBLIC_PAY_SERVICES
+// acima (mapa Infosimples-only). Preço fixo, sem markup — cobre despbrasil + 2
+// consultas complementares, igual à versão logada (R$99), com margem maior pela
+// customização de comprador/vendedor/data.
+const PUBLIC_ATPVE_COMUNICACAO_VENDA_ID    = 'atpve-comunicacao-venda';
+const PUBLIC_ATPVE_COMUNICACAO_VENDA_PRICE = 120.00;
 
 async function callInfosimples(service, params) {
   const qs = new URLSearchParams({ token: INFOSIMPLES_TOKEN });
@@ -5564,10 +5609,21 @@ app.post('/api/public/validar-codigo', async (req, res) => {
 
 app.post('/api/public/pedido', async (req, res) => {
   const { servico, email, params, codigo } = req.body || {};
-  const serviceId = PUBLIC_PAY_SERVICES[servico];
-  if (!serviceId) return res.status(400).json({ error: 'Serviço inválido.' });
-  const service = SERVICES_V3.find(s => s.id === serviceId);
-  if (!service) return res.status(500).json({ error: 'Serviço não configurado.' });
+  const isAtpveComunicacaoVenda = servico === PUBLIC_ATPVE_COMUNICACAO_VENDA_ID;
+
+  let serviceId, service, valor, description;
+  if (isAtpveComunicacaoVenda) {
+    serviceId = PUBLIC_ATPVE_COMUNICACAO_VENDA_ID;
+    valor = PUBLIC_ATPVE_COMUNICACAO_VENDA_PRICE;
+    description = 'Consulta avulsa — Reemissão da ATPVe Com Comunicação de Venda';
+  } else {
+    serviceId = PUBLIC_PAY_SERVICES[servico];
+    if (!serviceId) return res.status(400).json({ error: 'Serviço inválido.' });
+    service = SERVICES_V3.find(s => s.id === serviceId);
+    if (!service) return res.status(500).json({ error: 'Serviço não configurado.' });
+    valor = EXTERNAL_API_PRICE;
+    description = `Consulta avulsa — ${service.name}`;
+  }
 
   // Página restrita por código de acesso por cliente — sem código ativo não gera PIX.
   const accessCode = (codigo || '').trim().toUpperCase();
@@ -5581,21 +5637,38 @@ app.post('/api/public/pedido', async (req, res) => {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail))
     return res.status(400).json({ error: 'Informe um e-mail válido para o pagamento.' });
 
-  const faltando = service.params
-    .filter(p => p.required && !(params?.[p.name] ?? '').toString().trim())
-    .map(p => p.label || p.name);
-  if (faltando.length)
-    return res.status(400).json({ error: `Campos obrigatórios ausentes: ${faltando.join(', ')}` });
+  if (isAtpveComunicacaoVenda) {
+    const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+    if (placa.length !== 7)
+      return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+    const cpfComprador = (params?.cpf_comprador || '').replace(/\D/g, '');
+    const cpfVendedor  = (params?.cpf_vendedor || '').replace(/\D/g, '');
+    if (cpfComprador.length !== 11)
+      return res.status(400).json({ error: 'CPF do comprador inválido. Informe os 11 dígitos.' });
+    if (cpfVendedor.length !== 11)
+      return res.status(400).json({ error: 'CPF do vendedor inválido. Informe os 11 dígitos.' });
+    if (!(params?.nome_comprador || '').trim())
+      return res.status(400).json({ error: 'Informe o nome do comprador.' });
+    if (!(params?.nome_vendedor || '').trim())
+      return res.status(400).json({ error: 'Informe o nome do vendedor.' });
+    if (!/^\d{2}\/\d{2}\/\d{4}$/.test((params?.data_venda || '').trim()))
+      return res.status(400).json({ error: 'Data da venda inválida. Informe no formato dd/mm/aaaa.' });
+  } else {
+    const faltando = service.params
+      .filter(p => p.required && !(params?.[p.name] ?? '').toString().trim())
+      .map(p => p.label || p.name);
+    if (faltando.length)
+      return res.status(400).json({ error: `Campos obrigatórios ausentes: ${faltando.join(', ')}` });
+  }
 
   try {
-    const valor = EXTERNAL_API_PRICE;
     const payer = { email: mail, first_name: 'Cliente', last_name: 'Consulta Avulsa' };
     const doc = (params?.cpf_vendedor || params?.cpf_comprador || '').replace(/\D/g, '');
     if (doc.length === 11) payer.identification = { type: 'CPF', number: doc };
 
     const payment = await mpReq('POST', '/v1/payments', {
       transaction_amount: valor,
-      description: `Consulta avulsa — ${service.name}`,
+      description,
       payment_method_id: 'pix',
       payer,
     }, { 'X-Idempotency-Key': crypto.randomUUID() });
@@ -5649,8 +5722,23 @@ app.get('/api/public/pedido/:token', async (req, res) => {
     );
     if (!claim.rows.length) return res.json({ status: 'PROCESSING' });
 
+    const params = JSON.parse(order.params || '{}');
+
+    if (order.service_id === PUBLIC_ATPVE_COMUNICACAO_VENDA_ID) {
+      try {
+        const pdfBuf = await runPublicAtpveComunicacaoVenda(params);
+        const resultPayload = { pdf_base64: pdfBuf.toString('base64') };
+        await pool.query(`UPDATE public_orders SET status='DONE', result_data=$1 WHERE id=$2`,
+          [JSON.stringify(resultPayload), order.id]);
+        return res.json({ status: 'DONE', result: resultPayload });
+      } catch (e) {
+        console.error('Erro ao processar ATPVe com comunicação de venda avulsa:', e.message);
+        await pool.query(`UPDATE public_orders SET status='ERROR', error_msg=$1 WHERE id=$2`, [e.message, order.id]);
+        return res.json({ status: 'ERROR', error: e.message });
+      }
+    }
+
     const service = SERVICES_V3.find(s => s.id === order.service_id);
-    const params  = JSON.parse(order.params || '{}');
     try {
       const out = await callInfosimples(service, params);
       if (out.ok) {

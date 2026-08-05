@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Consulta avulsa DETRAN/MG sem cadastro: emita ATPV-e ou registre intenção de venda pagando via PIX.">
+  <meta name="description" content="Consulta avulsa sem cadastro: Reemissão da ATPVe Com Comunicação de Venda pagando via PIX.">
   <!-- Página privada: enviada por link direto a clientes específicos — não deve ser indexada -->
   <meta name="robots" content="noindex, nofollow, noarchive">
   <title>Consulta Avulsa — MC Despachadoria Consultas</title>
@@ -34,8 +34,8 @@
   <main class="max-w-3xl mx-auto px-4 py-8 space-y-6">
 
     <div class="text-center">
-      <h1 class="text-2xl md:text-3xl font-bold text-blue-900">Consulta Avulsa — DETRAN/MG</h1>
-      <p class="text-gray-600 mt-2">Sem cadastro e sem mensalidade: preencha, pague o PIX de <strong>R$ 5,00</strong> e receba o resultado na hora.</p>
+      <h1 class="text-2xl md:text-3xl font-bold text-blue-900">Consulta Avulsa — Reemissão da ATPVe Com Comunicação de Venda</h1>
+      <p class="text-gray-600 mt-2">Sem cadastro e sem mensalidade: preencha, pague o PIX de <strong>R$ 120,00</strong> e receba o documento na hora.</p>
       <p id="cliente-badge" class="hidden mt-2 inline-block text-sm font-semibold text-green-700 bg-green-50 border border-green-200 px-3 py-1 rounded-full"></p>
     </div>
 
@@ -51,18 +51,12 @@
     </div>
 
     <!-- PASSO 1: escolher serviço -->
-    <div id="step-servico" class="hidden grid md:grid-cols-2 gap-4">
-      <div class="svc-card" onclick="selectService('atpve')">
-        <div class="text-3xl mb-2">📄</div>
-        <h2 class="font-bold text-blue-900 text-lg">Emitir ATPV-e</h2>
-        <p class="text-sm text-gray-600 mt-1">Autorização Para Transferência de Propriedade do Veículo (MG). Precisa apenas de placa e renavam.</p>
-        <div class="mt-3 font-bold text-orange-600">R$ 5,00</div>
-      </div>
-      <div class="svc-card" onclick="selectService('intencao-venda')">
-        <div class="text-3xl mb-2">📝</div>
-        <h2 class="font-bold text-blue-900 text-lg">Registrar Intenção de Venda</h2>
-        <p class="text-sm text-gray-600 mt-1">Registra a intenção de venda do veículo no DETRAN/MG com dados do vendedor e do comprador.</p>
-        <div class="mt-3 font-bold text-orange-600">R$ 5,00</div>
+    <div id="step-servico" class="hidden grid gap-4">
+      <div class="svc-card" onclick="selectService('atpve-comunicacao-venda')">
+        <div class="text-3xl mb-2">🔢</div>
+        <h2 class="font-bold text-blue-900 text-lg">Reemissão da ATPVe Com Comunicação de Venda</h2>
+        <p class="text-sm text-gray-600 mt-1">Gera o documento oficial de Autorização para Transferência de Propriedade do Veículo já com os dados da venda combinada entre comprador e vendedor.</p>
+        <div class="mt-3 font-bold text-orange-600">R$ 120,00</div>
       </div>
     </div>
 
@@ -72,9 +66,13 @@
         <h2 id="form-title" class="font-bold text-blue-900 text-lg"></h2>
         <button onclick="backToServices()" class="text-sm text-gray-500 hover:text-orange-500">← Trocar serviço</button>
       </div>
+      <div class="bg-blue-50 border border-blue-200 text-blue-800 rounded-lg px-4 py-3 text-sm">
+        Devido ao formato como esta ATPVe é gerada, o QR Code não faz leitura — todas as demais informações deste documento são reais. Fica a seu critério.
+        <a href="/assets/modelo-atpve.pdf" target="_blank" rel="noopener" class="underline font-semibold whitespace-nowrap">Visualize modelo da ATPVe</a>
+      </div>
       <div id="form-fields" class="grid md:grid-cols-2 gap-4"></div>
       <div id="form-error" class="hidden p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg"></div>
-      <button id="btn-pagar" onclick="submitOrder()" class="btn-primary w-full">Gerar PIX de R$ 5,00</button>
+      <button id="btn-pagar" onclick="submitOrder()" class="btn-primary w-full">Gerar PIX de R$ 120,00</button>
       <p class="text-xs text-gray-400 text-center">A consulta só é realizada após a confirmação do pagamento. Pagamento processado pelo Mercado Pago.</p>
     </div>
 
@@ -115,39 +113,16 @@
 <script>
 // Campos de cada serviço — nomes iguais aos exigidos pela API pública (/api/public/pedido).
 const FORMS = {
-  'atpve': {
-    title: 'Emitir ATPV-e — DETRAN/MG',
+  'atpve-comunicacao-venda': {
+    title: 'Reemissão da ATPVe Com Comunicação de Venda',
     fields: [
       { name: '_email', label: 'Seu E-mail (para o pagamento)', required: true, type: 'email', full: true },
-      { name: 'placa', label: 'Placa do Veículo', required: true, placeholder: 'ABC1D23' },
-      { name: 'renavam', label: 'Renavam', required: true, placeholder: 'Somente números' },
-    ],
-  },
-  'intencao-venda': {
-    title: 'Registrar Intenção de Venda — DETRAN/MG',
-    fields: [
-      { name: 'email_vendedor', label: 'E-mail do Vendedor (recebe o pagamento PIX)', required: true, type: 'email', full: true },
-      { name: 'cpf_vendedor', label: 'CPF do Vendedor (só números)', placeholder: '11 dígitos' },
-      { name: 'cnpj_vendedor', label: 'CNPJ do Vendedor (se pessoa jurídica)', placeholder: '14 dígitos' },
-      { name: 'placa', label: 'Placa do Veículo', required: true, placeholder: 'ABC1D23' },
-      { name: 'chassi', label: 'Chassi', required: true, placeholder: '17 caracteres' },
-      { name: 'renavam', label: 'Renavam', required: true, placeholder: 'Somente números' },
-      { name: 'crv', label: 'Número do CRV', required: true },
-      { name: 'valor_venda', label: 'Valor da Venda (ex.: 35000.00)', required: true },
-      { name: 'hodometro', label: 'Hodômetro (opcional)' },
-      { name: 'datahora_hodometro', label: 'Data/Hora Hodômetro (dd/mm/aaaa hh:mm)' },
-      { name: 'cpf_comprador', label: 'CPF do Comprador (só números)', placeholder: '11 dígitos' },
-      { name: 'cnpj_comprador', label: 'CNPJ do Comprador (se pessoa jurídica)', placeholder: '14 dígitos' },
-      { name: 'nome_comprador', label: 'Nome do Comprador', required: true, full: true },
-      { name: 'email_comprador', label: 'E-mail do Comprador', required: true, type: 'email' },
-      { name: 'rg_comprador', label: 'RG do Comprador' },
-      { name: 'cep_comprador', label: 'CEP do Comprador', required: true, placeholder: '8 dígitos' },
-      { name: 'logradouro_endereco_comprador', label: 'Logradouro (Rua/Av.)', required: true },
-      { name: 'numero_endereco_comprador', label: 'Número', required: true },
-      { name: 'complemento_endereco_comprador', label: 'Complemento' },
-      { name: 'bairro_endereco_comprador', label: 'Bairro', required: true },
-      { name: 'municipio_endereco_comprador', label: 'Município', required: true },
-      { name: 'uf_endereco_comprador', label: 'UF', required: true, placeholder: 'MG' },
+      { name: 'placa', label: 'Placa do Veículo', required: true, placeholder: 'ABC1D23', full: true },
+      { name: 'nome_vendedor', label: 'Nome do Vendedor', required: true },
+      { name: 'cpf_vendedor', label: 'CPF do Vendedor (só números)', required: true, placeholder: '11 dígitos' },
+      { name: 'nome_comprador', label: 'Nome do Comprador', required: true },
+      { name: 'cpf_comprador', label: 'CPF do Comprador (só números)', required: true, placeholder: '11 dígitos' },
+      { name: 'data_venda', label: 'Data da Venda', required: true, placeholder: 'dd/mm/aaaa' },
     ],
   },
 };
@@ -260,7 +235,7 @@ async function submitOrder() {
   } catch {
     showFormError('Erro de conexão. Tente novamente.');
   } finally {
-    btn.disabled = false; btn.textContent = 'Gerar PIX de R$ 5,00';
+    btn.disabled = false; btn.textContent = 'Gerar PIX de R$ 120,00';
   }
 }
 
@@ -322,6 +297,12 @@ function showResult(token, result, error) {
     document.getElementById('result-body').innerHTML =
       `<div class="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700">${error}</div>
        <p class="mt-2 text-gray-600">Seu pagamento foi recebido. Entre em contato com o suporte pelo WhatsApp informando o número do pedido para análise e reprocessamento ou estorno.</p>`;
+  } else if (result && result.pdf_base64) {
+    document.getElementById('result-title').textContent = '✅ Documento gerado com sucesso';
+    document.getElementById('result-title').className = 'font-bold text-lg text-green-600';
+    document.getElementById('result-body').innerHTML =
+      `<p class="text-gray-600 mb-3">Sua Reemissão da ATPVe Com Comunicação de Venda está pronta.</p>
+       <a href="data:application/pdf;base64,${result.pdf_base64}" download="atpve-comunicacao-venda.pdf" class="btn-primary inline-block">📄 Baixar PDF</a>`;
   } else {
     document.getElementById('result-title').textContent = '✅ Consulta concluída com sucesso';
     document.getElementById('result-title').className = 'font-bold text-lg text-green-600';
