@@ -2184,22 +2184,45 @@ function buildConsultaRenavamPdfBuffer(service, data, params) {
 }
 
 // ── Extração de campos — "Número ATPV-E" (despbrasil só devolve o PDF pronto em
-// arquivo_url, sem JSON estruturado). O PDF é um formulário visual (rótulo numa
-// linha, TODOS os valores num bloco separado mais abaixo, na mesma ordem em que
-// os rótulos apareceram) — não "Rótulo: valor" na mesma linha. Extraímos o texto
-// linearizado (ordem de desenho do PDF, não posição visual) e usamos como âncora
-// a última repetição do aviso estático "As assinaturas deverão ser autenticadas
-// ..." (ignora acento — a despbrasil às vezes devolve esse texto sem til/cedilha)
-// pra achar onde o bloco de rótulos termina e o bloco de valores começa; a partir
-// daí os valores vêm sempre na mesma ordem fixa (medida num PDF real de
-// referência). Validação leve (CPF/CNPJ, datas, só dígitos) evita gravar um valor
-// no campo errado se a ordem um dia mudar — nesse caso o campo fica em branco em
-// vez de trocado.
+// arquivo_url, sem JSON estruturado; extraímos o texto desse PDF — sempre no
+// formato "Rótulo: valor", um por linha — para remontar o documento no layout
+// oficial do ATPVe digital, ver buildNumeroAtpvePdfBuffer). Chave normalizada
+// (minúscula, sem acento/espaço) para casar com os nomes usados abaixo.
 // Usa pdf-parse@1.1.1 (não a v2) de propósito: a v2 empacota um pdf.js que
 // instancia `new DOMMatrix` no topo do módulo pra suportar renderização, e
 // trava com "DOMMatrix is not defined" ao ser importado no runtime Node da
 // Vercel (sem @napi-rs/canvas disponível) — derrubando o servidor inteiro. A
 // v1.1.1 usa um pdf.js antigo, só de texto, sem essa dependência.
+async function extractAtpveFieldsFromPdf(pdfBuf) {
+  const { text } = await pdfParse(pdfBuf);
+  const fields = {};
+  for (const rawLine of String(text || '').split('\n')) {
+    const line = rawLine.trim();
+    const m = line.match(/^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ /]*?):\s*(.+)$/);
+    if (!m) continue;
+    const key = m[1].trim().toLowerCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9]/g, '');
+    fields[key] = m[2].trim();
+  }
+  return fields;
+}
+
+// ── Extração de campos — versão avulsa (consulta-avulsa) da "Número ATPV-E",
+// usada só por runPublicAtpveComunicacaoVenda (a consulta logada continua
+// usando extractAtpveFieldsFromPdf acima, sem alteração de comportamento). O
+// PDF atual da despbrasil é um formulário visual (rótulo numa linha, TODOS os
+// valores num bloco separado mais abaixo, na mesma ordem em que os rótulos
+// apareceram) — não "Rótulo: valor" na mesma linha, por isso a extração acima
+// não encontra nada nele. Extraímos o texto linearizado (ordem de desenho do
+// PDF, não posição visual) e usamos como âncora a última repetição do aviso
+// estático "As assinaturas deverão ser autenticadas ..." (ignora acento — a
+// despbrasil às vezes devolve esse texto sem til/cedilha) pra achar onde o
+// bloco de rótulos termina e o bloco de valores começa; a partir daí os
+// valores vêm sempre na mesma ordem fixa (medida num PDF real de referência).
+// Validação leve (CPF/CNPJ, datas, só dígitos) evita gravar um valor no campo
+// errado se a ordem um dia mudar — nesse caso o campo fica em branco em vez
+// de trocado.
 function atpveSplitLastUf(s) {
   const t = (s || '').trim();
   if (t.length < 3) return [t, ''];
@@ -2212,7 +2235,7 @@ function atpveIsCpfCnpj(s) {
 function atpveIsDateBr(s) { return /^\d{2}\/\d{2}\/\d{4}$/.test((s || '').trim()); }
 function atpveIsDigits(s) { return /^\d+$/.test((s || '').trim()); }
 
-async function extractAtpveFieldsFromPdf(pdfBuf) {
+async function extractAtpveFieldsFromPdfAvulsa(pdfBuf) {
   const { text } = await pdfParse(pdfBuf);
   const lines = String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
   const noAccent = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
@@ -2510,11 +2533,13 @@ async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam) {
 }
 
 // ── "Reemissão da ATPVe Com Comunicação de Venda" — versão avulsa (consulta-avulsa,
-// pública/sem cadastro). Idêntico ao pipeline despbrasil → extractAtpveFieldsFromPdf →
-// runNumeroAtpveSupplementaryQueries → buildNumeroAtpvePdfBuffer já usado na versão
-// logada (ver /api/query, serviceId 'consultar-Numero-ATPVE'): só a placa é informada,
-// todo o resto — inclusive nome/CPF do comprador e vendedor e a data da venda que vão
-// nos dois selos do documento — vem exatamente da consulta real, sem edição manual.
+// pública/sem cadastro). Pipeline despbrasil → extractAtpveFieldsFromPdfAvulsa →
+// runNumeroAtpveSupplementaryQueries → buildNumeroAtpvePdfBuffer, mesmo padrão da
+// versão logada (ver /api/query, serviceId 'consultar-Numero-ATPVE') mas com a
+// extração corrigida (ver extractAtpveFieldsFromPdfAvulsa) — só nessa versão os
+// dois selos (nome/CPF do comprador e vendedor) e a data da venda saem preenchidos
+// a partir da consulta real; a versão logada mantém o comportamento original, sem
+// alteração. Só a placa é informada pelo cliente, sem edição manual dos demais campos.
 async function runPublicAtpveComunicacaoVenda(params) {
   const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
 
@@ -2533,7 +2558,7 @@ async function runPublicAtpveComunicacaoVenda(params) {
   if (!pdfRes.ok) throw new Error('Falha ao obter o PDF gerado pela API.');
   const sourcePdfBuf = Buffer.from(await pdfRes.arrayBuffer());
 
-  const fields = await extractAtpveFieldsFromPdf(sourcePdfBuf);
+  const fields = await extractAtpveFieldsFromPdfAvulsa(sourcePdfBuf);
   Object.assign(fields, await runNumeroAtpveSupplementaryQueries(placa, fields.renavam));
 
   const service = SERVICES.find(s => s.id === 'consultar-Numero-ATPVE');
