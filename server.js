@@ -257,11 +257,16 @@ const SERVICES = [
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // API Vistocar (vistocarconsulta.com.br) — fonte para Reemissão de CRLV-e RJ,
   // resposta em JSON com PDF pronto em base64 (ver VISTOCAR_ENDPOINTS).
-  { id:'crlv-rj-reemissao-2', name:'CRLV 2 Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
+  // Suspensa temporariamente (unavailable) por instabilidade do Detran/RJ — ver
+  // bloqueio em processCatalogQuery. Reverter removendo unavailable+slowNote.
+  { id:'crlv-rj-reemissao-2', name:'CRLV 2 Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj',
+    unavailable:true, slowNote:'Devido instabilidade do Detran/RJ estamos temporariamente inativo com essas consultas.' },
   // Backup manual da CRLV 2 Rio Reemissão (acima): quando a API estiver fora do ar, o
   // cliente usa esta em vez de esperar — vira fila de upload manual (MANUAL_SERVICE_IDS
-  // já inclui este id fixo, ver abaixo), sai em até 1h.
-  { id:'crlv-agendado-rj-reemissao', name:'CRLV Rio Reemissão Agendado', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📁', uf:'rj' },
+  // já inclui este id fixo, ver abaixo), sai em até 1h. Suspensa junto com a de cima
+  // pelo mesmo motivo (instabilidade do Detran/RJ) — ver nota acima.
+  { id:'crlv-agendado-rj-reemissao', name:'CRLV Rio Reemissão Agendado', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📁', uf:'rj',
+    unavailable:true, slowNote:'Devido instabilidade do Detran/RJ estamos temporariamente inativo com essas consultas.' },
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -3658,6 +3663,12 @@ async function processCatalogQuery(userId, serviceId, params, res) {
 
   const service = SERVICES.find(s => s.id === serviceId);
   if (!service) return res.status(400).json({ error: 'Serviço inválido.' });
+
+  // Serviço temporariamente suspenso (ver flag "unavailable" no catálogo) — bloqueia
+  // antes de qualquer débito ou chamada à API upstream. Cobre tanto o catálogo normal
+  // quanto a API externa (ambos passam por processCatalogQuery).
+  if (service.unavailable)
+    return res.status(400).json({ error: service.slowNote || 'Consulta temporariamente indisponível.' });
 
   if (MG_AUTO_SERVICES[serviceId]) {
     try {
