@@ -2542,6 +2542,30 @@ async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam) {
   return merged;
 }
 
+// Busca o PDF da despbrasil e extrai os campos — separado em função própria pra
+// poder tentar de novo (ver runPublicAtpveComunicacaoVenda): a despbrasil parece
+// gerar o PDF na hora a cada chamada, e às vezes devolve um arquivo malformado
+// que trava o parser (pdf.js) com erro tipo "Invalid number" — uma nova geração
+// (nova chamada) costuma vir íntegra.
+async function fetchAndExtractAtpveFromDespbrasil(placa) {
+  const r = await fetch(DESPBRASIL_BASE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', chaveAcesso: DESPBRASIL_KEY },
+    body: JSON.stringify({ servico: DESPBRASIL_SVCS['consultar-Numero-ATPVE'].servico, placa }),
+  });
+  const parsed = await r.json().catch(() => null);
+  if (!r.ok || !parsed?.sucesso || !parsed?.arquivo_url) {
+    console.error(`[atpve-comunicacao-venda avulsa] resposta inesperada da despbrasil: ${JSON.stringify(parsed)}`);
+    throw new Error('Não encontramos o número do ATPV-E para essa placa no momento.');
+  }
+
+  const pdfRes = await fetch(parsed.arquivo_url);
+  if (!pdfRes.ok) throw new Error('Falha ao obter o PDF gerado pela API.');
+  const sourcePdfBuf = Buffer.from(await pdfRes.arrayBuffer());
+
+  return extractAtpveFieldsFromPdfAvulsa(sourcePdfBuf);
+}
+
 // ── "Reemissão da ATPVe Com Comunicação de Venda" — versão avulsa (consulta-avulsa,
 // pública/sem cadastro). Pipeline despbrasil → extractAtpveFieldsFromPdfAvulsa →
 // runNumeroAtpveSupplementaryQueries → buildNumeroAtpvePdfBuffer, mesmo padrão da
@@ -2553,22 +2577,19 @@ async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam) {
 async function runPublicAtpveComunicacaoVenda(params) {
   const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
 
-  const r = await fetch(DESPBRASIL_BASE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', chaveAcesso: DESPBRASIL_KEY },
-    body: JSON.stringify({ servico: DESPBRASIL_SVCS['consultar-Numero-ATPVE'].servico, placa }),
-  });
-  const parsed = await r.json().catch(() => null);
-  if (!r.ok || !parsed?.sucesso || !parsed?.arquivo_url) {
-    console.error(`[atpve-comunicacao-venda avulsa] resposta inesperada da despbrasil: ${JSON.stringify(parsed)}`);
-    throw new Error('Não encontramos o número do ATPV-E para essa placa no momento. Tente novamente mais tarde ou fale com o suporte.');
+  let fields;
+  try {
+    fields = await fetchAndExtractAtpveFromDespbrasil(placa);
+  } catch (e) {
+    console.error(`[atpve-comunicacao-venda avulsa] 1ª tentativa falhou (${e.message}) — tentando de novo.`);
+    try {
+      fields = await fetchAndExtractAtpveFromDespbrasil(placa);
+    } catch (e2) {
+      console.error(`[atpve-comunicacao-venda avulsa] 2ª tentativa também falhou:`, e2.stack || e2.message);
+      throw new Error('Não foi possível gerar o documento para essa placa no momento. Tente novamente em alguns minutos ou fale com o suporte.');
+    }
   }
 
-  const pdfRes = await fetch(parsed.arquivo_url);
-  if (!pdfRes.ok) throw new Error('Falha ao obter o PDF gerado pela API.');
-  const sourcePdfBuf = Buffer.from(await pdfRes.arrayBuffer());
-
-  const fields = await extractAtpveFieldsFromPdfAvulsa(sourcePdfBuf);
   Object.assign(fields, await runNumeroAtpveSupplementaryQueries(placa, fields.renavam));
 
   const service = SERVICES.find(s => s.id === 'consultar-Numero-ATPVE');
