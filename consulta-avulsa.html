@@ -246,7 +246,7 @@ function startPolling(token) {
       const r = await fetch('/api/public/pedido/' + token);
       const d = await r.json();
       if (d.status === 'DONE')  { stopPolling(); showResult(token, d.result, null); }
-      if (d.status === 'ERROR') { stopPolling(); showResult(token, null, d.error); }
+      if (d.status === 'ERROR') { stopPolling(); showResult(token, null, d.error, d.refunded); }
       if (d.status === 'PROCESSING')
         document.getElementById('pix-status').innerHTML = '⚙️ Pagamento confirmado! Processando a consulta...';
     } catch {}
@@ -282,16 +282,18 @@ function renderObject(obj, depth = 0) {
   return html + '</div>';
 }
 
-function showResult(token, result, error) {
+function showResult(token, result, error, refunded) {
   document.getElementById('step-pix').classList.add('hidden');
   document.getElementById('step-result').classList.remove('hidden');
   document.getElementById('result-token').textContent = token.slice(0, 12);
   if (error) {
     document.getElementById('result-title').textContent = '❌ Não foi possível concluir a consulta';
     document.getElementById('result-title').className = 'font-bold text-lg text-red-600';
+    const followUp = refunded
+      ? '<p class="mt-2 text-gray-600">O valor já foi estornado automaticamente para o seu PIX — nenhuma ação necessária. Dúvidas? Fale com o suporte pelo WhatsApp informando o número do pedido.</p>'
+      : '<p class="mt-2 text-gray-600">Seu pagamento foi recebido. Entre em contato com o suporte pelo WhatsApp informando o número do pedido para análise e estorno.</p>';
     document.getElementById('result-body').innerHTML =
-      `<div class="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700">${error}</div>
-       <p class="mt-2 text-gray-600">Seu pagamento foi recebido. Entre em contato com o suporte pelo WhatsApp informando o número do pedido para análise e reprocessamento ou estorno.</p>`;
+      `<div class="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700">${error}</div>${followUp}`;
   } else if (result && result.pdf_base64) {
     document.getElementById('result-title').textContent = '✅ Documento gerado com sucesso';
     document.getElementById('result-title').className = 'font-bold text-lg text-green-600';

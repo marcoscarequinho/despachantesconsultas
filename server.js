@@ -202,6 +202,15 @@ async function mpReq(method, endpoint, body = null, extraHeaders = {}) {
   return data;
 }
 
+// Estorno total do PIX pago no Mercado Pago — usado quando o pagamento de um
+// pedido avulso (public_orders) foi aprovado mas a consulta em si falhou
+// depois (upstream fora do ar, dado inválido etc.): o cliente não deve ficar
+// cobrado por uma consulta que não recebeu. Idempotency-Key evita duplicar o
+// estorno em caso de retry de rede.
+async function mpRefundPayment(paymentId) {
+  await mpReq('POST', `/v1/payments/${paymentId}/refunds`, {}, { 'X-Idempotency-Key': `refund-${paymentId}` });
+}
+
 const SERVICES = [
   // ── Consultas Básicas ──
   { id:'base-estadual',          name:'Base Estadual',              group:'Consultas Básicas', basePrice:7.00,   inputType:'placa',       icon:'🚗' },
@@ -716,6 +725,7 @@ async function initDB() {
     );
   `);
   await pool.query(`ALTER TABLE public_orders ADD COLUMN IF NOT EXISTS access_code VARCHAR(20);`);
+  await pool.query(`ALTER TABLE public_orders ADD COLUMN IF NOT EXISTS refund_status VARCHAR(20);`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public_access_codes (
       id           SERIAL PRIMARY KEY,
@@ -5768,6 +5778,28 @@ app.post('/api/public/pedido', async (req, res) => {
   }
 });
 
+// Marca o pedido avulso como erro e tenta estornar o PIX automaticamente — o
+// cliente pagou mas a consulta não saiu, então não deve ficar cobrado por algo
+// que não recebeu. Falha no estorno (rede, PIX fora do prazo de estorno etc.)
+// não trava a resposta: o pedido fica ERROR com aviso pra procurar o suporte.
+async function failPublicOrderAndRefund(order, errMsg) {
+  let refunded = false;
+  try {
+    await mpRefundPayment(order.gateway_id);
+    refunded = true;
+  } catch (refundErr) {
+    console.error(`Falha ao estornar PIX do pedido avulso ${order.token}:`, refundErr.message);
+  }
+  const finalMsg = refunded
+    ? `${errMsg} O valor pago foi estornado automaticamente para o seu PIX.`
+    : `${errMsg} Não foi possível estornar automaticamente — entre em contato com o suporte informando o número do pedido.`;
+  await pool.query(
+    `UPDATE public_orders SET status='ERROR', error_msg=$1, refund_status=$2 WHERE id=$3`,
+    [finalMsg, refunded ? 'REFUNDED' : 'FAILED', order.id]
+  );
+  return { status: 'ERROR', error: finalMsg, refunded };
+}
+
 // Polling do pedido: confirma o pagamento no Mercado Pago e executa a consulta.
 // A execução é reivindicada com UPDATE ... WHERE status='PENDING' (lock de linha
 // do Postgres), então polling concorrente ou duplicado nunca consulta duas vezes.
@@ -5801,8 +5833,7 @@ app.get('/api/public/pedido/:token', async (req, res) => {
         return res.json({ status: 'DONE', result: resultPayload });
       } catch (e) {
         console.error('Erro ao processar ATPVe com comunicação de venda avulsa:', e.message);
-        await pool.query(`UPDATE public_orders SET status='ERROR', error_msg=$1 WHERE id=$2`, [e.message, order.id]);
-        return res.json({ status: 'ERROR', error: e.message });
+        return res.json(await failPublicOrderAndRefund(order, e.message));
       }
     }
 
@@ -5814,11 +5845,9 @@ app.get('/api/public/pedido/:token', async (req, res) => {
           [JSON.stringify(out.result), order.id]);
         return res.json({ status: 'DONE', result: out.result });
       }
-      await pool.query(`UPDATE public_orders SET status='ERROR', error_msg=$1 WHERE id=$2`, [out.errMsg, order.id]);
-      return res.json({ status: 'ERROR', error: out.errMsg });
+      return res.json(await failPublicOrderAndRefund(order, out.errMsg));
     } catch (e) {
-      await pool.query(`UPDATE public_orders SET status='ERROR', error_msg=$1 WHERE id=$2`, [e.message, order.id]);
-      return res.json({ status: 'ERROR', error: 'Erro ao processar a consulta após o pagamento. Entre em contato com o suporte informando o número do pedido.' });
+      return res.json(await failPublicOrderAndRefund(order, 'Erro ao processar a consulta após o pagamento.'));
     }
   } catch (err) {
     console.error('Erro no status do pedido avulso:', err.message);
