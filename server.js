@@ -3853,6 +3853,10 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         vendedor_nome: String(p.vendedor_nome).trim().toUpperCase(),
         vendedor_email: String(p.vendedor_email).trim(),
         venda_cidade: String(p.venda_cidade).trim().toUpperCase(),
+        // venda_uf: documentado no /cadastrar da Chekaki mas ausente do nosso payload
+        // até agora — sempre igual ao UF do próprio endpoint (a venda é registrada
+        // nesse ATPV-e), sem precisar de campo novo no formulário.
+        venda_uf: atpveUf.toUpperCase(),
         venda_valor: String(p.venda_valor).trim(),
         venda_data: String(p.venda_data).trim(),
         comprador_tipo_pessoa: String(p.comprador_tipo_pessoa).toUpperCase().trim(),
