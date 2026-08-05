@@ -265,10 +265,9 @@ const SERVICES = [
     unavailable:true, slowNote:'Devido instabilidade do Detran/RJ estamos temporariamente inativo com essas consultas.' },
   // Backup manual da CRLV 2 Rio Reemissão (acima): quando a API estiver fora do ar, o
   // cliente usa esta em vez de esperar — vira fila de upload manual (MANUAL_SERVICE_IDS
-  // já inclui este id fixo, ver abaixo), sai em até 1h. Suspensa junto com a de cima
-  // pelo mesmo motivo (instabilidade do Detran/RJ) — ver nota acima.
-  { id:'crlv-agendado-rj-reemissao', name:'CRLV Rio Reemissão Agendado', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📁', uf:'rj',
-    unavailable:true, slowNote:'Devido instabilidade do Detran/RJ estamos temporariamente inativo com essas consultas.' },
+  // já inclui este id fixo, ver abaixo), sai em até 1h. Mantida ativa mesmo com a API
+  // suspensa (nota acima) — é justamente o backup pra esse cenário.
+  { id:'crlv-agendado-rj-reemissao', name:'CRLV Rio Reemissão Agendado', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📁', uf:'rj' },
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
