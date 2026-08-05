@@ -2447,13 +2447,11 @@ async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam) {
 }
 
 // ── "Reemissão da ATPVe Com Comunicação de Venda" — versão avulsa (consulta-avulsa,
-// pública/sem cadastro). Reaproveita o mesmo pipeline despbrasil → extractAtpveFieldsFromPdf
-// → runNumeroAtpveSupplementaryQueries → buildNumeroAtpvePdfBuffer da versão logada
-// (ver /api/query, serviceId 'consultar-Numero-ATPVE'), mas sobrescreve comprador,
-// vendedor (nome+CPF) e data da venda com o que o cliente informou no formulário —
-// cobre vendas particulares ainda não registradas oficialmente no DETRAN. O valor
-// declarado da venda NÃO é sobrescrito: continua vindo da consulta real (pode sair
-// vazio, igual já acontece hoje na versão logada quando a fonte não retorna o campo).
+// pública/sem cadastro). Idêntico ao pipeline despbrasil → extractAtpveFieldsFromPdf →
+// runNumeroAtpveSupplementaryQueries → buildNumeroAtpvePdfBuffer já usado na versão
+// logada (ver /api/query, serviceId 'consultar-Numero-ATPVE'): só a placa é informada,
+// todo o resto — inclusive nome/CPF do comprador e vendedor e a data da venda que vão
+// nos dois selos do documento — vem exatamente da consulta real, sem edição manual.
 async function runPublicAtpveComunicacaoVenda(params) {
   const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
 
@@ -2474,12 +2472,6 @@ async function runPublicAtpveComunicacaoVenda(params) {
 
   const fields = await extractAtpveFieldsFromPdf(sourcePdfBuf);
   Object.assign(fields, await runNumeroAtpveSupplementaryQueries(placa, fields.renavam));
-
-  fields.nomecomprador = params.nome_comprador;
-  fields.documentocomprador = params.cpf_comprador;
-  fields.nomevendedor = params.nome_vendedor;
-  fields.documentovendedor = params.cpf_vendedor;
-  fields.datahoraregistrointencaovenda = params.data_venda;
 
   const service = SERVICES.find(s => s.id === 'consultar-Numero-ATPVE');
   return buildNumeroAtpvePdfBuffer(service, fields, { placa });
@@ -5641,18 +5633,6 @@ app.post('/api/public/pedido', async (req, res) => {
     const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
     if (placa.length !== 7)
       return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
-    const cpfComprador = (params?.cpf_comprador || '').replace(/\D/g, '');
-    const cpfVendedor  = (params?.cpf_vendedor || '').replace(/\D/g, '');
-    if (cpfComprador.length !== 11)
-      return res.status(400).json({ error: 'CPF do comprador inválido. Informe os 11 dígitos.' });
-    if (cpfVendedor.length !== 11)
-      return res.status(400).json({ error: 'CPF do vendedor inválido. Informe os 11 dígitos.' });
-    if (!(params?.nome_comprador || '').trim())
-      return res.status(400).json({ error: 'Informe o nome do comprador.' });
-    if (!(params?.nome_vendedor || '').trim())
-      return res.status(400).json({ error: 'Informe o nome do vendedor.' });
-    if (!/^\d{2}\/\d{2}\/\d{4}$/.test((params?.data_venda || '').trim()))
-      return res.status(400).json({ error: 'Data da venda inválida. Informe no formato dd/mm/aaaa.' });
   } else {
     const faltando = service.params
       .filter(p => p.required && !(params?.[p.name] ?? '').toString().trim())
