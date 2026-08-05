@@ -2223,92 +2223,6 @@ async function extractAtpveFieldsFromPdf(pdfBuf) {
   return fields;
 }
 
-// ── Extração de campos — versão avulsa (consulta-avulsa) da "Número ATPV-E",
-// usada só por runPublicAtpveComunicacaoVenda (a consulta logada continua
-// usando extractAtpveFieldsFromPdf acima, sem alteração de comportamento). O
-// PDF atual da despbrasil é um formulário visual (rótulo numa linha, TODOS os
-// valores num bloco separado mais abaixo, na mesma ordem em que os rótulos
-// apareceram) — não "Rótulo: valor" na mesma linha, por isso a extração acima
-// não encontra nada nele. Extraímos o texto linearizado (ordem de desenho do
-// PDF, não posição visual) e usamos como âncora a última repetição do aviso
-// estático "As assinaturas deverão ser autenticadas ..." (ignora acento — a
-// despbrasil às vezes devolve esse texto sem til/cedilha) pra achar onde o
-// bloco de rótulos termina e o bloco de valores começa; a partir daí os
-// valores vêm sempre na mesma ordem fixa (medida num PDF real de referência).
-// Validação leve (CPF/CNPJ, datas, só dígitos) evita gravar um valor no campo
-// errado se a ordem um dia mudar — nesse caso o campo fica em branco em vez
-// de trocado.
-function atpveSplitLastUf(s) {
-  const t = (s || '').trim();
-  if (t.length < 3) return [t, ''];
-  return [t.slice(0, -2).trim(), t.slice(-2)];
-}
-function atpveIsCpfCnpj(s) {
-  const d = (s || '').replace(/\D/g, '');
-  return d.length === 11 || d.length === 14;
-}
-function atpveIsDateBr(s) { return /^\d{2}\/\d{2}\/\d{4}$/.test((s || '').trim()); }
-function atpveIsDigits(s) { return /^\d+$/.test((s || '').trim()); }
-
-async function extractAtpveFieldsFromPdfAvulsa(pdfBuf) {
-  const { text } = await pdfParse(pdfBuf);
-  const lines = String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
-  const noAccent = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-
-  let startIdx = -1;
-  for (let idx = lines.length - 1; idx >= 0; idx--) {
-    if (noAccent(lines[idx]).startsWith('as assinaturas devera')) { startIdx = idx; break; }
-  }
-  if (startIdx === -1) return {};
-  let i = startIdx + 1;
-  while (i < lines.length && /^(as assinaturas devera|autorizo o|o registro deste)/.test(noAccent(lines[i]))) i++;
-
-  const v = lines.slice(i);
-  const fields = {};
-  let p = 0;
-  const next = () => v[p++];
-
-  fields.renavam = next();
-  fields.placa = next();
-  const anos = next() || '';
-  fields.anofabricacao = anos.slice(0, 4);
-  fields.anomodelo = anos.slice(4, 8);
-  fields.marcamodeloversao = next();
-  fields.categoria = next();
-  const corChassi = next() || '';
-  fields.chassi = corChassi.slice(-17);
-  fields.cor = corChassi.slice(0, -17).trim();
-  const crvPair = (next() || '').split(/\s+/).filter(Boolean);
-  fields.numerocrv = crvPair[0];
-  fields.codigosegurancacrv = crvPair[1];
-  const atpvePair = (next() || '').split(/\s+/).filter(Boolean);
-  fields.numeroatpve = atpvePair[0];
-  fields.datacrv = atpvePair[1];
-  fields.hodometro = next();
-  fields.nomevendedor = next();
-  fields.documentovendedor = next();
-  fields.emailvendedor = next();
-  [fields.municipiovendedor, fields.ufvendedor] = atpveSplitLastUf(next());
-  fields.nomecomprador = next();
-  fields.documentocomprador = next();
-  fields.emailcomprador = next();
-  [fields.municipiocomprador, fields.ufcomprador] = atpveSplitLastUf(next());
-  fields.nomelogradourocomprador = next();
-  fields.bairroimovelcomprador = next();
-  fields.valorvenda = next();
-  next(); // LOCAL (uf) — não usado: LOCAL é derivado de municipiocomprador/ufcomprador em buildNumeroAtpvePdfBuffer
-  fields.datahoraregistrointencaovenda = next();
-  next(); // LOCAL (município) — idem
-
-  if (!atpveIsDigits(fields.renavam)) delete fields.renavam;
-  if (!atpveIsCpfCnpj(fields.documentovendedor)) delete fields.documentovendedor;
-  if (!atpveIsCpfCnpj(fields.documentocomprador)) delete fields.documentocomprador;
-  if (fields.datahoraregistrointencaovenda && !atpveIsDateBr(fields.datahoraregistrointencaovenda.split(' ')[0]))
-    delete fields.datahoraregistrointencaovenda;
-
-  return fields;
-}
-
 // ── Extração de campos — "Proprietário Atual (v2)" (Chekaki devolve um PDF
 // pronto, mas em formato "Rótulo:" numa linha e o valor sozinho na linha
 // seguinte, diferente do formato "Rótulo: valor" da despbrasil acima). Usada
@@ -2568,17 +2482,18 @@ async function fetchAndExtractAtpveFromDespbrasil(placa) {
   if (!pdfRes.ok) throw new Error('Falha ao obter o PDF gerado pela API.');
   const sourcePdfBuf = Buffer.from(await pdfRes.arrayBuffer());
 
-  return extractAtpveFieldsFromPdfAvulsa(sourcePdfBuf);
+  return extractAtpveFieldsFromPdf(sourcePdfBuf);
 }
 
 // ── "Reemissão da ATPVe Com Comunicação de Venda" — versão avulsa (consulta-avulsa,
-// pública/sem cadastro). Pipeline despbrasil → extractAtpveFieldsFromPdfAvulsa →
-// runNumeroAtpveSupplementaryQueries → buildNumeroAtpvePdfBuffer, mesmo padrão da
-// versão logada (ver /api/query, serviceId 'consultar-Numero-ATPVE') mas com a
-// extração corrigida (ver extractAtpveFieldsFromPdfAvulsa) — só nessa versão os
-// dois selos (nome/CPF do comprador e vendedor) e a data da venda saem preenchidos
-// a partir da consulta real; a versão logada mantém o comportamento original, sem
-// alteração. Só a placa é informada pelo cliente, sem edição manual dos demais campos.
+// pública/sem cadastro). Pipeline despbrasil → extractAtpveFieldsFromPdf →
+// runNumeroAtpveSupplementaryQueries → buildNumeroAtpvePdfBuffer — idêntico ao
+// usado na versão logada (ver /api/query, serviceId 'consultar-Numero-ATPVE'),
+// inclusive a mesma extractAtpveFieldsFromPdf (o PDF bruto da despbrasil é sempre
+// "Rótulo: valor" por linha; uma tentativa anterior de reescrever essa extração
+// partiu de uma leitura errada — analisou nosso próprio PDF renderizado achando
+// que era o bruto da despbrasil — e foi revertida). Só a placa é informada pelo
+// cliente, sem edição manual dos demais campos.
 async function runPublicAtpveComunicacaoVenda(params) {
   const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
 
