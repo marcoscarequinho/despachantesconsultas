@@ -32,6 +32,10 @@ const ZAPI_TOKEN         = process.env.ZAPI_TOKEN         || '';
 const ZAPI_CLIENT_TOKEN  = process.env.ZAPI_CLIENT_TOKEN  || '';
 const WEBHOOK_BASE_URL   = (process.env.WEBHOOK_BASE_URL  || '').replace(/\/$/, '');
 const ADMIN_PHONE        = process.env.ADMIN_PHONE        || '';
+// API consultasfacil.net (CRLV Rio Reemissão v2) — auth por header chaveAcesso
+// (fixo); resposta é o PDF pronto em bytes (Content-Type: application/pdf).
+const CONSULTASFACIL_BASE_URL = 'https://www.consultasfacil.net';
+const CONSULTASFACIL_KEY      = process.env.CONSULTASFACIL_KEY || '';
 // API despbrasil.com.br — auth por header chaveAcesso (fixo); resposta traz a URL
 // do PDF pronto em "arquivo_url" (buscamos o arquivo no processCatalogQuery, ver
 // DESPBRASIL_SVCS). Mapeia serviceId para o "servico" da despbrasil (campo "extra"
@@ -263,11 +267,10 @@ const SERVICES = [
   // resolvida de fato. Reverter removendo unavailable+slowNote quando normalizar.
   { id:'crlv-rj-reemissao-2', name:'CRLV 2 Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj',
     unavailable:true, slowNote:'Devido instabilidade do Detran/RJ estamos temporariamente inativo com essas consultas.' },
-  // Backup manual da CRLV 2 Rio Reemissão (acima): quando a API estiver fora do ar, o
-  // cliente usa esta em vez de esperar — vira fila de upload manual (MANUAL_SERVICE_IDS
-  // já inclui este id fixo, ver abaixo), sai em até 1h. Mantida ativa mesmo com a API
-  // suspensa (nota acima) — é justamente o backup pra esse cenário.
-  { id:'crlv-agendado-rj-reemissao', name:'CRLV Rio Reemissão Agendado', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📁', uf:'rj' },
+  // Backup da CRLV 2 Rio Reemissão (acima): quando a API estiver fora do ar, o cliente
+  // usa esta em vez de esperar. Fonte alternativa via API consultasfacil.net (ver
+  // CONSULTASFACIL_BASE_URL), devolve o PDF pronto na hora — não é mais fila manual.
+  { id:'crlv-rio-reemissao-v2', name:'CRLV Rio Reemissão v2', group:'CRLV-e Rio de Janeiro', basePrice:65.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -457,7 +460,7 @@ const SERVICES = [
 // Serviços desta categoria não retornam resultado na hora: o pedido fica
 // pendente até o super admin subir o PDF manualmente (ver /api/admin/manual-queries).
 const MANUAL_UPLOAD_GROUP = 'Número CRV (Apenas antigos)';
-const MANUAL_SERVICE_IDS  = [...SERVICES.filter(s => s.group === MANUAL_UPLOAD_GROUP).map(s => s.id), 'crlv-agendado-rj-reemissao'];
+const MANUAL_SERVICE_IDS  = SERVICES.filter(s => s.group === MANUAL_UPLOAD_GROUP).map(s => s.id);
 
 // ── SERVICES_V2 — API Datacube (api.consultasdeveiculos.com) ──────────────────
 // Catálogo completamente separado do SERVICES/autocrlv/chekaki acima. Preços em
@@ -3714,6 +3717,16 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       method = 'POST';
       body   = { placa };
     }
+    // CRLV Rio Reemissão v2 — API consultasfacil.net (auth por header chaveAcesso
+    // fixo, ver fetchHeaders abaixo). Resposta é o PDF pronto em bytes (isRealPdf
+    // cuida do resto do fluxo, mesmo padrão dos demais serviços em PDF direto).
+    if (serviceId === 'crlv-rio-reemissao-v2') {
+      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      apiUrl = `${CONSULTASFACIL_BASE_URL}/consultar-crlv-rj2`;
+      method = 'POST';
+      body   = { placa };
+    }
     // Serviços via API despbrasil.com.br (auth por header chaveAcesso fixo, ver
     // fetchHeaders abaixo). Resposta é JSON com a URL do PDF pronto em "arquivo_url".
     if (DESPBRASIL_SVCS[serviceId]) {
@@ -4061,6 +4074,8 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY };
     } else if (DESPBRASIL_SVCS[serviceId]) {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': DESPBRASIL_KEY };
+    } else if (serviceId === 'crlv-rio-reemissao-v2') {
+      fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': CONSULTASFACIL_KEY };
     } else if (VISTOCAR_ENDPOINTS[serviceId]) {
       fetchHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await getVistocarToken()}` };
     } else {
@@ -4505,7 +4520,8 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         if (VISTOCAR_ENDPOINTS[serviceId] && user.phone) {
           const placa = (params?.placa || '').toUpperCase();
           const caption = `✅ *${service.name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
-          const fileName = `${serviceId}-${placa || 'doc'}.pdf`;
+          const fileNamePrefix = serviceId === 'vistocar-completa' ? 'mc-completa' : serviceId;
+          const fileName = `${fileNamePrefix}-${placa || 'doc'}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
         }
         // Envia PDF via WhatsApp para Localização CPF (e V3)
