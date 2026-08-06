@@ -2392,6 +2392,21 @@ async function buildNumeroAtpvePdfBuffer(service, fields, params) {
     page.drawText(line, { x: 32.9, y: pageH - (665 + i * 10), size: 7, font: helv, color: rgb(0.4, 0.4, 0.4) });
   });
 
+  // "AUTENTICAÇÃO DAS ASSINATURAS" — dois selos no estilo gov.br, com o mesmo
+  // nome/CPF/data usados nas caixas de identificação acima. O template já traz
+  // os selos "em branco" (ver assets/atpve-selo-assinatura.png, embutido no PDF
+  // por assets/atpve-template.pdf); aqui só sobrepomos os 3 campos variáveis de
+  // cada um, nas coordenadas medidas no selo de referência real (2.pdf). Data
+  // usa o mesmo valor de "data declarada da venda" (a despbrasil não devolve
+  // timestamp de assinatura separado).
+  V(fields.nomevendedor, { x: 321.3, top: 701.5, bottom: 709.5, maxX: 441.7, size: 8 });
+  V(maskDocDisplay(fields.documentovendedor), { x: 321.3, top: 727.0, bottom: 732.4, maxX: 380.6, size: 7 });
+  V(dataVenda, { x: 381.9, top: 727.0, bottom: 732.4, maxX: 442.6, size: 7 });
+
+  V(fields.nomecomprador, { x: 451.1, top: 701.5, bottom: 709.5, maxX: 572.4, size: 8 });
+  V(maskDocDisplay(fields.documentocomprador), { x: 451.1, top: 727.0, bottom: 732.4, maxX: 510.9, size: 7 });
+  V(dataVenda, { x: 512.2, top: 727.0, bottom: 732.4, maxX: 573.2, size: 7 });
+
   const bytes = await pdfDoc.save();
   return Buffer.from(bytes);
 }
