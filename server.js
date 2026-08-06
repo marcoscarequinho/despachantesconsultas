@@ -261,12 +261,7 @@ const SERVICES = [
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // API Vistocar (vistocarconsulta.com.br) — fonte para Reemissão de CRLV-e RJ,
   // resposta em JSON com PDF pronto em base64 (ver VISTOCAR_ENDPOINTS).
-  // Suspensa novamente (unavailable) — "Consulta não realizada" da Vistocar
-  // continua ocorrendo com frequência mesmo após a reativação em b4fe841 (26x só
-  // entre 02-05/08, 10 usuários diferentes), instabilidade do Detran/RJ não
-  // resolvida de fato. Reverter removendo unavailable+slowNote quando normalizar.
-  { id:'crlv-rj-reemissao-2', name:'CRLV 2 Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj',
-    unavailable:true, slowNote:'Devido instabilidade do Detran/RJ estamos temporariamente inativo com essas consultas.' },
+  { id:'crlv-rj-reemissao-2', name:'CRLV 2 Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // Backup da CRLV 2 Rio Reemissão (acima): quando a API estiver fora do ar, o cliente
   // usa esta em vez de esperar. Fonte alternativa via API consultasfacil.net (ver
   // CONSULTASFACIL_BASE_URL), devolve o PDF pronto na hora — não é mais fila manual.
