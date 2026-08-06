@@ -2272,7 +2272,7 @@ const ATPVE_TEMPLATE_PATH = path.join(__dirname, 'assets', 'atpve-template.pdf')
 // embaixo). Encolhe a fonte (até um mínimo) e trunca com "…" como último
 // recurso pra caber na largura da célula, igual ao padrão dos outros
 // relatórios do sistema.
-function pdfOverlayValue(page, pageH, font, text, { x, top, bottom, maxX, size = 10, bg = null, align = 'left' }) {
+function pdfOverlayValue(page, pageH, font, text, { x, top, bottom, maxX, size = 10, bg = null, align = 'left', minSize = 6 }) {
   const value = (text ?? '').toString().trim();
   const rectY = pageH - bottom - 1;
   const rectH = (bottom - top) + 2;
@@ -2285,7 +2285,7 @@ function pdfOverlayValue(page, pageH, font, text, { x, top, bottom, maxX, size =
   const maxW = maxX - x;
   let fSize = size;
   let display = value;
-  while (font.widthOfTextAtSize(display, fSize) > maxW && fSize > 6) fSize -= 0.5;
+  while (font.widthOfTextAtSize(display, fSize) > maxW && fSize > minSize) fSize -= 0.5;
   if (font.widthOfTextAtSize(display, fSize) > maxW) {
     while (display.length > 1 && font.widthOfTextAtSize(display + '…', fSize) > maxW) {
       display = display.slice(0, -1);
@@ -2398,14 +2398,17 @@ async function buildNumeroAtpvePdfBuffer(service, fields, params) {
   // por assets/atpve-template.pdf); aqui só sobrepomos os 3 campos variáveis de
   // cada um, nas coordenadas medidas no selo de referência real (2.pdf). Data
   // usa o mesmo valor de "data declarada da venda" (a despbrasil não devolve
-  // timestamp de assinatura separado).
-  V(fields.nomevendedor, { x: 321.3, top: 701.5, bottom: 709.5, maxX: 441.7, size: 8 });
-  V(maskDocDisplay(fields.documentovendedor), { x: 321.3, top: 727.0, bottom: 732.4, maxX: 380.6, size: 7 });
-  V(dataVenda, { x: 381.9, top: 727.0, bottom: 732.4, maxX: 442.6, size: 7 });
+  // timestamp de assinatura separado). Nome usa minSize bem baixo pra sempre
+  // caber dentro do quadro (nomes longos encolhem em vez de truncar). CPF e
+  // data ficam com folga da barra divisória vertical do selo (~x381 à esquerda
+  // / ~x511 à direita) pra não apagá-la com o retângulo de fundo do overlay.
+  V(fields.nomevendedor, { x: 321.3, top: 701.5, bottom: 709.5, maxX: 441.7, size: 8, minSize: 3 });
+  V(maskDocDisplay(fields.documentovendedor), { x: 321.3, top: 727.0, bottom: 732.4, maxX: 379.5, size: 7 });
+  V(dataVenda, { x: 383.0, top: 727.0, bottom: 732.4, maxX: 442.6, size: 7 });
 
-  V(fields.nomecomprador, { x: 451.1, top: 701.5, bottom: 709.5, maxX: 572.4, size: 8 });
-  V(maskDocDisplay(fields.documentocomprador), { x: 451.1, top: 727.0, bottom: 732.4, maxX: 510.9, size: 7 });
-  V(dataVenda, { x: 512.2, top: 727.0, bottom: 732.4, maxX: 573.2, size: 7 });
+  V(fields.nomecomprador, { x: 451.1, top: 701.5, bottom: 709.5, maxX: 572.4, size: 8, minSize: 3 });
+  V(maskDocDisplay(fields.documentocomprador), { x: 451.1, top: 727.0, bottom: 732.4, maxX: 509.8, size: 7 });
+  V(dataVenda, { x: 513.2, top: 727.0, bottom: 732.4, maxX: 573.2, size: 7 });
 
   const bytes = await pdfDoc.save();
   return Buffer.from(bytes);
