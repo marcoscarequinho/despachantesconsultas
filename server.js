@@ -2407,25 +2407,28 @@ async function buildNumeroAtpvePdfBuffer(service, fields, params, { withSelos = 
   // branco, como antes. O template já traz os selos "em branco" (ver
   // assets/atpve-selo-assinatura.png, embutido no PDF por
   // assets/atpve-template.pdf); aqui só sobrepomos os 3 campos variáveis de
-  // cada um, nas coordenadas medidas no selo de referência real (2.pdf). Data
-  // usa o mesmo valor de "data declarada da venda" (a despbrasil não devolve
-  // timestamp de assinatura separado). Nome usa minSize bem baixo pra sempre
-  // caber dentro do quadro (nomes longos encolhem em vez de truncar). CPF e
-  // data ficam com folga da barra divisória vertical do selo (~x381 à esquerda
-  // / ~x511 à direita) pra não apagá-la com o retângulo de fundo do overlay.
-  // CPF/CNPJ também precisa de minSize baixo: com o default (6) um CNPJ
-  // formatado (18 caracteres) não cabe na largura da caixa (~58pt) e
-  // pdfOverlayValue trunca com "…" (ex.: "47.519.705/0001…") — vazando/
-  // cortando em vez de encolher. Em Courier (monoespaçada) minSize 4.5
-  // cabe até o CNPJ mais longo sem truncar.
+  // cada um. Coordenadas remedidas diretamente no template real (régua
+  // desenhada sobre assets/atpve-template.pdf) — a medição anterior (a partir
+  // de 2.pdf) tinha ~4-6pt de erro: x inicial ficava à esquerda do próprio
+  // rótulo "CPF/CNPJ"/"Assinado digitalmente por:" (que começa em ~x328
+  // vendedor / ~x458 comprador) e o maxX passava da borda direita real do
+  // cartão (~x440 vendedor / ~x571,5 comprador) e/ou da barra divisória
+  // (~x381,5 vendedor / ~x511,5 comprador) — invadindo bordas com nome
+  // grande, CPF/CNPJ e data. Data usa o mesmo valor de "data declarada da
+  // venda" (a despbrasil não devolve timestamp de assinatura separado). Nome
+  // usa minSize bem baixo pra sempre caber dentro do quadro (nomes longos
+  // encolhem em vez de truncar). CPF/CNPJ também precisa de minSize baixo:
+  // com o default (6) um CNPJ formatado (18 caracteres) não cabe na largura
+  // da caixa e pdfOverlayValue trunca com "…" — em Courier (monoespaçada)
+  // minSize 4.5 cabe até o CNPJ mais longo sem truncar.
   if (withSelos) {
-    V(fields.nomevendedor, { x: 321.3, top: 701.5, bottom: 709.5, maxX: 441.7, size: 8, minSize: 3 });
-    V(maskDocDisplay(fields.documentovendedor), { x: 321.3, top: 727.0, bottom: 732.4, maxX: 379.5, size: 7, minSize: 4.5 });
-    V(dataVenda, { x: 383.0, top: 727.0, bottom: 732.4, maxX: 442.6, size: 7 });
+    V(fields.nomevendedor, { x: 328, top: 701.5, bottom: 709.5, maxX: 438, size: 8, minSize: 3 });
+    V(maskDocDisplay(fields.documentovendedor), { x: 328, top: 727.0, bottom: 732.4, maxX: 377, size: 7, minSize: 4.5 });
+    V(dataVenda, { x: 386, top: 727.0, bottom: 732.4, maxX: 438, size: 7 });
 
-    V(fields.nomecomprador, { x: 451.1, top: 701.5, bottom: 709.5, maxX: 572.4, size: 8, minSize: 3 });
-    V(maskDocDisplay(fields.documentocomprador), { x: 451.1, top: 727.0, bottom: 732.4, maxX: 509.8, size: 7, minSize: 4.5 });
-    V(dataVenda, { x: 513.2, top: 727.0, bottom: 732.4, maxX: 573.2, size: 7 });
+    V(fields.nomecomprador, { x: 458, top: 701.5, bottom: 709.5, maxX: 568, size: 8, minSize: 3 });
+    V(maskDocDisplay(fields.documentocomprador), { x: 458, top: 727.0, bottom: 732.4, maxX: 507, size: 7, minSize: 4.5 });
+    V(dataVenda, { x: 516, top: 727.0, bottom: 732.4, maxX: 568, size: 7 });
   }
 
   const bytes = await pdfDoc.save();
