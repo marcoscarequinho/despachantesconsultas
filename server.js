@@ -2278,14 +2278,42 @@ const ATPVE_TEMPLATE_SEM_SELOS_PATH = path.join(__dirname, 'assets', 'atpve-temp
 // embaixo). Encolhe a fonte (até um mínimo) e trunca com "…" como último
 // recurso pra caber na largura da célula, igual ao padrão dos outros
 // relatórios do sistema.
-function pdfOverlayValue(page, pageH, font, text, { x, top, bottom, maxX, size = 10, bg = null, align = 'left', minSize = 6 }) {
+// Sintetiza o "pontilhado" cinza-claro do selo gov.br (assets/atpve-selo-
+// -assinatura.png) — a imagem tem ruído fino branco/cinza (~rgb 230,230,230)
+// nas células de rótulo, mas as linhas de valor (onde nome/CPF/data entram)
+// já nascem em branco sólido, sem esse ruído (perdido quando alguém apagou
+// os dados do selo real de origem pra criar o template em branco). Como não
+// dá pra recuperar o pixel original, desenhamos pontinhos nas mesmas cores/
+// densidade aproximadas por cima do branco, antes do texto, só pra não
+// destoar visualmente das células vizinhas que ainda têm o ruído.
+function drawSeloDotTexture(page, pageH, x, top, bottom, maxX) {
+  const color = rgb(0.902, 0.902, 0.902);
+  const spacing = 2.6;
+  const radius = 0.35;
+  const yTop = pageH - top;
+  const yBottom = pageH - bottom;
+  let row = 0;
+  for (let y = yBottom; y < yTop; y += spacing) {
+    const offset = (row % 2 === 0) ? 0 : spacing / 2;
+    for (let px = x + offset; px < maxX; px += spacing) {
+      page.drawCircle({ x: px, y, size: radius, color });
+    }
+    row++;
+  }
+}
+
+function pdfOverlayValue(page, pageH, font, text, { x, top, bottom, maxX, size = 10, bg = null, align = 'left', minSize = 6, dotTexture = false }) {
   const value = (text ?? '').toString().trim();
-  const rectY = pageH - bottom - 1;
-  const rectH = (bottom - top) + 2;
-  page.drawRectangle({
-    x: x - 1, y: rectY, width: (maxX - x) + 2, height: rectH,
-    color: bg ? rgb(bg[0], bg[1], bg[2]) : rgb(1, 1, 1),
-  });
+  if (dotTexture) {
+    drawSeloDotTexture(page, pageH, x, top, bottom, maxX);
+  } else {
+    const rectY = pageH - bottom - 1;
+    const rectH = (bottom - top) + 2;
+    page.drawRectangle({
+      x: x - 1, y: rectY, width: (maxX - x) + 2, height: rectH,
+      color: bg ? rgb(bg[0], bg[1], bg[2]) : rgb(1, 1, 1),
+    });
+  }
   if (!value) return;
 
   const maxW = maxX - x;
@@ -2420,15 +2448,20 @@ async function buildNumeroAtpvePdfBuffer(service, fields, params, { withSelos = 
   // encolhem em vez de truncar). CPF/CNPJ também precisa de minSize baixo:
   // com o default (6) um CNPJ formatado (18 caracteres) não cabe na largura
   // da caixa e pdfOverlayValue trunca com "…" — em Courier (monoespaçada)
-  // minSize 4.5 cabe até o CNPJ mais longo sem truncar.
+  // minSize 4.5 cabe até o CNPJ mais longo sem truncar. dotTexture: true —
+  // essas linhas de valor já nascem em branco sólido no próprio template
+  // (sem o ruído cinza-claro que as células vizinhas de rótulo têm, ver
+  // drawSeloDotTexture), então sintetizamos o mesmo ruído por baixo do
+  // texto em vez de deixar branco liso ou apagar com retângulo (que também
+  // ficaria branco liso) — mantém o visual consistente com o resto do selo.
   if (withSelos) {
-    V(fields.nomevendedor, { x: 328, top: 701.5, bottom: 709.5, maxX: 438, size: 8, minSize: 3 });
-    V(maskDocDisplay(fields.documentovendedor), { x: 328, top: 727.0, bottom: 732.4, maxX: 377, size: 7, minSize: 4.5 });
-    V(dataVenda, { x: 386, top: 727.0, bottom: 732.4, maxX: 438, size: 7 });
+    V(fields.nomevendedor, { x: 328, top: 701.5, bottom: 709.5, maxX: 438, size: 8, minSize: 3, dotTexture: true });
+    V(maskDocDisplay(fields.documentovendedor), { x: 328, top: 727.0, bottom: 732.4, maxX: 377, size: 7, minSize: 4.5, dotTexture: true });
+    V(dataVenda, { x: 386, top: 727.0, bottom: 732.4, maxX: 438, size: 7, dotTexture: true });
 
-    V(fields.nomecomprador, { x: 458, top: 701.5, bottom: 709.5, maxX: 568, size: 8, minSize: 3 });
-    V(maskDocDisplay(fields.documentocomprador), { x: 458, top: 727.0, bottom: 732.4, maxX: 507, size: 7, minSize: 4.5 });
-    V(dataVenda, { x: 516, top: 727.0, bottom: 732.4, maxX: 568, size: 7 });
+    V(fields.nomecomprador, { x: 458, top: 701.5, bottom: 709.5, maxX: 568, size: 8, minSize: 3, dotTexture: true });
+    V(maskDocDisplay(fields.documentocomprador), { x: 458, top: 727.0, bottom: 732.4, maxX: 507, size: 7, minSize: 4.5, dotTexture: true });
+    V(dataVenda, { x: 516, top: 727.0, bottom: 732.4, maxX: 568, size: 7, dotTexture: true });
   }
 
   const bytes = await pdfDoc.save();
