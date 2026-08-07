@@ -2311,8 +2311,11 @@ function pdfOverlayValue(page, pageH, font, text, { x, top, bottom, maxX, size =
 // consulta complementar Proprietário Atual (v2) / Consulta 3 Código
 // Segurança CRV, já mescladas em "fields" antes de chegar aqui — ver
 // runNumeroAtpveSupplementaryQueries. LOCAL usa o município/UF do comprador
-// (mesma fonte da despbrasil, sem consulta extra).
-async function buildNumeroAtpvePdfBuffer(service, fields, params) {
+// (mesma fonte da despbrasil, sem consulta extra). Os selos gov.br de
+// "AUTENTICAÇÃO DAS ASSINATURAS" (withSelos) só valem pra Consultas Avulsas —
+// ver runPublicAtpveComunicacaoVenda; a consulta logada (serviceId
+// 'consultar-Numero-ATPVE' em /api/query) não os usa.
+async function buildNumeroAtpvePdfBuffer(service, fields, params, { withSelos = false } = {}) {
   const placaRaw = (params?.placa || fields.placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
   const templateBytes = await fs.promises.readFile(ATPVE_TEMPLATE_PATH);
@@ -2393,22 +2396,26 @@ async function buildNumeroAtpvePdfBuffer(service, fields, params) {
   });
 
   // "AUTENTICAÇÃO DAS ASSINATURAS" — dois selos no estilo gov.br, com o mesmo
-  // nome/CPF/data usados nas caixas de identificação acima. O template já traz
-  // os selos "em branco" (ver assets/atpve-selo-assinatura.png, embutido no PDF
-  // por assets/atpve-template.pdf); aqui só sobrepomos os 3 campos variáveis de
+  // nome/CPF/data usados nas caixas de identificação acima. Só pra Consultas
+  // Avulsas (withSelos) — na consulta logada o template fica com os selos em
+  // branco, como antes. O template já traz os selos "em branco" (ver
+  // assets/atpve-selo-assinatura.png, embutido no PDF por
+  // assets/atpve-template.pdf); aqui só sobrepomos os 3 campos variáveis de
   // cada um, nas coordenadas medidas no selo de referência real (2.pdf). Data
   // usa o mesmo valor de "data declarada da venda" (a despbrasil não devolve
   // timestamp de assinatura separado). Nome usa minSize bem baixo pra sempre
   // caber dentro do quadro (nomes longos encolhem em vez de truncar). CPF e
   // data ficam com folga da barra divisória vertical do selo (~x381 à esquerda
   // / ~x511 à direita) pra não apagá-la com o retângulo de fundo do overlay.
-  V(fields.nomevendedor, { x: 321.3, top: 701.5, bottom: 709.5, maxX: 441.7, size: 8, minSize: 3 });
-  V(maskDocDisplay(fields.documentovendedor), { x: 321.3, top: 727.0, bottom: 732.4, maxX: 379.5, size: 7 });
-  V(dataVenda, { x: 383.0, top: 727.0, bottom: 732.4, maxX: 442.6, size: 7 });
+  if (withSelos) {
+    V(fields.nomevendedor, { x: 321.3, top: 701.5, bottom: 709.5, maxX: 441.7, size: 8, minSize: 3 });
+    V(maskDocDisplay(fields.documentovendedor), { x: 321.3, top: 727.0, bottom: 732.4, maxX: 379.5, size: 7 });
+    V(dataVenda, { x: 383.0, top: 727.0, bottom: 732.4, maxX: 442.6, size: 7 });
 
-  V(fields.nomecomprador, { x: 451.1, top: 701.5, bottom: 709.5, maxX: 572.4, size: 8, minSize: 3 });
-  V(maskDocDisplay(fields.documentocomprador), { x: 451.1, top: 727.0, bottom: 732.4, maxX: 509.8, size: 7 });
-  V(dataVenda, { x: 513.2, top: 727.0, bottom: 732.4, maxX: 573.2, size: 7 });
+    V(fields.nomecomprador, { x: 451.1, top: 701.5, bottom: 709.5, maxX: 572.4, size: 8, minSize: 3 });
+    V(maskDocDisplay(fields.documentocomprador), { x: 451.1, top: 727.0, bottom: 732.4, maxX: 509.8, size: 7 });
+    V(dataVenda, { x: 513.2, top: 727.0, bottom: 732.4, maxX: 573.2, size: 7 });
+  }
 
   const bytes = await pdfDoc.save();
   return Buffer.from(bytes);
@@ -2530,7 +2537,7 @@ async function runPublicAtpveComunicacaoVenda(params) {
   Object.assign(fields, await runNumeroAtpveSupplementaryQueries(placa, fields.renavam));
 
   const service = SERVICES.find(s => s.id === 'consultar-Numero-ATPVE');
-  return buildNumeroAtpvePdfBuffer(service, fields, { placa });
+  return buildNumeroAtpvePdfBuffer(service, fields, { placa }, { withSelos: true });
 }
 
 // ── Geração de PDF — CNH (Datacube retorna JSON, não PDF pronto) ───────────────
