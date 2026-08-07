@@ -2501,7 +2501,9 @@ function selectService(svc) {
   document.getElementById('form-error').classList.add('hidden');
   const submitBtn = document.getElementById('query-submit');
   submitBtn.disabled = !!svc.unavailable;
-  document.getElementById('query-submit-text').textContent = svc.unavailable ? 'Indisponível' : 'Realizar Consulta';
+  document.getElementById('query-submit-text').textContent = svc.unavailable
+    ? 'Indisponível'
+    : (svc.inputType === 'declaracao_residencia' ? 'Gerar Declaração' : 'Realizar Consulta');
   document.getElementById('query-form-wrap').scrollIntoView({ behavior:'smooth', block:'nearest' });
 }
 
@@ -2663,6 +2665,48 @@ function renderFormFields(inputType, svc) {
 
     dc_cpf: field('cpf', 'CPF', 'text', '000.000.000-00'),
 
+    declaracao_residencia: `
+      <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 text-xs text-blue-800">
+        ℹ️ Informe o CPF do requerente e clique em "Buscar Dados" — vamos localizar nome e endereço mais recentes (Localização CPF V3) pra pré-preencher o formulário abaixo. Confira e edite o que precisar antes de gerar a declaração.
+      </div>
+      <div class="flex gap-2 items-end mb-1">
+        <div class="flex-1">${field('cpf', 'CPF do Requerente', 'text', '000.000.000-00')}</div>
+        <button type="button" id="declaracao-buscar-btn" onclick="buscarDadosDeclaracaoResidencia()" class="btn-primary text-xs px-4 py-2.5 whitespace-nowrap">🔎 Buscar Dados</button>
+      </div>
+      <p id="declaracao-busca-status" class="text-xs mb-2 hidden"></p>
+      <div id="declaracao-form-extra" class="hidden">
+        <div class="grid grid-cols-2 gap-3">
+          ${field('nome', 'Nome Completo', 'text', 'NOME COMPLETO')}
+          ${field('nomeSocial', 'Nome Social', 'text', '(opcional)', false)}
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          ${field('documentoIdentidade', 'Documento de Identidade (RG)', 'text', '00.000.000-0', false)}
+          ${field('orgaoExpedidor', 'Órgão Expedidor', 'text', 'DETRAN/RJ', false)}
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          ${field('nacionalidade', 'Nacionalidade', 'text', 'Brasileira', false)}
+          ${field('naturalidade', 'Naturalidade', 'text', 'Rio de Janeiro/RJ', false)}
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          ${field('telefone', 'Telefone', 'text', '(21) 3000-0000', false)}
+          ${field('celular', 'Celular', 'text', '(21) 90000-0000', false)}
+        </div>
+        ${field('email', 'E-mail', 'email', 'email@exemplo.com', false)}
+        <div class="grid grid-cols-2 gap-3">
+          ${field('endereco', 'Endereço (Logradouro)', 'text', 'RUA EXEMPLO')}
+          ${field('numero', 'Número', 'text', '123', false)}
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          ${field('complemento', 'Complemento', 'text', '(opcional)', false)}
+          ${field('cep', 'CEP', 'text', '00000-000', true, 'inputmode="numeric" maxlength="9"')}
+        </div>
+        <div class="grid grid-cols-3 gap-3">
+          ${field('uf', 'UF', 'text', 'RJ', true, 'maxlength="2"')}
+          ${field('cidade', 'Cidade', 'text', 'Rio de Janeiro')}
+          ${field('bairro', 'Bairro', 'text', 'Centro', false)}
+        </div>
+      </div>`,
+
     crv_full: placaField + renavamField + `
       <div class="grid grid-cols-2 gap-3">
         ${field('crv_numero','Número CRV','text','123456789012')}
@@ -2823,6 +2867,69 @@ function renderFormFields(inputType, svc) {
       this.value = this.value.replace(/\D/g, '').slice(0, 8);
       if (this.value.length === 8) autocompletarCep(this.value);
     });
+  }
+  // Máscara CEP da Declaração de Residência (00000-000, sem autopreenchimento —
+  // o endereço já vem pronto da Localização CPF V3 em "Buscar Dados").
+  const declaracaoCepEl = document.getElementById('f-cep');
+  if (declaracaoCepEl) {
+    declaracaoCepEl.addEventListener('input', function() {
+      const d = this.value.replace(/\D/g, '').slice(0, 8);
+      this.value = d.replace(/(\d{5})(\d{1,3})/, '$1-$2');
+    });
+  }
+}
+
+// ── Declaração de Residência DETRAN RJ: busca nome + endereço mais recente via
+// Localização CPF V3 (Datacube) pra pré-preencher o formulário editável — não
+// cobra créditos, só a geração final (botão "Gerar Declaração") debita o valor.
+async function buscarDadosDeclaracaoResidencia() {
+  const cpf = (document.getElementById('f-cpf')?.value || '').replace(/\D/g, '');
+  const status = document.getElementById('declaracao-busca-status');
+  const setStatus = (msg, cor) => {
+    if (!status) return;
+    status.className = `text-xs mb-2 ${cor}`;
+    status.textContent = msg;
+    status.classList.remove('hidden');
+  };
+  if (cpf.length !== 11) { setStatus('⚠️ Informe um CPF válido (11 dígitos).', 'text-amber-600'); return; }
+
+  const btn = document.getElementById('declaracao-buscar-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Buscando...'; }
+  setStatus('⏳ Buscando dados na Localização CPF V3…', 'text-blue-600');
+
+  try {
+    const r = await fetch('/api/declaracao-residencia/localizar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cpf }),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      setStatus('⚠️ ' + (data.error || 'Não foi possível localizar os dados. Preencha manualmente abaixo.'), 'text-amber-600');
+      document.getElementById('declaracao-form-extra').classList.remove('hidden');
+      return;
+    }
+
+    const set = (id, val) => { const el = document.getElementById('f-' + id); if (el && val) el.value = val; };
+    set('nome', data.data.nome);
+    set('endereco', data.data.logradouro);
+    set('numero', data.data.numero);
+    set('complemento', data.data.complemento);
+    set('bairro', data.data.bairro);
+    set('cidade', data.data.cidade);
+    set('uf', (data.data.uf || '').toUpperCase());
+    if (data.data.cep) set('cep', data.data.cep.replace(/\D/g, '').replace(/(\d{5})(\d{3})/, '$1-$2'));
+    set('telefone', data.data.telefone);
+    set('celular', data.data.celular);
+    set('email', data.data.email);
+
+    document.getElementById('declaracao-form-extra').classList.remove('hidden');
+    setStatus('✅ Dados localizados! Confira e edite o que precisar antes de gerar a declaração.', 'text-green-600');
+  } catch {
+    setStatus('⚠️ Erro de conexão ao buscar os dados. Preencha manualmente abaixo.', 'text-amber-600');
+    document.getElementById('declaracao-form-extra').classList.remove('hidden');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔎 Buscar Dados'; }
   }
 }
 
@@ -3004,6 +3111,17 @@ function buildParams(inputType) {
 
   if (inputType === 'veiculos_documento') return { documento: cd(g('documento')) };
 
+  if (inputType === 'declaracao_residencia')
+    return {
+      cpf: cd(g('cpf')),
+      nome: g('nome'), nomeSocial: g('nomeSocial'),
+      documentoIdentidade: g('documentoIdentidade'), orgaoExpedidor: g('orgaoExpedidor'),
+      nacionalidade: g('nacionalidade'), naturalidade: g('naturalidade'),
+      telefone: g('telefone'), celular: g('celular'), email: g('email'),
+      endereco: g('endereco'), numero: g('numero'), complemento: g('complemento'),
+      cep: cd(g('cep')), uf: g('uf').toUpperCase(), cidade: g('cidade'), bairro: g('bairro'),
+    };
+
   if (inputType === 'venda') {
     const vDoc = cd(g('v_cpf'));
     const cDoc = cd(g('c_cpf'));
@@ -3032,6 +3150,15 @@ function buildParams(inputType) {
 // Validação rápida no cliente antes de enviar (espelha as regras do servidor,
 // para dar feedback imediato sem depender da resposta da API externa).
 function validateParams(inputType, p) {
+  if (inputType === 'declaracao_residencia') {
+    if (!p.nome)                    return 'Informe o nome completo.';
+    if (p.cpf.length !== 11)        return 'CPF inválido. Deve ter 11 dígitos.';
+    if (!p.endereco)                return 'Informe o endereço (logradouro).';
+    if (p.cep.length !== 8)         return 'CEP inválido. Deve ter 8 dígitos.';
+    if (p.uf.length !== 2)          return 'Informe a UF (2 letras).';
+    if (!p.cidade)                  return 'Informe a cidade.';
+    return null;
+  }
   if (inputType === 'cancelar_venda') {
     if (!p.id)                        return 'Informe o ID da comunicação.';
     if (!p.protocolo)                 return 'Informe o protocolo.';
@@ -3073,7 +3200,8 @@ function setQueryLoading(on) {
   document.getElementById('query-submit').disabled = on;
   document.getElementById('query-submit-text').textContent = on
     ? 'Processando...'
-    : (editingComunicacaoVendaQueryId ? 'Salvar Alterações' : 'Realizar Consulta');
+    : (editingComunicacaoVendaQueryId ? 'Salvar Alterações'
+      : (selectedSvc?.inputType === 'declaracao_residencia' ? 'Gerar Declaração' : 'Realizar Consulta'));
   document.getElementById('query-spinner').classList.toggle('hidden', !on);
 }
 

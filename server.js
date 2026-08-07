@@ -257,6 +257,15 @@ const SERVICES = [
   // Localização CPF V3 — também movida da Opção 2 (grupo Cadastros), mesmo relatório
   // em PDF da Localização CPF acima (buildLocalizacaoCpfPdfBuffer), valor fixo R$8,00.
   { id:'dc-cadastro-localizacao-v3',      name:'Localização CPF V3',           group:'Débitos e Documentação', basePrice:8.00, noMarkup:true, inputType:'dc_cpf', icon:'📍', dcPath:'/pessoas/localizacao_v3' },
+  // Gerar Declaração de Residência DETRAN RJ — fluxo em duas etapas, fora do padrão
+  // padrão "chama upstream e cobra" dos demais serviços: primeiro o front busca dados
+  // via Localização CPF V3 pra pré-preencher um formulário editável (POST
+  // /api/declaracao-residencia/localizar, sem custo), o usuário confere/edita e só
+  // ao clicar "Gerar Declaração" esse serviço é submetido normalmente por /api/query
+  // (ver isDeclaracaoResidencia em processCatalogQuery) — os campos do form já vêm
+  // prontos nos params, sem nova chamada upstream, e o PDF é sobreposto no template
+  // oficial (ver buildDeclaracaoResidenciaPdfBuffer).
+  { id:'declaracao-residencia-detran-rj', name:'Gerar Declaração de Residência DETRAN RJ', group:'Débitos e Documentação', basePrice:8.00, noMarkup:true, inputType:'declaracao_residencia', icon:'🏠' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // API Vistocar (vistocarconsulta.com.br) — fonte para Reemissão de CRLV-e RJ,
@@ -2131,6 +2140,124 @@ function buildLocalizacaoCpfPdfBuffer(service, data, params) {
   });
 }
 
+// ── Heurística de mapeamento — Localização CPF V3 → formulário da Declaração de
+// Residência (usada em POST /api/declaracao-residencia/localizar pra pré-preencher
+// o formulário). O retorno da Datacube não tem um contrato de nomes de campo
+// documentado (varia por CPF/registro), então tentamos vários apelidos por chave,
+// normalizados (minúsculo, sem acento/pontuação) — o formulário fica editável de
+// qualquer forma, então o pior caso é o campo ficar em branco pro usuário
+// preencher à mão, nunca um valor errado silencioso.
+function pickAlias(obj, aliases) {
+  if (!obj || typeof obj !== 'object') return '';
+  const norm = s => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const wanted = aliases.map(norm);
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === null || v === undefined || v === '') continue;
+    if (wanted.includes(norm(k))) return String(v).trim();
+  }
+  return '';
+}
+
+// "historicos.enderecos"/"nomes"/... vêm como listas — pega o primeiro registro
+// (mais recente, conforme a própria Datacube ordena o histórico).
+function firstRecord(list) {
+  if (!Array.isArray(list) || !list.length) return null;
+  const item = list[0];
+  if (item === null || item === undefined) return null;
+  return typeof item === 'object' ? item : { valor: item };
+}
+
+function extractDeclaracaoResidenciaFields(localizacaoData) {
+  const nomeRec  = firstRecord(localizacaoData?.nomes);
+  const endRec   = firstRecord(localizacaoData?.enderecos);
+  const telRec   = firstRecord(localizacaoData?.telefones);
+  const celRec   = firstRecord(localizacaoData?.celulares);
+  const emailRec = firstRecord(localizacaoData?.emails);
+
+  return {
+    nome:        pickAlias(nomeRec, ['nome', 'nome_completo', 'valor']),
+    logradouro:  pickAlias(endRec, ['logradouro', 'endereco', 'rua']),
+    numero:      pickAlias(endRec, ['numero', 'numero_endereco', 'num']),
+    complemento: pickAlias(endRec, ['complemento']),
+    bairro:      pickAlias(endRec, ['bairro']),
+    cidade:      pickAlias(endRec, ['cidade', 'municipio']),
+    uf:          pickAlias(endRec, ['uf', 'estado']),
+    cep:         pickAlias(endRec, ['cep']),
+    telefone:    pickAlias(telRec, ['telefone', 'numero', 'valor']),
+    celular:     pickAlias(celRec, ['celular', 'telefone', 'numero', 'valor']),
+    email:       pickAlias(emailRec, ['email', 'valor']),
+  };
+}
+
+// ── Geração de PDF — Declaração de Residência DETRAN RJ, sobrepondo os dados do
+// formulário (já preenchido/editado pelo usuário) no PDF oficial "DETRAN - Nº
+// 0034 - rev. 07" (ver assets/declaracao-residencia-detran-rj-template.pdf).
+// Mesma técnica do buildNumeroAtpvePdfBuffer (usar o PDF real como base em vez de
+// remontar o layout do zero), mas aqui as coordenadas já vêm direto no sistema do
+// pdf-lib (origem no canto inferior esquerdo) — medidas com pdfjs/getTextContent
+// no PDF de referência, sem precisar do passo de conversão top→bottom do ATPVe.
+const DECLARACAO_RESIDENCIA_TEMPLATE_PATH = path.join(__dirname, 'assets', 'declaracao-residencia-detran-rj-template.pdf');
+const MESES_EXTENSO = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+
+function drawDeclaracaoValue(page, font, text, { x, y, maxX, size = 9, minSize = 6 }) {
+  const value = (text ?? '').toString().trim();
+  if (!value) return;
+  const maxW = maxX - x;
+  let fSize = size;
+  let display = value;
+  while (font.widthOfTextAtSize(display, fSize) > maxW && fSize > minSize) fSize -= 0.5;
+  if (font.widthOfTextAtSize(display, fSize) > maxW) {
+    while (display.length > 1 && font.widthOfTextAtSize(display + '…', fSize) > maxW) display = display.slice(0, -1);
+    display = display + '…';
+  }
+  page.drawText(display, { x, y, size: fSize, font, color: rgb(0.067, 0.094, 0.153) });
+}
+
+async function buildDeclaracaoResidenciaPdfBuffer(params) {
+  const templateBytes = await fs.promises.readFile(DECLARACAO_RESIDENCIA_TEMPLATE_PATH);
+  const pdfDoc = await PDFLibDocument.load(templateBytes);
+  const page = pdfDoc.getPages()[0];
+  const font = await pdfDoc.embedFont(PDFLibStandardFonts.Helvetica);
+
+  const V = (text, opts) => drawDeclaracaoValue(page, font, text, opts);
+
+  V(params.nome,                { x: 104, y: 722.14, maxX: 520 });
+  V(params.nomeSocial,          { x: 134, y: 704.62, maxX: 520 });
+  V(params.documentoIdentidade, { x: 196, y: 687.10, maxX: 335 });
+  V(params.orgaoExpedidor,      { x: 429, y: 687.10, maxX: 520 });
+  V(maskDocDisplay(params.cpf), { x: 95,  y: 669.58, maxX: 250 });
+  V(params.nacionalidade,       { x: 142, y: 652.06, maxX: 335 });
+  V(params.naturalidade,        { x: 411, y: 652.06, maxX: 520 });
+
+  // Telefone/Celular: o rótulo do template já traz um placeholder "(          )"
+  // fixo, mas ele faz parte do mesmo texto de "Telefone:"/"Celular:" (sem posição
+  // isolada pra apagar só o meio sem arriscar cortar o rótulo) — por isso o valor
+  // entra depois do rótulo inteiro, em vez de tentar encaixar dentro dos parênteses.
+  V(params.telefone, { x: 156, y: 634.54, maxX: 335 });
+  V(params.celular,  { x: 423, y: 634.54, maxX: 520 });
+
+  V(params.email,       { x: 109, y: 617.02, maxX: 520 });
+  V(params.endereco,    { x: 120, y: 577.87, maxX: 520 });
+  V(params.numero,      { x: 86,  y: 560.35, maxX: 140 });
+  V(params.complemento, { x: 217, y: 560.35, maxX: 388 });
+  V(params.cep,         { x: 419, y: 560.35, maxX: 520 });
+  V(params.uf,          { x: 90,  y: 542.83, maxX: 140 });
+  V(params.cidade,      { x: 185, y: 542.83, maxX: 367 });
+  V(params.bairro,      { x: 408, y: 542.83, maxX: 520 });
+
+  // "Rio de Janeiro ___ de ______________ de ____" — data da assinatura, sempre a
+  // data de geração da declaração. Apaga todos os traços de uma vez (do fim de
+  // "Rio de Janeiro " até o fim da linha) e escreve a data inteira num texto só —
+  // mais simples e robusto do que tentar encaixar dia/mês/ano nos espaços exatos
+  // dos "de" estáticos do template.
+  const now = new Date();
+  const dataPorExtenso = `${String(now.getDate()).padStart(2, '0')} de ${MESES_EXTENSO[now.getMonth()]} de ${now.getFullYear()}`;
+  page.drawRectangle({ x: 236, y: 437, width: 225, height: 12, color: rgb(1, 1, 1) });
+  V(dataPorExtenso, { x: 239, y: 439.97, maxX: 459 });
+
+  return Buffer.from(await pdfDoc.save());
+}
+
 // ── Geração de PDF — Verificar CRLV e Último Licenciamento (despbrasil devolve
 // os dados em "dados", sem um arquivo pronto útil para esse serviço) ──────────
 function buildVerificarCrlvPdfBuffer(service, data, params) {
@@ -3698,6 +3825,67 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         result: { status: 'Pedido registrado! Nossa equipe vai localizar o documento e o PDF ficará disponível para download aqui no seu painel.' },
         charged: price,
       });
+    }
+
+    // ── Gerar Declaração de Residência DETRAN RJ — não chama nenhuma API upstream
+    // aqui: os campos já chegam prontos do formulário (pré-preenchido via POST
+    // /api/declaracao-residencia/localizar e conferido/editado pelo usuário), então
+    // só validamos, sobrepomos no template oficial e cobramos — sem round-trip
+    // extra à Datacube nesta etapa (ver buildDeclaracaoResidenciaPdfBuffer).
+    if (serviceId === 'declaracao-residencia-detran-rj') {
+      const nome = (params?.nome || '').trim();
+      const cpfDigits = (params?.cpf || '').replace(/\D/g, '');
+      const endereco = (params?.endereco || '').trim();
+      const cepDigits = (params?.cep || '').replace(/\D/g, '');
+      const uf = (params?.uf || '').trim();
+      const cidade = (params?.cidade || '').trim();
+      if (!nome) return res.status(400).json({ error: 'Informe o nome.' });
+      if (cpfDigits.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+      if (!endereco) return res.status(400).json({ error: 'Informe o endereço.' });
+      if (cepDigits.length !== 8) return res.status(400).json({ error: 'CEP inválido. Deve ter 8 dígitos.' });
+      if (!uf) return res.status(400).json({ error: 'Informe a UF.' });
+      if (!cidade) return res.status(400).json({ error: 'Informe a cidade.' });
+
+      let pdfBuf;
+      try {
+        pdfBuf = await buildDeclaracaoResidenciaPdfBuffer({
+          ...params,
+          cpf: cpfDigits,
+          cep: cepDigits.replace(/(\d{5})(\d{3})/, '$1-$2'),
+        });
+      } catch (e) {
+        console.error('[declaracao-residencia-detran-rj] erro ao gerar PDF:', e.message);
+        return res.status(500).json({ error: 'Erro ao gerar a declaração.' });
+      }
+
+      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id]
+      );
+
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), expiresAt]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, params);
+
+      if (user.phone) {
+        const caption = `✅ *${service.name} pronta!*\n👤 ${nome}\n🪪 CPF: ${maskDocDisplay(cpfDigits)}\n\nDocumento gerado pela MC Despachadoria.`;
+        await sendWhatsAppPdf(user.phone, pdfBuf, `declaracao-residencia-${cpfDigits}.pdf`, caption).catch(() => {});
+      }
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="declaracao-residencia-${Date.now()}.pdf"`);
+      return res.send(pdfBuf);
     }
 
     // Build URL and method
@@ -6167,6 +6355,51 @@ app.get('/api/admin/whatsapp-inbox/count', requireAuth, requireSuperAdmin, async
     res.json({ unread: parseInt(r.rows[0].count) });
   } catch (err) {
     res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── POST /api/declaracao-residencia/localizar ─────────────────────────────────
+// Etapa 1 do serviço "Gerar Declaração de Residência DETRAN RJ": busca nome +
+// endereço mais recente na Localização CPF V3 (Datacube) pra pré-preencher o
+// formulário editável do front (ver extractDeclaracaoResidenciaFields). Não
+// cobra créditos — só a geração final (POST /api/query, serviceId
+// declaracao-residencia-detran-rj) debita o valor do serviço.
+app.post('/api/declaracao-residencia/localizar', requireAuth, async (req, res) => {
+  const cpf = (req.body?.cpf || '').replace(/\D/g, '');
+  if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+
+  try {
+    const ur = await pool.query('SELECT active FROM users WHERE id=$1', [req.user.id]);
+    if (!ur.rows[0]?.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+
+    const apiRes = await fetch(`${DATACUBE_API_URL}/pessoas/localizacao_v3`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ auth_token: DATACUBE_TOKEN, cpf }),
+    });
+    const bodyStr = await apiRes.text();
+    let parsed;
+    try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
+    if (!parsed) return res.status(502).json({ error: 'Erro ao consultar Localização CPF V3.' });
+
+    // Mesmo desembrulhamento de "historicos" usado no relatório da Localização CPF
+    // (ver isDcLocalizacaoCpf em /api/query) — a v3 devolve "result" como array com
+    // um único objeto { historicos: {nomes, enderecos, ...}, participacao_empresas }.
+    const localizacaoResult = parsed.result ?? parsed;
+    let localizacaoData = Array.isArray(localizacaoResult) ? (localizacaoResult[0] ?? {}) : localizacaoResult;
+    if (localizacaoData?.historicos && typeof localizacaoData.historicos === 'object') {
+      localizacaoData = localizacaoData.historicos;
+    }
+    const hasData = localizacaoData && (Array.isArray(localizacaoData)
+      ? localizacaoData.length > 0
+      : Object.keys(localizacaoData).length > 0);
+    if (!hasData) return res.status(422).json({ error: 'Nenhum dado encontrado para esse CPF.' });
+
+    const fields = extractDeclaracaoResidenciaFields(localizacaoData);
+    res.json({ success: true, data: fields });
+  } catch (err) {
+    console.error('Erro em /api/declaracao-residencia/localizar:', err.message);
+    res.status(500).json({ error: 'Erro interno ao buscar dados do CPF.' });
   }
 });
 
