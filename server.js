@@ -2262,7 +2262,13 @@ function extractVistocarSecurityFields(text, knownRenavam) {
   return fields;
 }
 
+// atpve-template.pdf já traz os dois selos gov.br desenhados no fundo (em
+// branco, ver 1e8969a); pra consulta logada usamos o backup de antes dos
+// selos existirem (atpve-template-pre-selos-backup.pdf) — sem isso, mesmo
+// não sobrepondo nome/CPF/data (withSelos: false), o desenho do selo em
+// branco continuaria visível no PDF.
 const ATPVE_TEMPLATE_PATH = path.join(__dirname, 'assets', 'atpve-template.pdf');
+const ATPVE_TEMPLATE_SEM_SELOS_PATH = path.join(__dirname, 'assets', 'atpve-template-pre-selos-backup.pdf');
 
 // Escreve um valor sobre o template do ATPVe: apaga a área com um retângulo
 // (branco por padrão, ou "bg" pra casar com caixas preenchidas como "Valor
@@ -2318,7 +2324,7 @@ function pdfOverlayValue(page, pageH, font, text, { x, top, bottom, maxX, size =
 async function buildNumeroAtpvePdfBuffer(service, fields, params, { withSelos = false } = {}) {
   const placaRaw = (params?.placa || fields.placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
-  const templateBytes = await fs.promises.readFile(ATPVE_TEMPLATE_PATH);
+  const templateBytes = await fs.promises.readFile(withSelos ? ATPVE_TEMPLATE_PATH : ATPVE_TEMPLATE_SEM_SELOS_PATH);
   const pdfDoc = await PDFLibDocument.load(templateBytes);
   const page = pdfDoc.getPages()[0];
   const pageH = page.getHeight();
