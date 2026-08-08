@@ -7172,6 +7172,7 @@ app.get('/admin', requireAuth, async (req, res) => {
 
 // ── Broadcast WhatsApp (disparo automático a cada 2 dias) ────────────────────
 const BROADCAST_IMAGE_PATH = path.join(__dirname, 'promo-atpve.png');
+const BROADCAST_VIDEO_PATH = path.join(__dirname, 'marcos.mp4');
 const BROADCAST_MESSAGE =
 `🛑ATENÇÃO CADASTRE COM SEU NUMERO WHATSAPP CORRETO PARA RECEBER AS NOTIFICAÇÕES
 ✅ FAÇA SEU CADASTRO:
@@ -7246,6 +7247,31 @@ async function sendBroadcastImage(dest, base64Png, caption) {
   }
 }
 
+// Envia o vídeo logo em seguida da imagem+texto (aparece abaixo no chat).
+async function sendBroadcastVideo(dest, base64Mp4) {
+  if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !dest) return;
+  const phone = String(dest);
+  try {
+    const r = await fetch(
+      `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/send-video`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(ZAPI_CLIENT_TOKEN ? { 'Client-Token': ZAPI_CLIENT_TOKEN } : {}),
+        },
+        body: JSON.stringify({ phone, video: `data:video/mp4;base64,${base64Mp4}` }),
+      }
+    );
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) console.error(`Broadcast vídeo erro [${phone}]:`, JSON.stringify(d));
+    else console.log(`✅ Broadcast vídeo → ${phone}`);
+  } catch (err) {
+    console.error(`Broadcast vídeo falha [${phone}]:`, err.message);
+    throw err;
+  }
+}
+
 // Grupos com disparo prioritário (além do disparo geral de 2 em 2
 // dias, que continua valendo para todos os grupos, inclusive estes).
 // PORTAL⚔️DESPACHANTES roda só em horário comercial (seg-sex, 10h-18h BRT) — ver
@@ -7269,10 +7295,13 @@ async function runWhatsAppBroadcast(groupNames) {
   }
   console.log(`📢 Broadcast: ${dests.length} grupos`);
   const imageBase64 = fs.readFileSync(BROADCAST_IMAGE_PATH).toString('base64');
+  const videoBase64 = fs.readFileSync(BROADCAST_VIDEO_PATH).toString('base64');
   let sent = 0, failed = 0;
   for (const dest of dests) {
     try {
       await sendBroadcastImage(dest.phone, imageBase64, BROADCAST_MESSAGE);
+      await new Promise(r => setTimeout(r, 1000));
+      await sendBroadcastVideo(dest.phone, videoBase64);
       sent++;
     } catch {
       failed++;
