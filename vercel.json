@@ -16,7 +16,7 @@
     },
     {
       "path": "/api/cron/broadcast-whatsapp-priority",
-      "schedule": "0 */2 * * *"
+      "schedule": "*/30 * * * *"
     },
     {
       "path": "/api/cron/broadcast-whatsapp-portal",

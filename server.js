@@ -7246,11 +7246,12 @@ async function sendBroadcastImage(dest, base64Png, caption) {
   }
 }
 
-// Grupos com disparo prioritário de 2 em 2 horas (além do disparo geral de 2 em 2
+// Grupos com disparo prioritário (além do disparo geral de 2 em 2
 // dias, que continua valendo para todos os grupos, inclusive estes).
 // PORTAL⚔️DESPACHANTES roda só em horário comercial (seg-sex, 10h-18h BRT) — ver
-// schedule do cron em vercel.json (13-21h UTC = 10h-18h BRT, sem horário de verão).
-// SERVIÇOS, OFERTAS E AMIGOS continua de 2 em 2 horas o dia todo, todos os dias.
+// schedule do cron em vercel.json (13-21h UTC = 10h-18h BRT, sem horário de verão),
+// de 2 em 2 horas.
+// SERVIÇOS, OFERTAS E AMIGOS dispara de 30 em 30 minutos, o dia todo, todos os dias.
 const BROADCAST_GROUP_PORTAL = 'PORTAL⚔️DESPACHANTES';
 const BROADCAST_GROUP_SERVICOS = 'SERVIÇOS, OFERTAS E AMIGOS';
 
@@ -7308,7 +7309,7 @@ app.post('/api/admin/broadcast-whatsapp', requireAuth, requireSuperAdmin, async 
   }
 });
 
-// ── GET /api/cron/broadcast-whatsapp-priority (Vercel Cron — de 2 em 2 horas, todo dia) ─
+// ── GET /api/cron/broadcast-whatsapp-priority (Vercel Cron — de 30 em 30 minutos, todo dia) ─
 // Só para o grupo SERVIÇOS, OFERTAS E AMIGOS.
 app.get('/api/cron/broadcast-whatsapp-priority', async (req, res) => {
   const secret = process.env.CRON_SECRET || '';
