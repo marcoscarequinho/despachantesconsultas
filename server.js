@@ -279,14 +279,16 @@ const SERVICES = [
   // Localização CPF V3 usadas para pré-preencher o formulário.
   { id:'contrato-aluguel', name:'Gerar Contrato de Aluguel', group:'Procurações e Contratos', basePrice:16.00, noMarkup:true, inputType:'contrato_aluguel', icon:'📜' },
   // Gerar Procuração Veicular — mesmo padrão em duas etapas acima, mas com uma
-  // particularidade: o CPF/CNPJ digitado + Localização CPF V3 pré-preenche o
-  // OUTORGANTE, enquanto a Placa + Proprietário Atual (Datacube, mesmo endpoint
-  // da aba "Opção 2 Nova Consulta", ver dc-proprietario-atual em SERVICES_V2)
-  // pré-preenche o OUTORGADO (nome e CPF/CNPJ vêm junto do proprietário atual
-  // do veículo) e os dados do veículo — ver POST
-  // /api/procuracao-veicular/localizar-cpf e /localizar-placa (ambos sem
-  // custo) e buildProcuracaoVeicularPdfBuffer (modelo padrão de procuração,
-  // sem overlay de PDF oficial).
+  // particularidade: a Placa + Proprietário Atual (Datacube, mesmo endpoint da
+  // aba "Opção 2 Nova Consulta", ver dc-proprietario-atual em SERVICES_V2)
+  // pré-preenche o OUTORGANTE (nome, CPF/CNPJ e endereço vêm junto do
+  // proprietário atual do veículo — endereço com fallback pra Veicular
+  // Completa/Vistocar quando ausente) e os dados do veículo, enquanto o
+  // CPF/CNPJ digitado + Localização CPF V3 pré-preenche o OUTORGADO (quem vai
+  // representar o OUTORGANTE) — ver POST /api/procuracao-veicular/localizar-placa
+  // e /localizar-cpf (ambos sem custo, 3 endpoints upstream no total) e
+  // buildProcuracaoVeicularPdfBuffer (modelo padrão de procuração, sem
+  // overlay de PDF oficial). Preço fixo cobrindo os 3 endpoints usados.
   { id:'procuracao-veicular', name:'Gerar Procuração Veicular', group:'Procurações e Contratos', basePrice:22.00, noMarkup:true, inputType:'procuracao_veicular', icon:'🖊️' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
@@ -2227,6 +2229,13 @@ function extractProprietarioAtualFields(data) {
   return {
     nome:          deepFindAlias(data, ['nome', 'nome_proprietario', 'proprietario', 'nome_completo']),
     cpfCnpj:       deepFindAlias(data, ['cpf_cnpj', 'cpfcnpj', 'cpf', 'cnpj', 'documento', 'documento_proprietario']),
+    logradouro:    deepFindAlias(data, ['logradouro', 'endereco', 'rua']),
+    numero:        deepFindAlias(data, ['numero', 'numero_endereco', 'num']),
+    complemento:   deepFindAlias(data, ['complemento']),
+    bairro:        deepFindAlias(data, ['bairro']),
+    cidade:        deepFindAlias(data, ['cidade', 'municipio']),
+    uf:            deepFindAlias(data, ['uf', 'estado']),
+    cep:           deepFindAlias(data, ['cep']),
     marcaModelo:   deepFindAlias(data, ['marca_modelo', 'marcamodelo', 'marca_modelo_versao', 'modelo', 'descricao_modelo']),
     chassi:        deepFindAlias(data, ['chassi']),
     renavam:       deepFindAlias(data, ['renavam']),
@@ -2234,6 +2243,20 @@ function extractProprietarioAtualFields(data) {
     anoFabricacao: deepFindAlias(data, ['ano_fabricacao', 'anofabricacao', 'ano_fab']),
     anoModelo:     deepFindAlias(data, ['ano_modelo', 'anomodelo', 'ano_mod']),
   };
+}
+
+// Junta os componentes de endereço (de Proprietário Atual ou, em fallback, da
+// Veicular Completa) numa única linha de texto pronta para o parágrafo da
+// procuração — mais simples e robusto do que expor 7 campos separados no
+// formulário para um dado que é só impresso numa frase.
+function composeEndereco({ logradouro, numero, complemento, bairro, cidade, uf, cep }) {
+  const parts = [];
+  if (logradouro) parts.push(logradouro + (numero ? `, ${numero}` : ''));
+  if (complemento) parts.push(complemento);
+  if (bairro) parts.push(bairro);
+  if (cidade || uf) parts.push([cidade, uf].filter(Boolean).join('/'));
+  if (cep) parts.push(`CEP ${cep}`);
+  return parts.join(', ');
 }
 
 function extractDeclaracaoResidenciaFields(localizacaoData) {
@@ -2516,11 +2539,12 @@ function buildProcuracaoVeicularPdfBuffer(params) {
 
       pdfContractParagraph(doc,
         `Pelo presente instrumento particular de procuração, eu, ${params.outorganteNome}, portador(a) do CPF/CNPJ sob o nº ` +
-        `${maskDocDisplay(params.outorganteCpfCnpj)}, nomeio e constituo como meu(minha) bastante procurador(a) ${params.outorgadoNome}` +
-        (params.outorgadoCpfCnpj ? `, portador(a) do CPF/CNPJ sob o nº ${maskDocDisplay(params.outorgadoCpfCnpj)},` : ',') +
-        ` a quem confiro os poderes descritos neste instrumento para que, em meu nome, junto ao Departamento de Trânsito ` +
-        `(DETRAN), aos demais órgãos do Sistema Nacional de Trânsito e a quaisquer terceiros que se fizerem necessários, ` +
-        `pratique os atos relativos ao veículo abaixo identificado:`);
+        `${maskDocDisplay(params.outorganteCpfCnpj)}` +
+        (params.outorganteEndereco ? `, residente e domiciliado(a) em ${params.outorganteEndereco},` : ',') +
+        ` nomeio e constituo como meu(minha) bastante procurador(a) ${params.outorgadoNome}, portador(a) do CPF/CNPJ sob o nº ` +
+        `${maskDocDisplay(params.outorgadoCpfCnpj)}, a quem confiro os poderes descritos neste instrumento para que, em meu ` +
+        `nome, junto ao Departamento de Trânsito (DETRAN), aos demais órgãos do Sistema Nacional de Trânsito e a quaisquer ` +
+        `terceiros que se fizerem necessários, pratique os atos relativos ao veículo abaixo identificado:`);
 
       const veiculoPairs = [
         ['Placa', maskPlacaDisplay(params.placa)],
@@ -4276,14 +4300,15 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     }
 
     // ── Gerar Procuração Veicular — mesmo padrão acima: os campos já chegam
-    // prontos do formulário (Outorgante pré-preenchido via POST
-    // /api/procuracao-veicular/localizar-cpf, Outorgado e dados do veículo via
-    // /localizar-placa, todos conferidos/editados pelo usuário), então só
+    // prontos do formulário (Outorgante e dados do veículo pré-preenchidos via
+    // POST /api/procuracao-veicular/localizar-placa, Outorgado via
+    // /localizar-cpf, todos conferidos/editados pelo usuário), então só
     // validamos, montamos a procuração do zero (ver
     // buildProcuracaoVeicularPdfBuffer) e cobramos.
     if (serviceId === 'procuracao-veicular') {
       const outorganteNome = (params?.outorganteNome || '').trim();
       const outorganteCpfCnpj = (params?.outorganteCpfCnpj || '').replace(/\D/g, '');
+      const outorganteEndereco = (params?.outorganteEndereco || '').trim();
       const outorgadoNome = (params?.outorgadoNome || '').trim();
       const outorgadoCpfCnpj = (params?.outorgadoCpfCnpj || '').replace(/\D/g, '');
       const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
@@ -4294,18 +4319,18 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       const anoFabricacao = (params?.anoFabricacao || '').trim();
       const anoModelo = (params?.anoModelo || '').trim();
 
+      if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
       if (!outorganteNome) return res.status(400).json({ error: 'Informe o nome do Outorgante.' });
       if (outorganteCpfCnpj.length !== 11 && outorganteCpfCnpj.length !== 14)
         return res.status(400).json({ error: 'CPF/CNPJ do Outorgante inválido.' });
-      if (!outorgadoNome) return res.status(400).json({ error: 'Informe o nome do Outorgado.' });
-      if (outorgadoCpfCnpj && outorgadoCpfCnpj.length !== 11 && outorgadoCpfCnpj.length !== 14)
+      if (outorgadoCpfCnpj.length !== 11 && outorgadoCpfCnpj.length !== 14)
         return res.status(400).json({ error: 'CPF/CNPJ do Outorgado inválido.' });
-      if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      if (!outorgadoNome) return res.status(400).json({ error: 'Informe o nome do Outorgado.' });
 
       let pdfBuf;
       try {
         pdfBuf = await buildProcuracaoVeicularPdfBuffer({
-          outorganteNome, outorganteCpfCnpj, outorgadoNome, outorgadoCpfCnpj,
+          outorganteNome, outorganteCpfCnpj, outorganteEndereco, outorgadoNome, outorgadoCpfCnpj,
           placa, marcaModelo, chassi, renavam, cor, anoFabricacao, anoModelo,
         });
       } catch (e) {
@@ -6904,8 +6929,8 @@ app.post('/api/contrato-aluguel/localizar', requireAuth, async (req, res) => {
 
 // ── POST /api/procuracao-veicular/localizar-cpf ───────────────────────────────
 // Etapa 1a do serviço "Gerar Procuração Veicular": busca o nome mais recente
-// na Localização CPF V3 (Datacube) pra pré-preencher o nome do OUTORGANTE a
-// partir do CPF digitado. Não cobra créditos.
+// na Localização CPF V3 (Datacube) pra pré-preencher o nome do OUTORGADO (quem
+// vai representar o OUTORGANTE) a partir do CPF digitado. Não cobra créditos.
 app.post('/api/procuracao-veicular/localizar-cpf', requireAuth, async (req, res) => {
   const cpf = (req.body?.cpf || '').replace(/\D/g, '');
   if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
@@ -6946,8 +6971,10 @@ app.post('/api/procuracao-veicular/localizar-cpf', requireAuth, async (req, res)
 // Etapa 1b do serviço "Gerar Procuração Veicular": busca o proprietário atual
 // e os dados do veículo (Proprietário Atual, mesmo endpoint Datacube da aba
 // "Opção 2 Nova Consulta" — dc-proprietario-atual) a partir da placa, pra
-// pré-preencher o OUTORGADO (nome + CPF/CNPJ vêm junto do proprietário atual
-// do veículo) e os campos do veículo. Não cobra créditos.
+// pré-preencher o OUTORGANTE (nome + CPF/CNPJ vêm junto do proprietário atual
+// do veículo) e os campos do veículo. Se a Proprietário Atual não trouxer
+// endereço, cai pra Veicular Completa (Vistocar) só pra completar esse dado
+// (ver fallback abaixo). Não cobra créditos.
 app.post('/api/procuracao-veicular/localizar-placa', requireAuth, async (req, res) => {
   const placa = (req.body?.placa || '').toUpperCase().replace(/[\s-]/g, '');
   if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
@@ -6971,7 +6998,50 @@ app.post('/api/procuracao-veicular/localizar-placa', requireAuth, async (req, re
     if (!hasData) return res.status(422).json({ error: 'Nenhum dado encontrado para essa placa.' });
 
     const fields = extractProprietarioAtualFields(result);
-    res.json({ success: true, data: fields });
+    let endereco = composeEndereco(fields);
+
+    // Proprietário Atual nem sempre traz endereço — cai pra Veicular Completa
+    // (API Vistocar, schema documentado em buildVeicularCompletaPdfBuffer) só
+    // pra completar esse dado. Best-effort: se falhar ou também não trouxer
+    // endereço, segue sem — o formulário fica editável de qualquer forma.
+    if (!endereco) {
+      try {
+        const token = await getVistocarToken();
+        const vcRes = await fetch(`${VISTOCAR_BASE_URL}/apiclient/completa`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ plate: placa }),
+        });
+        const vcParsed = await vcRes.json().catch(() => null);
+        const vcOk = vcParsed?.status === 200 && vcParsed?.response?.success === true && vcParsed?.response?.dadosVeicular;
+        if (vcOk) {
+          const enderecos = vcParsed.response.dadosVeicular.proprietario?.enderecos;
+          const end = Array.isArray(enderecos) && enderecos.length ? enderecos[0] : null;
+          if (end) {
+            endereco = composeEndereco({
+              logradouro:  pickAlias(end, ['logradouro', 'endereco', 'rua']),
+              numero:      pickAlias(end, ['numero', 'numero_endereco', 'num']),
+              complemento: pickAlias(end, ['complemento']),
+              bairro:      pickAlias(end, ['bairro']),
+              cidade:      pickAlias(end, ['cidade', 'municipio']),
+              uf:          pickAlias(end, ['uf', 'estado']),
+              cep:         pickAlias(end, ['cep']),
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('[procuracao-veicular] fallback Veicular Completa (endereço) falhou:', e.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        nome: fields.nome, cpfCnpj: fields.cpfCnpj, endereco,
+        marcaModelo: fields.marcaModelo, chassi: fields.chassi, renavam: fields.renavam,
+        cor: fields.cor, anoFabricacao: fields.anoFabricacao, anoModelo: fields.anoModelo,
+      },
+    });
   } catch (err) {
     console.error('Erro em /api/procuracao-veicular/localizar-placa:', err.message);
     res.status(500).json({ error: 'Erro interno ao buscar dados da placa.' });
