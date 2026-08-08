@@ -2226,9 +2226,15 @@ function deepFindAlias(obj, aliases, depth = 3) {
 }
 
 function extractProprietarioAtualFields(data) {
+  // Schema real confirmado em produção (placa KPU4A03): {..., marca, modelo,
+  // proprietario_documento, proprietario_nome, ...} — marca/modelo vêm em
+  // campos separados (não "marca_modelo"), e os apelidos de nome/documento
+  // do proprietário usam a ordem "proprietario_X", não "X_proprietario".
+  const marca = deepFindAlias(data, ['marca']);
+  const modelo = deepFindAlias(data, ['modelo', 'descricao_modelo']);
   return {
-    nome:          deepFindAlias(data, ['nome', 'nome_proprietario', 'proprietario', 'nome_completo']),
-    cpfCnpj:       deepFindAlias(data, ['cpf_cnpj', 'cpfcnpj', 'cpf', 'cnpj', 'documento', 'documento_proprietario']),
+    nome:          deepFindAlias(data, ['proprietario_nome', 'nome_proprietario', 'nome', 'proprietario', 'nome_completo']),
+    cpfCnpj:       deepFindAlias(data, ['proprietario_documento', 'documento_proprietario', 'cpf_cnpj', 'cpfcnpj', 'cpf', 'cnpj', 'documento']),
     logradouro:    deepFindAlias(data, ['logradouro', 'endereco', 'rua']),
     numero:        deepFindAlias(data, ['numero', 'numero_endereco', 'num']),
     complemento:   deepFindAlias(data, ['complemento']),
@@ -2236,7 +2242,7 @@ function extractProprietarioAtualFields(data) {
     cidade:        deepFindAlias(data, ['cidade', 'municipio']),
     uf:            deepFindAlias(data, ['uf', 'estado']),
     cep:           deepFindAlias(data, ['cep']),
-    marcaModelo:   deepFindAlias(data, ['marca_modelo', 'marcamodelo', 'marca_modelo_versao', 'modelo', 'descricao_modelo']),
+    marcaModelo:   [marca, modelo].filter(Boolean).join('/') || deepFindAlias(data, ['marca_modelo', 'marcamodelo', 'marca_modelo_versao']),
     chassi:        deepFindAlias(data, ['chassi']),
     renavam:       deepFindAlias(data, ['renavam']),
     cor:           deepFindAlias(data, ['cor', 'cor_veiculo']),
