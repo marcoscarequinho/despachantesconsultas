@@ -2165,6 +2165,7 @@ function inputTypeLabel(t) {
     veiculos_documento:  'Entrada: CPF/CNPJ',
     declaracao_residencia: 'Entrada: CPF (com busca automática)',
     contrato_aluguel:    'Entrada: Tipo + CPF/CNPJ Locador/Locatário + Endereço + Datas + Valor',
+    procuracao_veicular: 'Entrada: CPF/CNPJ do Outorgante + Placa (com busca automática)',
   };
   return map[t] || t;
 }
@@ -2517,6 +2518,7 @@ function selectService(svc) {
 function queryActionLabel(inputType) {
   if (inputType === 'declaracao_residencia') return 'Gerar Declaração';
   if (inputType === 'contrato_aluguel') return 'Gerar Contrato';
+  if (inputType === 'procuracao_veicular') return 'Gerar Procuração';
   return 'Realizar Consulta';
 }
 
@@ -2753,6 +2755,39 @@ function renderFormFields(inputType, svc) {
         ${field('data_fim', 'Data de Término do Contrato', 'date')}
       </div>
       ${field('valor_aluguel', 'Valor do Aluguel (R$)', 'text', '1500.00')}`,
+
+    procuracao_veicular: `
+      <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 text-xs text-blue-800">
+        ℹ️ Informe o CPF do Outorgante e clique em "🔎 Buscar" para localizar o nome automaticamente (Localização CPF V3). Informe a placa e clique em "🔎 Buscar" para localizar o Outorgado (proprietário atual) e os dados do veículo. Confira e edite o que precisar antes de gerar a procuração.
+      </div>
+      <div class="font-semibold text-gray-700 text-sm mb-2">Outorgante</div>
+      <div class="flex gap-2 items-end mb-1">
+        <div class="flex-1">${field('outorgante_cpf', 'CPF/CNPJ do Outorgante', 'text', '000.000.000-00 ou CNPJ')}</div>
+        <button type="button" onclick="buscarOutorganteProcuracao()" class="btn-primary text-xs px-4 py-2.5 whitespace-nowrap">🔎 Buscar</button>
+      </div>
+      <p id="procuracao-busca-status-outorgante" class="text-xs mb-2 hidden"></p>
+      ${field('outorgante_nome', 'Nome do Outorgante', 'text', 'NOME COMPLETO / RAZÃO SOCIAL')}
+      <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Veículo</div>
+      <div class="flex gap-2 items-end mb-1">
+        <div class="flex-1">${field('placa', 'Placa do Veículo', 'text', 'ABC1234 ou ABC-1234')}</div>
+        <button type="button" onclick="buscarVeiculoProcuracao()" class="btn-primary text-xs px-4 py-2.5 whitespace-nowrap">🔎 Buscar</button>
+      </div>
+      <p id="procuracao-busca-status-veiculo" class="text-xs mb-2 hidden"></p>
+      <div class="grid grid-cols-2 gap-3">
+        ${field('marca_modelo', 'Marca/Modelo', 'text', '(preenchido pela busca)', false)}
+        ${field('chassi', 'Chassi', 'text', '(preenchido pela busca)', false)}
+      </div>
+      <div class="grid grid-cols-3 gap-3">
+        ${field('renavam', 'Renavam', 'text', '(preenchido pela busca)', false)}
+        ${field('cor', 'Cor', 'text', '(preenchido pela busca)', false)}
+        ${field('ano_fabricacao', 'Ano Fab.', 'text', '(preenchido pela busca)', false)}
+      </div>
+      ${field('ano_modelo', 'Ano Modelo', 'text', '(preenchido pela busca)', false)}
+      <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Outorgado (proprietário atual do veículo)</div>
+      <div class="grid grid-cols-2 gap-3">
+        ${field('outorgado_nome', 'Nome do Outorgado', 'text', '(preenchido pela busca da placa)')}
+        ${field('outorgado_cpf', 'CPF/CNPJ do Outorgado', 'text', '(preenchido pela busca da placa)', false)}
+      </div>`,
 
     crv_full: placaField + renavamField + `
       <div class="grid grid-cols-2 gap-3">
@@ -3017,6 +3052,81 @@ async function buscarNomeContratoAluguel(prefix) {
   }
 }
 
+// ── Gerar Procuração Veicular: busca o nome do Outorgante via Localização CPF
+// V3 a partir do CPF digitado. Não cobra créditos.
+async function buscarOutorganteProcuracao() {
+  const cpf = (document.getElementById('f-outorgante_cpf')?.value || '').replace(/\D/g, '');
+  const status = document.getElementById('procuracao-busca-status-outorgante');
+  const setStatus = (msg, cor) => {
+    if (!status) return;
+    status.className = `text-xs mb-2 ${cor}`;
+    status.textContent = msg;
+    status.classList.remove('hidden');
+  };
+  if (cpf.length === 14) { setStatus('ℹ️ Busca automática disponível apenas para CPF (pessoa física). Preencha o nome manualmente.', 'text-amber-600'); return; }
+  if (cpf.length !== 11) { setStatus('⚠️ Informe um CPF válido (11 dígitos).', 'text-amber-600'); return; }
+
+  setStatus('⏳ Buscando dados na Localização CPF V3…', 'text-blue-600');
+  try {
+    const r = await fetch('/api/procuracao-veicular/localizar-cpf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cpf }),
+    });
+    const data = await r.json();
+    if (!r.ok) { setStatus('⚠️ ' + (data.error || 'Não foi possível localizar o nome. Preencha manualmente.'), 'text-amber-600'); return; }
+    if (data.nome) {
+      const nomeEl = document.getElementById('f-outorgante_nome');
+      if (nomeEl) nomeEl.value = data.nome;
+      setStatus('✅ Nome localizado! Confira antes de gerar a procuração.', 'text-green-600');
+    } else {
+      setStatus('⚠️ Nenhum nome encontrado para esse CPF. Preencha manualmente.', 'text-amber-600');
+    }
+  } catch {
+    setStatus('⚠️ Erro de conexão ao buscar os dados. Preencha manualmente.', 'text-amber-600');
+  }
+}
+
+// ── Gerar Procuração Veicular: busca o proprietário atual (Outorgado) e os
+// dados do veículo via Proprietário Atual (Opção 2 Nova Consulta/Datacube) a
+// partir da placa. Não cobra créditos.
+async function buscarVeiculoProcuracao() {
+  const placa = (document.getElementById('f-placa')?.value || '').toUpperCase().replace(/[\s-]/g, '');
+  const status = document.getElementById('procuracao-busca-status-veiculo');
+  const setStatus = (msg, cor) => {
+    if (!status) return;
+    status.className = `text-xs mb-2 ${cor}`;
+    status.textContent = msg;
+    status.classList.remove('hidden');
+  };
+  if (placa.length < 7) { setStatus('⚠️ Informe uma placa válida.', 'text-amber-600'); return; }
+
+  setStatus('⏳ Buscando dados na Proprietário Atual…', 'text-blue-600');
+  try {
+    const r = await fetch('/api/procuracao-veicular/localizar-placa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ placa }),
+    });
+    const data = await r.json();
+    if (!r.ok) { setStatus('⚠️ ' + (data.error || 'Não foi possível localizar os dados. Preencha manualmente.'), 'text-amber-600'); return; }
+
+    const set = (id, val) => { const el = document.getElementById('f-' + id); if (el && val) el.value = val; };
+    set('outorgado_nome', data.data.nome);
+    set('outorgado_cpf', data.data.cpfCnpj);
+    set('marca_modelo', data.data.marcaModelo);
+    set('chassi', data.data.chassi);
+    set('renavam', data.data.renavam);
+    set('cor', data.data.cor);
+    set('ano_fabricacao', data.data.anoFabricacao);
+    set('ano_modelo', data.data.anoModelo);
+
+    setStatus('✅ Dados localizados! Confira e edite o que precisar antes de gerar a procuração.', 'text-green-600');
+  } catch {
+    setStatus('⚠️ Erro de conexão ao buscar os dados. Preencha manualmente.', 'text-amber-600');
+  }
+}
+
 async function autocompletarCep(cep) {
   const status = document.getElementById('cep-status');
   const setStatus = (msg, cor) => {
@@ -3219,6 +3329,21 @@ function buildParams(inputType) {
       valorAluguel: g('valor_aluguel'),
     };
 
+  if (inputType === 'procuracao_veicular')
+    return {
+      outorganteNome: g('outorgante_nome'),
+      outorganteCpfCnpj: cd(g('outorgante_cpf')),
+      outorgadoNome: g('outorgado_nome'),
+      outorgadoCpfCnpj: cd(g('outorgado_cpf')),
+      placa: g('placa'),
+      marcaModelo: g('marca_modelo'),
+      chassi: g('chassi'),
+      renavam: g('renavam'),
+      cor: g('cor'),
+      anoFabricacao: g('ano_fabricacao'),
+      anoModelo: g('ano_modelo'),
+    };
+
   if (inputType === 'venda') {
     const vDoc = cd(g('v_cpf'));
     const cDoc = cd(g('c_cpf'));
@@ -3267,6 +3392,14 @@ function validateParams(inputType, p) {
     if (!p.dataFim)                return 'Informe a data de término do contrato.';
     if (p.dataFim <= p.dataInicio) return 'A data de término deve ser posterior à data de início.';
     if (!p.valorAluguel || isNaN(parseFloat(p.valorAluguel.replace(',', '.')))) return 'Informe um valor de aluguel válido.';
+    return null;
+  }
+  if (inputType === 'procuracao_veicular') {
+    if (!p.outorganteNome)         return 'Informe o nome do Outorgante.';
+    if (p.outorganteCpfCnpj.length !== 11 && p.outorganteCpfCnpj.length !== 14) return 'CPF/CNPJ do Outorgante inválido.';
+    if (!p.outorgadoNome)          return 'Informe o nome do Outorgado (busque pela placa).';
+    if (p.outorgadoCpfCnpj && p.outorgadoCpfCnpj.length !== 11 && p.outorgadoCpfCnpj.length !== 14) return 'CPF/CNPJ do Outorgado inválido.';
+    if (p.placa.replace(/[^A-Za-z0-9]/g, '').length !== 7) return 'Placa inválida. Deve ter 7 caracteres (sem hífen).';
     return null;
   }
   if (inputType === 'cancelar_venda') {

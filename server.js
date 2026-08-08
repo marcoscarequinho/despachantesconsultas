@@ -278,6 +278,16 @@ const SERVICES = [
   // Urbano (Lei nº 8.245/91). Preço fixo cobrindo as 2 consultas de
   // Localização CPF V3 usadas para pré-preencher o formulário.
   { id:'contrato-aluguel', name:'Gerar Contrato de Aluguel', group:'Procurações e Contratos', basePrice:16.00, noMarkup:true, inputType:'contrato_aluguel', icon:'📜' },
+  // Gerar Procuração Veicular — mesmo padrão em duas etapas acima, mas com uma
+  // particularidade: o CPF/CNPJ digitado + Localização CPF V3 pré-preenche o
+  // OUTORGANTE, enquanto a Placa + Proprietário Atual (Datacube, mesmo endpoint
+  // da aba "Opção 2 Nova Consulta", ver dc-proprietario-atual em SERVICES_V2)
+  // pré-preenche o OUTORGADO (nome e CPF/CNPJ vêm junto do proprietário atual
+  // do veículo) e os dados do veículo — ver POST
+  // /api/procuracao-veicular/localizar-cpf e /localizar-placa (ambos sem
+  // custo) e buildProcuracaoVeicularPdfBuffer (modelo padrão de procuração,
+  // sem overlay de PDF oficial).
+  { id:'procuracao-veicular', name:'Gerar Procuração Veicular', group:'Procurações e Contratos', basePrice:22.00, noMarkup:true, inputType:'procuracao_veicular', icon:'🖊️' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // API Vistocar (vistocarconsulta.com.br) — fonte para Reemissão de CRLV-e RJ,
@@ -2187,6 +2197,45 @@ function extractNomeFromLocalizacaoV3(localizacaoData) {
   return pickAlias(nomeRec, ['nome', 'nome_completo', 'valor']);
 }
 
+// Mesma heurística de pickAlias, mas descendo em objetos/arrays aninhados —
+// necessária para o retorno de "Proprietário Atual" (dc-proprietario-atual,
+// mesmo endpoint Datacube da aba "Opção 2 Nova Consulta"), cujo formato
+// (proprietário + dados do veículo em subobjetos) também não é documentado.
+// Usada em POST /api/procuracao-veicular/localizar-placa — o formulário fica
+// editável, então o pior caso é o campo ficar em branco.
+function deepFindAlias(obj, aliases, depth = 3) {
+  if (!obj || typeof obj !== 'object' || depth < 0) return '';
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      const found = deepFindAlias(item, aliases, depth - 1);
+      if (found) return found;
+    }
+    return '';
+  }
+  const direct = pickAlias(obj, aliases);
+  if (direct) return direct;
+  for (const v of Object.values(obj)) {
+    if (v && typeof v === 'object') {
+      const found = deepFindAlias(v, aliases, depth - 1);
+      if (found) return found;
+    }
+  }
+  return '';
+}
+
+function extractProprietarioAtualFields(data) {
+  return {
+    nome:          deepFindAlias(data, ['nome', 'nome_proprietario', 'proprietario', 'nome_completo']),
+    cpfCnpj:       deepFindAlias(data, ['cpf_cnpj', 'cpfcnpj', 'cpf', 'cnpj', 'documento', 'documento_proprietario']),
+    marcaModelo:   deepFindAlias(data, ['marca_modelo', 'marcamodelo', 'marca_modelo_versao', 'modelo', 'descricao_modelo']),
+    chassi:        deepFindAlias(data, ['chassi']),
+    renavam:       deepFindAlias(data, ['renavam']),
+    cor:           deepFindAlias(data, ['cor', 'cor_veiculo']),
+    anoFabricacao: deepFindAlias(data, ['ano_fabricacao', 'anofabricacao', 'ano_fab']),
+    anoModelo:     deepFindAlias(data, ['ano_modelo', 'anomodelo', 'ano_mod']),
+  };
+}
+
 function extractDeclaracaoResidenciaFields(localizacaoData) {
   const nomeRec  = firstRecord(localizacaoData?.nomes);
   const endRec   = firstRecord(localizacaoData?.enderecos);
@@ -2297,14 +2346,20 @@ function formatDateExtenso(iso) {
   return `${m[3]} de ${MESES_EXTENSO[parseInt(m[2], 10) - 1]} de ${m[1]}`;
 }
 
+// x/width sempre explícitos (não confiar no cursor implícito do pdfkit): um
+// pdfFieldGrid antes destas chamadas termina com .text(str, x, y, {width})
+// nas duas colunas, o que desloca doc.x para a coluna direita — sem x/width
+// aqui, o próximo parágrafo herdaria essa posição e saíria estreito/deslocado.
 function pdfContractTitle(doc, text) {
-  doc.font('Helvetica-Bold').fontSize(9.5).text(text, { align: 'left' });
+  const { left, width } = pdfContentBox(doc);
+  doc.font('Helvetica-Bold').fontSize(9.5).text(text, left, doc.y, { width, align: 'left' });
   doc.moveDown(0.2);
   doc.font('Helvetica').fontSize(9.5);
 }
 
 function pdfContractParagraph(doc, text) {
-  doc.font('Helvetica').fontSize(9.5).text(text, { align: 'justify', lineGap: 1.5 });
+  const { left, width } = pdfContentBox(doc);
+  doc.font('Helvetica').fontSize(9.5).text(text, left, doc.y, { width, align: 'justify', lineGap: 1.5 });
   doc.moveDown(0.6);
 }
 
@@ -2424,6 +2479,86 @@ function buildContratoAluguelPdfBuffer(params) {
         [params.locadorNome, `CPF/CNPJ: ${maskDocDisplay(params.locadorCpfCnpj)}`]);
       pdfContractSignatureBlock(doc, y1, 'right', 'LOCATÁRIO(A)',
         [params.locatarioNome, `CPF/CNPJ: ${maskDocDisplay(params.locatarioCpfCnpj)}`]);
+
+      doc.y = y1 + 60;
+      pdfEnsureSpace(doc, 60);
+      doc.moveDown(2);
+      const y2 = doc.y;
+      pdfContractSignatureBlock(doc, y2, 'left', 'TESTEMUNHA 1', ['CPF: ______________________']);
+      pdfContractSignatureBlock(doc, y2, 'right', 'TESTEMUNHA 2', ['CPF: ______________________']);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+// ── Geração de PDF — Gerar Procuração Veicular. Mesma técnica do contrato de
+// aluguel acima (documento montado do zero com pdfkit, sem PDF/template
+// oficial), modelo padrão de procuração particular para atos perante o
+// DETRAN e demais órgãos de trânsito. Só o OUTORGANTE assina (procuração
+// particular é ato unilateral) — o OUTORGADO só precisa estar qualificado no
+// texto.
+function buildProcuracaoVeicularPdfBuffer(params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 55 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+
+      const now = new Date();
+
+      doc.font('Helvetica-Bold').fontSize(16).text('PROCURAÇÃO', { align: 'center' });
+      doc.moveDown(1);
+
+      pdfContractParagraph(doc,
+        `Pelo presente instrumento particular de procuração, eu, ${params.outorganteNome}, portador(a) do CPF/CNPJ sob o nº ` +
+        `${maskDocDisplay(params.outorganteCpfCnpj)}, nomeio e constituo como meu(minha) bastante procurador(a) ${params.outorgadoNome}` +
+        (params.outorgadoCpfCnpj ? `, portador(a) do CPF/CNPJ sob o nº ${maskDocDisplay(params.outorgadoCpfCnpj)},` : ',') +
+        ` a quem confiro os poderes descritos neste instrumento para que, em meu nome, junto ao Departamento de Trânsito ` +
+        `(DETRAN), aos demais órgãos do Sistema Nacional de Trânsito e a quaisquer terceiros que se fizerem necessários, ` +
+        `pratique os atos relativos ao veículo abaixo identificado:`);
+
+      const veiculoPairs = [
+        ['Placa', maskPlacaDisplay(params.placa)],
+        ['Marca/Modelo', params.marcaModelo],
+        ['Chassi', params.chassi],
+        ['RENAVAM', params.renavam],
+        ['Cor', params.cor],
+        ['Ano Fabricação/Modelo', (params.anoFabricacao || params.anoModelo) ? `${params.anoFabricacao || '-'}/${params.anoModelo || '-'}` : ''],
+      ].filter(([, v]) => v);
+      if (veiculoPairs.length) { pdfFieldGrid(doc, veiculoPairs); doc.moveDown(0.6); }
+
+      pdfContractTitle(doc, 'PODERES');
+      pdfContractParagraph(doc,
+        `Assinar requerimentos, formulários e demais documentos necessários; solicitar e retirar o Certificado de Registro de ` +
+        `Veículo (CRV) e o Certificado de Registro e Licenciamento de Veículo (CRLV); requerer transferência de propriedade, ` +
+        `licenciamento anual, alteração de características, inclusão ou baixa de gravame/alienação fiduciária, segunda via de ` +
+        `documentos e placas; efetuar o pagamento de taxas, tributos e multas; representar o(a) OUTORGANTE perante o DETRAN, ` +
+        `demais órgãos de trânsito, seguradoras e instituições financeiras no que for necessário à regularização do veículo; ` +
+        `bem como praticar todos os demais atos necessários ao fiel cumprimento deste mandato, dando tudo por bom, firme e ` +
+        `valioso.`);
+
+      pdfContractTitle(doc, 'VALIDADE');
+      pdfContractParagraph(doc,
+        `Esta procuração é outorgada pelo prazo de 12 (doze) meses, contados desta data, podendo ser revogada a qualquer ` +
+        `tempo pelo(a) OUTORGANTE, mediante comunicação escrita.`);
+
+      doc.moveDown(0.5);
+      doc.font('Helvetica').fontSize(9.5)
+        .text(`Local, ${formatDateExtenso(now.toISOString().slice(0, 10))}.`, { align: 'center' });
+
+      pdfEnsureSpace(doc, 150);
+      doc.moveDown(3);
+      const y1 = doc.y;
+      const { left, width } = pdfContentBox(doc);
+      doc.moveTo(left + width / 2 - 110, y1).lineTo(left + width / 2 + 110, y1).stroke();
+      doc.fontSize(9).font('Helvetica-Bold').text('OUTORGANTE', left, y1 + 4, { width, align: 'center' });
+      doc.font('Helvetica').text(params.outorganteNome, left, y1 + 16, { width, align: 'center' });
+      doc.text(`CPF/CNPJ: ${maskDocDisplay(params.outorganteCpfCnpj)}`, left, y1 + 28, { width, align: 'center' });
 
       doc.y = y1 + 60;
       pdfEnsureSpace(doc, 60);
@@ -4137,6 +4272,74 @@ async function processCatalogQuery(userId, serviceId, params, res) {
 
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="contrato-aluguel-${Date.now()}.pdf"`);
+      return res.send(pdfBuf);
+    }
+
+    // ── Gerar Procuração Veicular — mesmo padrão acima: os campos já chegam
+    // prontos do formulário (Outorgante pré-preenchido via POST
+    // /api/procuracao-veicular/localizar-cpf, Outorgado e dados do veículo via
+    // /localizar-placa, todos conferidos/editados pelo usuário), então só
+    // validamos, montamos a procuração do zero (ver
+    // buildProcuracaoVeicularPdfBuffer) e cobramos.
+    if (serviceId === 'procuracao-veicular') {
+      const outorganteNome = (params?.outorganteNome || '').trim();
+      const outorganteCpfCnpj = (params?.outorganteCpfCnpj || '').replace(/\D/g, '');
+      const outorgadoNome = (params?.outorgadoNome || '').trim();
+      const outorgadoCpfCnpj = (params?.outorgadoCpfCnpj || '').replace(/\D/g, '');
+      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      const marcaModelo = (params?.marcaModelo || '').trim();
+      const chassi = (params?.chassi || '').trim();
+      const renavam = (params?.renavam || '').trim();
+      const cor = (params?.cor || '').trim();
+      const anoFabricacao = (params?.anoFabricacao || '').trim();
+      const anoModelo = (params?.anoModelo || '').trim();
+
+      if (!outorganteNome) return res.status(400).json({ error: 'Informe o nome do Outorgante.' });
+      if (outorganteCpfCnpj.length !== 11 && outorganteCpfCnpj.length !== 14)
+        return res.status(400).json({ error: 'CPF/CNPJ do Outorgante inválido.' });
+      if (!outorgadoNome) return res.status(400).json({ error: 'Informe o nome do Outorgado.' });
+      if (outorgadoCpfCnpj && outorgadoCpfCnpj.length !== 11 && outorgadoCpfCnpj.length !== 14)
+        return res.status(400).json({ error: 'CPF/CNPJ do Outorgado inválido.' });
+      if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+
+      let pdfBuf;
+      try {
+        pdfBuf = await buildProcuracaoVeicularPdfBuffer({
+          outorganteNome, outorganteCpfCnpj, outorgadoNome, outorgadoCpfCnpj,
+          placa, marcaModelo, chassi, renavam, cor, anoFabricacao, anoModelo,
+        });
+      } catch (e) {
+        console.error('[procuracao-veicular] erro ao gerar PDF:', e.message);
+        return res.status(500).json({ error: 'Erro ao gerar a procuração.' });
+      }
+
+      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id]
+      );
+
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), expiresAt]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, params);
+
+      if (user.phone) {
+        const caption = `✅ *${service.name} pronta!*\n🖊️ Outorgante: ${outorganteNome}\n🚗 Placa: ${maskPlacaDisplay(placa)}\n\nDocumento gerado pela MC Despachadoria.`;
+        await sendWhatsAppPdf(user.phone, pdfBuf, `procuracao-veicular-${Date.now()}.pdf`, caption).catch(() => {});
+      }
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="procuracao-veicular-${Date.now()}.pdf"`);
       return res.send(pdfBuf);
     }
 
@@ -6696,6 +6899,82 @@ app.post('/api/contrato-aluguel/localizar', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Erro em /api/contrato-aluguel/localizar:', err.message);
     res.status(500).json({ error: 'Erro interno ao buscar dados do CPF.' });
+  }
+});
+
+// ── POST /api/procuracao-veicular/localizar-cpf ───────────────────────────────
+// Etapa 1a do serviço "Gerar Procuração Veicular": busca o nome mais recente
+// na Localização CPF V3 (Datacube) pra pré-preencher o nome do OUTORGANTE a
+// partir do CPF digitado. Não cobra créditos.
+app.post('/api/procuracao-veicular/localizar-cpf', requireAuth, async (req, res) => {
+  const cpf = (req.body?.cpf || '').replace(/\D/g, '');
+  if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+
+  try {
+    const ur = await pool.query('SELECT active FROM users WHERE id=$1', [req.user.id]);
+    if (!ur.rows[0]?.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+
+    const apiRes = await fetch(`${DATACUBE_API_URL}/pessoas/localizacao_v3`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ auth_token: DATACUBE_TOKEN, cpf }),
+    });
+    const bodyStr = await apiRes.text();
+    let parsed;
+    try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
+    if (!parsed) return res.status(502).json({ error: 'Erro ao consultar Localização CPF V3.' });
+
+    const localizacaoResult = parsed.result ?? parsed;
+    let localizacaoData = Array.isArray(localizacaoResult) ? (localizacaoResult[0] ?? {}) : localizacaoResult;
+    if (localizacaoData?.historicos && typeof localizacaoData.historicos === 'object') {
+      localizacaoData = localizacaoData.historicos;
+    }
+    const hasData = localizacaoData && (Array.isArray(localizacaoData)
+      ? localizacaoData.length > 0
+      : Object.keys(localizacaoData).length > 0);
+    if (!hasData) return res.status(422).json({ error: 'Nenhum dado encontrado para esse CPF.' });
+
+    const nome = extractNomeFromLocalizacaoV3(localizacaoData);
+    res.json({ success: true, nome });
+  } catch (err) {
+    console.error('Erro em /api/procuracao-veicular/localizar-cpf:', err.message);
+    res.status(500).json({ error: 'Erro interno ao buscar dados do CPF.' });
+  }
+});
+
+// ── POST /api/procuracao-veicular/localizar-placa ─────────────────────────────
+// Etapa 1b do serviço "Gerar Procuração Veicular": busca o proprietário atual
+// e os dados do veículo (Proprietário Atual, mesmo endpoint Datacube da aba
+// "Opção 2 Nova Consulta" — dc-proprietario-atual) a partir da placa, pra
+// pré-preencher o OUTORGADO (nome + CPF/CNPJ vêm junto do proprietário atual
+// do veículo) e os campos do veículo. Não cobra créditos.
+app.post('/api/procuracao-veicular/localizar-placa', requireAuth, async (req, res) => {
+  const placa = (req.body?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+  if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+
+  try {
+    const ur = await pool.query('SELECT active FROM users WHERE id=$1', [req.user.id]);
+    if (!ur.rows[0]?.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+
+    const apiRes = await fetch(`${DATACUBE_API_URL}/veiculos/proprietario-atual`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ auth_token: DATACUBE_TOKEN, placa }),
+    });
+    const bodyStr = await apiRes.text();
+    let parsed;
+    try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
+    if (!parsed) return res.status(502).json({ error: 'Erro ao consultar Proprietário Atual.' });
+
+    const result = parsed.result ?? parsed;
+    const hasData = result && (Array.isArray(result) ? result.length > 0 : Object.keys(result).length > 0);
+    if (!hasData) return res.status(422).json({ error: 'Nenhum dado encontrado para essa placa.' });
+
+    const fields = extractProprietarioAtualFields(result);
+    res.json({ success: true, data: fields });
+  } catch (err) {
+    console.error('Erro em /api/procuracao-veicular/localizar-placa:', err.message);
+    res.status(500).json({ error: 'Erro interno ao buscar dados da placa.' });
   }
 });
 
