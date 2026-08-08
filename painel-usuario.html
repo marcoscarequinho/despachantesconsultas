@@ -2163,6 +2163,8 @@ function inputTypeLabel(t) {
     cnh_se:              'Entrada: CNH + Registro + Nascimento',
     cnh_cpf_nascimento:  'Entrada: CPF + Nascimento',
     veiculos_documento:  'Entrada: CPF/CNPJ',
+    declaracao_residencia: 'Entrada: CPF (com busca automática)',
+    contrato_aluguel:    'Entrada: Tipo + CPF/CNPJ Locador/Locatário + Endereço + Datas + Valor',
   };
   return map[t] || t;
 }
@@ -2403,6 +2405,7 @@ function buildCategoryGrid() {
     'Divida Ativa':            { icon:'⚖️', color:'bg-rose-50 border-rose-200' },
     'CNH':                     { icon:'🪪', color:'bg-cyan-50 border-cyan-200' },
     'Número CRV (Apenas antigos)': { icon:'📁', color:'bg-indigo-50 border-indigo-200' },
+    'Procurações e Contratos': { icon:'📜', color:'bg-fuchsia-50 border-fuchsia-200' },
   };
 
   document.getElementById('category-grid').innerHTML = cats.map(cat => {
@@ -2503,8 +2506,18 @@ function selectService(svc) {
   submitBtn.disabled = !!svc.unavailable;
   document.getElementById('query-submit-text').textContent = svc.unavailable
     ? 'Indisponível'
-    : (svc.inputType === 'declaracao_residencia' ? 'Gerar Declaração' : 'Realizar Consulta');
+    : queryActionLabel(svc.inputType);
   document.getElementById('query-form-wrap').scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
+
+// Texto do botão de envio do formulário de "Nova Consulta" — a maioria dos
+// serviços é uma consulta simples, mas alguns (Declaração de Residência,
+// Contrato de Aluguel) montam um documento a partir de campos pré-preenchidos
+// em vez de consultar uma API upstream na hora.
+function queryActionLabel(inputType) {
+  if (inputType === 'declaracao_residencia') return 'Gerar Declaração';
+  if (inputType === 'contrato_aluguel') return 'Gerar Contrato';
+  return 'Realizar Consulta';
 }
 
 function renderFormFields(inputType, svc) {
@@ -2706,6 +2719,40 @@ function renderFormFields(inputType, svc) {
           ${field('bairro', 'Bairro', 'text', 'Centro', false)}
         </div>
       </div>`,
+
+    contrato_aluguel: `
+      <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 text-xs text-blue-800">
+        ℹ️ Informe o CPF (pessoa física) do Locatário e/ou do Locador e clique em "🔎 Buscar" para localizar o nome automaticamente (Localização CPF V3). Para CNPJ (pessoa jurídica), preencha o nome manualmente. Confira e edite o que precisar antes de gerar o contrato.
+      </div>
+      <div>
+        <label class="label">Tipo de Contrato <span class="text-red-500">*</span></label>
+        <select id="f-tipo" class="input-field" required>
+          <option value="">Selecione...</option>
+          <option value="residencial">Contrato de Aluguel Residencial</option>
+          <option value="comercial">Contrato de Aluguel Comercial</option>
+        </select>
+      </div>
+      <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Locatário (inquilino)</div>
+      <div class="flex gap-2 items-end mb-1">
+        <div class="flex-1">${field('locatario_cpf', 'CPF/CNPJ do Locatário', 'text', '000.000.000-00 ou CNPJ')}</div>
+        <button type="button" onclick="buscarNomeContratoAluguel('locatario')" class="btn-primary text-xs px-4 py-2.5 whitespace-nowrap">🔎 Buscar</button>
+      </div>
+      <p id="contrato-busca-status-locatario" class="text-xs mb-2 hidden"></p>
+      ${field('locatario_nome', 'Nome do Locatário', 'text', 'NOME COMPLETO / RAZÃO SOCIAL')}
+      <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Locador (proprietário)</div>
+      <div class="flex gap-2 items-end mb-1">
+        <div class="flex-1">${field('locador_cpf', 'CPF/CNPJ do Locador', 'text', '000.000.000-00 ou CNPJ')}</div>
+        <button type="button" onclick="buscarNomeContratoAluguel('locador')" class="btn-primary text-xs px-4 py-2.5 whitespace-nowrap">🔎 Buscar</button>
+      </div>
+      <p id="contrato-busca-status-locador" class="text-xs mb-2 hidden"></p>
+      ${field('locador_nome', 'Nome do Locador', 'text', 'NOME COMPLETO / RAZÃO SOCIAL')}
+      <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Imóvel e Condições</div>
+      ${field('endereco_locacao', 'Endereço da Locação', 'text', 'RUA EXEMPLO, 123, BAIRRO, CIDADE/UF')}
+      <div class="grid grid-cols-2 gap-3">
+        ${field('data_inicio', 'Data de Início do Contrato', 'date')}
+        ${field('data_fim', 'Data de Término do Contrato', 'date')}
+      </div>
+      ${field('valor_aluguel', 'Valor do Aluguel (R$)', 'text', '1500.00')}`,
 
     crv_full: placaField + renavamField + `
       <div class="grid grid-cols-2 gap-3">
@@ -2933,6 +2980,43 @@ async function buscarDadosDeclaracaoResidencia() {
   }
 }
 
+// ── Gerar Contrato de Aluguel: busca o nome mais recente via Localização CPF
+// V3 (Datacube) pra pré-preencher o nome do Locatário ou do Locador — chamada
+// duas vezes, uma por parte (prefix = 'locatario' | 'locador'). Não cobra
+// créditos, só a geração final (botão "Gerar Contrato") debita o valor.
+async function buscarNomeContratoAluguel(prefix) {
+  const cpf = (document.getElementById('f-' + prefix + '_cpf')?.value || '').replace(/\D/g, '');
+  const status = document.getElementById('contrato-busca-status-' + prefix);
+  const setStatus = (msg, cor) => {
+    if (!status) return;
+    status.className = `text-xs mb-2 ${cor}`;
+    status.textContent = msg;
+    status.classList.remove('hidden');
+  };
+  if (cpf.length === 14) { setStatus('ℹ️ Busca automática disponível apenas para CPF (pessoa física). Preencha o nome manualmente.', 'text-amber-600'); return; }
+  if (cpf.length !== 11) { setStatus('⚠️ Informe um CPF válido (11 dígitos).', 'text-amber-600'); return; }
+
+  setStatus('⏳ Buscando dados na Localização CPF V3…', 'text-blue-600');
+  try {
+    const r = await fetch('/api/contrato-aluguel/localizar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cpf }),
+    });
+    const data = await r.json();
+    if (!r.ok) { setStatus('⚠️ ' + (data.error || 'Não foi possível localizar o nome. Preencha manualmente.'), 'text-amber-600'); return; }
+    if (data.nome) {
+      const nomeEl = document.getElementById('f-' + prefix + '_nome');
+      if (nomeEl) nomeEl.value = data.nome;
+      setStatus('✅ Nome localizado! Confira antes de gerar o contrato.', 'text-green-600');
+    } else {
+      setStatus('⚠️ Nenhum nome encontrado para esse CPF. Preencha manualmente.', 'text-amber-600');
+    }
+  } catch {
+    setStatus('⚠️ Erro de conexão ao buscar os dados. Preencha manualmente.', 'text-amber-600');
+  }
+}
+
 async function autocompletarCep(cep) {
   const status = document.getElementById('cep-status');
   const setStatus = (msg, cor) => {
@@ -3122,6 +3206,19 @@ function buildParams(inputType) {
       cep: cd(g('cep')), uf: g('uf').toUpperCase(), cidade: g('cidade'), bairro: g('bairro'),
     };
 
+  if (inputType === 'contrato_aluguel')
+    return {
+      tipo: g('tipo'),
+      locatarioCpfCnpj: cd(g('locatario_cpf')),
+      locatarioNome: g('locatario_nome'),
+      locadorCpfCnpj: cd(g('locador_cpf')),
+      locadorNome: g('locador_nome'),
+      enderecoLocacao: g('endereco_locacao'),
+      dataInicio: g('data_inicio'),
+      dataFim: g('data_fim'),
+      valorAluguel: g('valor_aluguel'),
+    };
+
   if (inputType === 'venda') {
     const vDoc = cd(g('v_cpf'));
     const cDoc = cd(g('c_cpf'));
@@ -3157,6 +3254,19 @@ function validateParams(inputType, p) {
     if (p.cep.length !== 8)         return 'CEP inválido. Deve ter 8 dígitos.';
     if (p.uf.length !== 2)          return 'Informe a UF (2 letras).';
     if (!p.cidade)                  return 'Informe a cidade.';
+    return null;
+  }
+  if (inputType === 'contrato_aluguel') {
+    if (p.tipo !== 'residencial' && p.tipo !== 'comercial') return 'Selecione o tipo de contrato.';
+    if (p.locatarioCpfCnpj.length !== 11 && p.locatarioCpfCnpj.length !== 14) return 'CPF/CNPJ do Locatário inválido.';
+    if (!p.locatarioNome)          return 'Informe o nome do Locatário.';
+    if (p.locadorCpfCnpj.length !== 11 && p.locadorCpfCnpj.length !== 14) return 'CPF/CNPJ do Locador inválido.';
+    if (!p.locadorNome)            return 'Informe o nome do Locador.';
+    if (!p.enderecoLocacao)        return 'Informe o endereço da locação.';
+    if (!p.dataInicio)             return 'Informe a data de início do contrato.';
+    if (!p.dataFim)                return 'Informe a data de término do contrato.';
+    if (p.dataFim <= p.dataInicio) return 'A data de término deve ser posterior à data de início.';
+    if (!p.valorAluguel || isNaN(parseFloat(p.valorAluguel.replace(',', '.')))) return 'Informe um valor de aluguel válido.';
     return null;
   }
   if (inputType === 'cancelar_venda') {
@@ -3200,8 +3310,7 @@ function setQueryLoading(on) {
   document.getElementById('query-submit').disabled = on;
   document.getElementById('query-submit-text').textContent = on
     ? 'Processando...'
-    : (editingComunicacaoVendaQueryId ? 'Salvar Alterações'
-      : (selectedSvc?.inputType === 'declaracao_residencia' ? 'Gerar Declaração' : 'Realizar Consulta'));
+    : (editingComunicacaoVendaQueryId ? 'Salvar Alterações' : queryActionLabel(selectedSvc?.inputType));
   document.getElementById('query-spinner').classList.toggle('hidden', !on);
 }
 

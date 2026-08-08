@@ -266,6 +266,18 @@ const SERVICES = [
   // prontos nos params, sem nova chamada upstream, e o PDF é sobreposto no template
   // oficial (ver buildDeclaracaoResidenciaPdfBuffer).
   { id:'declaracao-residencia-detran-rj', name:'Gerar Declaração de Residência DETRAN RJ', group:'Débitos e Documentação', basePrice:8.00, noMarkup:true, inputType:'declaracao_residencia', icon:'🏠' },
+  // ── Procurações e Contratos ──
+  // Gerar Contrato de Aluguel — mesmo padrão em duas etapas da Declaração de
+  // Residência acima: o front busca o nome do Locatário e do Locador via
+  // Localização CPF V3 (POST /api/contrato-aluguel/localizar, sem custo, uma
+  // chamada por parte), o usuário confere/edita, e só ao clicar "Gerar
+  // Contrato" esse serviço é submetido normalmente por /api/query (ver bloco
+  // serviceId === 'contrato-aluguel' em processCatalogQuery) — o contrato em
+  // si é montado do zero (não é overlay de PDF oficial, ver
+  // buildContratoAluguelPdfBuffer), com o modelo padrão de Locação de Imóvel
+  // Urbano (Lei nº 8.245/91). Preço fixo cobrindo as 2 consultas de
+  // Localização CPF V3 usadas para pré-preencher o formulário.
+  { id:'contrato-aluguel', name:'Gerar Contrato de Aluguel', group:'Procurações e Contratos', basePrice:16.00, noMarkup:true, inputType:'contrato_aluguel', icon:'📜' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // API Vistocar (vistocarconsulta.com.br) — fonte para Reemissão de CRLV-e RJ,
@@ -2167,6 +2179,14 @@ function firstRecord(list) {
   return typeof item === 'object' ? item : { valor: item };
 }
 
+// Usada em POST /api/contrato-aluguel/localizar — só precisa do nome (Locador
+// ou Locatário), diferente da Declaração de Residência que pré-preenche o
+// endereço inteiro do requerente.
+function extractNomeFromLocalizacaoV3(localizacaoData) {
+  const nomeRec = firstRecord(localizacaoData?.nomes);
+  return pickAlias(nomeRec, ['nome', 'nome_completo', 'valor']);
+}
+
 function extractDeclaracaoResidenciaFields(localizacaoData) {
   const nomeRec  = firstRecord(localizacaoData?.nomes);
   const endRec   = firstRecord(localizacaoData?.enderecos);
@@ -2256,6 +2276,167 @@ async function buildDeclaracaoResidenciaPdfBuffer(params) {
   V(dataPorExtenso, { x: 239, y: 439.97, maxX: 459 });
 
   return Buffer.from(await pdfDoc.save());
+}
+
+// ── Geração de PDF — Gerar Contrato de Aluguel. Diferente dos relatórios acima
+// (que sobrepõem dados num PDF/template oficial já pronto), aqui não existe
+// documento oficial — o contrato é montado do zero com pdfkit, seguindo o
+// modelo padrão de Contrato de Locação de Imóvel Urbano previsto na Lei nº
+// 8.245/91 (Lei do Inquilinato), com pequenas variações de texto entre
+// Residencial e Comercial (destinação do imóvel na Cláusula 1ª e ressalva do
+// direito à ação renovatória — art. 51 — na Cláusula 2ª, exclusiva do
+// comercial).
+function formatDateBr(iso) {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : (iso || '');
+}
+
+function formatDateExtenso(iso) {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return iso || '';
+  return `${m[3]} de ${MESES_EXTENSO[parseInt(m[2], 10) - 1]} de ${m[1]}`;
+}
+
+function pdfContractTitle(doc, text) {
+  doc.font('Helvetica-Bold').fontSize(9.5).text(text, { align: 'left' });
+  doc.moveDown(0.2);
+  doc.font('Helvetica').fontSize(9.5);
+}
+
+function pdfContractParagraph(doc, text) {
+  doc.font('Helvetica').fontSize(9.5).text(text, { align: 'justify', lineGap: 1.5 });
+  doc.moveDown(0.6);
+}
+
+function pdfContractSignatureBlock(doc, y, side, title, lines) {
+  const { left, width } = pdfContentBox(doc);
+  const colW = width / 2 - 10;
+  const x = side === 'right' ? left + width - colW : left;
+  doc.moveTo(x, y).lineTo(x + colW, y).stroke();
+  doc.fontSize(9).font('Helvetica-Bold').text(title, x, y + 4, { width: colW, align: 'center' });
+  doc.font('Helvetica');
+  lines.forEach((line, i) => doc.text(line, x, y + 16 + i * 12, { width: colW, align: 'center' }));
+}
+
+function buildContratoAluguelPdfBuffer(params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 55 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+
+      const isComercial = params.tipo === 'comercial';
+      const destinacao = isComercial ? 'comerciais' : 'residenciais';
+      const now = new Date();
+
+      doc.font('Helvetica-Bold').fontSize(14)
+        .text(`CONTRATO DE LOCAÇÃO ${isComercial ? 'COMERCIAL (NÃO RESIDENCIAL)' : 'RESIDENCIAL'} DE IMÓVEL URBANO`, { align: 'center' });
+      doc.moveDown(1);
+
+      pdfContractParagraph(doc,
+        `Pelo presente instrumento particular de Contrato de Locação, de um lado ${params.locadorNome}, ` +
+        `inscrito(a) no CPF/CNPJ sob o nº ${maskDocDisplay(params.locadorCpfCnpj)}, doravante denominado(a) simplesmente LOCADOR(A), ` +
+        `e de outro lado ${params.locatarioNome}, inscrito(a) no CPF/CNPJ sob o nº ${maskDocDisplay(params.locatarioCpfCnpj)}, ` +
+        `doravante denominado(a) simplesmente LOCATÁRIO(A), têm entre si justo e contratado o presente Contrato de Locação de Imóvel ` +
+        `${isComercial ? 'para Fins Não Residenciais' : 'Residencial'}, que se regerá pela Lei nº 8.245, de 18 de outubro de 1991 ` +
+        `(Lei do Inquilinato), e pelas cláusulas e condições a seguir estabelecidas:`);
+
+      pdfContractTitle(doc, 'CLÁUSULA 1ª – DO OBJETO');
+      pdfContractParagraph(doc,
+        `O LOCADOR dá em locação ao LOCATÁRIO, que aceita, o imóvel situado à ${params.enderecoLocacao}, destinado exclusivamente ` +
+        `para fins ${destinacao}, não podendo o LOCATÁRIO alterar essa destinação sem prévia anuência escrita do LOCADOR.`);
+
+      pdfContractTitle(doc, 'CLÁUSULA 2ª – DO PRAZO');
+      pdfContractParagraph(doc,
+        `A presente locação vigorará pelo prazo determinado, com início em ${formatDateBr(params.dataInicio)} e término em ` +
+        `${formatDateBr(params.dataFim)}, findo o qual, se o LOCATÁRIO permanecer no imóvel sem oposição do LOCADOR, a locação ` +
+        `prorrogar-se-á por prazo indeterminado, nos termos da legislação vigente.` +
+        (isComercial ? ` Fica ressalvado ao LOCATÁRIO o direito à ação renovatória, nos termos do art. 51 da Lei nº 8.245/91, ` +
+          `caso preenchidos os requisitos legais para tanto.` : ''));
+
+      pdfContractTitle(doc, 'CLÁUSULA 3ª – DO ALUGUEL E FORMA DE PAGAMENTO');
+      pdfContractParagraph(doc,
+        `O aluguel mensal ajustado entre as partes é de ${fmtMoneyBRL(params.valorAluguel)}, a ser pago pelo LOCATÁRIO até o dia ` +
+        `5 (cinco) de cada mês, relativo ao mês vencido, mediante depósito ou transferência bancária em conta indicada pelo ` +
+        `LOCADOR, sob pena de multa moratória de 10% (dez por cento) sobre o valor em atraso, juros de mora de 1% (um por cento) ` +
+        `ao mês e correção monetária pelo índice pactuado na Cláusula 4ª.`);
+
+      pdfContractTitle(doc, 'CLÁUSULA 4ª – DO REAJUSTE');
+      pdfContractParagraph(doc,
+        `O valor do aluguel será reajustado anualmente, ou na menor periodicidade admitida em lei, com base na variação ` +
+        `acumulada do IGP-M/FGV (Índice Geral de Preços do Mercado) ou outro índice oficial que venha a substituí-lo.`);
+
+      pdfContractTitle(doc, 'CLÁUSULA 5ª – DAS OBRIGAÇÕES DO LOCATÁRIO');
+      pdfContractParagraph(doc,
+        `O LOCATÁRIO se obriga a: a) pagar pontualmente o aluguel e os encargos da locação; b) usar o imóvel de acordo com sua ` +
+        `destinação, tratando-o com o mesmo cuidado como se fosse seu; c) não sublocar, ceder, emprestar ou transferir total ou ` +
+        `parcialmente o imóvel sem prévia autorização escrita do LOCADOR; d) restituir o imóvel, finda a locação, no estado em ` +
+        `que o recebeu, salvo o desgaste natural pelo uso regular; e) permitir a vistoria do imóvel pelo LOCADOR, mediante prévio ` +
+        `aviso; f) pagar as despesas de consumo (água, luz, gás) e, quando houver, as despesas condominiais ordinárias; g) ` +
+        `comunicar imediatamente ao LOCADOR o surgimento de qualquer dano ou defeito cuja reparação a este incumba.`);
+
+      pdfContractTitle(doc, 'CLÁUSULA 6ª – DAS OBRIGAÇÕES DO LOCADOR');
+      pdfContractParagraph(doc,
+        `O LOCADOR se obriga a: a) entregar o imóvel em condições de uso para os fins a que se destina; b) garantir ao ` +
+        `LOCATÁRIO o uso pacífico do imóvel durante todo o prazo da locação; c) responder pelos vícios ou defeitos anteriores à ` +
+        `locação; d) pagar os tributos, taxas e demais encargos que incidam ou venham a incidir sobre o imóvel, salvo disposição ` +
+        `em contrário estabelecida entre as partes.`);
+
+      pdfContractTitle(doc, 'CLÁUSULA 7ª – DAS BENFEITORIAS');
+      pdfContractParagraph(doc,
+        `As benfeitorias necessárias introduzidas pelo LOCATÁRIO serão indenizáveis, ainda que não autorizadas, assegurado o ` +
+        `direito de retenção. As benfeitorias úteis somente serão indenizáveis se previamente autorizadas por escrito pelo ` +
+        `LOCADOR. As benfeitorias voluptuárias não serão indenizáveis, podendo ser levantadas pelo LOCATÁRIO ao término da ` +
+        `locação, desde que sua retirada não afete a estrutura ou substância do imóvel.`);
+
+      pdfContractTitle(doc, 'CLÁUSULA 8ª – DA RESCISÃO E MULTA');
+      pdfContractParagraph(doc,
+        `O descumprimento de qualquer cláusula deste contrato, bem como a rescisão antecipada e imotivada por qualquer das ` +
+        `partes, sujeitará o infrator ao pagamento de multa equivalente a 3 (três) aluguéis vigentes à época, calculada ` +
+        `proporcionalmente ao período restante do contrato, nos termos do art. 4º da Lei nº 8.245/91, sem prejuízo das perdas e ` +
+        `danos cabíveis.`);
+
+      pdfContractTitle(doc, 'CLÁUSULA 9ª – DA GARANTIA');
+      pdfContractParagraph(doc,
+        `As partes poderão, de comum acordo e em instrumento apartado, convencionar uma das modalidades de garantia ` +
+        `locatícia previstas no art. 37 da Lei nº 8.245/91 (caução, fiança, seguro-fiança ou cessão fiduciária de quotas de ` +
+        `fundo de investimento), não tendo sido pactuada nenhuma garantia específica neste instrumento.`);
+
+      pdfContractTitle(doc, 'CLÁUSULA 10ª – DO FORO');
+      pdfContractParagraph(doc,
+        `Fica eleito o foro da comarca de situação do imóvel para dirimir quaisquer dúvidas ou litígios oriundos do presente ` +
+        `contrato, com renúncia expressa a qualquer outro, por mais privilegiado que seja.`);
+
+      pdfContractParagraph(doc,
+        `E, por estarem assim justos e contratados, firmam o presente instrumento em 2 (duas) vias de igual teor e forma, na ` +
+        `presença das testemunhas abaixo.`);
+
+      doc.moveDown(0.5);
+      doc.font('Helvetica').fontSize(9.5)
+        .text(`Local, ${formatDateExtenso(now.toISOString().slice(0, 10))}.`, { align: 'center' });
+
+      pdfEnsureSpace(doc, 150);
+      doc.moveDown(3);
+      const y1 = doc.y;
+      pdfContractSignatureBlock(doc, y1, 'left', 'LOCADOR(A)',
+        [params.locadorNome, `CPF/CNPJ: ${maskDocDisplay(params.locadorCpfCnpj)}`]);
+      pdfContractSignatureBlock(doc, y1, 'right', 'LOCATÁRIO(A)',
+        [params.locatarioNome, `CPF/CNPJ: ${maskDocDisplay(params.locatarioCpfCnpj)}`]);
+
+      doc.y = y1 + 60;
+      pdfEnsureSpace(doc, 60);
+      doc.moveDown(2);
+      const y2 = doc.y;
+      pdfContractSignatureBlock(doc, y2, 'left', 'TESTEMUNHA 1', ['CPF: ______________________']);
+      pdfContractSignatureBlock(doc, y2, 'right', 'TESTEMUNHA 2', ['CPF: ______________________']);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
 }
 
 // ── Geração de PDF — Verificar CRLV e Último Licenciamento (despbrasil devolve
@@ -3885,6 +4066,77 @@ async function processCatalogQuery(userId, serviceId, params, res) {
 
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="declaracao-residencia-${Date.now()}.pdf"`);
+      return res.send(pdfBuf);
+    }
+
+    // ── Gerar Contrato de Aluguel — mesmo padrão da Declaração de Residência
+    // acima: os nomes de Locador/Locatário já chegam prontos do formulário
+    // (pré-preenchidos via POST /api/contrato-aluguel/localizar e conferidos/
+    // editados pelo usuário), então só validamos, montamos o contrato do zero
+    // (ver buildContratoAluguelPdfBuffer) e cobramos.
+    if (serviceId === 'contrato-aluguel') {
+      const tipo = (params?.tipo || '').trim();
+      const locadorNome = (params?.locadorNome || '').trim();
+      const locadorCpfCnpj = (params?.locadorCpfCnpj || '').replace(/\D/g, '');
+      const locatarioNome = (params?.locatarioNome || '').trim();
+      const locatarioCpfCnpj = (params?.locatarioCpfCnpj || '').replace(/\D/g, '');
+      const enderecoLocacao = (params?.enderecoLocacao || '').trim();
+      const dataInicio = (params?.dataInicio || '').trim();
+      const dataFim = (params?.dataFim || '').trim();
+      const valorAluguel = parseFloat(String(params?.valorAluguel || '').replace(',', '.'));
+
+      if (tipo !== 'residencial' && tipo !== 'comercial')
+        return res.status(400).json({ error: 'Selecione o tipo de contrato (Residencial ou Comercial).' });
+      if (!locadorNome) return res.status(400).json({ error: 'Informe o nome do Locador.' });
+      if (locadorCpfCnpj.length !== 11 && locadorCpfCnpj.length !== 14)
+        return res.status(400).json({ error: 'CPF/CNPJ do Locador inválido.' });
+      if (!locatarioNome) return res.status(400).json({ error: 'Informe o nome do Locatário.' });
+      if (locatarioCpfCnpj.length !== 11 && locatarioCpfCnpj.length !== 14)
+        return res.status(400).json({ error: 'CPF/CNPJ do Locatário inválido.' });
+      if (!enderecoLocacao) return res.status(400).json({ error: 'Informe o endereço do imóvel locado.' });
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dataInicio)) return res.status(400).json({ error: 'Data de início inválida.' });
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dataFim)) return res.status(400).json({ error: 'Data de término inválida.' });
+      if (dataFim <= dataInicio) return res.status(400).json({ error: 'A data de término deve ser posterior à data de início.' });
+      if (!(valorAluguel > 0)) return res.status(400).json({ error: 'Informe um valor de aluguel válido.' });
+
+      let pdfBuf;
+      try {
+        pdfBuf = await buildContratoAluguelPdfBuffer({
+          tipo, locadorNome, locadorCpfCnpj, locatarioNome, locatarioCpfCnpj,
+          enderecoLocacao, dataInicio, dataFim, valorAluguel,
+        });
+      } catch (e) {
+        console.error('[contrato-aluguel] erro ao gerar PDF:', e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o contrato.' });
+      }
+
+      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id]
+      );
+
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), expiresAt]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, params);
+
+      if (user.phone) {
+        const caption = `✅ *${service.name} pronto!*\n🏠 Locatário: ${locatarioNome}\n🧾 Locador: ${locadorNome}\n\nDocumento gerado pela MC Despachadoria.`;
+        await sendWhatsAppPdf(user.phone, pdfBuf, `contrato-aluguel-${Date.now()}.pdf`, caption).catch(() => {});
+      }
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="contrato-aluguel-${Date.now()}.pdf"`);
       return res.send(pdfBuf);
     }
 
@@ -6399,6 +6651,50 @@ app.post('/api/declaracao-residencia/localizar', requireAuth, async (req, res) =
     res.json({ success: true, data: fields });
   } catch (err) {
     console.error('Erro em /api/declaracao-residencia/localizar:', err.message);
+    res.status(500).json({ error: 'Erro interno ao buscar dados do CPF.' });
+  }
+});
+
+// ── POST /api/contrato-aluguel/localizar ──────────────────────────────────────
+// Etapa 1 do serviço "Gerar Contrato de Aluguel": busca o nome mais recente na
+// Localização CPF V3 (Datacube) pra pré-preencher o nome do Locador ou do
+// Locatário no formulário (ver extractNomeFromLocalizacaoV3) — chamada duas
+// vezes pelo front, uma por parte. Só funciona para CPF (pessoa física); CNPJ
+// (pessoa jurídica) não é suportado por esse endpoint da Datacube, o nome
+// precisa ser preenchido manualmente nesse caso. Não cobra créditos — só a
+// geração final (POST /api/query, serviceId contrato-aluguel) debita o valor.
+app.post('/api/contrato-aluguel/localizar', requireAuth, async (req, res) => {
+  const cpf = (req.body?.cpf || '').replace(/\D/g, '');
+  if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+
+  try {
+    const ur = await pool.query('SELECT active FROM users WHERE id=$1', [req.user.id]);
+    if (!ur.rows[0]?.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+
+    const apiRes = await fetch(`${DATACUBE_API_URL}/pessoas/localizacao_v3`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ auth_token: DATACUBE_TOKEN, cpf }),
+    });
+    const bodyStr = await apiRes.text();
+    let parsed;
+    try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
+    if (!parsed) return res.status(502).json({ error: 'Erro ao consultar Localização CPF V3.' });
+
+    const localizacaoResult = parsed.result ?? parsed;
+    let localizacaoData = Array.isArray(localizacaoResult) ? (localizacaoResult[0] ?? {}) : localizacaoResult;
+    if (localizacaoData?.historicos && typeof localizacaoData.historicos === 'object') {
+      localizacaoData = localizacaoData.historicos;
+    }
+    const hasData = localizacaoData && (Array.isArray(localizacaoData)
+      ? localizacaoData.length > 0
+      : Object.keys(localizacaoData).length > 0);
+    if (!hasData) return res.status(422).json({ error: 'Nenhum dado encontrado para esse CPF.' });
+
+    const nome = extractNomeFromLocalizacaoV3(localizacaoData);
+    res.json({ success: true, nome });
+  } catch (err) {
+    console.error('Erro em /api/contrato-aluguel/localizar:', err.message);
     res.status(500).json({ error: 'Erro interno ao buscar dados do CPF.' });
   }
 });
