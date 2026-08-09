@@ -290,6 +290,20 @@ const SERVICES = [
   // buildProcuracaoVeicularPdfBuffer (modelo padrão de procuração, sem
   // overlay de PDF oficial). Preço fixo cobrindo os 3 endpoints usados.
   { id:'procuracao-veicular', name:'Gerar Procuração Veicular', group:'Procurações e Contratos', basePrice:22.00, noMarkup:true, inputType:'procuracao_veicular', icon:'🖊️' },
+  // Gerar Nota de Prestação de Serviços Para Despachantes — mesmo padrão em
+  // duas etapas dos dois itens acima: o front busca o nome do Prestador
+  // (despachante) e do Tomador (cliente) via Localização CPF V3 (POST
+  // /api/nota-prestacao-servicos/localizar, sem custo, uma chamada por parte —
+  // CPF apenas, CNPJ é digitado manualmente), o usuário confere/edita, digita
+  // livremente a Matrícula (CRDD-UF) e a Discriminação dos Serviços Prestados
+  // (texto livre com itens/valores/total, reproduzido como veio — sem parsear
+  // nem calcular), e só ao clicar "Gerar Nota" esse serviço é submetido
+  // normalmente por /api/query (ver bloco serviceId ===
+  // 'nota-prestacao-servicos-despachante' em processCatalogQuery) — a nota é
+  // montada do zero no padrão de Nota de Serviços Eletrônica de despachante,
+  // sem overlay de PDF oficial (ver buildNotaPrestacaoServicosPdfBuffer).
+  // Preço fixo cobrindo as 2 consultas de Localização CPF V3.
+  { id:'nota-prestacao-servicos-despachante', name:'Nota de Prestação de Serviços Para Despachantes RJ', group:'Procurações e Contratos', basePrice:5.00, noMarkup:true, inputType:'nota_prestacao_servicos', icon:'🧾' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // API Vistocar (vistocarconsulta.com.br) — fonte para Reemissão de CRLV-e RJ,
@@ -2295,6 +2309,11 @@ function extractDeclaracaoResidenciaFields(localizacaoData) {
 // pdf-lib (origem no canto inferior esquerdo) — medidas com pdfjs/getTextContent
 // no PDF de referência, sem precisar do passo de conversão top→bottom do ATPVe.
 const DECLARACAO_RESIDENCIA_TEMPLATE_PATH = path.join(__dirname, 'assets', 'declaracao-residencia-detran-rj-template.pdf');
+
+// Brasão do Conselho Regional dos Despachantes Documentalistas do Rio de Janeiro
+// (CRDD-RJ), usado no cabeçalho da Nota de Prestação de Serviços Para
+// Despachantes RJ — serviço fixo em RJ (ver nome do serviço em SERVICES).
+const CRDD_RJ_LOGO_PATH = path.join(__dirname, 'assets', 'crdd-rj-logo.jpg');
 const MESES_EXTENSO = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
 
 function drawDeclaracaoValue(page, font, text, { x, y, maxX, size = 9, minSize = 6 }) {
@@ -2596,6 +2615,101 @@ function buildProcuracaoVeicularPdfBuffer(params) {
       const y2 = doc.y;
       pdfContractSignatureBlock(doc, y2, 'left', 'TESTEMUNHA 1', ['CPF: ______________________']);
       pdfContractSignatureBlock(doc, y2, 'right', 'TESTEMUNHA 2', ['CPF: ______________________']);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+// ── Geração de PDF — Gerar Nota de Prestação de Serviços Para Despachantes.
+// Mesma técnica dos dois anteriores (documento montado do zero com pdfkit,
+// sem PDF/template oficial), no padrão de uma Nota de Serviços Eletrônica
+// emitida por despachante documentalista — documento meramente declaratório
+// (não é nota fiscal, sem cálculo de ISSQN). A discriminação dos serviços
+// (itens e valores unitários) é texto livre digitado pelo despachante e
+// reproduzido como veio, sem tentar parsear/somar itens — só o Valor Total
+// vem como campo numérico separado, destacado em barra própria (equivalente
+// ao "VALOR TOTAL BRUTO DA NOTA" do modelo de referência).
+function buildNotaPrestacaoServicosPdfBuffer(params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 55 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+
+      const now = new Date();
+      const { left, width } = pdfContentBox(doc);
+
+      const headerY = doc.y;
+      const logoW = 55;
+      let logoH = 0;
+      try {
+        const img = doc.openImage(CRDD_RJ_LOGO_PATH);
+        logoH = logoW * (img.height / img.width);
+        doc.image(img, left, headerY, { width: logoW });
+      } catch (e) {
+        console.warn('[nota-prestacao-servicos] logo CRDD-RJ não encontrado:', e.message);
+      }
+
+      const titleX = left + logoW + 12;
+      const titleWidth = width - logoW - 12;
+      doc.font('Helvetica-Bold').fontSize(15)
+        .text('NOTA DE PRESTAÇÃO DE SERVIÇOS', titleX, headerY + 6, { width: titleWidth, align: 'center' });
+      doc.font('Helvetica').fontSize(9).fillColor('#6b7280')
+        .text(`Emitida em ${now.toLocaleString('pt-BR')}`, titleX, doc.y + 2, { width: titleWidth, align: 'center' });
+      doc.fillColor('#111827').fontSize(10);
+
+      doc.y = Math.max(doc.y, headerY + logoH) + 10;
+
+      pdfBar(doc, 'PRESTADOR DE SERVIÇOS');
+      pdfFieldGrid(doc, [
+        ['Nome / Razão Social', params.prestadorNome],
+        ['Matrícula (CRDD-UF)', params.matriculaCrdd],
+        ['CPF/CNPJ', maskDocDisplay(params.prestadorCpfCnpj)],
+      ]);
+      doc.moveDown(0.6);
+
+      pdfBar(doc, 'TOMADOR DE SERVIÇOS (CLIENTE)');
+      pdfFieldGrid(doc, [
+        ['Nome / Razão Social', params.tomadorNome],
+        ['CPF/CNPJ', maskDocDisplay(params.tomadorCpfCnpj)],
+      ]);
+      doc.moveDown(0.6);
+
+      pdfBar(doc, 'DISCRIMINAÇÃO DOS SERVIÇOS PRESTADOS');
+      pdfEnsureSpace(doc, 40);
+      doc.font('Helvetica').fontSize(9.5).fillColor('#111827')
+        .text(params.discriminacaoServicos, left, doc.y, { width, align: 'left', lineGap: 2 });
+      doc.moveDown(1);
+
+      pdfEnsureSpace(doc, 30);
+      pdfBar(doc, `VALOR TOTAL DOS SERVIÇOS: ${fmtMoneyBRL(params.valorTotal)}`, { bg: '#1e40af', color: '#ffffff', size: 11 });
+      doc.moveDown(0.4);
+
+      pdfEnsureSpace(doc, 60);
+      doc.font('Helvetica-Bold').fontSize(8).fillColor('#374151').text('OBSERVAÇÕES:', left, doc.y, { width });
+      doc.font('Helvetica').fontSize(8).fillColor('#6b7280').text(
+        '- Documento meramente declaratório, sem valor de nota fiscal; o prestador é responsável cível e criminal pelo ' +
+        'conteúdo aqui declarado.\n' +
+        '- Eventuais valores referentes a taxas e despesas de órgãos públicos, quando incluídos na discriminação acima, ' +
+        'representam meros reembolsos de despesas efetuadas em nome e por conta do tomador do serviço.',
+        left, doc.y, { width, lineGap: 1.5 }
+      );
+      doc.fillColor('#111827').fontSize(10);
+
+      pdfEnsureSpace(doc, 70);
+      doc.moveDown(2.5);
+      const y1 = doc.y;
+      doc.moveTo(left + width / 2 - 110, y1).lineTo(left + width / 2 + 110, y1).stroke();
+      doc.fontSize(9).font('Helvetica-Bold').text(params.prestadorNome, left, y1 + 4, { width, align: 'center' });
+      doc.font('Helvetica').text(
+        `Despachante Documentalista${params.matriculaCrdd ? ' - Matrícula ' + params.matriculaCrdd : ''}`,
+        left, y1 + 16, { width, align: 'center' }
+      );
 
       doc.end();
     } catch (e) {
@@ -4371,6 +4485,66 @@ async function processCatalogQuery(userId, serviceId, params, res) {
 
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="procuracao-veicular-${Date.now()}.pdf"`);
+      return res.send(pdfBuf);
+    }
+
+    if (serviceId === 'nota-prestacao-servicos-despachante') {
+      const matriculaCrdd = (params?.matriculaCrdd || '').trim();
+      const prestadorCpfCnpj = (params?.prestadorCpfCnpj || '').replace(/\D/g, '');
+      const prestadorNome = (params?.prestadorNome || '').trim();
+      const tomadorCpfCnpj = (params?.tomadorCpfCnpj || '').replace(/\D/g, '');
+      const tomadorNome = (params?.tomadorNome || '').trim();
+      const discriminacaoServicos = (params?.discriminacaoServicos || '').trim();
+      const valorTotal = parseFloat(String(params?.valorTotal || '').replace(',', '.'));
+
+      if (!matriculaCrdd) return res.status(400).json({ error: 'Informe a Matrícula do Despachante (CRDD-UF).' });
+      if (prestadorCpfCnpj.length !== 11 && prestadorCpfCnpj.length !== 14)
+        return res.status(400).json({ error: 'CPF/CNPJ do Prestador inválido.' });
+      if (!prestadorNome) return res.status(400).json({ error: 'Informe o nome do Prestador de Serviços.' });
+      if (tomadorCpfCnpj.length !== 11 && tomadorCpfCnpj.length !== 14)
+        return res.status(400).json({ error: 'CPF/CNPJ do Tomador de Serviços inválido.' });
+      if (!tomadorNome) return res.status(400).json({ error: 'Informe o nome do Tomador de Serviços (Cliente).' });
+      if (!discriminacaoServicos) return res.status(400).json({ error: 'Informe a discriminação dos serviços prestados.' });
+      if (!(valorTotal > 0)) return res.status(400).json({ error: 'Informe um valor total válido.' });
+
+      let pdfBuf;
+      try {
+        pdfBuf = await buildNotaPrestacaoServicosPdfBuffer({
+          matriculaCrdd, prestadorCpfCnpj, prestadorNome, tomadorCpfCnpj, tomadorNome,
+          discriminacaoServicos, valorTotal,
+        });
+      } catch (e) {
+        console.error('[nota-prestacao-servicos-despachante] erro ao gerar PDF:', e.message);
+        return res.status(500).json({ error: 'Erro ao gerar a nota de prestação de serviços.' });
+      }
+
+      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id]
+      );
+
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), expiresAt]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, params);
+
+      if (user.phone) {
+        const caption = `✅ *${service.name} pronta!*\n🧾 Prestador: ${prestadorNome}\n👤 Tomador: ${tomadorNome}\n💰 Total: ${fmtMoneyBRL(valorTotal)}\n\nDocumento gerado pela MC Despachadoria.`;
+        await sendWhatsAppPdf(user.phone, pdfBuf, `nota-prestacao-servicos-${Date.now()}.pdf`, caption).catch(() => {});
+      }
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="nota-prestacao-servicos-${Date.now()}.pdf"`);
       return res.send(pdfBuf);
     }
 
@@ -7051,6 +7225,49 @@ app.post('/api/procuracao-veicular/localizar-placa', requireAuth, async (req, re
   } catch (err) {
     console.error('Erro em /api/procuracao-veicular/localizar-placa:', err.message);
     res.status(500).json({ error: 'Erro interno ao buscar dados da placa.' });
+  }
+});
+
+// ── POST /api/nota-prestacao-servicos/localizar ────────────────────────────────
+// Etapa 1 do serviço "Gerar Nota de Prestação de Serviços Para Despachantes":
+// busca o nome mais recente na Localização CPF V3 (Datacube) a partir do CPF
+// digitado — reutilizado tanto pra pré-preencher o nome do Prestador
+// (despachante) quanto do Tomador (cliente), cada um com sua própria chamada.
+// CPF apenas (Localização CPF V3 não suporta CNPJ); pra CNPJ o nome é digitado
+// manualmente. Não cobra créditos.
+app.post('/api/nota-prestacao-servicos/localizar', requireAuth, async (req, res) => {
+  const cpf = (req.body?.cpf || '').replace(/\D/g, '');
+  if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+
+  try {
+    const ur = await pool.query('SELECT active FROM users WHERE id=$1', [req.user.id]);
+    if (!ur.rows[0]?.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+
+    const apiRes = await fetch(`${DATACUBE_API_URL}/pessoas/localizacao_v3`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ auth_token: DATACUBE_TOKEN, cpf }),
+    });
+    const bodyStr = await apiRes.text();
+    let parsed;
+    try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
+    if (!parsed) return res.status(502).json({ error: 'Erro ao consultar Localização CPF V3.' });
+
+    const localizacaoResult = parsed.result ?? parsed;
+    let localizacaoData = Array.isArray(localizacaoResult) ? (localizacaoResult[0] ?? {}) : localizacaoResult;
+    if (localizacaoData?.historicos && typeof localizacaoData.historicos === 'object') {
+      localizacaoData = localizacaoData.historicos;
+    }
+    const hasData = localizacaoData && (Array.isArray(localizacaoData)
+      ? localizacaoData.length > 0
+      : Object.keys(localizacaoData).length > 0);
+    if (!hasData) return res.status(422).json({ error: 'Nenhum dado encontrado para esse CPF.' });
+
+    const nome = extractNomeFromLocalizacaoV3(localizacaoData);
+    res.json({ success: true, nome });
+  } catch (err) {
+    console.error('Erro em /api/nota-prestacao-servicos/localizar:', err.message);
+    res.status(500).json({ error: 'Erro interno ao buscar dados do CPF.' });
   }
 });
 
