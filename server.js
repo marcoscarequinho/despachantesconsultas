@@ -2641,7 +2641,7 @@ function buildNotaPrestacaoServicosPdfBuffer(params) {
       const { left, width } = pdfContentBox(doc);
 
       const headerY = doc.y;
-      const logoW = 55;
+      const logoW = 95;
       let logoH = 0;
       try {
         const img = doc.openImage(CRDD_BR_LOGO_PATH);
