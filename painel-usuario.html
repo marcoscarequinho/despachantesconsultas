@@ -2793,7 +2793,7 @@ function renderFormFields(inputType, svc) {
 
     nota_prestacao_servicos: `
       <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 text-xs text-blue-800">
-        ℹ️ Informe o CPF (pessoa física) do Prestador e/ou do Tomador e clique em "🔎 Buscar" para localizar o nome automaticamente (Localização CPF V3). Para CNPJ (pessoa jurídica), preencha o nome manualmente. Confira e edite o que precisar antes de gerar a nota.
+        ℹ️ Informe o CPF (pessoa física) do Prestador e/ou do Tomador e clique em "🔎 Buscar" para localizar o nome automaticamente (Localização CPF). Para CNPJ (pessoa jurídica), preencha o nome manualmente. Confira e edite o que precisar antes de gerar a nota.
       </div>
       <div class="font-semibold text-gray-700 text-sm mb-2">Prestador de Serviços (despachante)</div>
       ${field('matricula_crdd', 'Matrícula do Despachante (CRDD-UF)', 'text', 'Ex.: RJ 12.345')}
@@ -3158,10 +3158,10 @@ async function buscarVeiculoProcuracao() {
 }
 
 // ── Gerar Nota de Prestação de Serviços Para Despachantes: busca o nome mais
-// recente via Localização CPF V3 (Datacube) pra pré-preencher o nome do
-// Prestador ou do Tomador — chamada duas vezes, uma por parte (prefix =
-// 'prestador' | 'tomador'). Não cobra créditos, só a geração final (botão
-// "Gerar Nota") debita o valor.
+// recente via Localização CPF (Datacube, Débitos e Documentação — não a V3)
+// pra pré-preencher o nome do Prestador ou do Tomador — chamada duas vezes,
+// uma por parte (prefix = 'prestador' | 'tomador'). Não cobra créditos, só a
+// geração final (botão "Gerar Nota") debita o valor.
 async function buscarNomeNotaPrestacaoServicos(prefix) {
   const cpf = (document.getElementById('f-' + prefix + '_cpf')?.value || '').replace(/\D/g, '');
   const status = document.getElementById('nota-prestacao-busca-status-' + prefix);
@@ -3174,7 +3174,7 @@ async function buscarNomeNotaPrestacaoServicos(prefix) {
   if (cpf.length === 14) { setStatus('ℹ️ Busca automática disponível apenas para CPF (pessoa física). Preencha o nome manualmente.', 'text-amber-600'); return; }
   if (cpf.length !== 11) { setStatus('⚠️ Informe um CPF válido (11 dígitos).', 'text-amber-600'); return; }
 
-  setStatus('⏳ Buscando dados na Localização CPF V3…', 'text-blue-600');
+  setStatus('⏳ Buscando dados na Localização CPF…', 'text-blue-600');
   try {
     const r = await fetch('/api/nota-prestacao-servicos/localizar', {
       method: 'POST',

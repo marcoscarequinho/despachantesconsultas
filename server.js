@@ -292,7 +292,7 @@ const SERVICES = [
   { id:'procuracao-veicular', name:'Gerar Procuração Veicular', group:'Procurações e Contratos', basePrice:22.00, noMarkup:true, inputType:'procuracao_veicular', icon:'🖊️' },
   // Gerar Nota de Prestação de Serviços Para Despachantes — mesmo padrão em
   // duas etapas dos dois itens acima: o front busca o nome do Prestador
-  // (despachante) e do Tomador (cliente) via Localização CPF V3 (POST
+  // (despachante) e do Tomador (cliente) via Localização CPF, não a V3 (POST
   // /api/nota-prestacao-servicos/localizar, sem custo, uma chamada por parte —
   // CPF apenas, CNPJ é digitado manualmente), o usuário confere/edita, digita
   // livremente a Matrícula (CRDD-UF) e a Discriminação dos Serviços Prestados
@@ -302,7 +302,7 @@ const SERVICES = [
   // 'nota-prestacao-servicos-despachante' em processCatalogQuery) — a nota é
   // montada do zero no padrão de Nota de Serviços Eletrônica de despachante,
   // sem overlay de PDF oficial (ver buildNotaPrestacaoServicosPdfBuffer).
-  // Preço fixo cobrindo as 2 consultas de Localização CPF V3.
+  // Preço fixo cobrindo as 2 consultas de Localização CPF.
   { id:'nota-prestacao-servicos-despachante', name:'Nota de Prestação de Serviços Para Despachantes RJ', group:'Procurações e Contratos', basePrice:5.00, noMarkup:true, inputType:'nota_prestacao_servicos', icon:'🧾' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
@@ -2211,6 +2211,18 @@ function firstRecord(list) {
 function extractNomeFromLocalizacaoV3(localizacaoData) {
   const nomeRec = firstRecord(localizacaoData?.nomes);
   return pickAlias(nomeRec, ['nome', 'nome_completo', 'valor']);
+}
+
+// Localização CPF (plain, não a V3) tem um schema diferente — o nome vem
+// direto em "cadastro.nome" (objeto único), não numa lista "nomes" com
+// histórico como na V3 (confirmado testando com CPF real: {"result":
+// {"cadastro":{"nome":"...", ...}, "enderecos":[...], ...}}). Usada em POST
+// /api/nota-prestacao-servicos/localizar. Mantém o fallback pro formato da
+// V3 caso a Datacube unifique o schema no futuro.
+function extractNomeFromLocalizacao(localizacaoData) {
+  const direto = pickAlias(localizacaoData?.cadastro, ['nome', 'nome_completo']);
+  if (direto) return direto;
+  return extractNomeFromLocalizacaoV3(localizacaoData);
 }
 
 // Mesma heurística de pickAlias, mas descendo em objetos/arrays aninhados —
@@ -7230,11 +7242,11 @@ app.post('/api/procuracao-veicular/localizar-placa', requireAuth, async (req, re
 
 // ── POST /api/nota-prestacao-servicos/localizar ────────────────────────────────
 // Etapa 1 do serviço "Gerar Nota de Prestação de Serviços Para Despachantes":
-// busca o nome mais recente na Localização CPF V3 (Datacube) a partir do CPF
-// digitado — reutilizado tanto pra pré-preencher o nome do Prestador
-// (despachante) quanto do Tomador (cliente), cada um com sua própria chamada.
-// CPF apenas (Localização CPF V3 não suporta CNPJ); pra CNPJ o nome é digitado
-// manualmente. Não cobra créditos.
+// busca o nome mais recente na Localização CPF (Datacube, Débitos e
+// Documentação — não a V3) a partir do CPF digitado — reutilizado tanto pra
+// pré-preencher o nome do Prestador (despachante) quanto do Tomador (cliente),
+// cada um com sua própria chamada. CPF apenas (Localização CPF não suporta
+// CNPJ); pra CNPJ o nome é digitado manualmente. Não cobra créditos.
 app.post('/api/nota-prestacao-servicos/localizar', requireAuth, async (req, res) => {
   const cpf = (req.body?.cpf || '').replace(/\D/g, '');
   if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
@@ -7243,7 +7255,7 @@ app.post('/api/nota-prestacao-servicos/localizar', requireAuth, async (req, res)
     const ur = await pool.query('SELECT active FROM users WHERE id=$1', [req.user.id]);
     if (!ur.rows[0]?.active) return res.status(403).json({ error: 'Conta bloqueada.' });
 
-    const apiRes = await fetch(`${DATACUBE_API_URL}/pessoas/localizacao_v3`, {
+    const apiRes = await fetch(`${DATACUBE_API_URL}/pessoas/localizacao`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ auth_token: DATACUBE_TOKEN, cpf }),
@@ -7251,7 +7263,7 @@ app.post('/api/nota-prestacao-servicos/localizar', requireAuth, async (req, res)
     const bodyStr = await apiRes.text();
     let parsed;
     try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
-    if (!parsed) return res.status(502).json({ error: 'Erro ao consultar Localização CPF V3.' });
+    if (!parsed) return res.status(502).json({ error: 'Erro ao consultar Localização CPF.' });
 
     const localizacaoResult = parsed.result ?? parsed;
     let localizacaoData = Array.isArray(localizacaoResult) ? (localizacaoResult[0] ?? {}) : localizacaoResult;
@@ -7263,7 +7275,7 @@ app.post('/api/nota-prestacao-servicos/localizar', requireAuth, async (req, res)
       : Object.keys(localizacaoData).length > 0);
     if (!hasData) return res.status(422).json({ error: 'Nenhum dado encontrado para esse CPF.' });
 
-    const nome = extractNomeFromLocalizacaoV3(localizacaoData);
+    const nome = extractNomeFromLocalizacao(localizacaoData);
     res.json({ success: true, nome });
   } catch (err) {
     console.error('Erro em /api/nota-prestacao-servicos/localizar:', err.message);
