@@ -2166,7 +2166,7 @@ function inputTypeLabel(t) {
     declaracao_residencia: 'Entrada: CPF (com busca automática)',
     contrato_aluguel:    'Entrada: Tipo + CPF/CNPJ Locador/Locatário + Endereço + Datas + Valor',
     procuracao_veicular: 'Entrada: Placa + CPF/CNPJ do Outorgado (com busca automática)',
-    nota_prestacao_servicos: 'Entrada: Matrícula CRDD-UF + CPF/CNPJ Prestador/Tomador (com busca automática) + Discriminação + Valor Total',
+    nota_prestacao_servicos: 'Entrada: Matrícula CRDD-UF + Dados do Prestador/Tomador + Discriminação + Valor Total',
   };
   return map[t] || t;
 }
@@ -2793,22 +2793,14 @@ function renderFormFields(inputType, svc) {
 
     nota_prestacao_servicos: `
       <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 text-xs text-blue-800">
-        ℹ️ Informe o CPF (pessoa física) do Prestador e/ou do Tomador e clique em "🔎 Buscar" para localizar o nome automaticamente (Localização CPF). Para CNPJ (pessoa jurídica), preencha o nome manualmente. Confira e edite o que precisar antes de gerar a nota.
+        ℹ️ Preencha os dados do Prestador e do Tomador e confira antes de gerar a nota.
       </div>
       <div class="font-semibold text-gray-700 text-sm mb-2">Prestador de Serviços (despachante)</div>
       ${field('matricula_crdd', 'Matrícula do Despachante (CRDD-UF)', 'text', 'Ex.: RJ 12.345')}
-      <div class="flex gap-2 items-end mb-1">
-        <div class="flex-1">${field('prestador_cpf', 'CPF/CNPJ do Prestador', 'text', '000.000.000-00 ou CNPJ')}</div>
-        <button type="button" onclick="buscarNomeNotaPrestacaoServicos('prestador')" class="btn-primary text-xs px-4 py-2.5 whitespace-nowrap">🔎 Buscar</button>
-      </div>
-      <p id="nota-prestacao-busca-status-prestador" class="text-xs mb-2 hidden"></p>
+      ${field('prestador_cpf', 'CPF/CNPJ do Prestador', 'text', '000.000.000-00 ou CNPJ')}
       ${field('prestador_nome', 'Nome / Razão Social do Prestador', 'text', 'NOME COMPLETO / RAZÃO SOCIAL')}
       <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Tomador de Serviços (cliente)</div>
-      <div class="flex gap-2 items-end mb-1">
-        <div class="flex-1">${field('tomador_cpf', 'CPF/CNPJ do Tomador', 'text', '000.000.000-00 ou CNPJ')}</div>
-        <button type="button" onclick="buscarNomeNotaPrestacaoServicos('tomador')" class="btn-primary text-xs px-4 py-2.5 whitespace-nowrap">🔎 Buscar</button>
-      </div>
-      <p id="nota-prestacao-busca-status-tomador" class="text-xs mb-2 hidden"></p>
+      ${field('tomador_cpf', 'CPF/CNPJ do Tomador', 'text', '000.000.000-00 ou CNPJ')}
       ${field('tomador_nome', 'Nome / Razão Social do Tomador', 'text', 'NOME COMPLETO / RAZÃO SOCIAL')}
       <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Serviços Prestados</div>
       <div>
@@ -3152,44 +3144,6 @@ async function buscarVeiculoProcuracao() {
     set('ano_modelo', data.data.anoModelo);
 
     setStatus('✅ Dados localizados! Confira e edite o que precisar antes de gerar a procuração.', 'text-green-600');
-  } catch {
-    setStatus('⚠️ Erro de conexão ao buscar os dados. Preencha manualmente.', 'text-amber-600');
-  }
-}
-
-// ── Gerar Nota de Prestação de Serviços Para Despachantes: busca o nome mais
-// recente via Localização CPF (Datacube, Débitos e Documentação — não a V3)
-// pra pré-preencher o nome do Prestador ou do Tomador — chamada duas vezes,
-// uma por parte (prefix = 'prestador' | 'tomador'). Não cobra créditos, só a
-// geração final (botão "Gerar Nota") debita o valor.
-async function buscarNomeNotaPrestacaoServicos(prefix) {
-  const cpf = (document.getElementById('f-' + prefix + '_cpf')?.value || '').replace(/\D/g, '');
-  const status = document.getElementById('nota-prestacao-busca-status-' + prefix);
-  const setStatus = (msg, cor) => {
-    if (!status) return;
-    status.className = `text-xs mb-2 ${cor}`;
-    status.textContent = msg;
-    status.classList.remove('hidden');
-  };
-  if (cpf.length === 14) { setStatus('ℹ️ Busca automática disponível apenas para CPF (pessoa física). Preencha o nome manualmente.', 'text-amber-600'); return; }
-  if (cpf.length !== 11) { setStatus('⚠️ Informe um CPF válido (11 dígitos).', 'text-amber-600'); return; }
-
-  setStatus('⏳ Buscando dados na Localização CPF…', 'text-blue-600');
-  try {
-    const r = await fetch('/api/nota-prestacao-servicos/localizar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cpf }),
-    });
-    const data = await r.json();
-    if (!r.ok) { setStatus('⚠️ ' + (data.error || 'Não foi possível localizar o nome. Preencha manualmente.'), 'text-amber-600'); return; }
-    if (data.nome) {
-      const nomeEl = document.getElementById('f-' + prefix + '_nome');
-      if (nomeEl) nomeEl.value = data.nome;
-      setStatus('✅ Nome localizado! Confira antes de gerar a nota.', 'text-green-600');
-    } else {
-      setStatus('⚠️ Nenhum nome encontrado para esse CPF. Preencha manualmente.', 'text-amber-600');
-    }
   } catch {
     setStatus('⚠️ Erro de conexão ao buscar os dados. Preencha manualmente.', 'text-amber-600');
   }

@@ -290,20 +290,16 @@ const SERVICES = [
   // buildProcuracaoVeicularPdfBuffer (modelo padrão de procuração, sem
   // overlay de PDF oficial). Preço fixo cobrindo os 3 endpoints usados.
   { id:'procuracao-veicular', name:'Gerar Procuração Veicular', group:'Procurações e Contratos', basePrice:22.00, noMarkup:true, inputType:'procuracao_veicular', icon:'🖊️' },
-  // Gerar Nota de Prestação de Serviços Para Despachantes — mesmo padrão em
-  // duas etapas dos dois itens acima: o front busca o nome do Prestador
-  // (despachante) e do Tomador (cliente) via Localização CPF, não a V3 (POST
-  // /api/nota-prestacao-servicos/localizar, sem custo, uma chamada por parte —
-  // CPF apenas, CNPJ é digitado manualmente), o usuário confere/edita, digita
-  // livremente a Matrícula (CRDD-UF) e a Discriminação dos Serviços Prestados
-  // (texto livre com itens/valores/total, reproduzido como veio — sem parsear
-  // nem calcular), e só ao clicar "Gerar Nota" esse serviço é submetido
-  // normalmente por /api/query (ver bloco serviceId ===
+  // Gerar Nota de Prestação de Serviços Para Despachantes — mesmo padrão dos
+  // itens acima: o usuário digita livremente a Matrícula (CRDD-UF), os dados
+  // do Prestador (despachante) e do Tomador (cliente), e a Discriminação dos
+  // Serviços Prestados (texto livre com itens/valores/total, reproduzido como
+  // veio — sem parsear nem calcular), e só ao clicar "Gerar Nota" esse serviço
+  // é submetido normalmente por /api/query (ver bloco serviceId ===
   // 'nota-prestacao-servicos-despachante' em processCatalogQuery) — a nota é
   // montada do zero no padrão de Nota de Serviços Eletrônica de despachante,
   // sem overlay de PDF oficial (ver buildNotaPrestacaoServicosPdfBuffer).
-  // Preço fixo cobrindo as 2 consultas de Localização CPF.
-  { id:'nota-prestacao-servicos-despachante', name:'Nota de Prestação de Serviços Para Despachantes RJ', group:'Procurações e Contratos', basePrice:5.00, noMarkup:true, inputType:'nota_prestacao_servicos', icon:'🧾' },
+  { id:'nota-prestacao-servicos-despachante', name:'Nota de Prestação de Serviços Para Despachantes', group:'Procurações e Contratos', basePrice:1.00, noMarkup:true, inputType:'nota_prestacao_servicos', icon:'🧾' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // API Vistocar (vistocarconsulta.com.br) — fonte para Reemissão de CRLV-e RJ,
@@ -2213,18 +2209,6 @@ function extractNomeFromLocalizacaoV3(localizacaoData) {
   return pickAlias(nomeRec, ['nome', 'nome_completo', 'valor']);
 }
 
-// Localização CPF (plain, não a V3) tem um schema diferente — o nome vem
-// direto em "cadastro.nome" (objeto único), não numa lista "nomes" com
-// histórico como na V3 (confirmado testando com CPF real: {"result":
-// {"cadastro":{"nome":"...", ...}, "enderecos":[...], ...}}). Usada em POST
-// /api/nota-prestacao-servicos/localizar. Mantém o fallback pro formato da
-// V3 caso a Datacube unifique o schema no futuro.
-function extractNomeFromLocalizacao(localizacaoData) {
-  const direto = pickAlias(localizacaoData?.cadastro, ['nome', 'nome_completo']);
-  if (direto) return direto;
-  return extractNomeFromLocalizacaoV3(localizacaoData);
-}
-
 // Mesma heurística de pickAlias, mas descendo em objetos/arrays aninhados —
 // necessária para o retorno de "Proprietário Atual" (dc-proprietario-atual,
 // mesmo endpoint Datacube da aba "Opção 2 Nova Consulta"), cujo formato
@@ -2325,7 +2309,7 @@ const DECLARACAO_RESIDENCIA_TEMPLATE_PATH = path.join(__dirname, 'assets', 'decl
 // Brasão do Conselho Regional dos Despachantes Documentalistas do Rio de Janeiro
 // (CRDD-RJ), usado no cabeçalho da Nota de Prestação de Serviços Para
 // Despachantes RJ — serviço fixo em RJ (ver nome do serviço em SERVICES).
-const CRDD_RJ_LOGO_PATH = path.join(__dirname, 'assets', 'crdd-rj-logo.jpg');
+const CRDD_BR_LOGO_PATH = path.join(__dirname, 'assets', 'crdd-br-logo.png');
 const MESES_EXTENSO = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
 
 function drawDeclaracaoValue(page, font, text, { x, y, maxX, size = 9, minSize = 6 }) {
@@ -2660,11 +2644,11 @@ function buildNotaPrestacaoServicosPdfBuffer(params) {
       const logoW = 55;
       let logoH = 0;
       try {
-        const img = doc.openImage(CRDD_RJ_LOGO_PATH);
+        const img = doc.openImage(CRDD_BR_LOGO_PATH);
         logoH = logoW * (img.height / img.width);
         doc.image(img, left, headerY, { width: logoW });
       } catch (e) {
-        console.warn('[nota-prestacao-servicos] logo CRDD-RJ não encontrado:', e.message);
+        console.warn('[nota-prestacao-servicos] logo CRDD-BR não encontrado:', e.message);
       }
 
       const titleX = left + logoW + 12;
@@ -7237,49 +7221,6 @@ app.post('/api/procuracao-veicular/localizar-placa', requireAuth, async (req, re
   } catch (err) {
     console.error('Erro em /api/procuracao-veicular/localizar-placa:', err.message);
     res.status(500).json({ error: 'Erro interno ao buscar dados da placa.' });
-  }
-});
-
-// ── POST /api/nota-prestacao-servicos/localizar ────────────────────────────────
-// Etapa 1 do serviço "Gerar Nota de Prestação de Serviços Para Despachantes":
-// busca o nome mais recente na Localização CPF (Datacube, Débitos e
-// Documentação — não a V3) a partir do CPF digitado — reutilizado tanto pra
-// pré-preencher o nome do Prestador (despachante) quanto do Tomador (cliente),
-// cada um com sua própria chamada. CPF apenas (Localização CPF não suporta
-// CNPJ); pra CNPJ o nome é digitado manualmente. Não cobra créditos.
-app.post('/api/nota-prestacao-servicos/localizar', requireAuth, async (req, res) => {
-  const cpf = (req.body?.cpf || '').replace(/\D/g, '');
-  if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
-
-  try {
-    const ur = await pool.query('SELECT active FROM users WHERE id=$1', [req.user.id]);
-    if (!ur.rows[0]?.active) return res.status(403).json({ error: 'Conta bloqueada.' });
-
-    const apiRes = await fetch(`${DATACUBE_API_URL}/pessoas/localizacao`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ auth_token: DATACUBE_TOKEN, cpf }),
-    });
-    const bodyStr = await apiRes.text();
-    let parsed;
-    try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
-    if (!parsed) return res.status(502).json({ error: 'Erro ao consultar Localização CPF.' });
-
-    const localizacaoResult = parsed.result ?? parsed;
-    let localizacaoData = Array.isArray(localizacaoResult) ? (localizacaoResult[0] ?? {}) : localizacaoResult;
-    if (localizacaoData?.historicos && typeof localizacaoData.historicos === 'object') {
-      localizacaoData = localizacaoData.historicos;
-    }
-    const hasData = localizacaoData && (Array.isArray(localizacaoData)
-      ? localizacaoData.length > 0
-      : Object.keys(localizacaoData).length > 0);
-    if (!hasData) return res.status(422).json({ error: 'Nenhum dado encontrado para esse CPF.' });
-
-    const nome = extractNomeFromLocalizacao(localizacaoData);
-    res.json({ success: true, nome });
-  } catch (err) {
-    console.error('Erro em /api/nota-prestacao-servicos/localizar:', err.message);
-    res.status(500).json({ error: 'Erro interno ao buscar dados do CPF.' });
   }
 });
 
