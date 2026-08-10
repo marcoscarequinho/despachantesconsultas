@@ -61,6 +61,7 @@ const VISTOCAR_ENDPOINTS = {
   'crlv-rj-reemissao-2': 'crlv-rj',
   'security-code-vistocar-2': 'security-code',
   'vistocar-completa': 'completa',
+  'vistocar-debitos-cod-barra': 'debitos-cod-barra',
 };
 
 // Cache do token JWT da Vistocar em memória do processo — o login devolve um token
@@ -257,6 +258,12 @@ const SERVICES = [
   // Localização CPF V3 — também movida da Opção 2 (grupo Cadastros), mesmo relatório
   // em PDF da Localização CPF acima (buildLocalizacaoCpfPdfBuffer), valor fixo R$8,00.
   { id:'dc-cadastro-localizacao-v3',      name:'Localização CPF V3',           group:'Débitos e Documentação', basePrice:8.00, noMarkup:true, inputType:'dc_cpf', icon:'📍', dcPath:'/pessoas/localizacao_v3' },
+  // API Vistocar (vistocarconsulta.com.br) — mesmo padrão do Veicular Completa: usa
+  // a auth JWT da Vistocar (ver VISTOCAR_ENDPOINTS) e devolve um relatório JSON com a
+  // lista de débitos (multas, IPVA etc.) já com código de barras/linha digitável do
+  // boleto pronto para pagamento, sem PDF pronto — montado a partir do JSON por
+  // buildDebitosCodBarraPdfBuffer. Valor fixo (noMarkup) definido pelo usuário.
+  { id:'vistocar-debitos-cod-barra',      name:'Débitos + Código de Barras',    group:'Débitos e Documentação', basePrice:8.00, noMarkup:true, inputType:'placa', icon:'💳' },
   // Gerar Declaração de Residência DETRAN RJ — fluxo em duas etapas, fora do padrão
   // padrão "chama upstream e cobra" dos demais serviços: primeiro o front busca dados
   // via Localização CPF V3 pra pré-preencher um formulário editável (POST
@@ -3630,6 +3637,77 @@ function buildVeicularCompletaPdfBuffer(service, data, params) {
   });
 }
 
+// Rótulos amigáveis para o campo "statusPagamento" da Vistocar (débitos-cod-barra) —
+// só documentados os valores vistos em produção até agora; qualquer outro valor cai
+// no fallback (o próprio texto retornado pela API).
+const DEBITOS_COD_BARRA_STATUS_LABELS = {
+  opened: 'Em aberto',
+  notice: 'Aviso de cobrança',
+  paid: 'Pago',
+};
+
+// ── Geração de PDF — Débitos + Código de Barras (API Vistocar retorna JSON com a
+// lista de débitos já com código de barras/linha digitável do boleto, não PDF pronto) ──
+function buildDebitosCodBarraPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const { left, width } = pdfContentBox(doc);
+      const now = new Date();
+      const registros = Array.isArray(data?.registros) ? data.registros : [];
+
+      pdfReportHeader(doc, 'DÉBITOS + CÓDIGO DE BARRAS', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Placa', maskPlacaDisplay(params?.placa)]]);
+      doc.moveDown(0.4);
+
+      const total = registros.reduce((acc, r) => acc + (Number(r.valor) || 0), 0);
+      pdfEnsureSpace(doc, 36);
+      const boxY = doc.y;
+      const boxH = 28;
+      doc.rect(left, boxY, width, boxH).fill('#f97316');
+      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9.5)
+        .text('TOTAL ESTIMADO DE DÉBITOS', left + 12, boxY + 9);
+      doc.fontSize(13).text(fmtMoneyBRL(total), left, boxY + 7, { width: width - 12, align: 'right' });
+      doc.y = boxY + boxH + 4;
+      doc.fillColor('#111827').font('Helvetica').fontSize(10);
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'DÉBITOS');
+      if (!registros.length) {
+        pdfEmptyNotice(doc, 'Nenhum débito encontrado para esta placa.');
+      } else {
+        registros.forEach((r, idx) => {
+          pdfSubBar(doc, `Débito ${idx + 1} — ${r.descricao || 'Sem descrição'}`);
+          pdfFieldGrid(doc, [
+            ['Valor', fmtMoneyBRL(r.valor)],
+            ['Vencimento', r.dataVencimento || '-'],
+            ['Situação', DEBITOS_COD_BARRA_STATUS_LABELS[r.statusPagamento] || r.statusPagamento || '-'],
+            ['Código de Barras', r.codigoBarra || '-'],
+            ['Linha Digitável', r.linhaDigitavel || '-'],
+          ]);
+          const detalhes = Array.isArray(r.detalhes) ? r.detalhes : [];
+          if (detalhes.length) {
+            doc.moveDown(0.2);
+            pdfFieldGrid(doc, detalhes.map(d => [d.chave, d.valor]));
+          }
+          doc.moveDown(0.35);
+        });
+      }
+
+      pdfReportFooter(doc, now);
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── Geração de PDF — Inserir Comunicação Venda (API retorna JSON, não PDF pronto) ──
 function buildComunicacaoVendaPdfBuffer(service, data, params) {
   return new Promise((resolve, reject) => {
@@ -5284,6 +5362,21 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         }
         try {
           dcDebitoPdfBuf = await buildVeicularCompletaPdfBuffer(service, parsed.response, params);
+        } catch (e) {
+          console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+        }
+      } else if (serviceId === 'vistocar-debitos-cod-barra') {
+        // Mesmo padrão de envelope dos outros endpoints Vistocar: status/message no
+        // nível raiz, dados de verdade dentro de "response" (aqui: success/registros).
+        const ok = parsed?.status === 200 && parsed?.response?.success === true && Array.isArray(parsed?.response?.registros);
+        if (!ok) {
+          const errMsg = parsed?.message || parsed?.response?.msg || 'Nenhum resultado encontrado para essa consulta.';
+          console.error(`[${serviceId}] resposta inesperada da Vistocar: ${JSON.stringify(parsed)}`);
+          return res.status(422).json({ error: errMsg });
+        }
+        try {
+          dcDebitoPdfBuf = await buildDebitosCodBarraPdfBuffer(service, parsed.response, params);
         } catch (e) {
           console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
           return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
