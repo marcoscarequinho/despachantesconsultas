@@ -264,7 +264,8 @@ const SERVICES = [
   // lista de débitos (multas, IPVA etc.) já com código de barras/linha digitável do
   // boleto pronto para pagamento, sem PDF pronto — montado a partir do JSON por
   // buildDebitosCodBarraPdfBuffer. Valor fixo (noMarkup) definido pelo usuário.
-  { id:'vistocar-debitos-cod-barra',      name:'Débitos + Código de Barras',    group:'Débitos e Documentação', basePrice:8.00, noMarkup:true, inputType:'placa', icon:'💳' },
+  { id:'vistocar-debitos-cod-barra',      name:'Débitos + Código de Barras',    group:'Débitos e Documentação', basePrice:8.00, noMarkup:true, inputType:'placa', icon:'💳',
+    slowNote:'Só sai para pagamento de Multas.' },
   // Gerar Declaração de Residência DETRAN RJ — fluxo em duas etapas, fora do padrão
   // padrão "chama upstream e cobra" dos demais serviços: primeiro o front busca dados
   // via Localização CPF V3 pra pré-preencher um formulário editável (POST
