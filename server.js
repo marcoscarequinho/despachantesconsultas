@@ -4299,18 +4299,34 @@ app.post('/api/queries/:id/comunicacao-venda-cancelar', requireAuth, async (req,
       body: JSON.stringify({ id: comunicacaoId, protocolo, id_motivo_cancelamento: idMotivo }),
     });
     const upData = await upRes.json().catch(() => null);
-    if (!upRes.ok) {
+
+    // Bug visto em produção: a Chekaki confirmava o cancelamento (ação irreversível
+    // lá, cobrança já efetuada aqui) mas o painel continuava mostrando "Comunicado"
+    // pra sempre. Em vez de confiar cegamente em upRes.ok, reconfere o status real
+    // na Chekaki sempre que a resposta local não vier "ok" — algumas vezes o
+    // cancelamento é aceito lá mesmo com uma resposta de erro aqui.
+    let confirmedCancelado = upRes.ok;
+    let statusData = upData;
+    if (!confirmedCancelado) {
+      const check = await correlateComunicacaoVenda(comunicacaoId).catch(() => null);
+      if (check?.status === 'cancelado') { confirmedCancelado = true; statusData = check; }
+    }
+    if (!confirmedCancelado) {
       const errMsg = upData?.error || upData?.erro || `Erro HTTP ${upRes.status}.`;
       return res.status(upRes.status).json({ error: errMsg });
     }
+
+    // Grava o status ANTES de cobrar: se a cobrança falhar depois, o pior cenário
+    // é não cobrar a tarifa — nunca mais deixar a tarifa cobrada com o status do
+    // painel desatualizado (era exatamente essa a ordem que causava o bug acima).
+    const merged = { ...meta, ...(statusData || {}), _cancelado: true };
+    await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), qr.rows[0].id]);
 
     await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
     await pool.query(
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3)`,
       [req.user.id, price, 'Consulta: Cancelar Comunicação Venda']
     );
-    const merged = { ...meta, ...(upData || {}), _cancelado: true };
-    await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), qr.rows[0].id]);
     res.json({ success: true, result: merged });
   } catch (err) {
     console.error('Erro ao cancelar comunicação de venda:', err.message);
