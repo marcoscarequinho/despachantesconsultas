@@ -3770,8 +3770,14 @@ function buildComunicacaoVendaPdfBuffer(service, data, params) {
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
       const now = new Date();
+      const cancelada = !!data?._cancelado;
 
       pdfReportHeader(doc, 'COMUNICAÇÃO DE VENDA', now);
+
+      if (cancelada) {
+        pdfBar(doc, 'COMUNICAÇÃO DE VENDA CANCELADA', { bg: '#dc2626' });
+        doc.moveDown(0.2);
+      }
 
       pdfBar(doc, 'DADOS DA CONSULTA');
       const veic = params?.veiculo  || {};
@@ -3790,11 +3796,12 @@ function buildComunicacaoVendaPdfBuffer(service, data, params) {
       ]);
       doc.moveDown(0.4);
 
-      // Sem seção "RESULTADO": a resposta bruta da Chekaki inclui um campo de
-      // situação (ex.: "importado") que fica congelado no momento da inserção —
-      // exibi-lo aqui seria enganoso depois da transmissão, já que o PDF não é
-      // regerado. A situação atual é mostrada dinamicamente em "Meus Comunicados
-      // de Venda" (ver renderMeusComunicadosVenda em painel-usuario.html).
+      // Sem seção "RESULTADO" com a resposta bruta da Chekaki: o campo de situação
+      // dela (ex.: "importado") ficaria congelado no momento da inserção e seria
+      // enganoso depois. A única situação refletida aqui é o cancelamento (acima),
+      // porque cacheComunicacaoVendaPdf regera este PDF quando isso acontece — o
+      // resto continua mostrado dinamicamente em "Meus Comunicados de Venda" (ver
+      // renderMeusComunicadosVenda em painel-usuario.html).
       pdfReportFooter(doc, now);
 
       doc.end();
@@ -3999,14 +4006,26 @@ async function correlateComunicacaoVenda(comunicacaoId) {
 // comunicação de venda já transmitida/comunicada e cacheia por 7 dias — usado
 // tanto pelo botão "Transmitir" quanto pela sincronização automática em
 // GET /api/queries. Retorna {token, expiresAt} do cache (novo ou existente).
-async function cacheComunicacaoVendaPdf(queryId, userId, params) {
+// Passar meta com _cancelado:true força a regeração do PDF (mesmo token, mesmo
+// se já houver cache válido) para o comprovante passar a mostrar "CANCELADA" —
+// ver POST /api/queries/:id/comunicacao-venda-cancelar.
+async function cacheComunicacaoVendaPdf(queryId, userId, params, meta = null) {
+  const cancelada = !!meta?._cancelado;
   const existing = await pool.query(
     `SELECT token, expires_at FROM pdf_cache WHERE query_id=$1 AND expires_at > NOW()`, [queryId]
   );
-  if (existing.rows.length) return { token: existing.rows[0].token, expiresAt: existing.rows[0].expires_at };
+  if (existing.rows.length && !cancelada) {
+    return { token: existing.rows[0].token, expiresAt: existing.rows[0].expires_at };
+  }
 
   const service = SERVICES.find(s => s.id === 'inserir-comunicacao-venda');
-  const pdfBuf = await buildComunicacaoVendaPdfBuffer(service, null, params);
+  const pdfBuf = await buildComunicacaoVendaPdfBuffer(service, meta, params);
+
+  if (existing.rows.length) {
+    await pool.query(`UPDATE pdf_cache SET pdf_data=$1 WHERE query_id=$2`, [pdfBuf.toString('base64'), queryId]);
+    return { token: existing.rows[0].token, expiresAt: existing.rows[0].expires_at };
+  }
+
   const token = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
   await pool.query(
@@ -4271,7 +4290,7 @@ app.post('/api/queries/:id/comunicacao-venda-cancelar', requireAuth, async (req,
       return res.status(400).json({ error: 'Informe o motivo do cancelamento.' });
 
     const qr = await pool.query(
-      `SELECT result_data FROM queries WHERE id=$1 AND user_id=$2 AND service_id='inserir-comunicacao-venda'`,
+      `SELECT result_data, params FROM queries WHERE id=$1 AND user_id=$2 AND service_id='inserir-comunicacao-venda'`,
       [req.params.id, req.user.id]
     );
     if (!qr.rows.length) return res.status(404).json({ error: 'Comunicação de venda não encontrada.' });
@@ -4321,6 +4340,17 @@ app.post('/api/queries/:id/comunicacao-venda-cancelar', requireAuth, async (req,
     // painel desatualizado (era exatamente essa a ordem que causava o bug acima).
     const merged = { ...meta, ...(statusData || {}), _cancelado: true };
     await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), qr.rows[0].id]);
+
+    // Regera o comprovante em PDF já cacheado (mesmo token) pra passar a mostrar
+    // "CANCELADA" — best effort: uma falha aqui não deve impedir o cancelamento,
+    // que já está confirmado e gravado acima.
+    try {
+      let params = {};
+      try { params = JSON.parse(qr.rows[0].params || '{}'); } catch {}
+      await cacheComunicacaoVendaPdf(qr.rows[0].id, req.user.id, params, merged);
+    } catch (e) {
+      console.error(`Erro ao regerar PDF cancelado da comunicação de venda [query ${qr.rows[0].id}]:`, e.message);
+    }
 
     await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
     await pool.query(
