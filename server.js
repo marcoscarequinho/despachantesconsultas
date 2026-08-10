@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const PDFDocument = require('pdfkit');
+const bwipjs = require('bwip-js');
 const pdfParse = require('pdf-parse');
 const { PDFDocument: PDFLibDocument, StandardFonts: PDFLibStandardFonts, rgb } = require('pdf-lib');
 
@@ -3646,9 +3647,36 @@ const DEBITOS_COD_BARRA_STATUS_LABELS = {
   paid: 'Pago',
 };
 
+// Gera a imagem do código de barras do boleto (padrão Interleaved 2 of 5, usado nos
+// boletos bancários brasileiros) a partir da linha de pagamento — o "codigoBarra" de
+// 44 dígitos da Vistocar é o valor numérico puro (sem os dígitos verificadores extras
+// da "linhaDigitavel", que é só a formatação para digitação manual). bwip-js roda em
+// JS puro (sem canvas nativo), compatível com a function serverless da Vercel.
+async function generateBoletoBarcodePng(codigoBarra) {
+  const digits = String(codigoBarra || '').replace(/\D/g, '');
+  if (digits.length !== 44) return null;
+  try {
+    return await bwipjs.toBuffer({
+      bcid: 'interleaved2of5',
+      text: digits,
+      scale: 3,
+      height: 12,
+      includetext: false,
+      paddingwidth: 0,
+      paddingheight: 0,
+    });
+  } catch (e) {
+    console.error('Erro ao gerar código de barras do boleto:', e.message);
+    return null;
+  }
+}
+
 // ── Geração de PDF — Débitos + Código de Barras (API Vistocar retorna JSON com a
 // lista de débitos já com código de barras/linha digitável do boleto, não PDF pronto) ──
-function buildDebitosCodBarraPdfBuffer(service, data, params) {
+async function buildDebitosCodBarraPdfBuffer(service, data, params) {
+  const registros = Array.isArray(data?.registros) ? data.registros : [];
+  const barcodePngs = await Promise.all(registros.map(r => generateBoletoBarcodePng(r.codigoBarra)));
+
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({ size: 'A4', margin: 50 });
@@ -3658,7 +3686,6 @@ function buildDebitosCodBarraPdfBuffer(service, data, params) {
       doc.on('error', reject);
       const { left, width } = pdfContentBox(doc);
       const now = new Date();
-      const registros = Array.isArray(data?.registros) ? data.registros : [];
 
       pdfReportHeader(doc, 'DÉBITOS + CÓDIGO DE BARRAS', now);
 
@@ -3683,14 +3710,38 @@ function buildDebitosCodBarraPdfBuffer(service, data, params) {
         pdfEmptyNotice(doc, 'Nenhum débito encontrado para esta placa.');
       } else {
         registros.forEach((r, idx) => {
-          pdfSubBar(doc, `Débito ${idx + 1} — ${r.descricao || 'Sem descrição'}`);
+          pdfSubBar(doc, `Débito ${idx + 1}`);
+          doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#111827')
+            .text('Descrição:', left, doc.y, { width });
+          doc.font('Helvetica').fontSize(9.5).fillColor('#374151')
+            .text(r.descricao || 'Sem descrição', left, doc.y, { width });
+          doc.fillColor('#111827').font('Helvetica').fontSize(10);
+          doc.moveDown(0.3);
+
           pdfFieldGrid(doc, [
             ['Valor', fmtMoneyBRL(r.valor)],
             ['Vencimento', r.dataVencimento || '-'],
             ['Situação', DEBITOS_COD_BARRA_STATUS_LABELS[r.statusPagamento] || r.statusPagamento || '-'],
-            ['Código de Barras', r.codigoBarra || '-'],
-            ['Linha Digitável', r.linhaDigitavel || '-'],
           ]);
+          doc.moveDown(0.25);
+
+          // Linha digitável (texto, para digitar manualmente) + código de barras
+          // (imagem, para leitura por app do banco) — mesmo layout de um boleto real.
+          doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#111827')
+            .text('Linha Digitável (pagamento):', left, doc.y, { width });
+          doc.font('Helvetica').fontSize(9.5).fillColor('#374151')
+            .text(r.linhaDigitavel || '-', left, doc.y, { width });
+          doc.fillColor('#111827').font('Helvetica').fontSize(10);
+          doc.moveDown(0.3);
+
+          const barcodePng = barcodePngs[idx];
+          if (barcodePng) {
+            const barcodeW = Math.min(width * 0.65, 260);
+            pdfEnsureSpace(doc, 55);
+            doc.image(barcodePng, left, doc.y, { width: barcodeW });
+            doc.y += 42;
+          }
+
           const detalhes = Array.isArray(r.detalhes) ? r.detalhes : [];
           if (detalhes.length) {
             doc.moveDown(0.2);
