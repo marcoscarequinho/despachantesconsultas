@@ -1503,25 +1503,36 @@ app.get('/api/queries', requireAuth, async (req, res) => {
     );
 
     // Sincroniza silenciosamente comunicações de venda que já têm um
-    // "comunicacao_id" vinculado mas ainda não estão marcadas como transmitidas
-    // no nosso banco — cobre o caso de a comunicação ter sido transmitida direto
-    // no site da Chekaki (fora do botão "Transmitir" deste painel), que sem isso
-    // ficaria mostrando "Importado" para sempre. Best effort: uma falha aqui
-    // nunca deve quebrar a listagem.
+    // "comunicacao_id" vinculado com o status atual na Chekaki — cobre dois
+    // casos de ação feita direto no site da Chekaki (fora dos botões deste
+    // painel), que sem isso ficariam com o status errado para sempre:
+    // 1) transmitida direto lá ("Importado" preso mesmo já "comunicado");
+    // 2) cancelada direto lá pelo Portal deles ("Comunicado" preso mesmo já
+    //    "cancelado" — é por isso que não basta parar de checar depois que
+    //    _transmitido vira true). Best effort: uma falha aqui nunca deve
+    //    quebrar a listagem.
     for (const row of r.rows) {
       if (row.service_id !== 'inserir-comunicacao-venda' || !row.comunicacao_venda_meta) continue;
       let meta = {};
       try { meta = JSON.parse(row.comunicacao_venda_meta); } catch {}
-      if (meta._transmitido || meta._cancelado || !meta.comunicacao_id) continue;
+      if (meta._cancelado || !meta.comunicacao_id) continue;
       try {
         const sync = await correlateComunicacaoVenda(meta.comunicacao_id);
-        if (sync?.status !== 'comunicado') continue;
-        const merged = { ...meta, ...sync, _transmitido: true };
+        if (!sync) continue;
+
+        let merged = null;
+        if (!meta._transmitido && sync.status === 'comunicado') {
+          merged = { ...meta, ...sync, _transmitido: true };
+        } else if (meta._transmitido && sync.status === 'cancelado') {
+          merged = { ...meta, ...sync, _cancelado: true };
+        }
+        if (!merged) continue;
+
         await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), row.id]);
         row.comunicacao_venda_meta = JSON.stringify(merged);
 
         const params = JSON.parse(row.params || '{}');
-        const cached = await cacheComunicacaoVendaPdf(row.id, req.user.id, params);
+        const cached = await cacheComunicacaoVendaPdf(row.id, req.user.id, params, merged);
         row.result_type = 'pdf';
         row.pdf_token   = cached.token;
         row.pdf_expires = cached.expiresAt;
