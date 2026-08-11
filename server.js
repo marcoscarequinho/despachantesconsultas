@@ -2865,13 +2865,16 @@ function extractVistocarSecurityFields(text, knownRenavam) {
   return fields;
 }
 
-// atpve-template.pdf já traz os dois selos gov.br desenhados no fundo (em
-// branco, ver 1e8969a); pra consulta logada usamos o backup de antes dos
-// selos existirem (atpve-template-pre-selos-backup.pdf) — sem isso, mesmo
-// não sobrepondo nome/CPF/data (withSelos: false), o desenho do selo em
-// branco continuaria visível no PDF.
-const ATPVE_TEMPLATE_PATH = path.join(__dirname, 'assets', 'atpve-template.pdf');
+// O template usado é sempre o SEM selos (atpve-template-pre-selos-backup.pdf):
+// os selos gov.br das Consultas Avulsas passaram a ser desenhados em tempo de
+// geração a partir de assets/atpve-selo-govbr.png (ver bloco withSelos em
+// buildNumeroAtpvePdfBuffer). O antigo atpve-template.pdf, que trazia os selos
+// "em branco" embutidos no fundo, tinha perdido os contornos das caixas de
+// valor (nome/CPF/data) — a "borda" do selo real é justamente a caixa branca
+// recortada contra a textura cinza pontilhada, e qualquer retângulo branco de
+// apagar/sobrepor engolia esse recorte.
 const ATPVE_TEMPLATE_SEM_SELOS_PATH = path.join(__dirname, 'assets', 'atpve-template-pre-selos-backup.pdf');
+const ATPVE_SELO_GOVBR_PATH = path.join(__dirname, 'assets', 'atpve-selo-govbr.png');
 
 // Escreve um valor sobre o template do ATPVe: apaga a área com um retângulo
 // (branco por padrão, ou "bg" pra casar com caixas preenchidas como "Valor
@@ -2881,35 +2884,14 @@ const ATPVE_TEMPLATE_SEM_SELOS_PATH = path.join(__dirname, 'assets', 'atpve-temp
 // embaixo). Encolhe a fonte (até um mínimo) e trunca com "…" como último
 // recurso pra caber na largura da célula, igual ao padrão dos outros
 // relatórios do sistema.
-// Sintetiza o "pontilhado" cinza-claro do selo gov.br (assets/atpve-selo-
-// -assinatura.png) — a imagem tem ruído fino branco/cinza (~rgb 230,230,230)
-// nas células de rótulo, mas as linhas de valor (onde nome/CPF/data entram)
-// já nascem em branco sólido, sem esse ruído (perdido quando alguém apagou
-// os dados do selo real de origem pra criar o template em branco). Como não
-// dá pra recuperar o pixel original, desenhamos pontinhos nas mesmas cores/
-// densidade aproximadas por cima do branco, antes do texto, só pra não
-// destoar visualmente das células vizinhas que ainda têm o ruído.
-function drawSeloDotTexture(page, pageH, x, top, bottom, maxX) {
-  const color = rgb(0.902, 0.902, 0.902);
-  const spacing = 2.6;
-  const radius = 0.35;
-  const yTop = pageH - top;
-  const yBottom = pageH - bottom;
-  let row = 0;
-  for (let y = yBottom; y < yTop; y += spacing) {
-    const offset = (row % 2 === 0) ? 0 : spacing / 2;
-    for (let px = x + offset; px < maxX; px += spacing) {
-      page.drawCircle({ x: px, y, size: radius, color });
-    }
-    row++;
-  }
-}
-
-function pdfOverlayValue(page, pageH, font, text, { x, top, bottom, maxX, size = 10, bg = null, align = 'left', minSize = 6, dotTexture = false }) {
+function pdfOverlayValue(page, pageH, font, text, { x, top, bottom, maxX, size = 10, bg = null, align = 'left', minSize = 6, overlay = false }) {
   const value = (text ?? '').toString().trim();
-  if (dotTexture) {
-    drawSeloDotTexture(page, pageH, x, top, bottom, maxX);
-  } else {
+  // overlay: true — escreve o texto sem apagar nada por baixo. Usado nos selos
+  // gov.br, cujas caixas de valor já nascem em branco na própria imagem do selo
+  // (assets/atpve-selo-govbr.png); um retângulo branco aqui cobriria o contorno
+  // da caixa contra a textura pontilhada — era exatamente o defeito antigo de
+  // "bordas do selo sumindo".
+  if (!overlay) {
     const rectY = pageH - bottom - 1;
     const rectH = (bottom - top) + 2;
     page.drawRectangle({
@@ -2931,14 +2913,17 @@ function pdfOverlayValue(page, pageH, font, text, { x, top, bottom, maxX, size =
   }
 
   const baseline = pageH - bottom + 2;
-  const drawX = align === 'right' ? (maxX - font.widthOfTextAtSize(display, fSize)) : x;
+  const textW = font.widthOfTextAtSize(display, fSize);
+  const drawX = align === 'right' ? (maxX - textW)
+    : align === 'center' ? x + (maxX - x - textW) / 2
+    : x;
   page.drawText(display, { x: drawX, y: baseline, size: fSize, font, color: rgb(0.067, 0.094, 0.153) });
 }
 
 // ── Geração de PDF — Número ATPV-E, sobrepondo os dados desta consulta no
 // próprio PDF de referência do documento oficial "Autorização para
 // Transferência de Propriedade de Veículo - Digital" (DENATRAN) — ver
-// assets/atpve-template.pdf. Usar o PDF real como base (em vez de remontar o
+// assets/atpve-template-pre-selos-backup.pdf. Usar o PDF real como base (em vez de remontar o
 // layout do zero com pdfkit) garante que tamanho/posição do QR code, das
 // caixas, das linhas de assinatura e das fontes fiquem idênticos ao
 // documento oficial — só o texto dinâmico é sobrescrito, nas coordenadas
@@ -2955,7 +2940,7 @@ function pdfOverlayValue(page, pageH, font, text, { x, top, bottom, maxX, size =
 async function buildNumeroAtpvePdfBuffer(service, fields, params, { withSelos = false } = {}) {
   const placaRaw = (params?.placa || fields.placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
-  const templateBytes = await fs.promises.readFile(withSelos ? ATPVE_TEMPLATE_PATH : ATPVE_TEMPLATE_SEM_SELOS_PATH);
+  const templateBytes = await fs.promises.readFile(ATPVE_TEMPLATE_SEM_SELOS_PATH);
   const pdfDoc = await PDFLibDocument.load(templateBytes);
   const page = pdfDoc.getPages()[0];
   const pageH = page.getHeight();
@@ -3032,39 +3017,44 @@ async function buildNumeroAtpvePdfBuffer(service, fields, params, { withSelos = 
     page.drawText(line, { x: 32.9, y: pageH - (665 + i * 10), size: 7, font: helv, color: rgb(0.4, 0.4, 0.4) });
   });
 
-  // "AUTENTICAÇÃO DAS ASSINATURAS" — dois selos no estilo gov.br, com o mesmo
-  // nome/CPF/data usados nas caixas de identificação acima. Só pra Consultas
-  // Avulsas (withSelos) — na consulta logada o template fica com os selos em
-  // branco, como antes. O template já traz os selos "em branco" (ver
-  // assets/atpve-selo-assinatura.png, embutido no PDF por
-  // assets/atpve-template.pdf); aqui só sobrepomos os 3 campos variáveis de
-  // cada um. Coordenadas remedidas diretamente no template real (régua
-  // desenhada sobre assets/atpve-template.pdf) — a medição anterior (a partir
-  // de 2.pdf) tinha ~4-6pt de erro: x inicial ficava à esquerda do próprio
-  // rótulo "CPF/CNPJ"/"Assinado digitalmente por:" (que começa em ~x328
-  // vendedor / ~x458 comprador) e o maxX passava da borda direita real do
-  // cartão (~x440 vendedor / ~x571,5 comprador) e/ou da barra divisória
-  // (~x381,5 vendedor / ~x511,5 comprador) — invadindo bordas com nome
-  // grande, CPF/CNPJ e data. Data usa o mesmo valor de "data declarada da
+  // "AUTENTICAÇÃO DAS ASSINATURAS" — dois selos gov.br, com o mesmo nome/CPF/
+  // data usados nas caixas de identificação acima. Só pra Consultas Avulsas
+  // (withSelos); na consulta logada a área fica em branco. O selo inteiro é a
+  // imagem assets/atpve-selo-govbr.png (recortada do modelo de referência do
+  // usuário, com os valores de exemplo apagados mas as caixas brancas de valor
+  // e a textura pontilhada intactas), desenhada aqui em tempo de geração —
+  // nada de retângulo branco ou textura sintética por cima: as "bordas" do
+  // selo real são o recorte das caixas brancas contra a textura, e qualquer
+  // apagão por cima engolia esse contorno. Os 3 campos são escritos com
+  // overlay: true (texto puro, sem apagar), em coordenadas derivadas dos
+  // pixels medidos na própria imagem (273×151 px) vezes a escala de exibição.
+  // Posição/tamanho dos selos na página medidos no modelo de referência
+  // (ATPV-1.png, 1240 px ↔ 595,28 pt): vendedor x≈331..429, comprador
+  // x≈460..561, topo y≈678. Data usa o mesmo valor de "data declarada da
   // venda" (a despbrasil não devolve timestamp de assinatura separado). Nome
-  // usa minSize bem baixo pra sempre caber dentro do quadro (nomes longos
-  // encolhem em vez de truncar). CPF/CNPJ também precisa de minSize baixo:
-  // com o default (6) um CNPJ formatado (18 caracteres) não cabe na largura
-  // da caixa e pdfOverlayValue trunca com "…" — em Courier (monoespaçada)
-  // minSize 4.5 cabe até o CNPJ mais longo sem truncar. dotTexture: true —
-  // essas linhas de valor já nascem em branco sólido no próprio template
-  // (sem o ruído cinza-claro que as células vizinhas de rótulo têm, ver
-  // drawSeloDotTexture), então sintetizamos o mesmo ruído por baixo do
-  // texto em vez de deixar branco liso ou apagar com retângulo (que também
-  // ficaria branco liso) — mantém o visual consistente com o resto do selo.
+  // e CPF/CNPJ usam minSize baixo pra encolher em vez de truncar (CNPJ
+  // formatado tem 18 caracteres; em Courier, minSize 4 cabe na caixa).
   if (withSelos) {
-    V(fields.nomevendedor, { x: 328, top: 701.5, bottom: 709.5, maxX: 438, size: 8, minSize: 3, dotTexture: true });
-    V(maskDocDisplay(fields.documentovendedor), { x: 328, top: 727.0, bottom: 732.4, maxX: 377, size: 7, minSize: 4.5, dotTexture: true });
-    V(dataVenda, { x: 386, top: 727.0, bottom: 732.4, maxX: 438, size: 7, dotTexture: true });
-
-    V(fields.nomecomprador, { x: 458, top: 701.5, bottom: 709.5, maxX: 568, size: 8, minSize: 3, dotTexture: true });
-    V(maskDocDisplay(fields.documentocomprador), { x: 458, top: 727.0, bottom: 732.4, maxX: 507, size: 7, minSize: 4.5, dotTexture: true });
-    V(dataVenda, { x: 516, top: 727.0, bottom: 732.4, maxX: 568, size: 7, dotTexture: true });
+    const seloImg = await pdfDoc.embedPng(await fs.promises.readFile(ATPVE_SELO_GOVBR_PATH));
+    const SELO_W = 100;                    // pt — largura do selo no modelo
+    const SELO_H = SELO_W * 151 / 273;     // mantém a proporção da imagem
+    const s = SELO_W / 273;                // pt por pixel da imagem
+    // Tamanho da fonte calibrado pelos textos de exemplo do modelo (~7 px de
+    // altura de maiúscula ≈ 4.3pt nesta escala); CPF/CNPJ e data usam o MESMO
+    // tamanho (4) pra não destoar um do outro (com tamanhos independentes a
+    // data, mais curta, não encolhia e saía maior que o CPF, estourando o topo
+    // da caixa). Os dois são centralizados dentro das caixas brancas
+    // (align: 'center', x/maxX = interior da caixa medido na imagem); os "+2"
+    // nos bottoms compensam o deslocamento fixo de +2pt do baseline em
+    // pdfOverlayValue, pra o texto assentar centralizado na vertical.
+    const drawSelo = (imgX, imgTop, nome, doc, data) => {
+      page.drawImage(seloImg, { x: imgX, y: pageH - imgTop - SELO_H, width: SELO_W, height: SELO_H });
+      V(nome, { x: imgX + 13 * s, top: imgTop + 69 * s, bottom: imgTop + 79 * s + 2, maxX: imgX + 263 * s, size: 4.5, minSize: 3, overlay: true });
+      V(doc,  { x: imgX + 8 * s,   top: imgTop + 117 * s, bottom: imgTop + 124.5 * s + 2, maxX: imgX + 131 * s, size: 4, minSize: 3, align: 'center', overlay: true });
+      V(data, { x: imgX + 143 * s, top: imgTop + 117 * s, bottom: imgTop + 124.5 * s + 2, maxX: imgX + 266 * s, size: 4, minSize: 3, align: 'center', overlay: true });
+    };
+    drawSelo(330, 678, fields.nomevendedor, maskDocDisplay(fields.documentovendedor), dataVenda);
+    drawSelo(460, 678, fields.nomecomprador, maskDocDisplay(fields.documentocomprador), dataVenda);
   }
 
   const bytes = await pdfDoc.save();
