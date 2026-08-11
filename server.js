@@ -331,6 +331,9 @@ const SERVICES = [
   { id:'consultar-crlv-pr', name:'CRLV-e Paraná (PR)',             group:'CRLV-e Digital', basePrice:15.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ro', name:'CRLV-e Rondônia (RO)',           group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-rr', name:'CRLV-e Roraima (RR)',            group:'CRLV-e Digital', basePrice:30.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  // API Datacube (assíncrona, ver bloco dc-crlve-rs-v2 em /api/query) — só placa.
+  { id:'dc-crlve-rs-v2',    name:'CRLV-e Rio Grande do Sul V2 (RS)', group:'CRLV-e Digital', basePrice:162.00, noMarkup:true, inputType:'placa', icon:'📄', dcPath:'/veiculos/documentos-crlve-rs-v2',
+    slowNote:'Emissão assíncrona no Detran-RS: a consulta pode levar alguns minutos — mantenha a página aberta até o download do PDF.' },
   { id:'consultar-crlv-se', name:'CRLV-e Sergipe (SE)',            group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-sp', name:'CRLV-e São Paulo (SP)',          group:'CRLV-e Digital', basePrice:15.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-to', name:'CRLV-e Tocantins (TO)',          group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -4718,6 +4721,112 @@ async function processCatalogQuery(userId, serviceId, params, res) {
 
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="nota-prestacao-servicos-${Date.now()}.pdf"`);
+      return res.send(pdfBuf);
+    }
+
+    // ── CRLV-e Rio Grande do Sul V2 — API Datacube ASSÍNCRONA: o POST inicial em
+    // /veiculos/documentos-crlve-rs-v2 só cria uma tarefa (devolve status:false,
+    // msg "Tarefa criada com sucesso!" e um request_uid — status:false aqui NÃO é
+    // erro, por isso este serviço não passa pelo fluxo Datacube genérico, que
+    // trataria como falha). O documento sai depois via POST {api}/api/get-task
+    // (auth_token + request_uid), que devolve status:true com result.pdf_base64
+    // quando pronto. Faz o polling dentro da própria request (maxDuration de 800s
+    // da function comporta; ver slowNote no catálogo) e só cobra com o PDF em
+    // mãos. Atenção: o resultado do get-task só pode ser visualizado UMA vez (a
+    // partir daí apenas /api/recovery-task reexpõe) — então o PDF é gravado em
+    // pdf_cache imediatamente, antes de responder ao cliente.
+    if (serviceId === 'dc-crlve-rs-v2') {
+      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+
+      let createRes, createData;
+      try {
+        createRes = await fetch(`${DATACUBE_API_URL}${service.dcPath}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ auth_token: DATACUBE_TOKEN, placa }).toString(),
+        });
+        createData = await createRes.json().catch(() => null);
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao criar tarefa na Datacube:`, e.message);
+        return res.status(502).json({ error: 'Erro ao consultar a API. Tente novamente.' });
+      }
+
+      // Cobre também o caso de a API responder síncrona (documento já no corpo).
+      let rsResult = createData?.status === true ? (createData.result ?? createData) : null;
+      const requestUid = createData?.request_uid;
+      if (!rsResult && (!createRes.ok || !requestUid)) {
+        const errMsg = createData ? extractApiErrorMsg(createData) : `Erro HTTP ${createRes.status}.`;
+        console.error(`[${serviceId}] erro Datacube ao criar tarefa (HTTP ${createRes.status}): ${errMsg}`);
+        return res.status(422).json({ error: errMsg });
+      }
+
+      // Polling do get-task: a doc não distingue "processando" de "falhou" no
+      // status (ambos vêm status:false, muda só a msg) — então insiste até o
+      // limite e loga cada msg distinta pra diagnóstico.
+      const POLL_INTERVAL_MS = 5000;
+      const POLL_MAX_MS = 5 * 60 * 1000;
+      const pollStart = Date.now();
+      let lastMsg = null;
+      while (!rsResult) {
+        if (Date.now() - pollStart > POLL_MAX_MS) {
+          console.error(`[${serviceId}] tarefa ${requestUid} não ficou pronta em ${POLL_MAX_MS / 1000}s (última msg: ${lastMsg}).`);
+          return res.status(504).json({ error: 'O Detran-RS demorou para emitir o documento e a consulta não foi cobrada. Tente novamente em alguns minutos.' });
+        }
+        await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+        try {
+          const pollRes = await fetch(`${DATACUBE_API_URL}/api/get-task`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ auth_token: DATACUBE_TOKEN, request_uid: requestUid }).toString(),
+          });
+          const pollData = await pollRes.json().catch(() => null);
+          if (pollData?.status === true) {
+            rsResult = pollData.result ?? pollData;
+          } else if (pollData?.msg && pollData.msg !== lastMsg) {
+            lastMsg = pollData.msg;
+            console.log(`[${serviceId}] tarefa ${requestUid} pendente: ${lastMsg}`);
+          }
+        } catch (e) {
+          console.error(`[${serviceId}] erro no polling do get-task (tentando de novo):`, e.message);
+        }
+      }
+
+      const pdfBase64 = rsResult?.pdf_base64;
+      if (!pdfBase64) {
+        console.error(`[${serviceId}] tarefa concluída sem pdf_base64: ${JSON.stringify(rsResult).slice(0, 500)}`);
+        return res.status(422).json({ error: 'A API não retornou o documento. A consulta não foi cobrada — tente novamente.' });
+      }
+      const pdfBuf = Buffer.from(pdfBase64, 'base64');
+
+      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type, result_data)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf',$7) RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id,
+         JSON.stringify({ ano_exercicio: rsResult.ano_exercicio ?? null, request_uid: requestUid ?? null })]
+      );
+
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBase64, expiresAt]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, params);
+
+      if (user.phone) {
+        const caption = `✅ *CRLV-e RS pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
+        await sendWhatsAppPdf(user.phone, pdfBuf, `CRLV-e-RS-${placa}.pdf`, caption).catch(() => {});
+      }
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="CRLV-e-RS-${placa}.pdf"`);
       return res.send(pdfBuf);
     }
 
