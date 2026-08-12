@@ -496,15 +496,17 @@ const SERVICES = [
   { id:'crv-antigo-se', name:'Consulta CRV antigo SE', group:'Número CRV (Apenas antigos)', basePrice:448.00, inputType:'placa', icon:'📁', uf:'se', noMarkup:true, slowNote:'Atenção: esta consulta pode levar de 3 a 5 dias para a entrega do documento.' },
   { id:'crv-antigo-to', name:'Consulta CRV antigo TO', group:'Número CRV (Apenas antigos)', basePrice:350.00, inputType:'placa', icon:'📁', uf:'to', noMarkup:true, slowNote:'Atenção: esta consulta pode levar de 3 a 5 dias para a entrega do documento.' },
   { id:'crv-antigo-sc', name:'Consulta CRV antigo SC', group:'Número CRV (Apenas antigos)', basePrice:600.00, inputType:'placa', icon:'📁', uf:'sc', noMarkup:true, slowNote:'Atenção: esta consulta pode levar de 3 a 5 dias para a entrega do documento.' },
-  // ── Intenção de Venda (ATPVE) — todas automáticas: RJ via Chekaki
-  // (api/atpve-rj/cadastrar, ver bloco "intencao-venda-rj" no /api/query), MG
-  // (Intenção de Venda e Emitir ATPV-e) via API Infosimples (ver MG_AUTO_SERVICES
-  // / handleMgInfosimplesAuto) ──
+  // ── Intenção de Venda (ATPVE) — 100% automáticas via Chekaki: cadastro e
+  // emissão do ATPV-e num único passo (api/atpve-<uf>/cadastrar), ver
+  // ATPVE_UFS/processCatalogQuery. MG migrou da Infosimples (que exigia dois
+  // serviços separados: registrar intenção + emitir ATPV-e) para este mesmo
+  // fluxo único da Chekaki — por isso não existe mais um serviço "Emitir
+  // ATPV-e MG" à parte: cadastrar já entrega o documento pronto, como em
+  // RJ/SP/MS ──
   { id:'intencao-venda-rj', name:'Intenção de Venda RJ', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'atpve_rj_cadastro', icon:'📝', uf:'rj' },
   { id:'intencao-venda-sp', name:'Intenção de Venda SP', group:'Intenção de Venda (ATPVE)', basePrice:60.00, noMarkup:true, inputType:'atpve_sp_cadastro', icon:'📝', uf:'sp' },
   { id:'intencao-venda-ms', name:'Intenção de Venda MS', group:'Intenção de Venda (ATPVE)', basePrice:60.00, noMarkup:true, inputType:'atpve_ms_cadastro', icon:'📝', uf:'ms' },
-  { id:'intencao-venda-mg', name:'Intenção de Venda MG', group:'Intenção de Venda (ATPVE)', basePrice:25.00, noMarkup:true, inputType:'intencao_venda_mg', icon:'📝', uf:'mg' },
-  { id:'atpve-mg', name:'Emitir ATPV-e MG', group:'Intenção de Venda (ATPVE)', basePrice:2.00, noMarkup:true, inputType:'atpve_mg', icon:'📄', uf:'mg' },
+  { id:'intencao-venda-mg', name:'Intenção de Venda MG', group:'Intenção de Venda (ATPVE)', basePrice:60.00, noMarkup:true, inputType:'atpve_mg_cadastro', icon:'📝', uf:'mg' },
 ];
 
 // Serviços desta categoria não retornam resultado na hora: o pedido fica
@@ -1489,7 +1491,7 @@ app.get('/api/queries', requireAuth, async (req, res) => {
     const r = await pool.query(
       `SELECT q.id, q.service_id, q.service_name, q.params, q.status, q.amount,
               q.result_type, q.created_at,
-              CASE WHEN q.service_id IN ('intencao-venda-rj','intencao-venda-sp','intencao-venda-ms')
+              CASE WHEN q.service_id IN ('intencao-venda-rj','intencao-venda-sp','intencao-venda-ms','intencao-venda-mg')
                    THEN q.result_data ELSE NULL END AS atpve_meta,
               CASE WHEN q.service_id = 'inserir-comunicacao-venda'
                    THEN q.result_data ELSE NULL END AS comunicacao_venda_meta,
@@ -1577,7 +1579,7 @@ app.get('/api/queries/:id/result', requireAuth, async (req, res) => {
 
 // Estados suportados pelo fluxo automático de Intenção de Venda (ATPVE) via
 // Chekaki — cada um mapeia para /api/atpve-<uf>/... e service_id 'intencao-venda-<uf>'.
-const ATPVE_UFS = ['rj', 'sp', 'ms'];
+const ATPVE_UFS = ['rj', 'sp', 'ms', 'mg'];
 
 // Busca o estado canônico de um pedido ATPV-e direto na Chekaki (GET
 // /api/atpve-<uf>/:id — "Consultar por ID"). É a fonte confiável de situação: a
@@ -3815,81 +3817,6 @@ function buildComunicacaoVendaPdfBuffer(service, data, params) {
   });
 }
 
-// ── Serviços MG automáticos via API Infosimples (Intenção de Venda MG / Emitir ATPV-e MG) ──
-// Mesmo fluxo de validar → consultar → só então debitar créditos do /api/query-v3, mas com
-// preço fixo de R$ 50,00 (catálogo SERVICES, noMarkup) em vez do markup padrão da Infosimples.
-const MG_AUTO_SERVICES = {
-  'intencao-venda-mg': {
-    infosimplesId: 'is-detran-mg-reg-intencao-venda',
-    extraValidate: p => {
-      if (!String(p?.cpf_vendedor || '').trim() && !String(p?.cnpj_vendedor || '').trim())
-        return 'Informe o CPF ou CNPJ do vendedor.';
-      if (!String(p?.cpf_comprador || '').trim() && !String(p?.cnpj_comprador || '').trim())
-        return 'Informe o CPF ou CNPJ do comprador.';
-      return null;
-    },
-  },
-  'atpve-mg': { infosimplesId: 'is-detran-mg-atpve', extraValidate: null },
-};
-
-async function handleMgInfosimplesAuto(req, res, service, params) {
-  const cfg = MG_AUTO_SERVICES[service.id];
-  const isvc = SERVICES_V3.find(s => s.id === cfg.infosimplesId);
-  if (!isvc) return res.status(500).json({ error: 'Serviço não configurado.' });
-
-  const price = await getUserServicePrice(req.user.id, service);
-
-  const missingLabels = isvc.params
-    .filter(p => p.required && !(params?.[p.name] ?? '').toString().trim())
-    .map(p => p.label);
-  if (missingLabels.length)
-    return res.status(400).json({ error: `Campos obrigatórios ausentes: ${missingLabels.join(', ')}` });
-  const extraError = cfg.extraValidate?.(params);
-  if (extraError) return res.status(400).json({ error: extraError });
-
-  const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.user.id]);
-  const user = ur.rows[0];
-  if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
-  if (parseFloat(user.credits) < price)
-    return res.status(400).json({ error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}` });
-
-  const qs = new URLSearchParams({ token: INFOSIMPLES_TOKEN });
-  for (const p of isvc.params) {
-    const v = (params?.[p.name] ?? '').toString().trim();
-    if (v) qs.set(p.name, v);
-  }
-
-  let apiRes, apiData;
-  try {
-    apiRes = await fetch(`${INFOSIMPLES_API_URL}/${isvc.path}?${qs.toString()}`, { method: 'POST' });
-    apiData = await apiRes.json().catch(() => null);
-  } catch (e) {
-    console.error(`Erro na API Infosimples [${service.id}]:`, e.message);
-    return res.status(502).json({ error: 'Erro ao consultar a API. Tente novamente.' });
-  }
-
-  if (!apiData || apiData.code !== 200) {
-    const errMsg = (apiData && (apiData.errors?.[0] || apiData.code_message)) || `Erro HTTP ${apiRes.status}.`;
-    console.error(`Erro API Infosimples [${service.id}] code ${apiData?.code}: ${errMsg}`);
-    return res.status(apiRes.status && apiRes.status >= 400 ? apiRes.status : 502).json({ error: errMsg });
-  }
-
-  const result = Array.isArray(apiData.data) ? (apiData.data[0] ?? {}) : (apiData.data ?? {});
-
-  await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
-  const txRow = await pool.query(
-    `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
-    [req.user.id, price, `Consulta: ${service.name} (Infosimples)`]
-  );
-  await pool.query(
-    `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type, result_data)
-     VALUES ($1,$2,$3,$4,'success',$5,$6,'json',$7)`,
-    [req.user.id, service.id, service.name, JSON.stringify(params || {}), price, txRow.rows[0].id, JSON.stringify(result)]
-  );
-
-  return res.json({ success: true, result, charged: price });
-}
-
 // Garante um PDF em cache válido (7 dias) pro pedido sempre que a Chekaki sinalizar
 // pdf_disponivel=true. O Cadastrar nem sempre devolve o PDF pronto na hora — placas
 // que passam por verificação extra (LAUDOCAR) respondem com JSON e só depois ficam
@@ -4418,15 +4345,6 @@ async function processCatalogQuery(userId, serviceId, params, res) {
   // quanto a API externa (ambos passam por processCatalogQuery).
   if (service.unavailable)
     return res.status(400).json({ error: service.slowNote || 'Consulta temporariamente indisponível.' });
-
-  if (MG_AUTO_SERVICES[serviceId]) {
-    try {
-      return await handleMgInfosimplesAuto({ user: { id: userId } }, res, service, params);
-    } catch (err) {
-      console.error(`Erro em /api/query [${serviceId}]:`, err.message);
-      return res.status(500).json({ error: 'Erro interno. Tente novamente.' });
-    }
-  }
 
   const price = await getUserServicePrice(userId, service);
 
@@ -5867,10 +5785,10 @@ function isV1Eligible(serviceId) {
 }
 
 // Preço fixo da consulta pós-paga (chave Geral) de CRLV 2 Rio Reemissão pela
-// API — diferente do preço do painel (R$ 55,00) e do preço fixo das rotas
-// DETRAN/MG (EXTERNAL_API_PRICE, R$ 5,00); valor comercial definido para os
+// API — diferente do preço do painel (R$ 55,00) e do preço fixo do cadastro de
+// ATPV-e MG (EXTERNAL_API_PRICE, R$ 5,00); valor comercial definido para os
 // contratos de API. Usado também na tela Cobranças API do admin (ver
-// externalApiPriceFor logo abaixo, junto às rotas DETRAN/MG).
+// externalApiPriceFor logo abaixo, junto às rotas ATPV-e MG).
 const CRLV_RJ_REEMISSAO_2_API_PRICE = 28.00;
 
 // Roda a consulta de CRLV 2 Rio Reemissão para chave Geral (pós-paga): não
@@ -5937,8 +5855,8 @@ app.post('/api/v1/crlv-rj-reemissao-2', requireApiKey, (req, res) => {
 // Mesmo núcleo (processCatalogQuery) e mesmo preço do painel (basePrice *
 // markup), mas autenticado por chave em vez de cookie JWT, e debitando sempre
 // da conta vinculada à chave — chave Geral (pós-paga, sem usuário) não serve
-// aqui, só para os endpoints DETRAN/MG e CRLV 2 Rio Reemissão (ver
-// runExternalInfosimplesQuery e runVistocarCrlvRj2General acima).
+// aqui, só para os endpoints ATPV-e MG e CRLV 2 Rio Reemissão (ver
+// proxyAtpveMgExternal adiante e runVistocarCrlvRj2General acima).
 app.post('/api/v1/:serviceId', requireApiKey, (req, res) => {
   if (!req.apiUser)
     return res.status(403).json({ error: 'Esta chave é do tipo Geral e não pode ser usada para o catálogo de Nova Consulta.' });
@@ -6461,32 +6379,33 @@ app.post('/api/query-v3', requireAuth, async (req, res) => {
 });
 
 // ── API externa /api/v1 (autenticada por chave de API) ────────────────────────
-// Executa um serviço do catálogo Infosimples em nome de um cliente externo:
-// mesma regra do /api/query-v3 (validar → consultar → só então debitar créditos
-// da conta dona da chave), mas os parâmetros vêm no corpo raiz da requisição —
-// não aninhados em "params" — para a integração do cliente ficar mais simples.
 // Preço fixo por consulta na API externa — não segue a tabela Infosimples nem
 // o markup do painel; valor comercial definido para os contratos de API.
 const EXTERNAL_API_PRICE = 5.00;
 
 // Preço por serviço nas rotas de API externa que aceitam chave Geral (pós-paga)
-// e aparecem em Cobranças API — DETRAN/MG usa o preço fixo padrão acima; CRLV 2
+// e aparecem em Cobranças API — ATPV-e MG (cadastrar) usa o preço fixo padrão acima; CRLV 2
 // Rio Reemissão (fora do SERVICES_V3, via Vistocar) tem preço comercial próprio
 // (ver CRLV_RJ_REEMISSAO_2_API_PRICE / runVistocarCrlvRj2General).
 function externalApiPriceFor(serviceId) {
   return serviceId === 'crlv-rj-reemissao-2' ? CRLV_RJ_REEMISSAO_2_API_PRICE : EXTERNAL_API_PRICE;
 }
 
-async function runExternalInfosimplesQuery(req, res, serviceId) {
-  const service = SERVICES_V3.find(s => s.id === serviceId);
-  if (!service) return res.status(500).json({ error: 'Serviço não configurado.' });
-
-  const price  = EXTERNAL_API_PRICE;
-  const params = req.body || {};
-  const isGeneral = !req.apiUser; // chave geral (pós-paga): não debita créditos
-
+// ── API externa /api/v1/atpve-mg — ATPV-e MG via Chekaki ─────────────────────
+// Substitui os antigos endpoints Infosimples (/api/v1/detran-mg/intencao-venda
+// e /api/v1/detran-mg/atpve): espelha 1:1 os 9 endpoints da API ATPV-e MG da
+// Chekaki (mesmos caminhos, verbos e formatos de resposta da documentação de
+// integração), trocando só a autenticação — chave mcd_ aqui, chaveAcesso da
+// casa na upstream. Cobrança apenas no "cadastrar" (EXTERNAL_API_PRICE) e
+// somente após sucesso da upstream; os demais endpoints gerenciam um pedido já
+// criado/pago (consultar, PDF, atualizar, registrar no DETRAN, excluir) e não
+// debitam nada. Atenção: a upstream não segrega pedidos por cliente — qualquer
+// chave mcd_ enxerga/opera os pedidos ATPV-e MG de toda a chaveAcesso da casa
+// (aceitável no modelo contratual, chaves só para parceiros de confiança).
+async function proxyAtpveMgExternal(req, res, upstreamPath, { charge = false } = {}) {
+  const price = EXTERNAL_API_PRICE;
   try {
-    if (!isGeneral) {
+    if (charge && req.apiUser) {
       const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.apiUser.id]);
       const user = ur.rows[0];
       if (!user || !user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
@@ -6496,72 +6415,146 @@ async function runExternalInfosimplesQuery(req, res, serviceId) {
         });
     }
 
-    const faltando = service.params
-      .filter(p => p.required && !(params?.[p.name] ?? '').toString().trim())
-      .map(p => p.name);
-    if (faltando.length)
-      return res.status(400).json({ error: `Campos obrigatórios ausentes: ${faltando.join(', ')}` });
-
-    const qs = new URLSearchParams({ token: INFOSIMPLES_TOKEN });
-    for (const p of service.params) {
-      const v = (params?.[p.name] ?? '').toString().trim();
-      if (v) qs.set(p.name, v);
-    }
-
-    let apiRes, apiData;
+    let upRes, buf;
     try {
-      apiRes = await fetch(`${INFOSIMPLES_API_URL}/${service.path}?${qs.toString()}`, { method: 'POST' });
-      apiData = await apiRes.json().catch(() => null);
+      upRes = await fetch(`${BASE_API_URL}${upstreamPath}`, {
+        method: req.method,
+        headers: { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO },
+        ...(req.method !== 'GET' ? { body: JSON.stringify(req.body || {}) } : {}),
+      });
+      buf = Buffer.from(await upRes.arrayBuffer());
     } catch (e) {
-      console.error(`Erro na API Infosimples [externo ${serviceId}]:`, e.message);
+      console.error(`Erro na API Chekaki [externo ${upstreamPath}]:`, e.message);
       return res.status(502).json({ error: 'Erro ao consultar a API. Tente novamente.' });
     }
 
-    if (!apiData || apiData.code !== 200) {
-      const errMsg = (apiData && (apiData.errors?.[0] || apiData.code_message)) || `Erro HTTP ${apiRes.status}.`;
-      console.error(`Erro API Infosimples [externo ${serviceId}] code ${apiData?.code}: ${errMsg}`);
-      return res.status(apiRes.status && apiRes.status >= 400 ? apiRes.status : 502).json({ error: errMsg });
+    // 401/403 da Chekaki indicam problema com a NOSSA chaveAcesso, não com a
+    // chave mcd_ do cliente — repassar confundiria a integração dele.
+    if (upRes.status === 401 || upRes.status === 403) {
+      console.error(`Chekaki recusou a chaveAcesso [externo ${upstreamPath}] HTTP ${upRes.status}: ${buf.toString().slice(0, 300)}`);
+      return res.status(502).json({ error: 'Erro de configuração no provedor. Contate o suporte.' });
     }
 
-    const result = Array.isArray(apiData.data) ? (apiData.data[0] ?? {}) : (apiData.data ?? {});
-    const label  = `${service.group} — ${service.name}`;
+    const contentType = upRes.headers.get('content-type') || 'application/json';
+    const isPdf = contentType.includes('application/pdf');
 
-    // Chave geral: registra a consulta para a cobrança posterior (página
-    // Cobranças API do admin) e devolve o resultado sem debitar créditos.
-    if (isGeneral) {
-      const gRow = await pool.query(
-        `INSERT INTO api_general_queries (api_key_id, service_id, params, result_data)
-         VALUES ($1,$2,$3,$4) RETURNING id`,
-        [req.apiKey.id, service.id, JSON.stringify(params), JSON.stringify(result)]
-      );
-      return res.json({ success: true, consulta_id: gRow.rows[0].id, servico: label, result });
+    // Erro de negócio da upstream (400/404/422/500): repassa como veio, sem cobrar.
+    if (!upRes.ok) return res.status(upRes.status).set('Content-Type', contentType).send(buf);
+
+    if (charge) {
+      const params = req.body || {};
+      if (!req.apiUser) {
+        // Chave geral (pós-paga): registra para a página Cobranças API do admin.
+        await pool.query(
+          `INSERT INTO api_general_queries (api_key_id, service_id, params, result_data)
+           VALUES ($1,$2,$3,$4)`,
+          [req.apiKey.id, 'atpve-mg', JSON.stringify(params), JSON.stringify({ success: true })]
+        );
+      } else {
+        await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.apiUser.id]);
+        const txRow = await pool.query(
+          `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+          [req.apiUser.id, price, 'Consulta: ATPV-e MG — Cadastrar (API externa)']
+        );
+        const qRow = await pool.query(
+          `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type, result_data)
+           VALUES ($1,'atpve-mg','ATPV-e MG (API externa)',$2,'success',$3,$4,$5,$6) RETURNING id`,
+          [req.apiUser.id, JSON.stringify(params), price, txRow.rows[0].id,
+           isPdf ? 'pdf' : 'json', isPdf ? '{}' : buf.toString()]
+        );
+        if (isPdf) {
+          // Mesmo cache de 7 dias do painel: o dono da chave rebaixa o PDF pelo
+          // histórico sem nova cobrança.
+          const pdfToken = crypto.randomBytes(32).toString('hex');
+          await pool.query(
+            `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+            [qRow.rows[0].id, req.apiUser.id, pdfToken, buf.toString('base64'),
+             new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+          ).catch(e => console.error('Erro ao salvar pdf_cache (atpve-mg externo):', e.message));
+        }
+      }
     }
 
-    await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.apiUser.id]);
-    const txRow = await pool.query(
-      `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
-      [req.apiUser.id, price, `Consulta: ${label} (API externa)`]
-    );
-    const qRow = await pool.query(
-      `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type, result_data)
-       VALUES ($1,$2,$3,$4,'success',$5,$6,'json',$7) RETURNING id`,
-      [req.apiUser.id, service.id, label, JSON.stringify(params), price, txRow.rows[0].id, JSON.stringify(result)]
-    );
-
-    return res.json({ success: true, consulta_id: qRow.rows[0].id, servico: label, charged: price, result });
+    res.status(upRes.status).set('Content-Type', contentType);
+    if (isPdf) {
+      const placa = (req.body?.placa || '').toString().toUpperCase().replace(/[\s-]/g, '');
+      res.set('Content-Disposition', upRes.headers.get('content-disposition')
+        || `attachment; filename="atpve-mg${placa ? '-' + placa : ''}-${Date.now()}.pdf"`);
+    }
+    return res.send(buf);
   } catch (err) {
-    console.error(`Erro em API externa [${serviceId}]:`, err.message);
+    console.error(`Erro em API externa [atpve-mg ${upstreamPath}]:`, err.message);
     res.status(500).json({ error: 'Erro interno. Tente novamente.' });
   }
 }
 
-// DETRAN/MG — Registrar Intenção de Venda de Veículo
-app.post('/api/v1/detran-mg/intencao-venda', requireApiKey, (req, res) =>
-  runExternalInfosimplesQuery(req, res, 'is-detran-mg-reg-intencao-venda'));
+// Valida o :id numérico antes de montá-lo na URL da upstream.
+function atpveMgIdParam(req, res) {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: 'ID do pedido inválido.' });
+    return null;
+  }
+  return id;
+}
 
-// DETRAN/MG — Emitir ATPV-e
-app.post('/api/v1/detran-mg/atpve', requireApiKey, (req, res) =>
-  runExternalInfosimplesQuery(req, res, 'is-detran-mg-atpve'));
+// ATPV-e MG — Listar pedidos
+app.get('/api/v1/atpve-mg', requireApiKey, (req, res) =>
+  proxyAtpveMgExternal(req, res, '/api/atpve-mg'));
+
+// ATPV-e MG — Cadastrar (única rota cobrada)
+app.post('/api/v1/atpve-mg/cadastrar', requireApiKey, (req, res) => {
+  const placa   = (req.body?.placa || '').toString().toUpperCase().replace(/[\s-]/g, '');
+  const renavam = (req.body?.renavam || '').toString().replace(/\D/g, '');
+  if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+  if (renavam.length < 9 || renavam.length > 11)
+    return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+  return proxyAtpveMgExternal(req, res, '/api/atpve-mg/cadastrar', { charge: true });
+});
+
+// ATPV-e MG — Consultar por protocolo
+app.get('/api/v1/atpve-mg/protocolo/:protocolo', requireApiKey, (req, res) => {
+  const protocolo = (req.params.protocolo || '').trim();
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(protocolo))
+    return res.status(400).json({ error: 'Protocolo inválido.' });
+  return proxyAtpveMgExternal(req, res, `/api/atpve-mg/protocolo/${encodeURIComponent(protocolo)}`);
+});
+
+// ATPV-e MG — Consultar por ID
+app.get('/api/v1/atpve-mg/:id', requireApiKey, (req, res) => {
+  const id = atpveMgIdParam(req, res);
+  if (id) proxyAtpveMgExternal(req, res, `/api/atpve-mg/${id}`);
+});
+
+// ATPV-e MG — Baixar PDF
+app.get('/api/v1/atpve-mg/:id/pdf', requireApiKey, (req, res) => {
+  const id = atpveMgIdParam(req, res);
+  if (id) proxyAtpveMgExternal(req, res, `/api/atpve-mg/${id}/pdf`);
+});
+
+// ATPV-e MG — PDF em Base64
+app.get('/api/v1/atpve-mg/:id/pdf/base64', requireApiKey, (req, res) => {
+  const id = atpveMgIdParam(req, res);
+  if (id) proxyAtpveMgExternal(req, res, `/api/atpve-mg/${id}/pdf/base64`);
+});
+
+// ATPV-e MG — Atualizar situação/PDF
+app.post('/api/v1/atpve-mg/:id/atualizar', requireApiKey, (req, res) => {
+  const id = atpveMgIdParam(req, res);
+  if (id) proxyAtpveMgExternal(req, res, `/api/atpve-mg/${id}/atualizar`);
+});
+
+// ATPV-e MG — Registrar no DETRAN
+app.post('/api/v1/atpve-mg/:id/registrar', requireApiKey, (req, res) => {
+  const id = atpveMgIdParam(req, res);
+  if (id) proxyAtpveMgExternal(req, res, `/api/atpve-mg/${id}/registrar`);
+});
+
+// ATPV-e MG — Excluir
+app.post('/api/v1/atpve-mg/:id/excluir', requireApiKey, (req, res) => {
+  const id = atpveMgIdParam(req, res);
+  if (id) proxyAtpveMgExternal(req, res, `/api/atpve-mg/${id}/excluir`);
+});
 
 // ── Gestão de chaves de API (admin) ───────────────────────────────────────────
 // A API é contratual (sem self-service, ver seção API da landing page): o admin
@@ -8633,7 +8626,7 @@ app.post('/api/admin/crlv-agendado-status-check', requireAuth, requireSuperAdmin
   }
 });
 
-// Varre as Intenções de Venda (RJ/SP/MS) recentes que ainda estão 'aguardando_pdf'
+// Varre as Intenções de Venda (RJ/SP/MS/MG) recentes que ainda estão 'aguardando_pdf'
 // (cobrança condicionada — ver processCatalogQuery) e reconsulta cada uma na
 // Chekaki. Cobre dois casos: (1) o cadastro devolveu id mas o PDF ainda não
 // tinha saído (verificação extra/LAUDOCAR) — reconsulta por id; (2) a correlação
@@ -8647,7 +8640,7 @@ async function runAtpvePendingCheck() {
   const { rows } = await pool.query(
     `SELECT q.id AS query_id, q.user_id, q.service_id, q.result_data, q.created_at, u.phone
      FROM queries q JOIN users u ON u.id = q.user_id
-     WHERE q.service_id IN ('intencao-venda-rj','intencao-venda-sp','intencao-venda-ms')
+     WHERE q.service_id IN ('intencao-venda-rj','intencao-venda-sp','intencao-venda-ms','intencao-venda-mg')
        AND q.status = 'aguardando_pdf'
        AND q.created_at > NOW() - INTERVAL '7 days'
      ORDER BY q.created_at DESC LIMIT 200`
@@ -8703,7 +8696,7 @@ async function runAtpvePendingCheck() {
 }
 
 // ── GET /api/cron/atpve-rj-status (Vercel Cron) — nome histórico, hoje varre
-// RJ+SP+MS numa passada só; ver runAtpvePendingCheck. ─────────────────────────
+// RJ+SP+MS+MG numa passada só; ver runAtpvePendingCheck. ──────────────────────
 app.get('/api/cron/atpve-rj-status', async (req, res) => {
   const secret = process.env.CRON_SECRET || '';
   if (secret && req.headers.authorization !== `Bearer ${secret}`) {

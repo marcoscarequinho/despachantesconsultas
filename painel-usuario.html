@@ -774,7 +774,7 @@
 
       <div>
         <h2 class="text-xl font-bold text-gray-800">Intenção de Venda (ATPVE)</h2>
-        <p class="text-sm text-gray-500">Preencha os dados do veículo, vendedor e comprador — o ATPV-e (RJ/SP/MS) ou o registro (MG) é emitido na hora, sem envio de documentos.</p>
+        <p class="text-sm text-gray-500">Preencha os dados do veículo, vendedor e comprador — o ATPV-e (RJ/SP/MS/MG) é emitido na hora, sem envio de documentos.</p>
       </div>
 
       <!-- Saldo disponível -->
@@ -849,81 +849,13 @@
         </div>
       </div>
 
-      <!-- Meus ATPV-e (RJ/SP/MS) -->
+      <!-- Meus ATPV-e (RJ/SP/MS/MG) -->
       <div class="card">
         <h3 class="font-semibold text-gray-800 mb-1">Meus ATPV-e</h3>
-        <p class="text-xs text-gray-500 mb-4">Suas emissões de ATPV-e (RJ, SP e MS) nesta conta. O PDF fica disponível para novo download por 7 dias.</p>
+        <p class="text-xs text-gray-500 mb-4">Suas emissões de ATPV-e (RJ, SP, MS e MG) nesta conta. O PDF fica disponível para novo download por 7 dias.</p>
         <div id="meus-atpve-list" class="space-y-1">
           <div class="text-center py-6 text-gray-400 text-sm">Nenhuma emissão de ATPV-e ainda.</div>
         </div>
-      </div>
-
-      <!-- Formulário MG — consulta automática via API Infosimples -->
-      <div id="intencao-mg-form-wrap" class="card hidden">
-        <div class="flex items-center justify-between mb-4">
-          <div>
-            <h3 id="intencao-mg-form-name" class="font-semibold text-gray-800"></h3>
-            <div class="flex items-center gap-2 mt-1">
-              <span class="text-xs text-gray-500">Custo:</span>
-              <span id="intencao-mg-form-price" class="price-tag"></span>
-            </div>
-          </div>
-          <button onclick="resetIntencaoMgForm()" class="text-xs text-gray-500 hover:text-gray-700">✕ Cancelar</button>
-        </div>
-
-        <div id="intencao-mg-warning" class="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-800 flex gap-2 mb-4">
-          <span class="flex-shrink-0">⚠️</span>
-          <div>
-            <p class="font-semibold">Atenção — conferência dos dados</p>
-            <p class="mt-1">Revise com cuidado todas as informações antes de concluir o ATPV-e. Dados preenchidos incorretamente após a finalização do documento não podem ser corrigidos por esta plataforma.</p>
-            <p class="mt-1">Em caso de erro após o ATPV concluído, o cancelamento ou desfazimento só pode ser feito diretamente junto ao DETRAN de origem. Não nos responsabilizamos por dados inseridos de forma errada.</p>
-          </div>
-        </div>
-
-        <form id="intencao-mg-form" onsubmit="submitIntencaoMg(event)" class="space-y-4">
-          <div id="intencao-mg-form-fields" class="grid sm:grid-cols-2 gap-4"></div>
-
-          <div id="intencao-mg-form-error"
-            class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm flex gap-2">
-            <span class="flex-shrink-0">⚠️</span>
-            <span id="intencao-mg-form-error-msg"></span>
-          </div>
-
-          <button id="intencao-mg-submit-btn" type="submit" class="btn-primary w-full justify-center py-3">
-            <span id="intencao-mg-submit-text">Realizar Consulta</span>
-            <svg id="intencao-mg-spinner" class="hidden w-4 h-4 spin" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-            </svg>
-          </button>
-        </form>
-      </div>
-
-      <!-- Resultado MG -->
-      <div id="intencao-mg-result-wrap" class="hidden result-card p-5">
-        <div class="flex items-center gap-3 mb-4">
-          <div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-xl">✅</div>
-          <div>
-            <div id="intencao-mg-result-title" class="font-bold text-green-800"></div>
-            <div class="text-sm text-green-700">Retorno da Infosimples abaixo</div>
-          </div>
-          <div class="ml-auto text-right">
-            <div class="text-xs text-gray-500">Debitado</div>
-            <div id="intencao-mg-result-charged" class="font-bold text-red-500 text-sm"></div>
-          </div>
-        </div>
-
-        <div id="intencao-mg-result-fields" class="grid sm:grid-cols-2 gap-3 mb-4"></div>
-
-        <details class="mt-2">
-          <summary class="text-xs text-gray-500 cursor-pointer hover:text-gray-700">Ver JSON completo</summary>
-          <pre id="intencao-mg-result-json"
-            class="mt-2 bg-gray-900 text-green-400 text-xs p-4 rounded-lg overflow-x-auto max-h-80 overflow-y-auto"></pre>
-        </details>
-
-        <button onclick="resetIntencaoMgForm()" class="btn-secondary w-full justify-center mt-4">
-          🔄 Nova Consulta
-        </button>
       </div>
     </section>
 
@@ -1301,17 +1233,10 @@ async function loadStats() {
 let selectedIntencaoSvc = null;
 const INTENCAO_ICONS = {
   'intencao-venda-rj': '🟢', 'intencao-venda-sp': '🟡', 'intencao-venda-ms': '🟠',
-  'intencao-venda-mg': '🔵', 'atpve-mg': '📄',
+  'intencao-venda-mg': '🔵',
 };
 // Selo exibido em "Meus ATPV-e" para identificar rapidamente o estado do pedido.
-const ATPVE_UF_LABELS = { 'intencao-venda-rj': 'RJ', 'intencao-venda-sp': 'SP', 'intencao-venda-ms': 'MS' };
-
-// Serviços MG automáticos (consulta na hora via API Infosimples) — mesmo formulário
-// dinâmico e mesma tela de resultado, só troca o spec de campos e o serviceId.
-const MG_AUTO_SERVICES = {
-  'intencao-venda-mg': { infosimplesId: 'is-detran-mg-reg-intencao-venda', resultTitle: 'Intenção de Venda registrada' },
-  'atpve-mg':           { infosimplesId: 'is-detran-mg-atpve',              resultTitle: 'ATPV-e emitido' },
-};
+const ATPVE_UF_LABELS = { 'intencao-venda-rj': 'RJ', 'intencao-venda-sp': 'SP', 'intencao-venda-ms': 'MS', 'intencao-venda-mg': 'MG' };
 
 function buildIntencaoCategoryGrid() {
   const svcs = allServices.filter(s => s.group === 'Intenção de Venda (ATPVE)');
@@ -1329,24 +1254,6 @@ function selectIntencaoCategory(svc, cardEl) {
   document.querySelectorAll('#intencao-category-grid .service-cat').forEach(el => el.classList.remove('selected'));
   cardEl?.classList.add('selected');
 
-  if (MG_AUTO_SERVICES[svc.id]) {
-    document.getElementById('intencao-form-wrap').classList.add('hidden');
-    document.getElementById('intencao-result-wrap').classList.add('hidden');
-    document.getElementById('intencao-mg-result-wrap').classList.add('hidden');
-    document.getElementById('intencao-mg-form-name').textContent = svc.name;
-    document.getElementById('intencao-mg-form-price').textContent = fmt(svc.price);
-    // Aviso de conferência de dados vale para toda "Intenção de Venda (ATPVE)",
-    // exceto "Emitir ATPV-e MG" (o próprio ATPV-e emitido, não uma intenção de
-    // venda a ser conferida antes de concluir).
-    document.getElementById('intencao-mg-warning').classList.toggle('hidden', svc.id === 'atpve-mg');
-    renderIntencaoMgFields();
-    document.getElementById('intencao-mg-form-wrap').classList.remove('hidden');
-    scrollToIntencaoForm('intencao-mg-form-wrap');
-    return;
-  }
-
-  document.getElementById('intencao-mg-form-wrap').classList.add('hidden');
-  document.getElementById('intencao-mg-result-wrap').classList.add('hidden');
   document.getElementById('intencao-form-name').textContent  = svc.name;
   document.getElementById('intencao-form-price').textContent = fmt(svc.price);
   renderIntencaoRjFields(svc.uf ? svc.uf.toUpperCase() : 'RJ');
@@ -1455,8 +1362,6 @@ function resetIntencaoForm(showCats = true) {
   document.getElementById('intencao-form-wrap').classList.add('hidden');
   document.getElementById('intencao-result-wrap').classList.add('hidden');
   document.getElementById('intencao-result-pdf-btn').classList.remove('hidden');
-  document.getElementById('intencao-mg-form-wrap').classList.add('hidden');
-  document.getElementById('intencao-mg-result-wrap').classList.add('hidden');
   document.querySelectorAll('#intencao-category-grid .service-cat').forEach(el => el.classList.remove('selected'));
   if (showCats) document.getElementById('intencao-category-wrap').classList.remove('hidden');
 }
@@ -1627,120 +1532,6 @@ async function submitIntencao(e) {
   } finally {
     btn.disabled = false; btnText.textContent = 'Emitir ATPV-e'; spinner.classList.add('hidden');
   }
-}
-
-// ── Serviços MG automáticos (Intenção de Venda / Emitir ATPV-e) — via API Infosimples Nova Consulta ──
-function getIntencaoMgSpec() {
-  const cfg = MG_AUTO_SERVICES[selectedIntencaoSvc?.id];
-  return cfg && allServicesV3.find(s => s.id === cfg.infosimplesId);
-}
-
-function renderIntencaoMgFields() {
-  const spec = getIntencaoMgSpec();
-  const wrap = document.getElementById('intencao-mg-form-fields');
-  if (!spec) {
-    wrap.innerHTML = '<p class="text-sm text-red-500">Não foi possível carregar o formulário. Recarregue a página.</p>';
-    return;
-  }
-  wrap.innerHTML = spec.params.map(p => `
-    <div>
-      <label class="label">${escapeHtml(p.label)}${p.required ? ' <span class="text-red-500">*</span>' : ''}</label>
-      <input id="im-${escapeHtml(p.name)}" type="text" class="input-field" ${p.required ? 'required' : ''}>
-      ${p.description ? `<p class="text-xs text-gray-400 mt-1">${escapeHtml(p.description)}</p>` : ''}
-    </div>`).join('');
-}
-
-function buildIntencaoMgParams() {
-  const spec = getIntencaoMgSpec();
-  const params = {};
-  (spec?.params || []).forEach(p => {
-    params[p.name] = (document.getElementById('im-' + p.name)?.value || '').trim();
-  });
-  return params;
-}
-
-function validateIntencaoMgParams(p) {
-  const spec = getIntencaoMgSpec();
-  for (const param of (spec?.params || [])) {
-    if (param.required && !p[param.name]) return `Campo obrigatório: ${param.label}`;
-  }
-  if (selectedIntencaoSvc?.id === 'intencao-venda-mg') {
-    if (!p.cpf_vendedor && !p.cnpj_vendedor) return 'Informe o CPF ou CNPJ do vendedor.';
-    if (!p.cpf_comprador && !p.cnpj_comprador) return 'Informe o CPF ou CNPJ do comprador.';
-  }
-  return null;
-}
-
-function resetIntencaoMgForm(showCats = true) {
-  selectedIntencaoSvc = null;
-  document.getElementById('intencao-mg-form').reset();
-  document.getElementById('intencao-mg-form-error').classList.add('hidden');
-  document.getElementById('intencao-mg-form-wrap').classList.add('hidden');
-  document.getElementById('intencao-mg-result-wrap').classList.add('hidden');
-  document.querySelectorAll('#intencao-category-grid .service-cat').forEach(el => el.classList.remove('selected'));
-  if (showCats) document.getElementById('intencao-category-wrap').classList.remove('hidden');
-}
-
-async function submitIntencaoMg(e) {
-  e.preventDefault();
-  const errEl    = document.getElementById('intencao-mg-form-error');
-  const errMsgEl = document.getElementById('intencao-mg-form-error-msg');
-  errEl.classList.add('hidden');
-
-  const params = buildIntencaoMgParams();
-  const validationError = validateIntencaoMgParams(params);
-  if (validationError) {
-    errMsgEl.textContent = validationError;
-    errEl.classList.remove('hidden');
-    return;
-  }
-
-  const btn = document.getElementById('intencao-mg-submit-btn');
-  const btnText = document.getElementById('intencao-mg-submit-text');
-  const spinner = document.getElementById('intencao-mg-spinner');
-  btn.disabled = true; btnText.textContent = 'Processando...'; spinner.classList.remove('hidden');
-
-  try {
-    const r = await fetch('/api/query', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ serviceId: selectedIntencaoSvc.id, params }),
-    });
-    const d = await r.json();
-    if (!r.ok) {
-      errMsgEl.textContent = d.error || 'Erro ao realizar consulta.';
-      errEl.classList.remove('hidden');
-      return;
-    }
-    showIntencaoMgResult(d);
-    await Promise.all([loadStats(), loadQueries()]);
-  } catch {
-    errMsgEl.textContent = 'Erro de conexão. Tente novamente.';
-    errEl.classList.remove('hidden');
-  } finally {
-    btn.disabled = false; btnText.textContent = 'Realizar Consulta'; spinner.classList.add('hidden');
-  }
-}
-
-function showIntencaoMgResult(data) {
-  document.getElementById('intencao-mg-form-wrap').classList.add('hidden');
-  document.getElementById('intencao-category-wrap').classList.add('hidden');
-  document.getElementById('intencao-mg-result-title').textContent =
-    MG_AUTO_SERVICES[selectedIntencaoSvc?.id]?.resultTitle || 'Consulta concluída';
-  document.getElementById('intencao-mg-result-charged').textContent = '-' + fmt(data.charged);
-
-  const result = data.result || {};
-  const fields = flattenObj(result, '', 3);
-  document.getElementById('intencao-mg-result-fields').innerHTML = fields.slice(0, 60).map(([k, v]) => `
-    <div class="result-field bg-white rounded-lg p-3 border border-gray-100">
-      <span class="result-label">${escapeHtml(k)}</span>
-      <span class="result-value">${escapeHtml(v)}</span>
-    </div>`).join('');
-  document.getElementById('intencao-mg-result-json').textContent = JSON.stringify(result, null, 2);
-
-  document.getElementById('intencao-mg-result-wrap').classList.remove('hidden');
-  document.getElementById('intencao-mg-result-wrap').scrollIntoView({ behavior: 'smooth' });
-  toast('Consulta concluída com sucesso!');
 }
 
 // ── Consultas ──────────────────────────────────────────────────────────────────
@@ -2247,19 +2038,13 @@ function apiExampleParams(inputType) {
     atpve_rj_cadastro: atpveCadastroExample('RJ', 'RIO DE JANEIRO'),
     atpve_sp_cadastro: atpveCadastroExample('SP', 'SÃO PAULO'),
     atpve_ms_cadastro: atpveCadastroExample('MS', 'CAMPO GRANDE'),
-    intencao_venda_mg: {
-      email_vendedor: 'vendedor@email.com', cpf_vendedor: '00000000000',
-      placa: 'ABC1D23', renavam: '00000000000', chassi: '9BWZZZ377VT004251',
-      crv: '123456789012', valor_venda: '15000',
-      cpf_comprador: '00000000000', nome_comprador: 'NOME DO COMPRADOR', email_comprador: 'comprador@email.com',
-    },
-    atpve_mg: { placa: 'ABC1D23', renavam: '00000000000' },
+    atpve_mg_cadastro: atpveCadastroExample('MG', 'BELO HORIZONTE'),
   };
   return map[inputType] || {};
 }
 
-// Corpo de exemplo do cadastro de Intenção de Venda (RJ/SP/MS) — mesmos campos
-// obrigatórios nos 3 estados (ver ATPVE_UFS em processCatalogQuery no server),
+// Corpo de exemplo do cadastro de Intenção de Venda (RJ/SP/MS/MG) — mesmos campos
+// obrigatórios nos 4 estados (ver ATPVE_UFS em processCatalogQuery no server),
 // só muda a UF/cidade de exemplo.
 function atpveCadastroExample(uf, cidade) {
   return {
