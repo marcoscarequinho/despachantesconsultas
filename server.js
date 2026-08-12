@@ -87,10 +87,22 @@ async function getVistocarToken() {
   return vistocarToken;
 }
 
+// Prefixa o DDI 55 (Brasil) quando ausente. Não dá pra decidir isso olhando só
+// se os dígitos "começam com 55" — DDD 55 (Santa Maria/RS) é válido e colide
+// com o próprio DDI, o que fazia o número de usuários dessa região sair sem o
+// DDI (ex.: "(55) 21995-6964" virava "55219956964", 11 dígitos, um número
+// inexistente na Z-API — o WhatsApp nunca era enviado, sem erro visível).
+// Números completos com DDI têm 12 (fixo) ou 13 (celular) dígitos; sem DDI,
+// telefones brasileiros têm no máximo 11 (DDD + celular de 9 dígitos) — por
+// isso o corte é pelo tamanho, não pelo prefixo.
+function formatWhatsAppPhone(phone) {
+  const digits = (phone || '').replace(/\D/g, '');
+  return digits.length >= 12 ? digits : `55${digits}`;
+}
+
 async function sendWhatsApp(phone, message) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !phone) return false;
-  const digits = phone.replace(/\D/g, '');
-  const formatted = digits.startsWith('55') ? digits : `55${digits}`;
+  const formatted = formatWhatsAppPhone(phone);
   try {
     const r = await fetch(
       `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/send-text`,
@@ -130,8 +142,7 @@ async function notifyAdminNewQuery(user, service, price, params) {
 
 async function sendWhatsAppPdf(phone, pdfBuffer, fileName, caption) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !phone) return false;
-  const digits = phone.replace(/\D/g, '');
-  const formatted = digits.startsWith('55') ? digits : `55${digits}`;
+  const formatted = formatWhatsAppPhone(phone);
   try {
     const r = await fetch(
       `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/send-document/pdf`,
@@ -161,8 +172,7 @@ async function sendWhatsAppPdf(phone, pdfBuffer, fileName, caption) {
 
 async function sendWhatsAppImage(phone, base64Png, caption) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !phone) return false;
-  const digits = phone.replace(/\D/g, '');
-  const formatted = digits.startsWith('55') ? digits : `55${digits}`;
+  const formatted = formatWhatsAppPhone(phone);
   try {
     const r = await fetch(
       `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/send-image`,
