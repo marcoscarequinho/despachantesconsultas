@@ -3912,6 +3912,32 @@ async function correlateAtpveRecord(uf, queryId, placa) {
   }
 }
 
+// Dispara "Registrar no DETRAN" automaticamente logo após o cadastro de um
+// ATPV-e MG. Diferente de RJ/SP/MS — onde a Chekaki avança sozinha de
+// CADASTRADA até COMUNICADA sem nenhuma ação nossa —, pedidos MG ficam parados
+// em CADASTRADA indefinidamente até alguém chamar Registrar; sem isso o
+// cliente ficava com o pedido preso esperando alguém notar e clicar no botão
+// manual em "Meus ATPV-e" (foi o que aconteceu com os primeiros pedidos MG
+// migrados para a Chekaki). Best-effort: não é problema se a Chekaki responder
+// que "ainda não concluiu com PDF" (ela só confirma que entrou em
+// processamento) — qualquer falha aqui é só logada, o botão manual e o cron
+// runAtpvePendingCheck continuam cobrindo o pedido normalmente.
+async function autoRegistrarAtpveMg(uf, queryId, atpveId) {
+  try {
+    await fetch(`${BASE_API_URL}/api/atpve-${uf}/${atpveId}/registrar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO },
+      body: JSON.stringify({}),
+    });
+    const fresh = await fetchAtpveById(uf, atpveId);
+    if (fresh) await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(fresh), queryId]);
+    return fresh;
+  } catch (e) {
+    console.error(`Erro ao auto-registrar ATPV-e ${uf.toUpperCase()} [id ${atpveId}]:`, e.message);
+    return null;
+  }
+}
+
 // Consulta o status atual de uma comunicação de venda na Chekaki (GET
 // /api/comunicado-venda/:id — testado direto: o "id" válido para essa rota (e
 // para /comunicacao-venda/transmitir/:id) é o "comunicacao_id" de NÍVEL RAIZ do
@@ -5568,7 +5594,11 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         [userId, serviceId, service.name, JSON.stringify(params || {}), price, JSON.stringify({ placa })]
       );
       const queryId = qRow.rows[0].id;
-      const match = await correlateAtpveRecord(atpveUf, queryId, placa);
+      let match = await correlateAtpveRecord(atpveUf, queryId, placa);
+      // MG não avança sozinho como RJ/SP/MS — ver autoRegistrarAtpveMg.
+      if (atpveUf === 'mg' && match?.id && !match.pdf_disponivel && String(match.situacao_codigo) === '1') {
+        match = await autoRegistrarAtpveMg(atpveUf, queryId, match.id) || match;
+      }
       if (match?.pdf_disponivel) {
         await ensureAtpvePdfCached(atpveUf, queryId, userId, match, user.phone);
       }
@@ -8659,7 +8689,15 @@ async function runAtpvePendingCheck() {
       if (fresh) {
         // fetchAtpveById não grava sozinho (correlateAtpveRecord já grava por
         // conta própria) — persiste o merge só nesse caminho.
-        const merged = meta.id ? { ...meta, ...fresh } : fresh;
+        let merged = meta.id ? { ...meta, ...fresh } : fresh;
+        // MG não avança sozinho como RJ/SP/MS (ver autoRegistrarAtpveMg) — se o
+        // pedido ainda estiver CADASTRADA aqui, é porque o disparo automático no
+        // cadastro falhou ou não rodou (ex.: correlação inicial não achou o id
+        // ainda). O cron tenta de novo a cada passada até sair de CADASTRADA.
+        if (uf === 'mg' && merged.id && !merged.pdf_disponivel && String(merged.situacao_codigo) === '1') {
+          const reg = await autoRegistrarAtpveMg(uf, row.query_id, merged.id);
+          if (reg) merged = { ...merged, ...reg };
+        }
         if (meta.id) {
           await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), row.query_id]);
         }
