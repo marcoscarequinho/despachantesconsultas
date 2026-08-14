@@ -276,15 +276,6 @@ const SERVICES = [
   // buildDebitosCodBarraPdfBuffer. Valor fixo (noMarkup) definido pelo usuário.
   { id:'vistocar-debitos-cod-barra',      name:'Débitos + Código de Barras',    group:'Débitos e Documentação', basePrice:8.00, noMarkup:true, inputType:'placa', icon:'💳',
     slowNote:'Só sai para pagamento de Multas.' },
-  // Gerar Declaração de Residência DETRAN RJ — fluxo em duas etapas, fora do padrão
-  // padrão "chama upstream e cobra" dos demais serviços: primeiro o front busca dados
-  // via Localização CPF V3 pra pré-preencher um formulário editável (POST
-  // /api/declaracao-residencia/localizar, sem custo), o usuário confere/edita e só
-  // ao clicar "Gerar Declaração" esse serviço é submetido normalmente por /api/query
-  // (ver isDeclaracaoResidencia em processCatalogQuery) — os campos do form já vêm
-  // prontos nos params, sem nova chamada upstream, e o PDF é sobreposto no template
-  // oficial (ver buildDeclaracaoResidenciaPdfBuffer).
-  { id:'declaracao-residencia-detran-rj', name:'Gerar Declaração de Residência DETRAN RJ', group:'Débitos e Documentação', basePrice:8.00, noMarkup:true, inputType:'declaracao_residencia', icon:'🏠' },
   // ── Procurações e Contratos ──
   // Gerar Contrato de Aluguel — mesmo padrão em duas etapas da Declaração de
   // Residência acima: o front busca o nome do Locatário e do Locador via
@@ -309,6 +300,21 @@ const SERVICES = [
   // buildProcuracaoVeicularPdfBuffer (modelo padrão de procuração, sem
   // overlay de PDF oficial). Preço fixo cobrindo os 3 endpoints usados.
   { id:'procuracao-veicular', name:'Gerar Procuração Veicular', group:'Procurações e Contratos', basePrice:22.00, noMarkup:true, inputType:'procuracao_veicular', icon:'🖊️' },
+  // ── Para os Despachantes ──────────────────────────────────────────────────
+  // Grupo exclusivo da aba "Coisas de Despachantes" do painel (ver
+  // section-despachantes em painel-usuario.html): documentos que o próprio
+  // despachante emite para o cliente dele, não consultas veiculares. Fica fora
+  // do grid de categorias da aba "Acesse Aqui Para as Principais Consultas".
+  //
+  // Gerar Declaração de Residência DETRAN RJ — fluxo em duas etapas, fora do padrão
+  // padrão "chama upstream e cobra" dos demais serviços: primeiro o front busca dados
+  // via Localização CPF V3 pra pré-preencher um formulário editável (POST
+  // /api/declaracao-residencia/localizar, sem custo), o usuário confere/edita e só
+  // ao clicar "Gerar Declaração" esse serviço é submetido normalmente por /api/query
+  // (ver isDeclaracaoResidencia em processCatalogQuery) — os campos do form já vêm
+  // prontos nos params, sem nova chamada upstream, e o PDF é sobreposto no template
+  // oficial (ver buildDeclaracaoResidenciaPdfBuffer).
+  { id:'declaracao-residencia-detran-rj', name:'Gerar Declaração de Residência DETRAN RJ', group:'Para os Despachantes', basePrice:8.00, noMarkup:true, inputType:'declaracao_residencia', icon:'🏠' },
   // Gerar Nota de Prestação de Serviços Para Despachantes — mesmo padrão dos
   // itens acima: o usuário digita livremente a Matrícula (CRDD-UF), os dados
   // do Prestador (despachante) e do Tomador (cliente), e a Discriminação dos
@@ -318,7 +324,19 @@ const SERVICES = [
   // 'nota-prestacao-servicos-despachante' em processCatalogQuery) — a nota é
   // montada do zero no padrão de Nota de Serviços Eletrônica de despachante,
   // sem overlay de PDF oficial (ver buildNotaPrestacaoServicosPdfBuffer).
-  { id:'nota-prestacao-servicos-despachante', name:'Nota de Prestação de Serviços Para Despachantes', group:'Procurações e Contratos', basePrice:1.00, noMarkup:true, inputType:'nota_prestacao_servicos', icon:'🧾' },
+  { id:'nota-prestacao-servicos-despachante', name:'Nota de Prestação de Serviços Para Despachantes', group:'Para os Despachantes', basePrice:1.00, noMarkup:true, inputType:'nota_prestacao_servicos', icon:'🧾' },
+  // Gerar ASD (Anotação de Serviço Documental) — documento que o despachante
+  // emite identificando o serviço contratado, o profissional responsável e o
+  // beneficiário. Mesmo padrão em duas etapas da Procuração Veicular e usa
+  // exatamente os mesmos 3 endpoints de pré-preenchimento (sem custo, sem nova
+  // chamada upstream no /api/query): Localização CPF V3 para o Profissional e
+  // para o Beneficiário (POST /api/procuracao-veicular/localizar-cpf, uma
+  // chamada por parte) e Proprietário Atual para a Descrição Documental a
+  // partir da placa (POST /api/procuracao-veicular/localizar-placa). Preço fixo
+  // definido pelo cliente. As duas digitalizações da carteirinha (frente/verso)
+  // chegam como data URL nos params e viram a última página do PDF (ver
+  // buildAsdPdfBuffer).
+  { id:'gerar-asd', name:'Gerar ASD', group:'Para os Despachantes', basePrice:9.50, noMarkup:true, inputType:'asd', icon:'📑' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // API Vistocar (vistocarconsulta.com.br) — fonte para Reemissão de CRLV-e RJ,
@@ -2749,6 +2767,192 @@ function buildNotaPrestacaoServicosPdfBuffer(params) {
   });
 }
 
+// ── Digitalizações da carteirinha da ASD — o front manda as duas fotos já
+// redimensionadas como data URL (image/jpeg ou image/png). Aceita só esses dois
+// formatos porque são os únicos que o pdfkit embute, e limita o tamanho pra não
+// estourar o corpo da requisição nem o pdf_cache. Devolve null quando o valor
+// não é uma imagem válida — o anexo é opcional, então o PDF sai sem ele.
+const ASD_CARTEIRINHA_MAX_BYTES = 4 * 1024 * 1024;
+function decodeAsdCarteirinha(dataUrl) {
+  const m = /^data:image\/(png|jpe?g);base64,([A-Za-z0-9+/=\s]+)$/i.exec(String(dataUrl || '').trim());
+  if (!m) return null;
+  const buf = Buffer.from(m[2].replace(/\s/g, ''), 'base64');
+  if (!buf.length || buf.length > ASD_CARTEIRINHA_MAX_BYTES) return null;
+  return buf;
+}
+
+// ── Geração de PDF — Gerar ASD (Anotação de Serviço Documental). Mesma técnica
+// da Procuração Veicular e da Nota de Prestação de Serviços: documento montado
+// do zero com pdfkit, sem template oficial. Os dados chegam prontos do
+// formulário (Profissional e Beneficiário pré-preenchidos via Localização CPF
+// V3, Descrição Documental via Proprietário Atual), já conferidos pelo usuário.
+// As digitalizações da carteirinha do despachante, quando enviadas, viram uma
+// página de anexo no FINAL da ASD — é o que dá fé da habilitação profissional
+// de quem assina.
+function buildAsdPdfBuffer(params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 55 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+
+      const now = new Date();
+      const { left, width } = pdfContentBox(doc);
+
+      const headerY = doc.y;
+      // Logo menor que o da Nota (o CRDD-BR é quase quadrado, a 95pt come 94pt
+      // de altura): a ASD completa precisa caber com a assinatura na 1ª página.
+      const logoW = 72;
+      let logoH = 0;
+      try {
+        const img = doc.openImage(CRDD_BR_LOGO_PATH);
+        logoH = logoW * (img.height / img.width);
+        doc.image(img, left, headerY, { width: logoW });
+      } catch (e) {
+        console.warn('[gerar-asd] logo CRDD-BR não encontrado:', e.message);
+      }
+
+      const titleX = left + logoW + 12;
+      const titleWidth = width - logoW - 12;
+      doc.font('Helvetica-Bold').fontSize(14)
+        .text('ANOTAÇÃO DE SERVIÇO DOCUMENTAL', titleX, headerY + 4, { width: titleWidth, align: 'center' });
+      doc.font('Helvetica-Bold').fontSize(11).fillColor('#1e40af')
+        .text('ASD', titleX, doc.y + 1, { width: titleWidth, align: 'center' });
+      doc.font('Helvetica').fontSize(9).fillColor('#6b7280')
+        .text(`Emitida em ${now.toLocaleString('pt-BR')}`, titleX, doc.y + 2, { width: titleWidth, align: 'center' });
+      doc.fillColor('#111827').fontSize(10);
+
+      doc.y = Math.max(doc.y, headerY + logoH) + 4;
+
+      pdfBar(doc, 'DADOS DO SERVIÇO');
+      pdfFieldGrid(doc, [
+        ['Serviço', params.servico],
+        ['UF', params.uf],
+        ['Nome do Contratante', params.contratante],
+        ['Data', now.toLocaleDateString('pt-BR')],
+      ]);
+      doc.moveDown(0.3);
+
+      pdfBar(doc, 'PROFISSIONAL (DESPACHANTE DOCUMENTALISTA)');
+      pdfFieldGrid(doc, [
+        ['Nome / Razão Social', params.profissionalNome],
+        ['CPF/CNPJ', maskDocDisplay(params.profissionalCpfCnpj)],
+        ...(params.profissionalMatricula ? [['Matrícula (CRDD-UF)', params.profissionalMatricula]] : []),
+        ...(params.profissionalTelefone ? [['Telefone', params.profissionalTelefone]] : []),
+        ...(params.profissionalEmail ? [['E-mail', params.profissionalEmail]] : []),
+      ]);
+      doc.moveDown(0.3);
+
+      pdfBar(doc, 'BENEFICIÁRIO DO SERVIÇO');
+      pdfFieldGrid(doc, [
+        ['Nome / Razão Social', params.beneficiarioNome],
+        ['CPF/CNPJ', maskDocDisplay(params.beneficiarioCpfCnpj)],
+        ...(params.beneficiarioTelefone ? [['Telefone', params.beneficiarioTelefone]] : []),
+        ...(params.beneficiarioEmail ? [['E-mail', params.beneficiarioEmail]] : []),
+      ]);
+      doc.moveDown(0.3);
+
+      pdfBar(doc, 'DESCRIÇÃO DOCUMENTAL');
+      const veiculoPairs = [
+        ['Placa', params.placa ? maskPlacaDisplay(params.placa) : ''],
+        ['Marca/Modelo', params.marcaModelo],
+        ['Chassi', params.chassi],
+        ['RENAVAM', params.renavam],
+        ['Cor', params.cor],
+        ['Ano Fabricação/Modelo', (params.anoFabricacao || params.anoModelo) ? `${params.anoFabricacao || '-'}/${params.anoModelo || '-'}` : ''],
+      ].filter(([, v]) => v);
+      if (veiculoPairs.length) { pdfFieldGrid(doc, veiculoPairs); doc.moveDown(0.25); }
+      if (params.descricaoDocumental) {
+        pdfEnsureSpace(doc, 40);
+        doc.font('Helvetica').fontSize(9.5).fillColor('#111827')
+          .text(params.descricaoDocumental, left, doc.y, { width, align: 'left', lineGap: 2 });
+        doc.moveDown(0.3);
+      }
+      if (!veiculoPairs.length && !params.descricaoDocumental) {
+        pdfEmptyNotice(doc, 'Nenhuma descrição documental informada.');
+      }
+
+      pdfEnsureSpace(doc, 70);
+      doc.font('Helvetica-Bold').fontSize(8).fillColor('#374151').text('OBSERVAÇÕES:', left, doc.y, { width });
+      doc.font('Helvetica').fontSize(8).fillColor('#6b7280').text(
+        'Documento declaratório emitido nos termos da Lei nº 14.282/2021, que regulamenta a profissão de despachante ' +
+        'documentalista. O profissional identificado é responsável cível e criminal pelo conteúdo aqui declarado.',
+        left, doc.y, { width, lineGap: 1.5 }
+      );
+      doc.fillColor('#111827').fontSize(10);
+
+      // Local/data + assinatura são checados como um bloco só, e a folga do
+      // moveDown entra na reserva: separados, a ASD saía com uma página extra
+      // contendo apenas a linha de assinatura.
+      pdfEnsureSpace(doc, 105);
+      doc.moveDown(0.8);
+      doc.font('Helvetica').fontSize(9.5)
+        .text(`${params.uf ? params.uf + ', ' : ''}${formatDateExtenso(now.toISOString().slice(0, 10))}.`,
+          left, doc.y, { width, align: 'center' });
+
+      doc.moveDown(1.8);
+      const y1 = doc.y;
+      doc.moveTo(left + width / 2 - 110, y1).lineTo(left + width / 2 + 110, y1).stroke();
+      doc.fontSize(9).font('Helvetica-Bold').text(params.profissionalNome, left, y1 + 4, { width, align: 'center' });
+      doc.font('Helvetica').text(
+        `Despachante Documentalista${params.profissionalMatricula ? ' - Matrícula ' + params.profissionalMatricula : ''}`,
+        left, y1 + 16, { width, align: 'center' }
+      );
+
+      // Anexo: carteirinha digitalizada pelo próprio despachante (frente/verso),
+      // sempre em página própria no final. Cada digitalização é centralizada
+      // numa moldura de altura fixa: as fotos chegam em proporções bem
+      // diferentes (retrato ou paisagem) e o fit preserva o aspecto — a moldura
+      // dá o enquadramento e mantém as duas do mesmo tamanho na página.
+      const frente = decodeAsdCarteirinha(params.carteirinhaFrente);
+      const verso  = decodeAsdCarteirinha(params.carteirinhaVerso);
+      if (frente || verso) {
+        doc.addPage();
+        pdfBar(doc, 'ANEXO — IDENTIDADE DE DESPACHANTE DOCUMENTALISTA');
+        doc.font('Helvetica').fontSize(8.5).fillColor('#6b7280').text(
+          'Digitalização da carteira profissional do despachante documentalista responsável pelo serviço, ' +
+          'apresentada como comprovação de habilitação (Lei nº 14.282/2021).',
+          left, doc.y, { width, lineGap: 1.5 }
+        );
+        doc.fillColor('#111827').fontSize(10);
+        doc.moveDown(0.8);
+
+        const boxH = 285;
+        const padding = 10;
+        [['FRENTE', frente], ['VERSO', verso]].forEach(([label, buf]) => {
+          if (!buf) return;
+          pdfEnsureSpace(doc, boxH + 34);
+          doc.font('Helvetica-Bold').fontSize(9).fillColor('#1e40af')
+            .text(label, left, doc.y, { width });
+          doc.fillColor('#111827').font('Helvetica').fontSize(10);
+          doc.moveDown(0.25);
+          const boxY = doc.y;
+          doc.strokeColor('#d1d5db').lineWidth(0.75).rect(left, boxY, width, boxH).stroke();
+          try {
+            doc.image(buf, left + padding, boxY + padding, {
+              fit: [width - padding * 2, boxH - padding * 2],
+              align: 'center', valign: 'center',
+            });
+          } catch (e) {
+            console.warn('[gerar-asd] falha ao embutir digitalização da carteirinha:', e.message);
+            doc.font('Helvetica-Oblique').fontSize(9.5).fillColor('#9ca3af')
+              .text('Não foi possível embutir esta digitalização.', left + padding, boxY + boxH / 2,
+                { width: width - padding * 2, align: 'center' });
+            doc.fillColor('#111827').font('Helvetica').fontSize(10);
+          }
+          doc.y = boxY + boxH + 14;
+        });
+      }
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── Geração de PDF — Verificar CRLV e Último Licenciamento (despbrasil devolve
 // os dados em "dados", sem um arquivo pronto útil para esse serviço) ──────────
 function buildVerificarCrlvPdfBuffer(service, data, params) {
@@ -4675,6 +4879,105 @@ async function processCatalogQuery(userId, serviceId, params, res) {
 
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="nota-prestacao-servicos-${Date.now()}.pdf"`);
+      return res.send(pdfBuf);
+    }
+
+    // ── Gerar ASD (Anotação de Serviço Documental) — mesmo padrão da Procuração
+    // Veicular: os campos já chegam prontos do formulário (Profissional e
+    // Beneficiário pré-preenchidos via /api/procuracao-veicular/localizar-cpf,
+    // Descrição Documental via /localizar-placa, tudo conferido/editado pelo
+    // usuário), então só validamos, montamos a ASD do zero (ver
+    // buildAsdPdfBuffer) e cobramos. A placa e o anexo da carteirinha são
+    // opcionais — nem todo serviço documental é veicular.
+    if (serviceId === 'gerar-asd') {
+      const servico = (params?.servico || '').trim();
+      const uf = (params?.uf || '').trim().toUpperCase();
+      const contratante = (params?.contratante || '').trim();
+      const profissionalNome = (params?.profissionalNome || '').trim();
+      const profissionalCpfCnpj = (params?.profissionalCpfCnpj || '').replace(/\D/g, '');
+      const profissionalMatricula = (params?.profissionalMatricula || '').trim();
+      const beneficiarioNome = (params?.beneficiarioNome || '').trim();
+      const beneficiarioCpfCnpj = (params?.beneficiarioCpfCnpj || '').replace(/\D/g, '');
+      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      const descricaoDocumental = (params?.descricaoDocumental || '').trim();
+
+      if (!servico) return res.status(400).json({ error: 'Informe o serviço prestado.' });
+      if (uf.length !== 2) return res.status(400).json({ error: 'Informe a UF (2 letras).' });
+      if (!contratante) return res.status(400).json({ error: 'Informe o nome do Contratante.' });
+      if (!profissionalNome) return res.status(400).json({ error: 'Informe o nome do Profissional.' });
+      if (profissionalCpfCnpj.length !== 11 && profissionalCpfCnpj.length !== 14)
+        return res.status(400).json({ error: 'CPF/CNPJ do Profissional inválido.' });
+      if (!beneficiarioNome) return res.status(400).json({ error: 'Informe o nome do Beneficiário do Serviço.' });
+      if (beneficiarioCpfCnpj.length !== 11 && beneficiarioCpfCnpj.length !== 14)
+        return res.status(400).json({ error: 'CPF/CNPJ do Beneficiário do Serviço inválido.' });
+      if (placa && placa.length !== 7)
+        return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23 ou deixe em branco.' });
+
+      let pdfBuf;
+      try {
+        pdfBuf = await buildAsdPdfBuffer({
+          servico, uf, contratante,
+          profissionalNome, profissionalCpfCnpj, profissionalMatricula,
+          profissionalTelefone: (params?.profissionalTelefone || '').trim(),
+          profissionalEmail: (params?.profissionalEmail || '').trim(),
+          beneficiarioNome, beneficiarioCpfCnpj,
+          beneficiarioTelefone: (params?.beneficiarioTelefone || '').trim(),
+          beneficiarioEmail: (params?.beneficiarioEmail || '').trim(),
+          placa,
+          marcaModelo: (params?.marcaModelo || '').trim(),
+          chassi: (params?.chassi || '').trim(),
+          renavam: (params?.renavam || '').trim(),
+          cor: (params?.cor || '').trim(),
+          anoFabricacao: (params?.anoFabricacao || '').trim(),
+          anoModelo: (params?.anoModelo || '').trim(),
+          descricaoDocumental,
+          carteirinhaFrente: params?.carteirinhaFrente,
+          carteirinhaVerso: params?.carteirinhaVerso,
+        });
+      } catch (e) {
+        console.error('[gerar-asd] erro ao gerar PDF:', e.message);
+        return res.status(500).json({ error: 'Erro ao gerar a ASD.' });
+      }
+
+      // As digitalizações da carteirinha são data URLs de alguns MB — guardar
+      // isso em queries.params encheria a tabela (e o histórico devolveria o
+      // base64 inteiro pro painel). O PDF já está no pdf_cache, então aqui só
+      // fica o registro de que houve anexo.
+      const paramsToStore = {
+        ...(params || {}),
+        carteirinhaFrente: params?.carteirinhaFrente ? '[digitalização anexada]' : undefined,
+        carteirinhaVerso:  params?.carteirinhaVerso  ? '[digitalização anexada]' : undefined,
+      };
+
+      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify(paramsToStore), price, txRow.rows[0].id]
+      );
+
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), expiresAt]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, { placa });
+
+      if (user.phone) {
+        const caption = `✅ *${service.name} pronta!*\n📑 Serviço: ${servico}\n👤 Beneficiário: ${beneficiarioNome}` +
+          (placa ? `\n🚗 Placa: ${maskPlacaDisplay(placa)}` : '') +
+          `\n\nDocumento gerado pela MC Despachadoria.`;
+        await sendWhatsAppPdf(user.phone, pdfBuf, `asd-${Date.now()}.pdf`, caption).catch(() => {});
+      }
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="asd-${Date.now()}.pdf"`);
       return res.send(pdfBuf);
     }
 
@@ -7441,6 +7744,9 @@ app.post('/api/contrato-aluguel/localizar', requireAuth, async (req, res) => {
 // Etapa 1a do serviço "Gerar Procuração Veicular": busca o nome mais recente
 // na Localização CPF V3 (Datacube) pra pré-preencher o nome do OUTORGADO (quem
 // vai representar o OUTORGANTE) a partir do CPF digitado. Não cobra créditos.
+// Reaproveitado pela "Gerar ASD" (aba Coisas de Despachantes) nos botões de
+// busca do Profissional e do Beneficiário do Serviço — mesma entrada (CPF) e
+// mesma saída (nome), então não vale duplicar a rota.
 app.post('/api/procuracao-veicular/localizar-cpf', requireAuth, async (req, res) => {
   const cpf = (req.body?.cpf || '').replace(/\D/g, '');
   if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
@@ -7484,7 +7790,8 @@ app.post('/api/procuracao-veicular/localizar-cpf', requireAuth, async (req, res)
 // pré-preencher o OUTORGANTE (nome + CPF/CNPJ vêm junto do proprietário atual
 // do veículo) e os campos do veículo. Se a Proprietário Atual não trouxer
 // endereço, cai pra Veicular Completa (Vistocar) só pra completar esse dado
-// (ver fallback abaixo). Não cobra créditos.
+// (ver fallback abaixo). Não cobra créditos. Reaproveitado pela "Gerar ASD"
+// (aba Coisas de Despachantes) no botão de busca da Descrição Documental.
 app.post('/api/procuracao-veicular/localizar-placa', requireAuth, async (req, res) => {
   const placa = (req.body?.placa || '').toUpperCase().replace(/[\s-]/g, '');
   if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });

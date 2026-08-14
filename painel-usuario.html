@@ -89,6 +89,13 @@
       </svg>
       <span style="color:#ef4444;font-weight:bold">Acesse Aqui Para as Principais Consultas</span>
     </div>
+    <div class="nav-item" data-section="despachantes" onclick="showSection('despachantes')">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+      </svg>
+      <span style="color:#fbbf24;font-weight:bold">Coisas de Despachantes</span>
+    </div>
     <div class="nav-item" data-section="query2" onclick="showSection('query2')">
       <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -450,6 +457,13 @@
         <div class="grid sm:grid-cols-2 gap-2" id="service-list"></div>
       </div>
 
+      <!-- Formulário dinâmico + resultado. Ficam dentro de #query-form-host
+           porque a aba "Coisas de Despachantes" reaproveita exatamente o mesmo
+           formulário (mesmos ids f-*, mesmo submitQuery) — showSection() move
+           esse bloco para o slot da seção ativa em vez de duplicar o markup. -->
+      <div id="query-form-slot" class="space-y-5">
+      <div id="query-form-host" class="space-y-5">
+
       <!-- Formulário dinâmico -->
       <div id="query-form-wrap" class="card hidden">
         <div class="flex items-center justify-between mb-4">
@@ -536,6 +550,9 @@
         </button>
       </div>
 
+      </div><!-- /query-form-host -->
+      </div><!-- /query-form-slot -->
+
       <!-- Meus Comunicados de Venda -->
       <div class="card">
         <h3 class="font-semibold text-gray-800 mb-1">Meus Comunicados de Venda</h3>
@@ -544,6 +561,38 @@
           <div class="text-center py-6 text-gray-400 text-sm">Nenhuma comunicação de venda inserida ainda.</div>
         </div>
       </div>
+    </section>
+
+    <!-- ── COISAS DE DESPACHANTES (grupo "Para os Despachantes") ──────────────
+         Mesmo catálogo/servidor da aba "Acesse Aqui Para as Principais
+         Consultas" (allServices, /api/query), só que restrito ao grupo "Para os
+         Despachantes" e sem grid de categorias. O formulário e o resultado são
+         os mesmos: #query-form-host é movido para cá pelo showSection(). -->
+    <section id="section-despachantes" class="dash-section hidden space-y-5">
+
+      <div>
+        <h2 class="text-xl font-bold text-amber-600">Coisas de Despachantes</h2>
+        <p class="text-sm text-gray-500">Documentos que o despachante emite para o cliente — gerados na hora, em PDF</p>
+      </div>
+
+      <!-- Saldo disponível -->
+      <div class="card bg-gradient-to-br from-amber-50 to-white border border-amber-200 flex items-center gap-4">
+        <div class="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center text-xl flex-shrink-0">💳</div>
+        <div>
+          <div class="text-sm text-gray-600">Saldo disponível</div>
+          <div id="despachantes-credits" class="text-2xl font-bold text-amber-600">R$ 0,00</div>
+        </div>
+        <div class="ml-auto text-xs text-gray-400">Mesmo saldo da aba Acesse Aqui Para as Principais Consultas</div>
+      </div>
+
+      <div class="card">
+        <h3 class="font-semibold text-gray-800 mb-1">Para os Despachantes</h3>
+        <p class="text-xs text-gray-500 mb-4">Selecione o documento que deseja gerar e preencha os dados.</p>
+        <div class="grid sm:grid-cols-2 gap-2" id="despachantes-service-list"></div>
+      </div>
+
+      <!-- Slot do formulário/resultado compartilhado (ver #query-form-host) -->
+      <div id="despachantes-form-slot" class="space-y-5"></div>
     </section>
 
     <!-- ── OPÇÃO 2 NOVA CONSULTA (API Datacube) ───────────────────────────── -->
@@ -1106,6 +1155,7 @@ let editingComunicacaoVendaQueryId = null;
 const sectionTitles = {
   overview:  'Visão Geral',
   query:    'Acesse Aqui Para as Principais Consultas',
+  despachantes: 'Coisas de Despachantes',
   query2:   'Opção 2 Nova Consulta',
   query3:   'Infosimples Nova Consulta',
   intencao: 'Intenção de Venda (ATPVE)',
@@ -1159,6 +1209,15 @@ function toggleSidebar() {
 function showSection(id) {
   document.querySelectorAll('.dash-section').forEach(s => s.classList.add('hidden'));
   document.getElementById('section-' + id).classList.remove('hidden');
+  // "Acesse Aqui Para as Principais Consultas" e "Coisas de Despachantes"
+  // dividem o MESMO formulário/resultado (#query-form-host, ids f-*). Ao trocar
+  // de aba, o bloco é movido para o slot da aba de destino e o formulário é
+  // zerado — senão o documento aberto numa aba apareceria na outra.
+  if (id === 'query' || id === 'despachantes') {
+    const host = document.getElementById('query-form-host');
+    const slot = document.getElementById(id === 'query' ? 'query-form-slot' : 'despachantes-form-slot');
+    if (host && slot && host.parentElement !== slot) { resetForm(); slot.appendChild(host); }
+  }
   document.querySelectorAll('.nav-item[data-section]').forEach(n => n.classList.remove('active'));
   const nav = document.querySelector(`.nav-item[data-section="${id}"]`);
   if (nav) nav.classList.add('active');
@@ -1203,6 +1262,7 @@ async function init() {
       document.getElementById('nav-superadmin').classList.remove('hidden');
 
     buildCategoryGrid();
+    buildDespachantesList();
     buildIntencaoCategoryGrid();
     renderServiceListV2();
     await Promise.all([loadStats(), loadQueries()]);
@@ -1222,6 +1282,7 @@ async function loadStats() {
     document.getElementById('stat-month').textContent         = fmt(d.month_spent);
     document.getElementById('stat-total-spent').textContent   = fmt(d.total_spent);
     document.getElementById('query-credits').textContent      = fmt(d.credits);
+    document.getElementById('despachantes-credits').textContent = fmt(d.credits);
     document.getElementById('query2-credits').textContent     = fmt(d.credits);
     document.getElementById('query3-credits').textContent     = fmt(d.credits);
     document.getElementById('intencao-credits').textContent   = fmt(d.credits);
@@ -1887,6 +1948,7 @@ function renderPrices() {
     'Débitos por Estado':      '🏛️',
     'Divida Ativa':            '⚖️',
     'CNH':                     '🪪',
+    'Para os Despachantes':    '🧑‍💼',
   };
 
   document.getElementById('prices-content').innerHTML = Object.entries(groups).map(([group, svcs]) => `
@@ -1958,6 +2020,7 @@ function inputTypeLabel(t) {
     contrato_aluguel:    'Entrada: Tipo + CPF/CNPJ Locador/Locatário + Endereço + Datas + Valor',
     procuracao_veicular: 'Entrada: Placa + CPF/CNPJ do Outorgado (com busca automática)',
     nota_prestacao_servicos: 'Entrada: Matrícula CRDD-UF + Dados do Prestador/Tomador + Discriminação + Valor Total',
+    asd:                 'Entrada: Serviço + UF + Contratante + Profissional + Beneficiário + Placa (com busca automática)',
   };
   return map[t] || t;
 }
@@ -2034,6 +2097,15 @@ function apiExampleParams(inputType) {
         ano_fabricacao: '2015', ano_modelo: '2016',
         crv: { numero: '123456789012', codigo_seguranca: '00000000000', numero_via: '1', data_emissao: '01/01/2020', uf_emissao: 'RJ' },
       },
+    },
+    asd: {
+      servico: 'Transferência de Propriedade', uf: 'RJ', contratante: 'NOME DO CONTRATANTE',
+      profissionalNome: 'NOME DO DESPACHANTE', profissionalCpfCnpj: '00000000000',
+      profissionalMatricula: 'RJ 12.345', profissionalTelefone: '(21) 90000-0000', profissionalEmail: 'despachante@email.com',
+      beneficiarioNome: 'NOME DO BENEFICIÁRIO', beneficiarioCpfCnpj: '00000000000',
+      beneficiarioTelefone: '(21) 90000-0000', beneficiarioEmail: 'cliente@email.com',
+      placa: 'ABC1D23', descricaoDocumental: 'Documentos recebidos: CRV original e comprovante de residência.',
+      carteirinhaFrente: 'data:image/jpeg;base64,...', carteirinhaVerso: 'data:image/jpeg;base64,...',
     },
     atpve_rj_cadastro: atpveCadastroExample('RJ', 'RIO DE JANEIRO'),
     atpve_sp_cadastro: atpveCadastroExample('SP', 'SÃO PAULO'),
@@ -2120,9 +2192,16 @@ function copyApiDocCode(btnEl) {
 }
 
 function quickSelect(serviceId) {
-  showSection('query');
   const svc = allServices.find(s => s.id === serviceId);
   if (!svc) return;
+  // O grupo "Para os Despachantes" vive na aba própria, que não tem grid de
+  // categorias nem #service-list — abre lá direto.
+  if (svc.group === 'Para os Despachantes') {
+    showSection('despachantes');
+    selectService(svc);
+    return;
+  }
+  showSection('query');
   // Select the category first, then the service
   selectedCat = svc.group;
   renderServiceList(svc.group);
@@ -2177,7 +2256,9 @@ function requery(serviceId, paramsJson) {
 
 // ── Nova Consulta ──────────────────────────────────────────────────────────────
 function buildCategoryGrid() {
-  const cats = [...new Set(allServices.map(s => s.group))].filter(c => c !== 'CRLV-e Agendado' && c !== 'Intenção de Venda (ATPVE)' && c !== 'CRLV-e Rio de Janeiro');
+  // "Para os Despachantes" fica fora daqui — tem aba própria (Coisas de
+  // Despachantes, ver buildDespachantesList).
+  const cats = [...new Set(allServices.map(s => s.group))].filter(c => c !== 'CRLV-e Agendado' && c !== 'Intenção de Venda (ATPVE)' && c !== 'CRLV-e Rio de Janeiro' && c !== 'Para os Despachantes');
   const catIcons = {
     'Consultas Básicas':       { icon:'🔍', color:'bg-blue-50 border-blue-200' },
     'Débitos e Documentação':  { icon:'💳', color:'bg-red-50 border-red-200' },
@@ -2205,6 +2286,24 @@ function buildCategoryGrid() {
         <div class="text-xs text-gray-400 mt-0.5">${count} serviço(s)</div>
       </div>`;
   }).join('');
+}
+
+// ── Coisas de Despachantes ─────────────────────────────────────────────────────
+// A aba não tem grid de categorias: lista direto os serviços do grupo "Para os
+// Despachantes" e reaproveita selectService()/submitQuery() da Nova Consulta.
+function buildDespachantesList() {
+  const svcs = allServices.filter(s => s.group === 'Para os Despachantes');
+  document.getElementById('despachantes-service-list').innerHTML = svcs.map(s => `
+    <button type="button"
+      onclick="selectService(${JSON.stringify(s).replace(/"/g,"&quot;")})"
+      class="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-amber-300 hover:bg-amber-50 text-left transition-all">
+      <span class="text-xl flex-shrink-0">${s.icon}</span>
+      <div class="min-w-0 flex-1">
+        <div class="font-medium text-gray-800 text-sm">${s.name}</div>
+        <div class="text-xs text-gray-400 mt-0.5">${inputTypeLabel(s.inputType)}</div>
+      </div>
+      <div class="price-tag text-sm flex-shrink-0">${fmt(s.price)}</div>
+    </button>`).join('');
 }
 
 function openHeroService(serviceId) {
@@ -2306,6 +2405,7 @@ function queryActionLabel(inputType) {
   if (inputType === 'contrato_aluguel') return 'Gerar Contrato';
   if (inputType === 'procuracao_veicular') return 'Gerar Procuração';
   if (inputType === 'nota_prestacao_servicos') return 'Gerar Nota';
+  if (inputType === 'asd') return 'Gerar ASD';
   return 'Realizar Consulta';
 }
 
@@ -2595,6 +2695,83 @@ function renderFormFields(inputType, svc) {
       </div>
       ${field('valor_total', 'Valor Total dos Serviços (R$)', 'text', '793.20')}`,
 
+    // Gerar ASD (Anotação de Serviço Documental) — Profissional e Beneficiário
+    // buscam o nome na Localização CPF V3, a Descrição Documental busca os dados
+    // do veículo na Proprietário Atual, e as duas digitalizações da carteirinha
+    // (opcionais) viram a última página do PDF.
+    asd: `
+      <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 text-xs text-blue-800">
+        ℹ️ Use os botões "🔎 Buscar" para preencher automaticamente o Profissional e o Beneficiário (Localização CPF V3, só para CPF) e a Descrição Documental a partir da placa (Proprietário Atual). Confira e edite o que precisar antes de gerar a ASD.
+      </div>
+      <div class="grid grid-cols-3 gap-3">
+        <div class="col-span-2">${field('asd_servico', 'Serviço', 'text', 'Ex.: Transferência de Propriedade')}</div>
+        ${field('asd_uf', 'UF', 'text', 'RJ', true, 'maxlength="2"')}
+      </div>
+      ${field('asd_contratante', 'Nome do Contratante', 'text', 'NOME COMPLETO / RAZÃO SOCIAL')}
+
+      <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Profissional (despachante documentalista)</div>
+      <div class="flex gap-2 items-end mb-1">
+        <div class="flex-1">${field('asd_profissional_cpf', 'CPF/CNPJ do Profissional', 'text', '000.000.000-00 ou CNPJ')}</div>
+        <button type="button" onclick="buscarPessoaAsd('profissional')" class="btn-primary text-xs px-4 py-2.5 whitespace-nowrap">🔎 Buscar</button>
+      </div>
+      <p id="asd-busca-status-profissional" class="text-xs mb-2 hidden"></p>
+      ${field('asd_profissional_nome', 'Nome do Profissional', 'text', 'NOME COMPLETO / RAZÃO SOCIAL')}
+      <div class="grid grid-cols-3 gap-3">
+        ${field('asd_profissional_matricula', 'Matrícula (CRDD-UF)', 'text', 'Ex.: RJ 12.345', false)}
+        ${field('asd_profissional_telefone', 'Telefone', 'text', '(21) 90000-0000', false)}
+        ${field('asd_profissional_email', 'E-mail', 'email', 'email@exemplo.com', false)}
+      </div>
+
+      <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Beneficiário do Serviço</div>
+      <div class="flex gap-2 items-end mb-1">
+        <div class="flex-1">${field('asd_beneficiario_cpf', 'CPF/CNPJ do Beneficiário', 'text', '000.000.000-00 ou CNPJ')}</div>
+        <button type="button" onclick="buscarPessoaAsd('beneficiario')" class="btn-primary text-xs px-4 py-2.5 whitespace-nowrap">🔎 Buscar</button>
+      </div>
+      <p id="asd-busca-status-beneficiario" class="text-xs mb-2 hidden"></p>
+      ${field('asd_beneficiario_nome', 'Nome do Beneficiário', 'text', 'NOME COMPLETO / RAZÃO SOCIAL')}
+      <div class="grid grid-cols-2 gap-3">
+        ${field('asd_beneficiario_telefone', 'Telefone', 'text', '(21) 90000-0000', false)}
+        ${field('asd_beneficiario_email', 'E-mail', 'email', 'email@exemplo.com', false)}
+      </div>
+
+      <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Descrição Documental</div>
+      <div class="flex gap-2 items-end mb-1">
+        <div class="flex-1">${field('placa', 'Placa do Veículo', 'text', 'ABC1234 (opcional)', false)}</div>
+        <button type="button" onclick="buscarVeiculoAsd()" class="btn-primary text-xs px-4 py-2.5 whitespace-nowrap">🔎 Buscar</button>
+      </div>
+      <p id="asd-busca-status-veiculo" class="text-xs mb-2 hidden"></p>
+      <div class="grid grid-cols-2 gap-3">
+        ${field('asd_marca_modelo', 'Marca/Modelo', 'text', '(preenchido pela busca)', false)}
+        ${field('asd_chassi', 'Chassi', 'text', '(preenchido pela busca)', false)}
+      </div>
+      <div class="grid grid-cols-3 gap-3">
+        ${field('asd_renavam', 'Renavam', 'text', '(preenchido pela busca)', false)}
+        ${field('asd_cor', 'Cor', 'text', '(preenchido pela busca)', false)}
+        ${field('asd_ano_fabricacao', 'Ano Fab.', 'text', '(preenchido pela busca)', false)}
+      </div>
+      ${field('asd_ano_modelo', 'Ano Modelo', 'text', '(preenchido pela busca)', false)}
+      <div>
+        <label class="label">Observações da Descrição Documental</label>
+        <textarea id="f-asd_descricao" class="input-field" rows="4" placeholder="Ex.: Documentos recebidos: CRV original, comprovante de residência e cópia do CPF do beneficiário..."></textarea>
+      </div>
+
+      <div class="font-semibold text-gray-700 text-sm mt-3 mb-1">Carteirinha do Despachante</div>
+      <p class="text-xs text-gray-500 mb-2">As duas digitalizações são anexadas como última página da ASD. Opcional — envie JPG ou PNG.</p>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="label">Digitalizando Frente</label>
+          <input id="f-asd_carteirinha_frente" type="file" accept="image/png,image/jpeg" class="input-field text-xs"
+            onchange="lerCarteirinhaAsd(this, 'frente')">
+          <p id="asd-carteirinha-status-frente" class="text-xs mt-1 hidden"></p>
+        </div>
+        <div>
+          <label class="label">Digitalizando Verso</label>
+          <input id="f-asd_carteirinha_verso" type="file" accept="image/png,image/jpeg" class="input-field text-xs"
+            onchange="lerCarteirinhaAsd(this, 'verso')">
+          <p id="asd-carteirinha-status-verso" class="text-xs mt-1 hidden"></p>
+        </div>
+      </div>`,
+
     crv_full: placaField + renavamField + `
       <div class="grid grid-cols-2 gap-3">
         ${field('crv_numero','Número CRV','text','123456789012')}
@@ -2754,6 +2931,15 @@ function renderFormFields(inputType, svc) {
     cepEl.addEventListener('input', function() {
       this.value = this.value.replace(/\D/g, '').slice(0, 8);
       if (this.value.length === 8) autocompletarCep(this.value);
+    });
+  }
+  // Gerar ASD: cada abertura do formulário começa sem digitalização (o
+  // form.reset() limpa o <input type="file">, mas não o data URL já lido).
+  if (inputType === 'asd') {
+    asdCarteirinha = { frente: null, verso: null };
+    const ufEl = document.getElementById('f-asd_uf');
+    if (ufEl) ufEl.addEventListener('input', function() {
+      this.value = this.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
     });
   }
   // Máscara CEP da Declaração de Residência (00000-000, sem autopreenchimento —
@@ -2933,6 +3119,133 @@ async function buscarVeiculoProcuracao() {
   } catch {
     setStatus('⚠️ Erro de conexão ao buscar os dados. Preencha manualmente.', 'text-amber-600');
   }
+}
+
+// ── Gerar ASD ─────────────────────────────────────────────────────────────────
+// Digitalizações da carteirinha do despachante, já redimensionadas, guardadas
+// como data URL até o submit (input file não sobrevive a um form.reset()).
+let asdCarteirinha = { frente: null, verso: null };
+
+function setAsdStatus(id, msg, cor) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = `text-xs mb-2 ${cor}`;
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+// Busca o nome do Profissional ou do Beneficiário via Localização CPF V3
+// (mesma rota da Procuração Veicular). Não cobra créditos.
+async function buscarPessoaAsd(papel) {
+  const rotulo = papel === 'profissional' ? 'do Profissional' : 'do Beneficiário';
+  const statusId = `asd-busca-status-${papel}`;
+  const cpf = (document.getElementById(`f-asd_${papel}_cpf`)?.value || '').replace(/\D/g, '');
+
+  if (cpf.length === 14) { setAsdStatus(statusId, 'ℹ️ Busca automática disponível apenas para CPF (pessoa física). Preencha o nome manualmente.', 'text-amber-600'); return; }
+  if (cpf.length !== 11) { setAsdStatus(statusId, '⚠️ Informe um CPF válido (11 dígitos).', 'text-amber-600'); return; }
+
+  setAsdStatus(statusId, '⏳ Buscando dados na Localização CPF V3…', 'text-blue-600');
+  try {
+    const r = await fetch('/api/procuracao-veicular/localizar-cpf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cpf }),
+    });
+    const data = await r.json();
+    if (!r.ok) { setAsdStatus(statusId, '⚠️ ' + (data.error || 'Não foi possível localizar o nome. Preencha manualmente.'), 'text-amber-600'); return; }
+    if (data.nome) {
+      const nomeEl = document.getElementById(`f-asd_${papel}_nome`);
+      if (nomeEl) nomeEl.value = data.nome;
+      setAsdStatus(statusId, `✅ Nome ${rotulo} localizado! Confira antes de gerar a ASD.`, 'text-green-600');
+    } else {
+      setAsdStatus(statusId, '⚠️ Nenhum nome encontrado para esse CPF. Preencha manualmente.', 'text-amber-600');
+    }
+  } catch {
+    setAsdStatus(statusId, '⚠️ Erro de conexão ao buscar os dados. Preencha manualmente.', 'text-amber-600');
+  }
+}
+
+// Preenche a Descrição Documental com os dados do veículo via Proprietário
+// Atual (mesma rota da Procuração Veicular). Não cobra créditos.
+async function buscarVeiculoAsd() {
+  const placa = (document.getElementById('f-placa')?.value || '').toUpperCase().replace(/[\s-]/g, '');
+  if (placa.length < 7) { setAsdStatus('asd-busca-status-veiculo', '⚠️ Informe uma placa válida.', 'text-amber-600'); return; }
+
+  setAsdStatus('asd-busca-status-veiculo', '⏳ Buscando dados na Proprietário Atual…', 'text-blue-600');
+  try {
+    const r = await fetch('/api/procuracao-veicular/localizar-placa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ placa }),
+    });
+    const data = await r.json();
+    if (!r.ok) { setAsdStatus('asd-busca-status-veiculo', '⚠️ ' + (data.error || 'Não foi possível localizar os dados. Preencha manualmente.'), 'text-amber-600'); return; }
+
+    const set = (id, val) => { const el = document.getElementById('f-' + id); if (el && val) el.value = val; };
+    set('asd_marca_modelo', data.data.marcaModelo);
+    set('asd_chassi', data.data.chassi);
+    set('asd_renavam', data.data.renavam);
+    set('asd_cor', data.data.cor);
+    set('asd_ano_fabricacao', data.data.anoFabricacao);
+    set('asd_ano_modelo', data.data.anoModelo);
+
+    // O proprietário atual costuma ser o próprio beneficiário do serviço — só
+    // preenche se o campo ainda estiver vazio, para não sobrescrever o que o
+    // despachante já digitou/buscou pelo CPF.
+    const benNome = document.getElementById('f-asd_beneficiario_nome');
+    const benCpf  = document.getElementById('f-asd_beneficiario_cpf');
+    if (benNome && !benNome.value && data.data.nome) benNome.value = data.data.nome;
+    if (benCpf  && !benCpf.value  && data.data.cpfCnpj) benCpf.value = data.data.cpfCnpj;
+
+    setAsdStatus('asd-busca-status-veiculo', '✅ Dados localizados! Confira e edite o que precisar antes de gerar a ASD.', 'text-green-600');
+  } catch {
+    setAsdStatus('asd-busca-status-veiculo', '⚠️ Erro de conexão ao buscar os dados. Preencha manualmente.', 'text-amber-600');
+  }
+}
+
+// Lê a digitalização da carteirinha e reduz para no máximo 1800px no maior lado
+// antes de virar data URL — foto de celular crua passa de 5 MB e estouraria o
+// corpo da requisição; 1800px mantém a carteirinha legível na página de anexo.
+function lerCarteirinhaAsd(inputEl, lado) {
+  const statusId = `asd-carteirinha-status-${lado}`;
+  const file = inputEl.files && inputEl.files[0];
+  if (!file) { asdCarteirinha[lado] = null; setAsdStatus(statusId, '', 'text-gray-500'); return; }
+  if (!/^image\/(png|jpe?g)$/i.test(file.type)) {
+    inputEl.value = '';
+    asdCarteirinha[lado] = null;
+    setAsdStatus(statusId, '⚠️ Envie a digitalização em JPG ou PNG.', 'text-amber-600');
+    return;
+  }
+
+  setAsdStatus(statusId, '⏳ Processando imagem…', 'text-blue-600');
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const maxSide = 1800;
+      const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width  = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext('2d');
+      // Fundo branco: JPEG não tem transparência e um PNG com alfa sairia preto.
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      asdCarteirinha[lado] = canvas.toDataURL('image/jpeg', 0.9);
+      setAsdStatus(statusId, `✅ ${lado === 'frente' ? 'Frente' : 'Verso'} carregado (${canvas.width}×${canvas.height}).`, 'text-green-600');
+    };
+    img.onerror = () => {
+      asdCarteirinha[lado] = null;
+      setAsdStatus(statusId, '⚠️ Não foi possível ler essa imagem. Tente outro arquivo.', 'text-amber-600');
+    };
+    img.src = reader.result;
+  };
+  reader.onerror = () => {
+    asdCarteirinha[lado] = null;
+    setAsdStatus(statusId, '⚠️ Erro ao ler o arquivo.', 'text-amber-600');
+  };
+  reader.readAsDataURL(file);
 }
 
 async function autocompletarCep(cep) {
@@ -3164,6 +3477,32 @@ function buildParams(inputType) {
       valorTotal: g('valor_total'),
     };
 
+  if (inputType === 'asd')
+    return {
+      servico: g('asd_servico'),
+      uf: g('asd_uf').toUpperCase(),
+      contratante: g('asd_contratante'),
+      profissionalNome: g('asd_profissional_nome'),
+      profissionalCpfCnpj: cd(g('asd_profissional_cpf')),
+      profissionalMatricula: g('asd_profissional_matricula'),
+      profissionalTelefone: g('asd_profissional_telefone'),
+      profissionalEmail: g('asd_profissional_email'),
+      beneficiarioNome: g('asd_beneficiario_nome'),
+      beneficiarioCpfCnpj: cd(g('asd_beneficiario_cpf')),
+      beneficiarioTelefone: g('asd_beneficiario_telefone'),
+      beneficiarioEmail: g('asd_beneficiario_email'),
+      placa: g('placa'),
+      marcaModelo: g('asd_marca_modelo'),
+      chassi: g('asd_chassi'),
+      renavam: g('asd_renavam'),
+      cor: g('asd_cor'),
+      anoFabricacao: g('asd_ano_fabricacao'),
+      anoModelo: g('asd_ano_modelo'),
+      descricaoDocumental: g('asd_descricao'),
+      carteirinhaFrente: asdCarteirinha.frente || '',
+      carteirinhaVerso: asdCarteirinha.verso || '',
+    };
+
   if (inputType === 'venda') {
     const vDoc = cd(g('v_cpf'));
     const cDoc = cd(g('c_cpf'));
@@ -3230,6 +3569,19 @@ function validateParams(inputType, p) {
     if (!p.tomadorNome)            return 'Informe o nome do Tomador de Serviços (Cliente).';
     if (!p.discriminacaoServicos)  return 'Informe a discriminação dos serviços prestados.';
     if (!p.valorTotal || isNaN(parseFloat(p.valorTotal.replace(',', '.'))) || parseFloat(p.valorTotal.replace(',', '.')) <= 0) return 'Informe um valor total válido.';
+    return null;
+  }
+  if (inputType === 'asd') {
+    if (!p.servico)                return 'Informe o serviço prestado.';
+    if (p.uf.length !== 2)         return 'Informe a UF (2 letras).';
+    if (!p.contratante)            return 'Informe o nome do Contratante.';
+    if (!p.profissionalNome)       return 'Informe o nome do Profissional.';
+    if (p.profissionalCpfCnpj.length !== 11 && p.profissionalCpfCnpj.length !== 14) return 'CPF/CNPJ do Profissional inválido.';
+    if (!p.beneficiarioNome)       return 'Informe o nome do Beneficiário do Serviço.';
+    if (p.beneficiarioCpfCnpj.length !== 11 && p.beneficiarioCpfCnpj.length !== 14) return 'CPF/CNPJ do Beneficiário do Serviço inválido.';
+    // Placa é opcional (nem todo serviço documental é veicular), mas se
+    // preenchida precisa estar completa.
+    if (p.placa && p.placa.replace(/[^A-Za-z0-9]/g, '').length !== 7) return 'Placa inválida. Deve ter 7 caracteres (sem hífen) ou ficar em branco.';
     return null;
   }
   if (inputType === 'cancelar_venda') {
