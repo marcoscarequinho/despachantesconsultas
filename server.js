@@ -711,6 +711,30 @@ async function initDB() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  // Registro permanente das ASDs emitidas — NÃO pode virar pdf_cache (que expira
+  // em 7 dias): é o livro do despachante, consultado pela página pública
+  // /verificar-asd/:codigo. Cada usuário tem sua própria cadeia sequencial
+  // (seq 1, 2, 3...) em que chain_hash encadeia o registro anterior, então
+  // alterar uma ASD antiga invalida todas as posteriores daquele despachante.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS asd_registros (
+      id             SERIAL PRIMARY KEY,
+      user_id        INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      query_id       INTEGER REFERENCES queries(id) ON DELETE SET NULL,
+      seq            INTEGER NOT NULL,
+      codigo         VARCHAR(32) UNIQUE NOT NULL,
+      doc_hash       CHAR(64) NOT NULL,
+      prev_hash      CHAR(64) NOT NULL,
+      chain_hash     CHAR(64) NOT NULL,
+      servico        VARCHAR(255),
+      uf             CHAR(2),
+      prof_nome      VARCHAR(255),
+      prof_doc       VARCHAR(14),
+      prof_matricula VARCHAR(50),
+      created_at     TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_asd_registros_user_seq ON asd_registros(user_id, seq);`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pix_payments (
       id         SERIAL PRIMARY KEY,
@@ -2781,6 +2805,94 @@ function decodeAsdCarteirinha(dataUrl) {
   return buf;
 }
 
+// ── Cadeia de hashes da ASD ───────────────────────────────────────────────────
+// Cada despachante tem um livro sequencial próprio: o chain_hash de cada ASD
+// encadeia o da anterior, então adulterar uma ASD antiga invalida todas as
+// seguintes daquele profissional (mesma propriedade de uma blockchain, sem
+// depender de rede externa, taxa ou chave privada). Não é assinatura digital
+// no sentido da Lei 14.063/2020 — é prova de integridade e de data.
+const ASD_BASE_URL = WEBHOOK_BASE_URL || 'https://despachantesconsultas.com.br';
+const ASD_CHAIN_GENESIS = '0'.repeat(64);
+const ASD_CHAIN_LOCK_NS = 8123; // namespace do pg_advisory_xact_lock
+
+// O hash é dos DADOS, não dos bytes do PDF: o próprio código de verificação é
+// impresso dentro do PDF (referência circular) e a data de geração mudaria o
+// hash a cada reemissão. Normaliza espaços/caixa para que a mesma ASD digitada
+// com espaçamento diferente produza o mesmo hash, e cobre as digitalizações
+// pelo SHA-256 da imagem — trocar a carteirinha muda o hash.
+function asdCanonicalPayload(p) {
+  const norm = v => String(v ?? '').trim().replace(/\s+/g, ' ').toUpperCase();
+  const imgHash = d => {
+    const buf = decodeAsdCarteirinha(d);
+    return buf ? crypto.createHash('sha256').update(buf).digest('hex') : '';
+  };
+  return JSON.stringify([
+    ['servico',     norm(p.servico)],
+    ['uf',          norm(p.uf)],
+    ['contratante', norm(p.contratante)],
+    ['profissional', norm(p.profissionalNome), String(p.profissionalCpfCnpj || ''), norm(p.profissionalMatricula)],
+    ['beneficiario', norm(p.beneficiarioNome), String(p.beneficiarioCpfCnpj || '')],
+    ['veiculo',     norm(p.placa), norm(p.marcaModelo), norm(p.chassi), norm(p.renavam),
+                    norm(p.cor), norm(p.anoFabricacao), norm(p.anoModelo)],
+    ['descricao',   norm(p.descricaoDocumental)],
+    ['carteirinha', imgHash(p.carteirinhaFrente), imgHash(p.carteirinhaVerso)],
+  ]);
+}
+
+function asdDocHash(p) {
+  return crypto.createHash('sha256').update(asdCanonicalPayload(p), 'utf8').digest('hex');
+}
+
+// Insere o próximo elo da cadeia do despachante. O advisory lock serializa por
+// usuário: sem ele, duas ASDs emitidas ao mesmo tempo leriam o mesmo prev_hash
+// e a cadeia bifurcaria (dois elos apontando para o mesmo anterior).
+async function registrarAsdNaCadeia({ userId, docHash, servico, uf, profNome, profDoc, profMatricula }) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1, $2)', [ASD_CHAIN_LOCK_NS, userId]);
+
+    const last = await client.query(
+      'SELECT seq, chain_hash FROM asd_registros WHERE user_id=$1 ORDER BY seq DESC LIMIT 1',
+      [userId]
+    );
+    const seq = (last.rows[0]?.seq || 0) + 1;
+    const prevHash = last.rows[0]?.chain_hash || ASD_CHAIN_GENESIS;
+    const createdAt = new Date();
+    const chainHash = crypto.createHash('sha256')
+      .update(`${prevHash}|${docHash}|${userId}|${seq}|${createdAt.toISOString()}`, 'utf8')
+      .digest('hex');
+    // Código derivado do chain_hash: já é único por construção (o chain_hash
+    // inclui seq + timestamp), sem precisar sortear e tentar de novo.
+    const codigo = `ASD-${createdAt.getFullYear()}-${chainHash.slice(0, 8).toUpperCase()}`;
+
+    const ins = await client.query(
+      `INSERT INTO asd_registros
+         (user_id, seq, codigo, doc_hash, prev_hash, chain_hash, servico, uf, prof_nome, prof_doc, prof_matricula, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+      [userId, seq, codigo, docHash, prevHash, chainHash, servico, uf, profNome, profDoc, profMatricula, createdAt]
+    );
+    await client.query('COMMIT');
+    return { id: ins.rows[0].id, seq, codigo, docHash, prevHash, chainHash, createdAt };
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// QR do rodapé da ASD, apontando para a página pública de verificação. Mesmo
+// bwip-js já usado no código de barras do boleto (JS puro, roda na Vercel).
+async function generateAsdQrPng(url) {
+  try {
+    return await bwipjs.toBuffer({ bcid: 'qrcode', text: url, scale: 3, eclevel: 'M', padding: 1 });
+  } catch (e) {
+    console.error('[gerar-asd] erro ao gerar QR de verificação:', e.message);
+    return null;
+  }
+}
+
 // ── Geração de PDF — Gerar ASD (Anotação de Serviço Documental). Mesma técnica
 // da Procuração Veicular e da Nota de Prestação de Serviços: documento montado
 // do zero com pdfkit, sem template oficial. Os dados chegam prontos do
@@ -2835,13 +2947,18 @@ function buildAsdPdfBuffer(params) {
       ]);
       doc.moveDown(0.3);
 
+      // Telefone e e-mail entram numa célula só ("Contato"): como pares
+      // separados eles somavam uma linha inteira de grade a cada seção e
+      // empurravam a assinatura para uma segunda página.
+      const contato = (tel, mail) => [tel, mail].filter(Boolean).join('  ·  ');
+
       pdfBar(doc, 'PROFISSIONAL (DESPACHANTE DOCUMENTALISTA)');
       pdfFieldGrid(doc, [
         ['Nome / Razão Social', params.profissionalNome],
         ['CPF/CNPJ', maskDocDisplay(params.profissionalCpfCnpj)],
         ...(params.profissionalMatricula ? [['Matrícula (CRDD-UF)', params.profissionalMatricula]] : []),
-        ...(params.profissionalTelefone ? [['Telefone', params.profissionalTelefone]] : []),
-        ...(params.profissionalEmail ? [['E-mail', params.profissionalEmail]] : []),
+        ...(contato(params.profissionalTelefone, params.profissionalEmail)
+          ? [['Contato', contato(params.profissionalTelefone, params.profissionalEmail)]] : []),
       ]);
       doc.moveDown(0.3);
 
@@ -2849,8 +2966,8 @@ function buildAsdPdfBuffer(params) {
       pdfFieldGrid(doc, [
         ['Nome / Razão Social', params.beneficiarioNome],
         ['CPF/CNPJ', maskDocDisplay(params.beneficiarioCpfCnpj)],
-        ...(params.beneficiarioTelefone ? [['Telefone', params.beneficiarioTelefone]] : []),
-        ...(params.beneficiarioEmail ? [['E-mail', params.beneficiarioEmail]] : []),
+        ...(contato(params.beneficiarioTelefone, params.beneficiarioEmail)
+          ? [['Contato', contato(params.beneficiarioTelefone, params.beneficiarioEmail)]] : []),
       ]);
       doc.moveDown(0.3);
 
@@ -2883,10 +3000,11 @@ function buildAsdPdfBuffer(params) {
       );
       doc.fillColor('#111827').fontSize(10);
 
-      // Local/data + assinatura são checados como um bloco só, e a folga do
-      // moveDown entra na reserva: separados, a ASD saía com uma página extra
-      // contendo apenas a linha de assinatura.
-      pdfEnsureSpace(doc, 105);
+      // Local/data + assinatura + verificação são checados como um bloco só, e a
+      // folga do moveDown entra na reserva: separados, a ASD saía com uma página
+      // extra contendo apenas a linha de assinatura.
+      const v = params.verificacao;
+      pdfEnsureSpace(doc, v ? 128 : 105);
       doc.moveDown(0.8);
       doc.font('Helvetica').fontSize(9.5)
         .text(`${params.uf ? params.uf + ', ' : ''}${formatDateExtenso(now.toISOString().slice(0, 10))}.`,
@@ -2901,6 +3019,27 @@ function buildAsdPdfBuffer(params) {
         left, y1 + 16, { width, align: 'center' }
       );
 
+      // Bloco de verificação — QR + código na faixa livre à esquerda da
+      // assinatura (a linha de assinatura ocupa só os 220pt centrais), para não
+      // gastar altura extra na página.
+      if (v) {
+        const qrSize = 62;
+        const qrY = y1 - 12;
+        if (params.qrPng) {
+          try { doc.image(params.qrPng, left, qrY, { fit: [qrSize, qrSize] }); }
+          catch (e) { console.warn('[gerar-asd] falha ao embutir QR:', e.message); }
+        }
+        const txtY = qrY + qrSize + 3;
+        doc.font('Helvetica-Bold').fontSize(6.5).fillColor('#1e40af')
+          .text(v.codigo, left, txtY, { width: 190 });
+        doc.font('Helvetica').fontSize(5.8).fillColor('#6b7280')
+          .text(`ASD nº ${v.seq} deste profissional`, left, txtY + 8, { width: 190 })
+          .text(`SHA-256: ${v.docHash.slice(0, 32)}…`, left, txtY + 15, { width: 190 })
+          .text(`Confira em ${v.urlCurta}`, left, txtY + 22, { width: 190 });
+        doc.fillColor('#111827').font('Helvetica').fontSize(10);
+        doc.y = Math.max(doc.y, txtY + 32);
+      }
+
       // Anexo: carteirinha digitalizada pelo próprio despachante (frente/verso),
       // sempre em página própria no final. Cada digitalização é centralizada
       // numa moldura de altura fixa: as fotos chegam em proporções bem
@@ -2913,7 +3052,11 @@ function buildAsdPdfBuffer(params) {
         pdfBar(doc, 'ANEXO — IDENTIDADE DE DESPACHANTE DOCUMENTALISTA');
         doc.font('Helvetica').fontSize(8.5).fillColor('#6b7280').text(
           'Digitalização da carteira profissional do despachante documentalista responsável pelo serviço, ' +
-          'apresentada como comprovação de habilitação (Lei nº 14.282/2021).',
+          'apresentada como comprovação de habilitação (Lei nº 14.282/2021).' +
+          // Repete o código aqui para amarrar o anexo ao documento: as imagens
+          // entram no doc_hash, então trocar a carteirinha muda o hash impresso
+          // na 1ª página e a verificação acusa.
+          (v ? ` Anexo da ${v.codigo}.` : ''),
           left, doc.y, { width, lineGap: 1.5 }
         );
         doc.fillColor('#111827').fontSize(10);
@@ -4913,6 +5056,44 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       if (placa && placa.length !== 7)
         return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23 ou deixe em branco.' });
 
+      // Registra na cadeia ANTES de cobrar: se a gravação do elo falhar, o
+      // cliente não paga por uma ASD que não seria verificável. O código e o
+      // hash saem impressos no PDF, então o registro precisa vir primeiro.
+      const asdCampos = {
+        servico, uf, contratante,
+        profissionalNome, profissionalCpfCnpj, profissionalMatricula,
+        beneficiarioNome, beneficiarioCpfCnpj,
+        placa,
+        marcaModelo: (params?.marcaModelo || '').trim(),
+        chassi: (params?.chassi || '').trim(),
+        renavam: (params?.renavam || '').trim(),
+        cor: (params?.cor || '').trim(),
+        anoFabricacao: (params?.anoFabricacao || '').trim(),
+        anoModelo: (params?.anoModelo || '').trim(),
+        descricaoDocumental,
+        carteirinhaFrente: params?.carteirinhaFrente,
+        carteirinhaVerso: params?.carteirinhaVerso,
+      };
+      let registro;
+      try {
+        registro = await registrarAsdNaCadeia({
+          userId, docHash: asdDocHash(asdCampos), servico, uf,
+          profNome: profissionalNome, profDoc: profissionalCpfCnpj, profMatricula: profissionalMatricula,
+        });
+      } catch (e) {
+        console.error('[gerar-asd] erro ao registrar na cadeia:', e.message);
+        return res.status(500).json({ error: 'Erro ao registrar a ASD. Nenhum crédito foi debitado.' });
+      }
+
+      const verificacao = {
+        codigo: registro.codigo,
+        docHash: registro.docHash,
+        seq: registro.seq,
+        url: `${ASD_BASE_URL}/verificar-asd/${registro.codigo}`,
+        urlCurta: `${ASD_BASE_URL.replace(/^https?:\/\//, '')}/verificar-asd`,
+      };
+      const qrPng = await generateAsdQrPng(verificacao.url);
+
       let pdfBuf;
       try {
         pdfBuf = await buildAsdPdfBuffer({
@@ -4923,6 +5104,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           beneficiarioNome, beneficiarioCpfCnpj,
           beneficiarioTelefone: (params?.beneficiarioTelefone || '').trim(),
           beneficiarioEmail: (params?.beneficiarioEmail || '').trim(),
+          verificacao, qrPng,
           placa,
           marcaModelo: (params?.marcaModelo || '').trim(),
           chassi: (params?.chassi || '').trim(),
@@ -4967,11 +5149,17 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), expiresAt]
       ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
 
+      // Amarra o elo da cadeia à consulta cobrada (o elo é gravado antes, para
+      // não cobrar por uma ASD que não seria verificável — ver acima).
+      await pool.query('UPDATE asd_registros SET query_id=$1 WHERE id=$2', [qRow.rows[0].id, registro.id])
+        .catch(e => console.error('[gerar-asd] erro ao vincular query_id ao registro:', e.message));
+
       await notifyAdminNewQuery(user, service, price, { placa });
 
       if (user.phone) {
         const caption = `✅ *${service.name} pronta!*\n📑 Serviço: ${servico}\n👤 Beneficiário: ${beneficiarioNome}` +
           (placa ? `\n🚗 Placa: ${maskPlacaDisplay(placa)}` : '') +
+          `\n🔐 Código de verificação: ${registro.codigo}\n${verificacao.url}` +
           `\n\nDocumento gerado pela MC Despachadoria.`;
         await sendWhatsAppPdf(user.phone, pdfBuf, `asd-${Date.now()}.pdf`, caption).catch(() => {});
       }
@@ -8579,6 +8767,148 @@ app.get('/api/html/:token', requireAuth, async (req, res) => {
     return res.send(buf);
   } catch (err) {
     res.status(500).send('<p>Erro interno.</p>');
+  }
+});
+
+// ── Verificação pública da ASD ────────────────────────────────────────────────
+// Página aberta (sem login) para quem recebeu a ASD conferir o documento pelo
+// QR/código impresso. Mostra SÓ o profissional, o serviço e a data: o
+// beneficiário é dado de terceiro e não entra numa página pública. O CPF/CNPJ do
+// profissional sai mascarado.
+const escapeHtmlServer = s => String(s ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+// Mostra só os 3 primeiros e os 2 últimos dígitos (***.171.***-**), suficiente
+// para conferir contra o documento em mãos sem publicar o CPF inteiro.
+function maskDocPublic(doc) {
+  const d = String(doc || '').replace(/\D/g, '');
+  if (d.length === 11) return `***.${d.slice(3, 6)}.***-${d.slice(9)}`;
+  if (d.length === 14) return `**.${d.slice(2, 5)}.***/****-${d.slice(12)}`;
+  return '-';
+}
+
+function asdVerificacaoHtml({ titulo, corpo }) {
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>${escapeHtmlServer(titulo)} — MC Despachadoria Consultas</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background:#f3f4f6; color:#111827; padding:24px 16px; }
+  .card { max-width:640px; margin:0 auto; background:#fff; border:1px solid #e5e7eb;
+          border-radius:14px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .head { background:#1e40af; color:#fff; padding:18px 22px; }
+  .head h1 { margin:0; font-size:17px; }
+  .head p { margin:4px 0 0; font-size:12.5px; opacity:.85; }
+  .body { padding:22px; }
+  .badge { display:inline-flex; align-items:center; gap:7px; font-weight:700; font-size:14px;
+           padding:8px 14px; border-radius:999px; margin-bottom:18px; }
+  .ok   { background:#dcfce7; color:#166534; }
+  .fail { background:#fee2e2; color:#991b1b; }
+  dl { margin:0; display:grid; grid-template-columns:1fr; gap:2px; }
+  .row { padding:10px 0; border-bottom:1px solid #f3f4f6; }
+  .row:last-child { border-bottom:0; }
+  dt { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:#6b7280; margin-bottom:3px; }
+  dd { margin:0; font-size:14.5px; font-weight:600; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11.5px;
+         word-break:break-all; font-weight:400; color:#374151; }
+  .nota { margin-top:20px; padding:13px 15px; background:#f9fafb; border:1px solid #e5e7eb;
+          border-radius:10px; font-size:12px; color:#4b5563; line-height:1.55; }
+  form { display:flex; gap:8px; margin-top:6px; flex-wrap:wrap; }
+  input { flex:1 1 200px; padding:11px 13px; border:1px solid #d1d5db; border-radius:9px; font-size:14px; }
+  button { padding:11px 20px; border:0; border-radius:9px; background:#1e40af; color:#fff;
+           font-size:14px; font-weight:600; cursor:pointer; }
+  .rodape { max-width:640px; margin:14px auto 0; text-align:center; font-size:11.5px; color:#6b7280; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="head">
+    <h1>Verificação de ASD</h1>
+    <p>Anotação de Serviço Documental — MC Despachadoria Consultas</p>
+  </div>
+  <div class="body">${corpo}</div>
+</div>
+<p class="rodape">Consulta pública de integridade. Não substitui assinatura eletrônica (Lei nº 14.063/2020).</p>
+</body>
+</html>`;
+}
+
+const ASD_FORM_HTML = `
+  <p style="margin:0 0 6px;font-size:13.5px;color:#4b5563">Informe o código impresso na ASD:</p>
+  <form method="GET" action="/verificar-asd">
+    <input name="codigo" placeholder="ASD-2026-XXXXXXXX" autocapitalize="characters" required>
+    <button type="submit">Verificar</button>
+  </form>`;
+
+app.get('/verificar-asd', (req, res) => {
+  const codigo = (req.query.codigo || '').toString().trim().toUpperCase();
+  if (codigo) return res.redirect(`/verificar-asd/${encodeURIComponent(codigo)}`);
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  noCache(res);
+  res.type('html').send(asdVerificacaoHtml({ titulo: 'Verificar ASD', corpo: ASD_FORM_HTML }));
+});
+
+app.get('/verificar-asd/:codigo', async (req, res) => {
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  noCache(res);
+  const codigo = (req.params.codigo || '').trim().toUpperCase();
+
+  const naoEncontrada = (msg) => res.status(404).type('html').send(asdVerificacaoHtml({
+    titulo: 'ASD não localizada',
+    corpo: `<div class="badge fail">✕ ${escapeHtmlServer(msg)}</div>${ASD_FORM_HTML}`,
+  }));
+
+  if (!/^ASD-\d{4}-[0-9A-F]{8}$/.test(codigo))
+    return naoEncontrada('Código inválido');
+
+  try {
+    const r = await pool.query(
+      `SELECT seq, codigo, doc_hash, chain_hash, servico, uf, prof_nome, prof_doc, prof_matricula, created_at
+         FROM asd_registros WHERE codigo=$1`,
+      [codigo]
+    );
+    if (!r.rows.length) return naoEncontrada('Nenhuma ASD encontrada com esse código');
+
+    const a = r.rows[0];
+    const dt = new Date(a.created_at);
+    const linha = (rot, val) => `<div class="row"><dt>${rot}</dt><dd>${val}</dd></div>`;
+
+    const corpo = `
+      <div class="badge ok">✓ ASD autêntica e registrada</div>
+      <dl>
+        ${linha('Código de verificação', escapeHtmlServer(a.codigo))}
+        ${linha('Emitida em', dt.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }))}
+        ${linha('Serviço', escapeHtmlServer(a.servico || '-'))}
+        ${linha('UF', escapeHtmlServer(a.uf || '-'))}
+        ${linha('Profissional responsável', escapeHtmlServer(a.prof_nome || '-'))}
+        ${linha('Matrícula (CRDD-UF)', escapeHtmlServer(a.prof_matricula || 'não informada'))}
+        ${linha('CPF/CNPJ do profissional', maskDocPublic(a.prof_doc))}
+        ${linha('Posição no livro do profissional', `ASD nº ${a.seq}`)}
+        ${linha('Hash do documento (SHA-256)', `<code>${escapeHtmlServer(a.doc_hash)}</code>`)}
+        ${linha('Hash da cadeia', `<code>${escapeHtmlServer(a.chain_hash)}</code>`)}
+      </dl>
+      <div class="nota">
+        <strong>O que esta página comprova:</strong> que uma ASD com esses dados foi registrada nesta
+        plataforma na data indicada e não foi alterada desde então. O <em>hash do documento</em> deve
+        conferir com o impresso na ASD que você tem em mãos. Cada ASD encadeia a anterior do mesmo
+        profissional, então modificar um registro antigo invalidaria todos os seguintes.<br><br>
+        Por privacidade, os dados do beneficiário do serviço não são exibidos publicamente.
+      </div>`;
+
+    res.type('html').send(asdVerificacaoHtml({ titulo: `ASD ${a.codigo}`, corpo }));
+  } catch (err) {
+    console.error('Erro em /verificar-asd:', err.message);
+    res.status(500).type('html').send(asdVerificacaoHtml({
+      titulo: 'Erro',
+      corpo: '<div class="badge fail">✕ Erro ao consultar. Tente novamente em instantes.</div>',
+    }));
   }
 });
 
