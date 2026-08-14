@@ -878,6 +878,20 @@ async function initDB() {
   console.log('✅ Tabelas prontas');
 }
 
+// No serverless o initDB() é disparado solto no cold start (ver o final do
+// arquivo): se a conexão cair justo nesse momento, a instância continua
+// servindo requisições com as tabelas faltando — e mesmo quando dá certo, uma
+// requisição pode chegar antes de ele terminar. Quem depende de tabela recente
+// (as rotas da ASD) espera por aqui em vez de estourar com "relation does not
+// exist"; se a tentativa anterior falhou, a próxima chamada tenta de novo.
+let dbReadyPromise = null;
+function ensureDbReady() {
+  if (!dbReadyPromise) {
+    dbReadyPromise = initDB().catch((err) => { dbReadyPromise = null; throw err; });
+  }
+  return dbReadyPromise;
+}
+
 // ── Middlewares ──────────────────────────────────────────────────────────────
 // Limite elevado para acomodar o envio de Intenção de Venda (4 documentos em base64
 // numa única requisição — fotos de RG/CNH tiradas do celular somam bem mais que 1 PDF).
@@ -2847,6 +2861,7 @@ function asdDocHash(p) {
 // usuário: sem ele, duas ASDs emitidas ao mesmo tempo leriam o mesmo prev_hash
 // e a cadeia bifurcaria (dois elos apontando para o mesmo anterior).
 async function registrarAsdNaCadeia({ userId, docHash, servico, uf, profNome, profDoc, profMatricula }) {
+  await ensureDbReady(); // asd_registros é tabela nova — ver comentário em ensureDbReady
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -8869,6 +8884,7 @@ app.get('/verificar-asd/:codigo', async (req, res) => {
     return naoEncontrada('Código inválido');
 
   try {
+    await ensureDbReady(); // asd_registros é tabela nova — ver comentário em ensureDbReady
     const r = await pool.query(
       `SELECT seq, codigo, doc_hash, chain_hash, servico, uf, prof_nome, prof_doc, prof_matricula, created_at
          FROM asd_registros WHERE codigo=$1`,
@@ -9421,7 +9437,8 @@ if (require.main === module) {
     });
 } else {
   // Vercel serverless: inicializa o banco no cold start e exporta o app
-  initDB().catch((err) => console.error('Erro DB:', err.message));
+  // (via ensureDbReady, para que quem precisar possa aguardar a mesma promise)
+  ensureDbReady().catch((err) => console.error('Erro DB:', err.message));
 }
 
 module.exports = app;
