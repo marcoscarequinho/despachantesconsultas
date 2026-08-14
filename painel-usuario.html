@@ -246,14 +246,23 @@
         </div>
       </div>
 
-      <!-- Quick actions -->
-      <div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      <!-- Quick actions — 7 atalhos: 4 colunas fecham em 4+3 (com 5 sobravam
+           dois cards soltos na segunda linha) -->
+      <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <button onclick="showSection('query')"
           class="card flex flex-col items-center gap-3 hover:shadow-md transition-shadow cursor-pointer border-2 border-transparent hover:border-orange-200">
           <div class="w-12 h-12 bg-orange-100 rounded-xl flex items-center justify-center text-2xl">🔍</div>
           <div class="text-center">
             <div class="font-bold text-red-600">Acesse Aqui Para as Principais Consultas</div>
             <div class="text-xs text-gray-500 mt-0.5">Realize uma consulta veicular</div>
+          </div>
+        </button>
+        <button onclick="showSection('despachantes')"
+          class="card flex flex-col items-center gap-3 hover:shadow-md transition-shadow cursor-pointer border-2 border-transparent hover:border-amber-200">
+          <div class="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center text-2xl">🧑‍💼</div>
+          <div class="text-center">
+            <div class="font-bold text-amber-600">Coisas de Despachantes</div>
+            <div class="text-xs text-gray-500 mt-0.5">Declaração de Residência, Nota de Serviços e ASD</div>
           </div>
         </button>
         <button onclick="showSection('query2')"
