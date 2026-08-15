@@ -18,6 +18,17 @@ const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-inseguro';
 const CHAVE_ACESSO = process.env.CHAVE_ACESSO || '';
 const BASE_API_URL = 'https://chekaki.online';
 const MARKUP = 1.40;
+// Grupos do catálogo que são gratuitos para o usuário: preço sempre R$ 0,00,
+// independentemente do basePrice e de qualquer preço fixo cadastrado em
+// user_service_prices (ver catalogPrice/getUserServicePrice). Hoje só a aba
+// "Coisas de Despachantes" — são documentos que o próprio despachante emite,
+// sem custo de API upstream, oferecidos como cortesia da plataforma.
+const FREE_SERVICE_GROUPS = ['Para os Despachantes'];
+const isFreeService = s => FREE_SERVICE_GROUPS.includes(s.group);
+// Preço de tabela de um serviço do catálogo: basePrice + markup (ou basePrice
+// puro quando noMarkup), e 0 quando o serviço está num grupo gratuito.
+const catalogPrice = s =>
+  isFreeService(s) ? 0 : parseFloat((s.basePrice * (s.noMarkup ? 1 : MARKUP)).toFixed(2));
 const MP_ACCESS_TOKEN = (process.env.MP_ACCESS_TOKEN || '')
   .split('').filter(c => c.charCodeAt(0) <= 127).join('').trim();
 const MP_BASE = 'https://api.mercadopago.com';
@@ -306,6 +317,10 @@ const SERVICES = [
   // despachante emite para o cliente dele, não consultas veiculares. Fica fora
   // do grid de categorias da aba "Acesse Aqui Para as Principais Consultas".
   //
+  // Todo o grupo é GRATUITO (ver FREE_SERVICE_GROUPS/catalogPrice): basePrice 0,
+  // nada é debitado e nem preço fixo cadastrado no admin cobra. Os basePrice
+  // antigos ficam registrados nos comentários de cada item caso volte a cobrar.
+  //
   // Gerar Declaração de Residência DETRAN RJ — fluxo em duas etapas, fora do padrão
   // padrão "chama upstream e cobra" dos demais serviços: primeiro o front busca dados
   // via Localização CPF V3 pra pré-preencher um formulário editável (POST
@@ -314,7 +329,8 @@ const SERVICES = [
   // (ver isDeclaracaoResidencia em processCatalogQuery) — os campos do form já vêm
   // prontos nos params, sem nova chamada upstream, e o PDF é sobreposto no template
   // oficial (ver buildDeclaracaoResidenciaPdfBuffer).
-  { id:'declaracao-residencia-detran-rj', name:'Gerar Declaração de Residência DETRAN RJ', group:'Para os Despachantes', basePrice:8.00, noMarkup:true, inputType:'declaracao_residencia', icon:'🏠' },
+  // Gratuito (antes R$ 8,00).
+  { id:'declaracao-residencia-detran-rj', name:'Gerar Declaração de Residência DETRAN RJ', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'declaracao_residencia', icon:'🏠' },
   // Gerar Nota de Prestação de Serviços Para Despachantes — mesmo padrão dos
   // itens acima: o usuário digita livremente a Matrícula (CRDD-UF), os dados
   // do Prestador (despachante) e do Tomador (cliente), e a Discriminação dos
@@ -324,7 +340,8 @@ const SERVICES = [
   // 'nota-prestacao-servicos-despachante' em processCatalogQuery) — a nota é
   // montada do zero no padrão de Nota de Serviços Eletrônica de despachante,
   // sem overlay de PDF oficial (ver buildNotaPrestacaoServicosPdfBuffer).
-  { id:'nota-prestacao-servicos-despachante', name:'Nota de Prestação de Serviços Para Despachantes', group:'Para os Despachantes', basePrice:1.00, noMarkup:true, inputType:'nota_prestacao_servicos', icon:'🧾' },
+  // Gratuito (antes R$ 1,00).
+  { id:'nota-prestacao-servicos-despachante', name:'Nota de Prestação de Serviços Para Despachantes', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'nota_prestacao_servicos', icon:'🧾' },
   // Gerar ASD (Anotação de Serviço Documental) — documento que o despachante
   // emite identificando o serviço contratado, o profissional responsável e o
   // beneficiário. Mesmo padrão em duas etapas da Procuração Veicular e usa
@@ -332,11 +349,11 @@ const SERVICES = [
   // chamada upstream no /api/query): Localização CPF V3 para o Profissional e
   // para o Beneficiário (POST /api/procuracao-veicular/localizar-cpf, uma
   // chamada por parte) e Proprietário Atual para a Descrição Documental a
-  // partir da placa (POST /api/procuracao-veicular/localizar-placa). Preço fixo
-  // definido pelo cliente. As duas digitalizações da carteirinha (frente/verso)
-  // chegam como data URL nos params e viram a última página do PDF (ver
-  // buildAsdPdfBuffer).
-  { id:'gerar-asd', name:'Gerar ASD', group:'Para os Despachantes', basePrice:9.50, noMarkup:true, inputType:'asd', icon:'📑' },
+  // partir da placa (POST /api/procuracao-veicular/localizar-placa). As duas
+  // digitalizações da carteirinha (frente/verso) chegam como data URL nos params
+  // e viram a última página do PDF (ver buildAsdPdfBuffer).
+  // Gratuito (antes R$ 9,50).
+  { id:'gerar-asd', name:'Gerar ASD', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'asd', icon:'📑' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // API Vistocar (vistocarconsulta.com.br) — fonte para Reemissão de CRLV-e RJ,
@@ -1476,7 +1493,9 @@ app.get('/api/services', requireAuth, async (req, res) => {
     res.json({
       services: SERVICES.map(s => ({
         ...s,
-        price: overrides[s.id] ?? parseFloat((s.basePrice * (s.noMarkup ? 1 : MARKUP)).toFixed(2)),
+        // Serviço de grupo gratuito ignora o preço fixo por usuário (catalogPrice
+        // devolve 0) — é a mesma regra aplicada na cobrança em getUserServicePrice.
+        price: isFreeService(s) ? 0 : (overrides[s.id] ?? catalogPrice(s)),
       })),
     });
   } catch (err) {
@@ -1492,7 +1511,7 @@ app.get('/api/services/public', (req, res) => {
       name:  s.name,
       group: s.group,
       icon:  s.icon,
-      price: parseFloat((s.basePrice * (s.noMarkup ? 1 : MARKUP)).toFixed(2)),
+      price: catalogPrice(s),
     })),
   });
 });
@@ -4698,12 +4717,15 @@ app.post('/api/queries/:id/comunicacao-venda-cancelar', requireAuth, async (req,
 // (ver rotas /api/admin/users/:id/service-prices), senão cai no cálculo padrão
 // (basePrice + markup, ou basePrice puro quando noMarkup).
 async function getUserServicePrice(userId, service) {
+  // Grupo gratuito (ver FREE_SERVICE_GROUPS) nunca cobra — nem por preço fixo
+  // cadastrado antes de o grupo virar cortesia.
+  if (isFreeService(service)) return 0;
   const r = await pool.query(
     'SELECT price FROM user_service_prices WHERE user_id=$1 AND service_id=$2',
     [userId, service.id]
   );
   if (r.rows.length) return parseFloat(r.rows[0].price);
-  return parseFloat((service.basePrice * (service.noMarkup ? 1 : MARKUP)).toFixed(2));
+  return catalogPrice(service);
 }
 
 // Estorna os créditos de uma consulta que foi cobrada mas nunca entregou o
@@ -8570,7 +8592,7 @@ app.get('/api/admin/users/:id/service-prices', requireAuth, requireSuperAdmin, a
         service_id:    row.service_id,
         service_name:  svc?.name || row.service_id,
         service_group: svc?.group || '-',
-        default_price: svc ? parseFloat((svc.basePrice * (svc.noMarkup ? 1 : MARKUP)).toFixed(2)) : null,
+        default_price: svc ? catalogPrice(svc) : null,
         price:         parseFloat(row.price),
         updated_at:    row.updated_at,
       };
@@ -8586,6 +8608,10 @@ app.post('/api/admin/users/:id/service-prices', requireAuth, requireSuperAdmin, 
   const { service_id, price } = req.body;
   const svc = SERVICES.find(s => s.id === service_id);
   if (!svc) return res.status(400).json({ error: 'Serviço inválido.' });
+  // Grupo gratuito não aceita preço personalizado — a cobrança ignoraria o valor
+  // (ver getUserServicePrice), então recusa aqui em vez de gravar um preço morto.
+  if (isFreeService(svc))
+    return res.status(400).json({ error: `"${svc.group}" é um grupo gratuito — não aceita preço personalizado.` });
   const parsedPrice = parseFloat(price);
   if (isNaN(parsedPrice) || parsedPrice < 0) return res.status(400).json({ error: 'Preço inválido.' });
   try {

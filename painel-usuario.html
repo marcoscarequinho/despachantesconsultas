@@ -1188,6 +1188,11 @@ let lastResultV3  = null;
 const fmt = v =>
   'R$ ' + parseFloat(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
 
+// Preço de serviço: serviços gratuitos (grupo "Para os Despachantes", ver
+// FREE_SERVICE_GROUPS no server.js) chegam com price 0 e aparecem como "Grátis"
+// em vez de "R$ 0,00".
+const fmtPrice = v => (parseFloat(v || 0) === 0 ? 'Grátis' : fmt(v));
+
 const fmtDate = s => {
   const d = new Date(s);
   return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' });
@@ -1978,7 +1983,7 @@ function renderPrices() {
               </div>
             </div>
             <div class="text-right flex-shrink-0 ml-4">
-              <div class="price-tag">${fmt(s.price)}</div>
+              <div class="price-tag">${fmtPrice(s.price)}</div>
               <button onclick="quickSelect('${s.id}')"
                 class="text-xs text-blue-600 hover:text-orange-500 font-medium mt-0.5 block">
                 Consultar →
@@ -2311,7 +2316,7 @@ function buildDespachantesList() {
         <div class="font-medium text-gray-800 text-sm">${s.name}</div>
         <div class="text-xs text-gray-400 mt-0.5">${inputTypeLabel(s.inputType)}</div>
       </div>
-      <div class="price-tag text-sm flex-shrink-0">${fmt(s.price)}</div>
+      <div class="price-tag text-sm flex-shrink-0">${fmtPrice(s.price)}</div>
     </button>`).join('');
 }
 
@@ -2354,7 +2359,7 @@ function renderServiceList(cat) {
         <div class="font-medium text-gray-800 text-sm">${s.name}</div>
         <div class="text-xs text-gray-400 mt-0.5">${inputTypeLabel(s.inputType)}</div>
       </div>
-      <div class="price-tag text-sm flex-shrink-0">${fmt(s.price)}</div>
+      <div class="price-tag text-sm flex-shrink-0">${fmtPrice(s.price)}</div>
     </button>`;
 
   if (cat === 'CRLV-e Digital') {
@@ -2380,7 +2385,7 @@ function selectService(svc) {
   if (typeof svc === 'string') svc = JSON.parse(svc);
   selectedSvc = svc;
   document.getElementById('form-service-name').textContent = svc.icon + ' ' + svc.name;
-  document.getElementById('form-service-price').textContent = fmt(svc.price);
+  document.getElementById('form-service-price').textContent = fmtPrice(svc.price);
   const slowNote = document.getElementById('form-slow-note');
   slowNote.classList.toggle('hidden', !svc.slowNote);
   if (svc.slowNote) {

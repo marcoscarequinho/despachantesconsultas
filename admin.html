@@ -1630,7 +1630,11 @@ async function openServicePrices(id, name) {
   if (!allServices.length) await loadServices();
   const sel = document.getElementById('price-service-select');
   const groups = {};
-  allServices.forEach(s => { if (!groups[s.group]) groups[s.group] = []; groups[s.group].push(s); });
+  // "Para os Despachantes" é gratuito para todos (ver FREE_SERVICE_GROUPS no
+  // server.js) e não aceita preço personalizado — fica fora do select.
+  allServices
+    .filter(s => s.group !== 'Para os Despachantes')
+    .forEach(s => { if (!groups[s.group]) groups[s.group] = []; groups[s.group].push(s); });
   sel.innerHTML = Object.entries(groups).map(([group, svcs]) => `
     <optgroup label="${group}">
       ${svcs.map(s => `<option value="${s.id}">${s.name} (padrão: ${fmt(s.price)})</option>`).join('')}

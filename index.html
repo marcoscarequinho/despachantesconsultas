@@ -344,6 +344,9 @@
             };
 
             const fmt = v => 'R$ ' + parseFloat(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+            // Serviços gratuitos (grupo "Para os Despachantes") vêm com price 0 —
+            // na tabela de preços aparecem como "Grátis", não "R$ 0,00".
+            const fmtPrice = v => (parseFloat(v || 0) === 0 ? 'Grátis' : fmt(v));
 
             function render(svcs) {
                 const groups = {};
@@ -367,7 +370,7 @@
                         <div class="flex items-center gap-3 px-5 py-3 hover:bg-orange-50 transition-colors">
                             <span class="text-lg flex-shrink-0">${s.icon}</span>
                             <span class="text-sm text-gray-700 flex-1">${s.name}</span>
-                            <span class="font-bold text-orange-500 text-sm flex-shrink-0">${fmt(s.price)}</span>
+                            <span class="font-bold text-orange-500 text-sm flex-shrink-0">${fmtPrice(s.price)}</span>
                         </div>`).join('')}
                     </div>
                 `).join('');
