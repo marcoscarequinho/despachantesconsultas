@@ -71,6 +71,7 @@ const VISTOCAR_LOGIN    = process.env.VISTOCAR_LOGIN    || '';
 const VISTOCAR_PASSWORD = process.env.VISTOCAR_PASSWORD || '';
 const VISTOCAR_ENDPOINTS = {
   'crlv-rj-reemissao-2': 'crlv-rj',
+  'crlv-pe-instantaneo': 'crlv-pe',
   'security-code-vistocar-2': 'security-code',
   'vistocar-completa': 'completa',
   'vistocar-debitos-cod-barra': 'debitos-cod-barra',
@@ -372,6 +373,12 @@ const SERVICES = [
   { id:'consultar-crlv-mg', name:'CRLV-e Minas Gerais (MG)',       group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ms', name:'CRLV-e Mato Grosso do Sul (MS)',group:'CRLV-e Digital', basePrice:15.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-mt', name:'CRLV-e Mato Grosso (MT)',        group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  // API Vistocar (vistocarconsulta.com.br) — alternativa instantânea ao "CRLV-e
+  // Agendado Pernambuco (PE)": mesmo padrão do CRLV 2 Rio Reemissão (auth JWT,
+  // POST apiclient/crlv-pe com { plate }, JSON com PDF pronto em base64, ver
+  // VISTOCAR_ENDPOINTS). Só placa — não pede renavam/CPF como os CRLV-e Digital
+  // da Chekaki. Preço fixo (noMarkup) definido pelo cliente.
+  { id:'crlv-pe-instantaneo', name:'CRLV-e Emissão Instantânea Pernambuco (PE)', group:'CRLV-e Digital', basePrice:49.00, noMarkup:true, inputType:'placa', icon:'⚡', uf:'pe' },
   { id:'consultar-crlv-pi', name:'CRLV-e Piauí (PI)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-pr', name:'CRLV-e Paraná (PR)',             group:'CRLV-e Digital', basePrice:15.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ro', name:'CRLV-e Rondônia (RO)',           group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
