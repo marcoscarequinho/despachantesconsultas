@@ -865,6 +865,24 @@ async function initDB() {
   await pool.query(`
     ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS aviso_venc_em TIMESTAMPTZ
   `);
+  // Liberação manual pelo admin (ver POST /api/admin/users/:id/assinatura):
+  // origem separa o que foi pago do que foi cortesia, e expires_at passa a
+  // aceitar NULL, que significa "sem data limite". Toda comparação de vigência
+  // trata NULL como vigente (ver getAssinaturaVigente); o cron de expiração e
+  // os avisos de vencimento ignoram NULL naturalmente, porque comparação com
+  // NULL nunca é verdadeira.
+  await pool.query(`
+    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS origem VARCHAR(20) NOT NULL DEFAULT 'PIX'
+  `);
+  await pool.query(`ALTER TABLE subscriptions ALTER COLUMN expires_at DROP NOT NULL`);
+  // Cota de consultas de placa do período. NULL = ilimitada (usada nas
+  // cortesias em que o admin não quer teto). Períodos pagos nascem com
+  // ASSINATURA_PLACAS_COTA; as linhas antigas recebem o mesmo valor.
+  await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS cota INTEGER`);
+  await pool.query(
+    `UPDATE subscriptions SET cota=$1 WHERE cota IS NULL AND origem='PIX'`,
+    [ASSINATURA_PLACAS_COTA]
+  );
   await pool.query(`
     CREATE TABLE IF NOT EXISTS whatsapp_inbox (
       id           SERIAL PRIMARY KEY,
@@ -4920,11 +4938,14 @@ async function refundQuery(queryId, userId, amount, reason) {
 // Assinatura vigente = período pago que ainda não venceu. A vigência NUNCA é
 // decidida pelo campo "status" (o cron só o atualiza de tempos em tempos, e
 // entre duas execuções ele fica desatualizado) — a verdade é sempre expires_at.
+// expires_at NULL = liberação sem data limite (cortesia do admin), por isso
+// entra no filtro e vem primeiro na ordenação: se o usuário tiver as duas
+// coisas, a indefinida é a que vale.
 async function getAssinaturaVigente(userId) {
   const r = await pool.query(
-    `SELECT id, expires_at, queries_used FROM subscriptions
-     WHERE user_id=$1 AND expires_at > NOW()
-     ORDER BY expires_at DESC LIMIT 1`,
+    `SELECT id, expires_at, queries_used, cota, origem FROM subscriptions
+     WHERE user_id=$1 AND (expires_at IS NULL OR expires_at > NOW())
+     ORDER BY expires_at DESC NULLS FIRST LIMIT 1`,
     [userId]
   );
   return r.rows[0] || null;
@@ -4945,11 +4966,13 @@ async function assinaturaGateDespachantes(userId, serviceId) {
     };
   }
 
-  if (serviceId === ASSINATURA_PLACAS_SERVICE_ID && assinatura.queries_used >= ASSINATURA_PLACAS_COTA) {
+  // cota NULL = ilimitada (liberação manual do admin sem teto).
+  if (serviceId === ASSINATURA_PLACAS_SERVICE_ID &&
+      assinatura.cota !== null && assinatura.queries_used >= assinatura.cota) {
     return {
       ok: false,
       code: 'COTA_ESGOTADA',
-      error: `Você já usou as ${ASSINATURA_PLACAS_COTA} consultas de placa deste período da assinatura. A cota é renovada ao pagar um novo período.`,
+      error: `Você já usou as ${assinatura.cota} consultas de placa deste período da assinatura. A cota é renovada ao pagar um novo período.`,
     };
   }
   return { ok: true, assinatura };
@@ -5461,14 +5484,15 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       // cobrar consulta sem resultado), e de forma atômica: o WHERE
       // queries_used < cota faz o próprio Postgres barrar duas consultas
       // simultâneas que tentem furar o teto do período.
+      // cota IS NULL = ilimitada: nesse caso o contador sobe só para relatório.
       const cota = await pool.query(
         `UPDATE subscriptions SET queries_used = queries_used + 1
-         WHERE id=$1 AND queries_used < $2 RETURNING queries_used`,
-        [gate.assinatura.id, ASSINATURA_PLACAS_COTA]
+         WHERE id=$1 AND (cota IS NULL OR queries_used < cota) RETURNING queries_used`,
+        [gate.assinatura.id]
       );
       if (!cota.rows.length)
         return res.status(402).json({
-          error: `Você já usou as ${ASSINATURA_PLACAS_COTA} consultas de placa deste período da assinatura.`,
+          error: `Você já usou as ${gate.assinatura.cota} consultas de placa deste período da assinatura.`,
           code: 'COTA_ESGOTADA',
         });
 
@@ -7997,14 +8021,19 @@ app.get('/api/assinatura/status', requireAuth, async (req, res) => {
         cota: ASSINATURA_PLACAS_COTA,
       });
     }
+    // expiraEm null = sem data limite; cota/consultasRestantes null = ilimitada.
+    // O painel trata os dois casos (ver renderAssinaturaBanner).
+    const ilimitada = assinatura.cota === null;
     res.json({
       ativa: true,
+      indefinida: assinatura.expires_at === null,
+      cortesia: assinatura.origem === 'CORTESIA',
       expiraEm: assinatura.expires_at,
       consultasUsadas: assinatura.queries_used,
-      consultasRestantes: Math.max(0, ASSINATURA_PLACAS_COTA - assinatura.queries_used),
+      consultasRestantes: ilimitada ? null : Math.max(0, assinatura.cota - assinatura.queries_used),
       preco: ASSINATURA_PLACAS_PRICE,
       dias: ASSINATURA_PLACAS_DIAS,
-      cota: ASSINATURA_PLACAS_COTA,
+      cota: assinatura.cota,
     });
   } catch (err) {
     console.error('Erro em /api/assinatura/status:', err.message);
@@ -8106,13 +8135,13 @@ async function creditPixPaymentIfApproved(gatewayId) {
     // própria — por isso uma linha nova em vez de UPDATE no período anterior.
     if (p.purpose === 'ASSINATURA') {
       await client.query(
-        `INSERT INTO subscriptions (user_id, plan, status, starts_at, expires_at, gateway_id)
-         SELECT $1, $2, 'ACTIVE', inicio, inicio + ($3 || ' days')::interval, $4
+        `INSERT INTO subscriptions (user_id, plan, status, starts_at, expires_at, gateway_id, origem, cota)
+         SELECT $1, $2, 'ACTIVE', inicio, inicio + ($3 || ' days')::interval, $4, 'PIX', $5
            FROM (SELECT GREATEST(NOW(), COALESCE(
                    (SELECT MAX(expires_at) FROM subscriptions WHERE user_id=$1 AND expires_at > NOW()),
                    NOW())) AS inicio) t
          ON CONFLICT (gateway_id) DO NOTHING`,
-        [p.user_id, ASSINATURA_PLACAS_SERVICE_ID, String(ASSINATURA_PLACAS_DIAS), gatewayId]
+        [p.user_id, ASSINATURA_PLACAS_SERVICE_ID, String(ASSINATURA_PLACAS_DIAS), gatewayId, ASSINATURA_PLACAS_COTA]
       );
       // De propósito não grava em transactions: aquele extrato é o de créditos
       // pré-pagos, e a assinatura não movimenta saldo. O pagamento fica
@@ -8949,17 +8978,100 @@ app.get('/api/admin/users', requireAuth, requireSuperAdmin, async (req, res) => 
   const { search = '', role = '', active = '' } = req.query;
   try {
     const conds = []; const vals = []; let i = 1;
-    if (search) { conds.push(`(name ILIKE $${i} OR email ILIKE $${i} OR cpf_cnpj ILIKE $${i})`); vals.push(`%${search}%`); i++; }
-    if (role)   { conds.push(`role=$${i}`);   vals.push(role); i++; }
-    if (active !== '') { conds.push(`active=$${i}`); vals.push(active === 'true'); i++; }
+    if (search) { conds.push(`(u.name ILIKE $${i} OR u.email ILIKE $${i} OR u.cpf_cnpj ILIKE $${i})`); vals.push(`%${search}%`); i++; }
+    if (role)   { conds.push(`u.role=$${i}`);   vals.push(role); i++; }
+    if (active !== '') { conds.push(`u.active=$${i}`); vals.push(active === 'true'); i++; }
     const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
+    // LEFT JOIN LATERAL traz a assinatura vigente de cada usuário (a indefinida
+    // primeiro, mesma regra do getAssinaturaVigente) para a tabela do admin
+    // mostrar quem tem acesso à aba "Coisas de Despachantes" sem uma consulta
+    // por linha.
     const r = await pool.query(
-      `SELECT id,name,email,cpf_cnpj,phone,role,credits,active,created_at,affiliate_code
-       FROM users ${where} ORDER BY created_at DESC LIMIT 500`, vals
+      `SELECT u.id,u.name,u.email,u.cpf_cnpj,u.phone,u.role,u.credits,u.active,u.created_at,u.affiliate_code,
+              s.expires_at AS assinatura_expira_em,
+              s.origem     AS assinatura_origem,
+              s.cota       AS assinatura_cota,
+              s.queries_used AS assinatura_usadas
+         FROM users u
+         LEFT JOIN LATERAL (
+           SELECT expires_at, origem, cota, queries_used FROM subscriptions
+            WHERE user_id = u.id AND (expires_at IS NULL OR expires_at > NOW())
+            ORDER BY expires_at DESC NULLS FIRST LIMIT 1
+         ) s ON true
+       ${where}
+       ORDER BY u.created_at DESC LIMIT 500`, vals
     );
     res.json({ users: r.rows });
   } catch (err) {
     res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── ADMIN: POST /api/admin/users/:id/assinatura ──────────────────────────────
+// Libera a Assinatura Consulta placas na mão, sem PIX. Dois modos:
+//   modo='indefinida' → expires_at NULL, vale até o admin revogar
+//   modo='ate'        → expires_at na data escolhida (fim do dia, horário de BSB)
+// cota vazia/ausente = ilimitada; qualquer número = teto de consultas de placa.
+// Cada liberação SUBSTITUI a cortesia anterior do usuário (não empilha), mas
+// não mexe nos períodos pagos por PIX — se o cliente já pagou, aquele período
+// continua valendo e o de cortesia soma como alternativa.
+app.post('/api/admin/users/:id/assinatura', requireAuth, requireSuperAdmin, async (req, res) => {
+  const userId = parseInt(req.params.id, 10);
+  const { modo, data, cota } = req.body || {};
+  if (!['indefinida', 'ate'].includes(modo))
+    return res.status(400).json({ error: 'Modo inválido. Use "indefinida" ou "ate".' });
+
+  let expiresAt = null;
+  if (modo === 'ate') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(data || '')))
+      return res.status(400).json({ error: 'Informe a data limite no formato AAAA-MM-DD.' });
+    // Fim do dia no horário de Brasília: liberar "até 20/09" deve valer o dia 20 inteiro.
+    expiresAt = new Date(`${data}T23:59:59-03:00`);
+    if (isNaN(expiresAt.getTime())) return res.status(400).json({ error: 'Data limite inválida.' });
+    if (expiresAt.getTime() <= Date.now())
+      return res.status(400).json({ error: 'A data limite precisa ser no futuro.' });
+  }
+
+  let cotaFinal = null;
+  if (cota !== '' && cota !== null && cota !== undefined) {
+    cotaFinal = parseInt(cota, 10);
+    if (!Number.isInteger(cotaFinal) || cotaFinal < 1)
+      return res.status(400).json({ error: 'Cota inválida. Informe um número inteiro maior que zero ou deixe vazio para ilimitada.' });
+  }
+
+  try {
+    const u = await pool.query('SELECT id, name FROM users WHERE id=$1', [userId]);
+    if (!u.rows.length) return res.status(404).json({ error: 'Usuário não encontrado.' });
+
+    await pool.query(`DELETE FROM subscriptions WHERE user_id=$1 AND origem='CORTESIA'`, [userId]);
+    const r = await pool.query(
+      `INSERT INTO subscriptions (user_id, plan, status, starts_at, expires_at, origem, cota)
+       VALUES ($1,$2,'ACTIVE',NOW(),$3,'CORTESIA',$4)
+       RETURNING id, expires_at, cota`,
+      [userId, ASSINATURA_PLACAS_SERVICE_ID, expiresAt, cotaFinal]
+    );
+    console.log(`[admin] assinatura liberada para user ${userId} (${modo}${expiresAt ? ' até ' + data : ''}, cota ${cotaFinal ?? 'ilimitada'})`);
+    res.json({ success: true, assinatura: r.rows[0] });
+  } catch (err) {
+    console.error('Erro ao liberar assinatura:', err.message);
+    res.status(500).json({ error: 'Erro ao liberar a assinatura.' });
+  }
+});
+
+// ── ADMIN: DELETE /api/admin/users/:id/assinatura ────────────────────────────
+// Revoga só a liberação manual. Períodos pagos por PIX são preservados de
+// propósito: o cliente pagou por eles e cancelá-los seria estorno, não revogação.
+app.delete('/api/admin/users/:id/assinatura', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `DELETE FROM subscriptions WHERE user_id=$1 AND origem='CORTESIA' RETURNING id`,
+      [parseInt(req.params.id, 10)]
+    );
+    if (!r.rowCount) return res.status(404).json({ error: 'Este usuário não tem liberação manual para revogar.' });
+    res.json({ success: true, revogadas: r.rowCount });
+  } catch (err) {
+    console.error('Erro ao revogar assinatura:', err.message);
+    res.status(500).json({ error: 'Erro ao revogar a assinatura.' });
   }
 });
 

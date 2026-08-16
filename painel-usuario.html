@@ -2345,7 +2345,10 @@ function assinaturaLiberada(serviceId) {
   if (!ASSINATURA_IDS.includes(serviceId)) return true;
   if (!assinaturaStatus) return true;  // sem status carregado, deixa o servidor decidir
   if (!assinaturaStatus.ativa) return false;
-  if (serviceId === ASSINATURA_PLACAS_ID && assinaturaStatus.consultasRestantes <= 0) return false;
+  // consultasRestantes null = cota ilimitada (liberação manual do admin).
+  if (serviceId === ASSINATURA_PLACAS_ID &&
+      assinaturaStatus.consultasRestantes !== null &&
+      assinaturaStatus.consultasRestantes <= 0) return false;
   return true;
 }
 
@@ -2353,9 +2356,15 @@ function renderAssinaturaBanner() {
   const el = document.getElementById('assinatura-banner');
   if (!el || !assinaturaStatus) return;
   if (assinaturaStatus.ativa) {
-    const ate = new Date(assinaturaStatus.expiraEm).toLocaleDateString('pt-BR');
+    // A liberação manual do admin pode não ter data limite nem cota.
+    const validade = assinaturaStatus.indefinida
+      ? 'sem data limite'
+      : 'até ' + new Date(assinaturaStatus.expiraEm).toLocaleDateString('pt-BR');
+    const consultas = assinaturaStatus.consultasRestantes === null
+      ? 'consultas de placa ilimitadas'
+      : `${assinaturaStatus.consultasRestantes} de ${assinaturaStatus.cota} consultas de placa restantes`;
     el.className = 'bg-green-50 border border-green-200 text-green-800 rounded-lg px-4 py-3 text-sm';
-    el.innerHTML = `✅ <strong>Assinatura ativa</strong> até ${ate} — ${assinaturaStatus.consultasRestantes} de ${assinaturaStatus.cota} consultas de placa restantes.`;
+    el.innerHTML = `✅ <strong>Assinatura ativa</strong> ${validade} — ${consultas}.`;
   } else {
     el.className = 'bg-amber-50 border border-amber-300 text-amber-800 rounded-lg px-4 py-3 text-sm';
     el.innerHTML = `🔑 Estes serviços são gratuitos para quem tem a <strong>Assinatura Consulta placas</strong> (R$ 30,00 por 30 dias). ` +
