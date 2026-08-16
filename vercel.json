@@ -33,6 +33,10 @@
     {
       "path": "/api/cron/atpve-rj-status",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/assinaturas-expirar",
+      "schedule": "5 3 * * *"
     }
   ]
 }

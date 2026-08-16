@@ -25,6 +25,35 @@ const MARKUP = 1.40;
 // sem custo de API upstream, oferecidos como cortesia da plataforma.
 const FREE_SERVICE_GROUPS = ['Para os Despachantes'];
 const isFreeService = s => FREE_SERVICE_GROUPS.includes(s.group);
+// ── Assinatura "Consulta placas" ─────────────────────────────────────────────
+// Os serviços do grupo acima continuam sem debitar crédito, mas deixaram de ser
+// abertos: só ficam liberados para quem tem assinatura ativa. O modelo é
+// pré-pago e NÃO renova sozinho — cada período de 30 dias exige um novo PIX
+// (ver POST /api/assinatura/pix e o cron /api/cron/assinaturas-expirar).
+const ASSINATURA_PLACAS_PRICE = 30.00;
+const ASSINATURA_PLACAS_DIAS  = 30;
+// Cota de consultas de placa por período. Só a "Assinatura Consulta placas"
+// consome cota — os três documentos do grupo não custam nada upstream, então
+// são ilimitados para o assinante. A cota existe porque cada consulta de placa
+// custa basePrice na Datacube: 50 consultas é o teto que mantém o plano
+// previsível (ver ASSINATURA_PLACAS_SERVICE_ID).
+const ASSINATURA_PLACAS_COTA  = 50;
+const ASSINATURA_PLACAS_SERVICE_ID = 'assinatura-consulta-placas';
+// Serviços que exigem assinatura ativa (todo o grupo "Para os Despachantes").
+const ASSINATURA_SERVICE_IDS = [
+  ASSINATURA_PLACAS_SERVICE_ID,
+  'declaracao-residencia-detran-rj',
+  'nota-prestacao-servicos-despachante',
+  'gerar-asd',
+];
+// Carência da virada: os três documentos eram gratuitos e abertos para todos,
+// então quem já emitiu algum deles antes do paywall continua com acesso livre
+// até esta data, para não interromper de um dia para o outro quem usa a
+// Declaração de Residência no dia a dia (ver assinaturaGateDespachantes).
+// Passada a data, a constante pode ser removida junto com a checagem.
+const ASSINATURA_CARENCIA_ATE = new Date(
+  process.env.ASSINATURA_CARENCIA_ATE || '2026-09-15T23:59:59-03:00'
+);
 // Preço de tabela de um serviço do catálogo: basePrice + markup (ou basePrice
 // puro quando noMarkup), e 0 quando o serviço está num grupo gratuito.
 const catalogPrice = s =>
@@ -355,6 +384,19 @@ const SERVICES = [
   // e viram a última página do PDF (ver buildAsdPdfBuffer).
   // Gratuito (antes R$ 9,50).
   { id:'gerar-asd', name:'Gerar ASD', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'asd', icon:'📑' },
+  // Assinatura Consulta placas — consulta de placa exclusiva da aba, servida
+  // pelo MESMO endpoint Datacube da "Proprietário Atual" da Opção 2
+  // (/veiculos/proprietario-atual) e pelo mesmo builder de PDF. É um serviço
+  // separado de propósito: a "dc-proprietario-atual" continua exatamente como
+  // está (crédito por consulta, aba Opção 2), enquanto esta aqui não debita
+  // crédito nenhum — é paga pela assinatura mensal e consome cota
+  // (ver ASSINATURA_PLACAS_COTA e o bloco deste serviceId em processCatalogQuery).
+  // slowNote + modeloUrl: o painel mostra o aviso com um link para o PDF de
+  // exemplo (assets/modelo-consulta-placas.pdf), para o despachante ver o que
+  // recebe antes de assinar. O mesmo link aparece no popup da assinatura.
+  { id:'assinatura-consulta-placas', name:'Assinatura Consulta placas', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'placa', icon:'🔎',
+    slowNote:'Consulta de proprietário atual pela placa, com retorno em PDF no padrão MC Despachadoria. Incluída na Assinatura Consulta placas.',
+    modeloUrl:'/assets/modelo-consulta-placas.pdf', modeloLabel:'Veja modelo da consulta' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // API Vistocar (vistocarconsulta.com.br) — fonte para Reemissão de CRLV-e RJ,
@@ -581,6 +623,8 @@ const SERVICES_V2 = [
   { id:'dc-informacao-basica',      name:'Informação Básica',                       group:'Documentos', basePrice:0.359,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/informacao-basica' },
   { id:'dc-informacao-basica-v2',   name:'Informação Básica V2',                    group:'Documentos', basePrice:0.391,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/informacao-basica-v2' },
   { id:'dc-proprietario-ano-lic',   name:'Proprietário / Ano Último Licenciamento', group:'Documentos', basePrice:1.006,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/proprietario-ano-licenciamento' },
+  // Entregue como relatório PDF no padrão da casa, não como JSON cru — o PDF é
+  // montado por buildProprietarioAtualPdfBuffer (ver V2_PDF_BUILDERS).
   { id:'dc-proprietario-atual',     name:'Proprietário Atual',                      group:'Documentos', basePrice:1.266,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/proprietario-atual' },
   { id:'dc-informacao-simples-v2',  name:'Informação Simples V2',                   group:'Documentos', basePrice:1.563,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/informacao-simples-v2' },
   { id:'dc-infracoes-v3',           name:'Infrações V3',                            group:'Documentos', basePrice:3.891,  inputType:'dc_placa',      icon:'🚗', dcPath:'/veiculos/infracoes-v3' },
@@ -777,6 +821,50 @@ async function initDB() {
         ALTER TABLE pix_payments RENAME COLUMN asaas_id TO gateway_id;
       END IF;
     END $$;
+  `);
+  // Para que serve o PIX: 'RECARGA' credita saldo (comportamento histórico, por
+  // isso é o default de toda linha antiga) e 'ASSINATURA' ativa/estende a
+  // Assinatura Consulta placas sem mexer no saldo. Ver creditPixPaymentIfApproved.
+  await pool.query(`
+    ALTER TABLE pix_payments ADD COLUMN IF NOT EXISTS purpose VARCHAR(20) NOT NULL DEFAULT 'RECARGA'
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS subscriptions (
+      id           SERIAL PRIMARY KEY,
+      user_id      INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      plan         VARCHAR(50) NOT NULL DEFAULT 'assinatura-consulta-placas',
+      status       VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+      starts_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at   TIMESTAMPTZ NOT NULL,
+      queries_used INTEGER NOT NULL DEFAULT 0,
+      gateway_id   VARCHAR(100),
+      created_at   TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  // Cada pagamento gera UMA linha (um período), então o histórico de renovações
+  // fica auditável e a cota é por período, não acumulada. A busca quente é
+  // sempre "assinatura vigente deste usuário".
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_subscriptions_user_vigencia
+      ON subscriptions (user_id, expires_at DESC)
+  `);
+  // Um pagamento PIX não pode ativar dois períodos (webhook + polling + cron
+  // chegando juntos) — mesma proteção do "credited" em pix_payments. Índice
+  // total, não parcial: o ON CONFLICT (gateway_id) do INSERT só casa com um
+  // índice sem predicado, e no Postgres NULLs são distintos entre si, então
+  // eventuais cortesias lançadas à mão (gateway_id nulo) continuam permitidas.
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_gateway_id
+      ON subscriptions (gateway_id)
+  `);
+  // Avisos de vencimento por WhatsApp (5 dias antes e no dia). Marcados no
+  // próprio período para o cron nunca mandar a mesma mensagem duas vezes —
+  // ele roda todo dia e sem isso repetiria o aviso a cada execução.
+  await pool.query(`
+    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS aviso_5d_em  TIMESTAMPTZ
+  `);
+  await pool.query(`
+    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS aviso_venc_em TIMESTAMPTZ
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS whatsapp_inbox (
@@ -3742,6 +3830,74 @@ function buildHistoricoProprietarioPdfBuffer(service, data, params) {
   });
 }
 
+// ── Geração de PDF — Proprietário Atual (Datacube retorna JSON, não PDF pronto) ──
+// Diferente dos demais relatórios da "Opção 2" (que só despejam o objeto cru),
+// aqui os campos principais já têm um extrator testado em produção
+// (extractProprietarioAtualFields, o mesmo usado pela Procuração Veicular e pela
+// Gerar ASD): o relatório abre com Proprietário e Veículo normalizados e só
+// depois despeja a resposta completa, para nenhum campo devolvido pela Datacube
+// se perder — o schema varia entre placas e o extrator cobre só os conhecidos.
+function buildProprietarioAtualPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+
+      const f = extractProprietarioAtualFields(data);
+      const endereco = composeEndereco(f);
+      const ouNada = v => (v && String(v).trim()) ? String(v).trim() : 'Nada consta';
+
+      pdfReportHeader(doc, 'PROPRIETÁRIO ATUAL', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Placa', maskPlacaDisplay(params?.placa)]]);
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'PROPRIETÁRIO');
+      pdfFieldGrid(doc, [
+        ['Nome',     ouNada(f.nome)],
+        ['CPF/CNPJ', f.cpfCnpj ? maskDocDisplay(f.cpfCnpj) : 'Nada consta'],
+        ['Endereço', ouNada(endereco)],
+      ]);
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'VEÍCULO');
+      pdfFieldGrid(doc, [
+        ['Marca/Modelo',      ouNada(f.marcaModelo)],
+        ['Chassi',            ouNada(f.chassi)],
+        ['Renavam',           ouNada(f.renavam)],
+        ['Cor',               ouNada(f.cor)],
+        ['Ano de Fabricação', ouNada(f.anoFabricacao)],
+        ['Ano do Modelo',     ouNada(f.anoModelo)],
+      ]);
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'RETORNO COMPLETO DA CONSULTA');
+      pdfRenderGenericObject(doc, data);
+      doc.moveDown(0.4);
+
+      pdfReportFooter(doc, now);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+// Serviços da "Opção 2 Nova Consulta" cuja upstream devolve JSON mas que o
+// usuário recebe como relatório PDF no padrão da casa. Não confundir com a flag
+// returnsPdf do catálogo: aquela é para quando a PRÓPRIA Datacube manda o PDF
+// pronto em base64 (ver findAndStripBase64Pdf); aqui o PDF é montado por nós a
+// partir do JSON, como já acontece no /api/query. Ver uso em /api/query-v2.
+const V2_PDF_BUILDERS = {
+  'dc-proprietario-atual': buildProprietarioAtualPdfBuffer,
+};
+
 // ── Geração de PDF — Histórico de Gravames (Datacube retorna JSON, não PDF pronto) ──
 function buildHistoricoGravamesPdfBuffer(service, data, params) {
   return new Promise((resolve, reject) => {
@@ -4761,6 +4917,65 @@ async function refundQuery(queryId, userId, amount, reason) {
 // externa de chave (ver app.post('/api/v1/:serviceId')), debitando sempre o
 // userId explícito recebido — no painel é req.user.id, na API é o dono da
 // chave (req.apiUser.id).
+// ── Assinatura Consulta placas — vigência, cota e carência ───────────────────
+// Assinatura vigente = período pago que ainda não venceu. A vigência NUNCA é
+// decidida pelo campo "status" (o cron só o atualiza de tempos em tempos, e
+// entre duas execuções ele fica desatualizado) — a verdade é sempre expires_at.
+async function getAssinaturaVigente(userId) {
+  const r = await pool.query(
+    `SELECT id, expires_at, queries_used FROM subscriptions
+     WHERE user_id=$1 AND expires_at > NOW()
+     ORDER BY expires_at DESC LIMIT 1`,
+    [userId]
+  );
+  return r.rows[0] || null;
+}
+
+// Carência da virada (ver ASSINATURA_CARENCIA_ATE): quem já emitiu algum dos
+// três documentos que eram abertos continua liberado até a data limite. O
+// histórico de queries é a fonte da verdade de quem já usava a aba — não há
+// flag em users para isso.
+async function temCarenciaDespachantes(userId) {
+  if (Date.now() > ASSINATURA_CARENCIA_ATE.getTime()) return false;
+  const legado = ASSINATURA_SERVICE_IDS.filter(id => id !== ASSINATURA_PLACAS_SERVICE_ID);
+  const r = await pool.query(
+    `SELECT 1 FROM queries
+     WHERE user_id=$1 AND service_id = ANY($2::text[]) AND status='success' LIMIT 1`,
+    [userId, legado]
+  );
+  return r.rows.length > 0;
+}
+
+// Porteiro dos serviços do grupo "Para os Despachantes". Devolve o motivo do
+// bloqueio junto com o code, para o painel abrir o popup certo (assinar x cota
+// esgotada) em vez de mostrar um erro genérico.
+async function assinaturaGateDespachantes(userId, serviceId) {
+  if (!ASSINATURA_SERVICE_IDS.includes(serviceId)) return { ok: true, assinatura: null };
+
+  const assinatura = await getAssinaturaVigente(userId);
+  if (!assinatura) {
+    // A carência cobre só os três documentos que já eram gratuitos e abertos. A
+    // consulta de placa é nova e tem custo upstream a cada chamada, então exige
+    // assinatura desde o primeiro dia — senão a carência viraria consulta grátis.
+    if (serviceId !== ASSINATURA_PLACAS_SERVICE_ID && await temCarenciaDespachantes(userId))
+      return { ok: true, assinatura: null, carencia: true };
+    return {
+      ok: false,
+      code: 'ASSINATURA_NECESSARIA',
+      error: 'Esta consulta só está liberada como Gratuita se você tem a "Assinatura Consulta placas". Assine por R$ 30,00 (30 dias) e pague com PIX para liberar.',
+    };
+  }
+
+  if (serviceId === ASSINATURA_PLACAS_SERVICE_ID && assinatura.queries_used >= ASSINATURA_PLACAS_COTA) {
+    return {
+      ok: false,
+      code: 'COTA_ESGOTADA',
+      error: `Você já usou as ${ASSINATURA_PLACAS_COTA} consultas de placa deste período da assinatura. A cota é renovada ao pagar um novo período.`,
+    };
+  }
+  return { ok: true, assinatura };
+}
+
 async function processCatalogQuery(userId, serviceId, params, res) {
   if (!serviceId) return res.status(400).json({ error: 'Serviço não informado.' });
 
@@ -4785,6 +5000,14 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       return res.status(400).json({
         error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}`,
       });
+
+    // ── Paywall da aba "Coisas de Despachantes" ──
+    // Estes serviços não debitam crédito, mas exigem assinatura vigente. A
+    // checagem vem aqui, antes de qualquer chamada upstream, para nenhum
+    // serviço do grupo rodar de graça. O "code" volta para o painel abrir o
+    // popup certo (assinar x cota esgotada).
+    const gate = await assinaturaGateDespachantes(userId, serviceId);
+    if (!gate.ok) return res.status(402).json({ error: gate.error, code: gate.code });
 
     // ── Serviços manuais (upload de arquivo pelo super admin — resultado não vem na hora) ──
     if (MANUAL_SERVICE_IDS.includes(serviceId)) {
@@ -5210,6 +5433,84 @@ async function processCatalogQuery(userId, serviceId, params, res) {
 
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="asd-${Date.now()}.pdf"`);
+      return res.send(pdfBuf);
+    }
+
+    // ── Assinatura Consulta placas ──
+    // Mesma fonte da "Proprietário Atual" da Opção 2 (Datacube
+    // /veiculos/proprietario-atual) e o mesmo builder de PDF, mas serviço à
+    // parte de propósito: a dc-proprietario-atual segue intocada (cobra crédito
+    // por consulta, na aba Opção 2) e esta aqui não debita nada — quem paga é a
+    // assinatura, e o custo do período é limitado pela cota.
+    if (serviceId === ASSINATURA_PLACAS_SERVICE_ID) {
+      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (placa.length !== 7)
+        return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+
+      let dcData;
+      try {
+        const dcRes = await fetch(`${DATACUBE_API_URL}/veiculos/proprietario-atual`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ auth_token: DATACUBE_TOKEN, placa }).toString(),
+        });
+        const parsed = await dcRes.json().catch(() => null);
+        if (!dcRes.ok || !parsed || parsed.status === false) {
+          const msg = parsed ? extractApiErrorMsg(parsed) : `Erro HTTP ${dcRes.status}.`;
+          console.error(`[${serviceId}] erro na Datacube: ${msg}`);
+          return res.status(502).json({ error: msg });
+        }
+        dcData = parsed.result ?? parsed;
+      } catch (e) {
+        console.error(`[${serviceId}] falha ao consultar a Datacube:`, e.message);
+        return res.status(502).json({ error: 'Erro ao consultar a API. Tente novamente.' });
+      }
+
+      const temDados = dcData && (Array.isArray(dcData) ? dcData.length > 0 : Object.keys(dcData).length > 0);
+      if (!temDados)
+        return res.status(422).json({ error: 'Nenhum dado encontrado para essa placa. Nada foi descontado da sua cota.' });
+
+      let pdfBuf;
+      try {
+        pdfBuf = await buildProprietarioAtualPdfBuffer(service, dcData, { placa });
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF da consulta. Nada foi descontado da sua cota.' });
+      }
+
+      // A cota só é consumida agora, com o PDF em mãos (mesma regra de nunca
+      // cobrar consulta sem resultado), e de forma atômica: o WHERE
+      // queries_used < cota faz o próprio Postgres barrar duas consultas
+      // simultâneas que tentem furar o teto do período.
+      const cota = await pool.query(
+        `UPDATE subscriptions SET queries_used = queries_used + 1
+         WHERE id=$1 AND queries_used < $2 RETURNING queries_used`,
+        [gate.assinatura.id, ASSINATURA_PLACAS_COTA]
+      );
+      if (!cota.rows.length)
+        return res.status(402).json({
+          error: `Você já usou as ${ASSINATURA_PLACAS_COTA} consultas de placa deste período da assinatura.`,
+          code: 'COTA_ESGOTADA',
+        });
+
+      // amount 0 e sem transaction_id: não há débito de crédito, o pagamento
+      // desta consulta é a assinatura. O histórico continua listando a consulta
+      // e o PDF normalmente.
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
+         VALUES ($1,$2,$3,$4,'success',0,'pdf',$5) RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify({ placa }), JSON.stringify(dcData)]
+      );
+
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), expiresAt]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="proprietario-atual-${placa}.pdf"`);
       return res.send(pdfBuf);
     }
 
@@ -6853,6 +7154,24 @@ app.post('/api/query-v2', requireAuth, async (req, res) => {
       }
     }
 
+    // Serviços que a upstream responde em JSON mas que o cliente recebe como
+    // relatório PDF (ver V2_PDF_BUILDERS). Montado ANTES do débito, igual ao
+    // /api/query: consulta vazia ou falha na geração não cobra crédito.
+    if (!pdfBase64 && V2_PDF_BUILDERS[serviceId]) {
+      const temDados = resultV2 && (Array.isArray(resultV2) ? resultV2.length > 0 : Object.keys(resultV2).length > 0);
+      if (!temDados) {
+        console.error(`[${serviceId}] resposta sem dados para montar o PDF: ${JSON.stringify(apiData)}`);
+        return res.status(422).json({ error: 'Nenhum dado encontrado para essa consulta. Nenhum crédito foi debitado.' });
+      }
+      try {
+        const buf = await V2_PDF_BUILDERS[serviceId](service, resultV2, params || {});
+        pdfBase64 = buf.toString('base64');
+      } catch (e) {
+        console.error(`[${serviceId}] falha ao montar o PDF:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF da consulta. Nenhum crédito foi debitado.' });
+      }
+    }
+
     await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
     const txRow = await pool.query(
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
@@ -7685,6 +8004,92 @@ app.post('/api/pix/criar', requireAuth, async (req, res) => {
   }
 });
 
+// ── GET /api/assinatura/status ────────────────────────────────────────────────
+// Consultado pelo painel ao abrir a aba "Coisas de Despachantes" e depois de
+// confirmar um PIX, para decidir entre liberar o serviço ou abrir o popup.
+app.get('/api/assinatura/status', requireAuth, async (req, res) => {
+  try {
+    const assinatura = await getAssinaturaVigente(req.user.id);
+    if (!assinatura) {
+      const carencia = await temCarenciaDespachantes(req.user.id);
+      return res.json({
+        ativa: false,
+        carencia,
+        carenciaAte: carencia ? ASSINATURA_CARENCIA_ATE.toISOString() : null,
+        preco: ASSINATURA_PLACAS_PRICE,
+        dias: ASSINATURA_PLACAS_DIAS,
+        cota: ASSINATURA_PLACAS_COTA,
+      });
+    }
+    res.json({
+      ativa: true,
+      carencia: false,
+      expiraEm: assinatura.expires_at,
+      consultasUsadas: assinatura.queries_used,
+      consultasRestantes: Math.max(0, ASSINATURA_PLACAS_COTA - assinatura.queries_used),
+      preco: ASSINATURA_PLACAS_PRICE,
+      dias: ASSINATURA_PLACAS_DIAS,
+      cota: ASSINATURA_PLACAS_COTA,
+    });
+  } catch (err) {
+    console.error('Erro em /api/assinatura/status:', err.message);
+    res.status(500).json({ error: 'Erro ao consultar a assinatura.' });
+  }
+});
+
+// ── POST /api/assinatura/pix ──────────────────────────────────────────────────
+// Cria a cobrança PIX de R$ 30,00 da Assinatura Consulta placas. O valor é fixo
+// no servidor (nunca vem do corpo da requisição) e a linha nasce com
+// purpose='ASSINATURA', que é o que faz creditPixPaymentIfApproved abrir um
+// período em vez de creditar saldo. A confirmação reaproveita todo o caminho já
+// existente: polling em /api/pix/status/:id, webhook e cron de reconciliação.
+app.post('/api/assinatura/pix', requireAuth, async (req, res) => {
+  try {
+    const ur = await pool.query('SELECT id, name, email, cpf_cnpj, active FROM users WHERE id=$1', [req.user.id]);
+    const user = ur.rows[0];
+    if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+
+    const doc = (user.cpf_cnpj || '').replace(/\D/g, '');
+    const docType = doc.length > 11 ? 'CNPJ' : 'CPF';
+    const nameParts = (user.name || 'Cliente').trim().split(/\s+/);
+    const firstName = nameParts[0];
+    const lastName  = nameParts.slice(1).join(' ') || firstName;
+
+    const payment = await mpReq('POST', '/v1/payments', {
+      transaction_amount: ASSINATURA_PLACAS_PRICE,
+      description: `Assinatura Consulta placas (${ASSINATURA_PLACAS_DIAS} dias) — ${user.name}`,
+      payment_method_id: 'pix',
+      payer: {
+        email: user.email,
+        first_name: firstName,
+        last_name: lastName,
+        identification: { type: docType, number: doc },
+      },
+    }, { 'X-Idempotency-Key': crypto.randomUUID() });
+
+    const txData = payment.point_of_interaction?.transaction_data || {};
+    if (!txData.qr_code) throw new Error('Mercado Pago não retornou o QR Code PIX.');
+
+    await pool.query(
+      `INSERT INTO pix_payments (user_id, gateway_id, value, status, purpose)
+       VALUES ($1,$2,$3,'PENDING','ASSINATURA') ON CONFLICT (gateway_id) DO NOTHING`,
+      [req.user.id, String(payment.id), ASSINATURA_PLACAS_PRICE]
+    );
+
+    res.json({
+      paymentId: payment.id,
+      qrCode: txData.qr_code_base64,
+      pixCopiaECola: txData.qr_code,
+      expirationDate: payment.date_of_expiration,
+      value: ASSINATURA_PLACAS_PRICE,
+      dias: ASSINATURA_PLACAS_DIAS,
+    });
+  } catch (err) {
+    console.error('Erro ao criar PIX da assinatura:', err.message);
+    res.status(500).json({ error: err.message || 'Erro ao criar a cobrança PIX da assinatura.' });
+  }
+});
+
 // ── Crédito de pagamento PIX aprovado — ponto único usado por /status, /webhook
 // e pelo cron de reconciliação. O passo que credita o usuário é uma única
 // UPDATE ... WHERE credited=false, cujo lock de linha do Postgres garante que
@@ -7708,7 +8113,7 @@ async function creditPixPaymentIfApproved(gatewayId) {
     await client.query('BEGIN');
     const upd = await client.query(
       `UPDATE pix_payments SET status='approved', credited=true
-       WHERE gateway_id=$1 AND credited=false RETURNING id, user_id, value`,
+       WHERE gateway_id=$1 AND credited=false RETURNING id, user_id, value, purpose`,
       [gatewayId]
     );
     if (upd.rows.length === 0) {
@@ -7718,6 +8123,29 @@ async function creditPixPaymentIfApproved(gatewayId) {
       return { credited: true, status: 'approved', alreadyCredited: true, value: existing.rows[0] ? parseFloat(existing.rows[0].value) : null };
     }
     const p = upd.rows[0];
+
+    // Pagamento da Assinatura Consulta placas: não credita saldo — abre um novo
+    // período de 30 dias. Se o assinante renova antes de vencer, o período novo
+    // começa no fim do atual (não perde os dias que faltavam); se já venceu,
+    // conta a partir de agora. Cada pagamento é um período próprio, com cota
+    // própria — por isso uma linha nova em vez de UPDATE no período anterior.
+    if (p.purpose === 'ASSINATURA') {
+      await client.query(
+        `INSERT INTO subscriptions (user_id, plan, status, starts_at, expires_at, gateway_id)
+         SELECT $1, $2, 'ACTIVE', inicio, inicio + ($3 || ' days')::interval, $4
+           FROM (SELECT GREATEST(NOW(), COALESCE(
+                   (SELECT MAX(expires_at) FROM subscriptions WHERE user_id=$1 AND expires_at > NOW()),
+                   NOW())) AS inicio) t
+         ON CONFLICT (gateway_id) DO NOTHING`,
+        [p.user_id, ASSINATURA_PLACAS_SERVICE_ID, String(ASSINATURA_PLACAS_DIAS), gatewayId]
+      );
+      // De propósito não grava em transactions: aquele extrato é o de créditos
+      // pré-pagos, e a assinatura não movimenta saldo. O pagamento fica
+      // registrado em pix_payments e o período em subscriptions.
+      await client.query('COMMIT');
+      return { credited: true, status: 'approved', value: parseFloat(p.value), purpose: 'ASSINATURA' };
+    }
+
     await client.query('UPDATE users SET credits = credits + $1 WHERE id=$2', [p.value, p.user_id]);
     await client.query(
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'deposit',$2,$3)`,
@@ -7797,6 +8225,93 @@ async function runPixReconcile() {
   }
   console.log(`✅ Reconciliação PIX: ${checked} verificados, ${credited} creditados`);
   return { checked, credited, pending: pendentes.length };
+}
+
+// ── GET /api/cron/assinaturas-expirar (Vercel Cron) ───────────────────────────
+// Fecha os períodos vencidos da Assinatura Consulta placas. O bloqueio em si
+// NÃO depende deste cron — o porteiro usa expires_at > NOW(), então uma
+// assinatura vencida já é barrada mesmo que o cron não tenha rodado ainda. Este
+// job só mantém o campo "status" coerente para relatórios e para o admin.
+app.get('/api/cron/assinaturas-expirar', async (req, res) => {
+  const secret = process.env.CRON_SECRET || '';
+  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const avisos = await avisarVencimentoAssinaturas();
+    const r = await pool.query(
+      `UPDATE subscriptions SET status='EXPIRED'
+       WHERE status='ACTIVE' AND expires_at <= NOW() RETURNING id`
+    );
+    console.log(`✅ Assinaturas expiradas: ${r.rowCount}`);
+    res.json({ success: true, expiradas: r.rowCount, ...avisos });
+  } catch (err) {
+    console.error('Erro no cron de assinaturas:', err.message);
+    res.status(500).json({ error: 'Erro ao expirar assinaturas.' });
+  }
+});
+
+// Avisa o assinante no WhatsApp faltando 5 dias e no dia do vencimento.
+// Quem garante "uma vez só" são as colunas aviso_5d_em/aviso_venc_em, não a
+// janela de tempo — por isso a janela é "faltam até 5 dias" em vez de "faltam
+// exatamente 5 dias": se o cron falhar num dia, o aviso ainda sai no dia
+// seguinte (atrasado, mas sai) em vez de se perder para sempre. O piso de 7
+// dias no aviso de vencimento evita disparar em lote para assinaturas velhas
+// na primeira execução depois do deploy.
+// O aviso é marcado ANTES do envio: se a Z-API falhar, a mensagem é perdida em
+// vez de virar spam diário para o cliente (o painel continua mostrando o prazo).
+async function avisarVencimentoAssinaturas() {
+  const enviar = async (rows, montarMsg, coluna) => {
+    let enviados = 0;
+    for (const s of rows) {
+      await pool.query(`UPDATE subscriptions SET ${coluna}=NOW() WHERE id=$1`, [s.id]);
+      if (!s.phone) continue;
+      const ok = await sendWhatsApp(s.phone, montarMsg(s)).catch(() => false);
+      if (ok) enviados++;
+    }
+    return enviados;
+  };
+
+  const { rows: faltando5 } = await pool.query(
+    `SELECT s.id, s.expires_at, u.name, u.phone
+       FROM subscriptions s JOIN users u ON u.id = s.user_id
+      WHERE s.aviso_5d_em IS NULL
+        AND s.expires_at > NOW()
+        AND s.expires_at <= NOW() + INTERVAL '5 days'`
+  );
+  const { rows: vencendo } = await pool.query(
+    `SELECT s.id, s.expires_at, u.name, u.phone
+       FROM subscriptions s JOIN users u ON u.id = s.user_id
+      WHERE s.aviso_venc_em IS NULL
+        AND s.expires_at > NOW() - INTERVAL '7 days'
+        AND s.expires_at <= NOW() + INTERVAL '1 day'`
+  );
+
+  const primeiroNome = n => (n || 'Cliente').trim().split(/\s+/)[0];
+  const dataBR = d => new Date(d).toLocaleDateString('pt-BR');
+
+  const n5 = await enviar(faltando5, s =>
+    `Olá, ${primeiroNome(s.name)}! 👋\n\n` +
+    `Sua *Assinatura Consulta placas* vence em *5 dias* (${dataBR(s.expires_at)}).\n\n` +
+    `Para não ficar sem acesso à consulta de placa, à Declaração de Residência, à Nota de Prestação de Serviços e à ASD, ` +
+    `renove por R$ ${ASSINATURA_PLACAS_PRICE.toFixed(2).replace('.', ',')} direto no painel, em *Coisas de Despachantes*.\n\n` +
+    `_MC Despachadoria Consultas_`, 'aviso_5d_em');
+
+  // Já venceu x vence hoje: o cron pode pegar a assinatura no dia ou logo depois
+  // (ver janela acima), então o texto se adapta em vez de afirmar "vence hoje".
+  const nv = await enviar(vencendo, s => {
+    const venceu = new Date(s.expires_at).getTime() <= Date.now();
+    return `Olá, ${primeiroNome(s.name)}!\n\n` +
+      (venceu
+        ? `Sua *Assinatura Consulta placas* venceu em ${dataBR(s.expires_at)}. ⏰\n\n`
+        : `Sua *Assinatura Consulta placas* vence hoje (${dataBR(s.expires_at)}). ⏰\n\n`) +
+      `Renove por R$ ${ASSINATURA_PLACAS_PRICE.toFixed(2).replace('.', ',')} no painel, em *Coisas de Despachantes*, ` +
+      `para continuar emitindo seus documentos sem interrupção.\n\n` +
+      `_MC Despachadoria Consultas_`;
+  }, 'aviso_venc_em');
+
+  console.log(`✅ Avisos de assinatura: ${n5} de 5 dias, ${nv} de vencimento`);
+  return { avisos5Dias: n5, avisosVencimento: nv };
 }
 
 // ── GET /api/cron/pix-reconcile (Vercel Cron) ─────────────────────────────────

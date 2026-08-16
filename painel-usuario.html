@@ -603,6 +603,9 @@
         <div class="ml-auto text-xs text-gray-400">Mesmo saldo da aba Acesse Aqui Para as Principais Consultas</div>
       </div>
 
+      <!-- Situação da Assinatura Consulta placas (ver renderAssinaturaBanner) -->
+      <div id="assinatura-banner" class="hidden"></div>
+
       <div class="card">
         <h3 class="font-semibold text-gray-800 mb-1">Para os Despachantes</h3>
         <p class="text-xs text-gray-500 mb-4">Selecione o documento que deseja gerar e preencha os dados.</p>
@@ -1288,7 +1291,7 @@ async function init() {
     buildDespachantesList();
     buildIntencaoCategoryGrid();
     renderServiceListV2();
-    await Promise.all([loadStats(), loadQueries()]);
+    await Promise.all([loadStats(), loadQueries(), loadAssinaturaStatus()]);
   } catch {
     window.location.href = '/entrar';
   }
@@ -2311,6 +2314,158 @@ function buildCategoryGrid() {
   }).join('');
 }
 
+// ── Assinatura Consulta placas ────────────────────────────────────────────────
+// Os serviços da aba "Coisas de Despachantes" não debitam crédito, mas exigem
+// assinatura ativa (R$ 30,00 / 30 dias). O bloqueio de verdade é do servidor
+// (HTTP 402 em /api/query, ver assinaturaGateDespachantes) — o que está aqui é
+// só para abrir o popup ANTES de o usuário preencher o formulário à toa.
+const ASSINATURA_IDS = [
+  'assinatura-consulta-placas',
+  'declaracao-residencia-detran-rj',
+  'nota-prestacao-servicos-despachante',
+  'gerar-asd',
+];
+const ASSINATURA_PLACAS_ID = 'assinatura-consulta-placas';
+let assinaturaStatus = null;
+let assinaturaPollTimer = null;
+let assinaturaSvcPendente = null;
+
+async function loadAssinaturaStatus() {
+  try {
+    const r = await fetch('/api/assinatura/status');
+    if (!r.ok) return;
+    assinaturaStatus = await r.json();
+    renderAssinaturaBanner();
+  } catch { /* status indisponível: o servidor ainda barra na hora da consulta */ }
+}
+
+// Regra espelhada do servidor: assinante passa; quem está na carência passa nos
+// três documentos, mas não na consulta de placa (que tem custo por chamada).
+function assinaturaLiberada(serviceId) {
+  if (!ASSINATURA_IDS.includes(serviceId)) return true;
+  if (!assinaturaStatus) return true;  // sem status carregado, deixa o servidor decidir
+  if (assinaturaStatus.ativa) {
+    if (serviceId === ASSINATURA_PLACAS_ID && assinaturaStatus.consultasRestantes <= 0) return false;
+    return true;
+  }
+  return !!assinaturaStatus.carencia && serviceId !== ASSINATURA_PLACAS_ID;
+}
+
+function renderAssinaturaBanner() {
+  const el = document.getElementById('assinatura-banner');
+  if (!el || !assinaturaStatus) return;
+  if (assinaturaStatus.ativa) {
+    const ate = new Date(assinaturaStatus.expiraEm).toLocaleDateString('pt-BR');
+    el.className = 'bg-green-50 border border-green-200 text-green-800 rounded-lg px-4 py-3 text-sm';
+    el.innerHTML = `✅ <strong>Assinatura ativa</strong> até ${ate} — ${assinaturaStatus.consultasRestantes} de ${assinaturaStatus.cota} consultas de placa restantes.`;
+  } else if (assinaturaStatus.carencia) {
+    const ate = new Date(assinaturaStatus.carenciaAte).toLocaleDateString('pt-BR');
+    el.className = 'bg-amber-50 border border-amber-300 text-amber-800 rounded-lg px-4 py-3 text-sm';
+    el.innerHTML = `⚠️ Seus documentos seguem liberados até <strong>${ate}</strong>. Depois dessa data será necessária a Assinatura Consulta placas (R$ 30,00/mês). ` +
+      `<button onclick="abrirModalAssinatura(null)" class="underline font-semibold">Assinar agora</button>`;
+  } else {
+    el.className = 'bg-amber-50 border border-amber-300 text-amber-800 rounded-lg px-4 py-3 text-sm';
+    el.innerHTML = `🔑 Estes serviços são gratuitos para quem tem a <strong>Assinatura Consulta placas</strong> (R$ 30,00 por 30 dias). ` +
+      `<button onclick="abrirModalAssinatura(null)" class="underline font-semibold">Assinar com PIX</button>`;
+  }
+  el.classList.remove('hidden');
+}
+
+// motivo: 'COTA_ESGOTADA' troca o texto da oferta pelo aviso de cota; qualquer
+// outro valor (ou nulo) mostra a mensagem padrão de assinatura necessária.
+function abrirModalAssinatura(svc, motivo, mensagemServidor) {
+  assinaturaSvcPendente = svc || null;
+  const msg = document.getElementById('assinatura-msg');
+  if (mensagemServidor) {
+    msg.textContent = mensagemServidor;
+  } else if (motivo === 'COTA_ESGOTADA') {
+    msg.textContent = `Você já usou todas as consultas de placa deste período da assinatura. Pague um novo período de 30 dias para renovar a cota.`;
+  } else {
+    msg.textContent = 'Esta consulta só está liberada como Gratuita se você tem a "Assinatura Consulta placas". Clique no botão assinar e pague com PIX.';
+  }
+  document.getElementById('assinatura-step-oferta').classList.remove('hidden');
+  document.getElementById('assinatura-step-pix').classList.add('hidden');
+  document.getElementById('assinatura-erro').classList.add('hidden');
+  const btn = document.getElementById('assinatura-assinar-btn');
+  btn.classList.remove('hidden');
+  btn.disabled = false;
+  btn.textContent = '💳 Assinar e pagar com PIX';
+  const modal = document.getElementById('assinatura-modal');
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+}
+
+function closeAssinaturaModal() {
+  const modal = document.getElementById('assinatura-modal');
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+  if (assinaturaPollTimer) { clearInterval(assinaturaPollTimer); assinaturaPollTimer = null; }
+}
+
+async function gerarPixAssinatura() {
+  const btn = document.getElementById('assinatura-assinar-btn');
+  const erro = document.getElementById('assinatura-erro');
+  btn.disabled = true;
+  btn.textContent = 'Gerando PIX...';
+  erro.classList.add('hidden');
+  try {
+    const r = await fetch('/api/assinatura/pix', { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) {
+      erro.textContent = d.error || 'Erro ao gerar a cobrança PIX.';
+      erro.classList.remove('hidden');
+      btn.disabled = false;
+      btn.textContent = '💳 Assinar e pagar com PIX';
+      return;
+    }
+    document.getElementById('assinatura-qr').src = 'data:image/png;base64,' + d.qrCode;
+    document.getElementById('assinatura-copia-cola').value = d.pixCopiaECola;
+    document.getElementById('assinatura-step-oferta').classList.add('hidden');
+    document.getElementById('assinatura-step-pix').classList.remove('hidden');
+    btn.classList.add('hidden');
+    iniciarPollingAssinatura(d.paymentId);
+  } catch {
+    erro.textContent = 'Erro de conexão. Tente novamente.';
+    erro.classList.remove('hidden');
+    btn.disabled = false;
+    btn.textContent = '💳 Assinar e pagar com PIX';
+  }
+}
+
+// Reaproveita o /api/pix/status já existente: ele confirma o pagamento no
+// Mercado Pago e, como a linha nasceu com purpose='ASSINATURA', o servidor abre
+// o período em vez de creditar saldo. Se o usuário fechar a página antes disso,
+// o webhook e o cron de reconciliação cobrem o resto.
+function iniciarPollingAssinatura(paymentId) {
+  if (assinaturaPollTimer) clearInterval(assinaturaPollTimer);
+  assinaturaPollTimer = setInterval(async () => {
+    try {
+      const r = await fetch('/api/pix/status/' + paymentId);
+      const d = await r.json();
+      if (d.credited) {
+        clearInterval(assinaturaPollTimer);
+        assinaturaPollTimer = null;
+        document.getElementById('assinatura-status').innerHTML = '✅ <span class="text-green-600">Assinatura ativada!</span>';
+        await loadAssinaturaStatus();
+        const svc = assinaturaSvcPendente;
+        setTimeout(() => {
+          closeAssinaturaModal();
+          toast('Assinatura ativada! Bom trabalho.');
+          if (svc) selectService(svc);
+        }, 1200);
+      }
+    } catch { /* tenta de novo no próximo tick */ }
+  }, 4000);
+}
+
+function copiarPixAssinatura() {
+  const ta = document.getElementById('assinatura-copia-cola');
+  ta.select();
+  navigator.clipboard.writeText(ta.value)
+    .then(() => toast('Código PIX copiado!'))
+    .catch(() => toast('Não consegui copiar — selecione e copie manualmente.'));
+}
+
 // ── Coisas de Despachantes ─────────────────────────────────────────────────────
 // A aba não tem grid de categorias: lista direto os serviços do grupo "Para os
 // Despachantes" e reaproveita selectService()/submitQuery() da Nova Consulta.
@@ -2392,6 +2547,13 @@ function renderServiceList(cat) {
 
 function selectService(svc) {
   if (typeof svc === 'string') svc = JSON.parse(svc);
+  // Serviços da aba "Coisas de Despachantes": sem assinatura ativa, abre o
+  // popup em vez do formulário (ver assinaturaLiberada).
+  if (!assinaturaLiberada(svc.id)) {
+    const cotaEsgotada = assinaturaStatus?.ativa && svc.id === ASSINATURA_PLACAS_ID;
+    abrirModalAssinatura(svc, cotaEsgotada ? 'COTA_ESGOTADA' : null);
+    return;
+  }
   selectedSvc = svc;
   document.getElementById('form-service-name').textContent = svc.icon + ' ' + svc.name;
   document.getElementById('form-service-price').textContent = fmtPrice(svc.price);
@@ -2403,8 +2565,10 @@ function selectService(svc) {
       ? 'bg-amber-50 border border-amber-300 text-amber-800 rounded-lg px-4 py-3 text-sm font-medium'
       : 'bg-blue-50 border border-blue-200 text-blue-800 rounded-lg px-4 py-3 text-sm';
     const noteText = (isWarning ? '⚠️ ' : '') + svc.slowNote;
+    // modeloLabel deixa o rótulo do link ajustável por serviço; sem ele o texto
+    // continua sendo o da ATPVe, que foi o primeiro a usar esse mecanismo.
     slowNote.innerHTML = escapeHtml(noteText) + (svc.modeloUrl
-      ? ` <a href="${svc.modeloUrl}" target="_blank" rel="noopener" class="underline font-semibold whitespace-nowrap">Visualize modelo da ATPVe</a>`
+      ? ` <a href="${svc.modeloUrl}" target="_blank" rel="noopener" class="underline font-semibold whitespace-nowrap">${escapeHtml(svc.modeloLabel || 'Visualize modelo da ATPVe')}</a>`
       : '');
   }
   renderFormFields(svc.inputType, svc);
@@ -3362,10 +3526,20 @@ async function submitQuery(e) {
       lastPdfBlob = blob;
       triggerPdfDownload(blob, selectedSvc.id);
       showPdfResult(selectedSvc);
-      await Promise.all([loadStats(), loadQueries()]);
+      // A consulta de placa consome cota da assinatura — recarrega para o banner
+      // mostrar o saldo de consultas certo logo após o download.
+      await Promise.all([loadStats(), loadQueries(), loadAssinaturaStatus()]);
     } else {
       const data = await res.json();
       if (!res.ok) {
+        // 402 = paywall da aba "Coisas de Despachantes". Abre o popup de
+        // assinatura em vez do erro genérico, e reconcilia o status local (o
+        // servidor é quem manda: a assinatura pode ter vencido com a aba aberta).
+        if (res.status === 402 && data.code) {
+          await loadAssinaturaStatus();
+          abrirModalAssinatura(selectedSvc, data.code, data.error);
+          return;
+        }
         showFormError(data.error || 'Erro ao realizar consulta.');
         return;
       }
@@ -5293,6 +5467,63 @@ function requeryFromModal() {
     <div class="px-5 py-3 border-t border-gray-100 flex justify-end gap-2">
       <button onclick="closeCancelarVendaModal()" class="text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded font-medium">Voltar</button>
       <button id="cancelar-venda-confirm-btn" onclick="confirmarCancelarVenda()" class="text-xs bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded font-medium">❌ Confirmar Cancelamento</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Assinatura Consulta placas ──────────────────────────────────────────────
+     Popup dos serviços da aba "Coisas de Despachantes": explica que a consulta
+     só é gratuita para assinantes e faz o PIX de R$ 30,00 na hora (etapa 1 =
+     oferta, etapa 2 = QR Code). Ver abrirModalAssinatura() no script. -->
+<div id="assinatura-modal" class="fixed inset-0 z-[9999] hidden items-center justify-center p-4" style="background:rgba(0,0,0,.6);" onclick="if(event.target===this) closeAssinaturaModal()">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[92vh]">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+      <div class="font-bold text-gray-800">🔑 Assinatura Consulta placas</div>
+      <button onclick="closeAssinaturaModal()" class="text-gray-400 hover:text-gray-600 text-2xl leading-none flex-shrink-0 ml-3">&times;</button>
+    </div>
+
+    <div class="px-5 py-4 overflow-y-auto">
+      <!-- Etapa 1: oferta -->
+      <div id="assinatura-step-oferta">
+        <p id="assinatura-msg" class="text-sm text-gray-700 leading-relaxed"></p>
+        <div class="mt-4 bg-amber-50 border border-amber-200 rounded-lg p-4 text-center">
+          <div class="text-3xl font-extrabold text-amber-700">R$ 30,00</div>
+          <div class="text-xs text-amber-700 mt-0.5">por 30 dias — sem renovação automática</div>
+        </div>
+        <ul class="mt-4 space-y-1.5 text-sm text-gray-600">
+          <li>✅ Consulta de placa (até 50 no período)</li>
+          <li>✅ Declaração de Residência DETRAN RJ</li>
+          <li>✅ Nota de Prestação de Serviços</li>
+          <li>✅ Gerar ASD</li>
+        </ul>
+        <a href="/assets/modelo-consulta-placas.pdf" target="_blank" rel="noopener"
+           class="mt-3 flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-800 rounded-lg px-3 py-2 text-sm hover:bg-blue-100 transition">
+          <span class="text-lg">📄</span>
+          <span>Veja modelo da consulta <span class="underline font-semibold">(abrir PDF de exemplo)</span></span>
+        </a>
+        <p class="text-xs text-gray-400 mt-3">
+          A assinatura vale por 30 dias e não renova sozinha: para continuar, é só
+          pagar outro PIX de R$ 30,00 quando o período acabar.
+        </p>
+        <div id="assinatura-erro" class="hidden mt-3 bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-sm"></div>
+      </div>
+
+      <!-- Etapa 2: PIX -->
+      <div id="assinatura-step-pix" class="hidden text-center">
+        <p class="text-sm text-gray-700">Pague o PIX abaixo para liberar na hora.</p>
+        <img id="assinatura-qr" class="mx-auto my-3 w-52 h-52 rounded-lg border border-gray-200" alt="QR Code PIX da assinatura">
+        <label class="block text-xs font-medium text-gray-500 mb-1">PIX copia e cola</label>
+        <textarea id="assinatura-copia-cola" readonly rows="3"
+          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs font-mono bg-gray-50 resize-none"></textarea>
+        <button onclick="copiarPixAssinatura()" class="mt-2 text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded font-medium">📋 Copiar código</button>
+        <div id="assinatura-status" class="mt-3 text-sm text-amber-600 font-medium">⏳ Aguardando o pagamento...</div>
+      </div>
+    </div>
+
+    <div class="px-5 py-3 border-t border-gray-100 flex justify-end gap-2">
+      <button onclick="closeAssinaturaModal()" class="text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded font-medium">Fechar</button>
+      <button id="assinatura-assinar-btn" onclick="gerarPixAssinatura()"
+        class="text-xs bg-amber-600 hover:bg-amber-700 text-white px-4 py-1.5 rounded font-semibold">💳 Assinar e pagar com PIX</button>
     </div>
   </div>
 </div>
