@@ -2339,16 +2339,14 @@ async function loadAssinaturaStatus() {
   } catch { /* status indisponível: o servidor ainda barra na hora da consulta */ }
 }
 
-// Regra espelhada do servidor: assinante passa; quem está na carência passa nos
-// três documentos, mas não na consulta de placa (que tem custo por chamada).
+// Regra espelhada do servidor: sem assinatura vigente, nenhum serviço do grupo
+// abre — não há carência nem exceção para cliente antigo.
 function assinaturaLiberada(serviceId) {
   if (!ASSINATURA_IDS.includes(serviceId)) return true;
   if (!assinaturaStatus) return true;  // sem status carregado, deixa o servidor decidir
-  if (assinaturaStatus.ativa) {
-    if (serviceId === ASSINATURA_PLACAS_ID && assinaturaStatus.consultasRestantes <= 0) return false;
-    return true;
-  }
-  return !!assinaturaStatus.carencia && serviceId !== ASSINATURA_PLACAS_ID;
+  if (!assinaturaStatus.ativa) return false;
+  if (serviceId === ASSINATURA_PLACAS_ID && assinaturaStatus.consultasRestantes <= 0) return false;
+  return true;
 }
 
 function renderAssinaturaBanner() {
@@ -2358,11 +2356,6 @@ function renderAssinaturaBanner() {
     const ate = new Date(assinaturaStatus.expiraEm).toLocaleDateString('pt-BR');
     el.className = 'bg-green-50 border border-green-200 text-green-800 rounded-lg px-4 py-3 text-sm';
     el.innerHTML = `✅ <strong>Assinatura ativa</strong> até ${ate} — ${assinaturaStatus.consultasRestantes} de ${assinaturaStatus.cota} consultas de placa restantes.`;
-  } else if (assinaturaStatus.carencia) {
-    const ate = new Date(assinaturaStatus.carenciaAte).toLocaleDateString('pt-BR');
-    el.className = 'bg-amber-50 border border-amber-300 text-amber-800 rounded-lg px-4 py-3 text-sm';
-    el.innerHTML = `⚠️ Seus documentos seguem liberados até <strong>${ate}</strong>. Depois dessa data será necessária a Assinatura Consulta placas (R$ 30,00/mês). ` +
-      `<button onclick="abrirModalAssinatura(null)" class="underline font-semibold">Assinar agora</button>`;
   } else {
     el.className = 'bg-amber-50 border border-amber-300 text-amber-800 rounded-lg px-4 py-3 text-sm';
     el.innerHTML = `🔑 Estes serviços são gratuitos para quem tem a <strong>Assinatura Consulta placas</strong> (R$ 30,00 por 30 dias). ` +
@@ -2381,7 +2374,7 @@ function abrirModalAssinatura(svc, motivo, mensagemServidor) {
   } else if (motivo === 'COTA_ESGOTADA') {
     msg.textContent = `Você já usou todas as consultas de placa deste período da assinatura. Pague um novo período de 30 dias para renovar a cota.`;
   } else {
-    msg.textContent = 'Esta consulta só está liberada como Gratuita se você tem a "Assinatura Consulta placas". Clique no botão assinar e pague com PIX.';
+    msg.textContent = 'Esta consulta só está liberada como Gratuita, se você tem assinatura: "Assinatura Consulta placas", clique no botão assinar e pague com pix.';
   }
   document.getElementById('assinatura-step-oferta').classList.remove('hidden');
   document.getElementById('assinatura-step-pix').classList.add('hidden');

@@ -46,14 +46,9 @@ const ASSINATURA_SERVICE_IDS = [
   'nota-prestacao-servicos-despachante',
   'gerar-asd',
 ];
-// Carência da virada: os três documentos eram gratuitos e abertos para todos,
-// então quem já emitiu algum deles antes do paywall continua com acesso livre
-// até esta data, para não interromper de um dia para o outro quem usa a
-// Declaração de Residência no dia a dia (ver assinaturaGateDespachantes).
-// Passada a data, a constante pode ser removida junto com a checagem.
-const ASSINATURA_CARENCIA_ATE = new Date(
-  process.env.ASSINATURA_CARENCIA_ATE || '2026-09-15T23:59:59-03:00'
-);
+// Não há carência: a assinatura vale para todos os usuários, antigos e novos.
+// Sem assinatura vigente, nenhum serviço do grupo roda — inclusive para quem já
+// emitia os três documentos quando eram abertos.
 // Preço de tabela de um serviço do catálogo: basePrice + markup (ou basePrice
 // puro quando noMarkup), e 0 quando o serviço está num grupo gratuito.
 const catalogPrice = s =>
@@ -351,6 +346,23 @@ const SERVICES = [
   // nada é debitado e nem preço fixo cadastrado no admin cobra. Os basePrice
   // antigos ficam registrados nos comentários de cada item caso volte a cobrar.
   //
+  // A ORDEM DESTE GRUPO IMPORTA: o painel lista os serviços na ordem do
+  // catálogo (ver buildDespachantesList), e a "Assinatura Consulta placas" vem
+  // primeiro de propósito — é ela que libera os três documentos abaixo.
+  //
+  // Assinatura Consulta placas — consulta de placa exclusiva da aba, servida
+  // pelo MESMO endpoint Datacube da "Proprietário Atual" da Opção 2
+  // (/veiculos/proprietario-atual) e pelo mesmo builder de PDF. É um serviço
+  // separado de propósito: a "dc-proprietario-atual" continua exatamente como
+  // está (crédito por consulta, aba Opção 2), enquanto esta aqui não debita
+  // crédito nenhum — é paga pela assinatura mensal e consome cota
+  // (ver ASSINATURA_PLACAS_COTA e o bloco deste serviceId em processCatalogQuery).
+  // slowNote + modeloUrl: o painel mostra o aviso com um link para o PDF de
+  // exemplo (assets/modelo-consulta-placas.pdf), para o despachante ver o que
+  // recebe antes de assinar. O mesmo link aparece no popup da assinatura.
+  { id:'assinatura-consulta-placas', name:'Assinatura Consulta placas', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'placa', icon:'🔎',
+    slowNote:'Consulta de proprietário atual pela placa, com retorno em PDF no padrão MC Despachadoria. Incluída na Assinatura Consulta placas.',
+    modeloUrl:'/assets/modelo-consulta-placas.pdf', modeloLabel:'Veja modelo da consulta' },
   // Gerar Declaração de Residência DETRAN RJ — fluxo em duas etapas, fora do padrão
   // padrão "chama upstream e cobra" dos demais serviços: primeiro o front busca dados
   // via Localização CPF V3 pra pré-preencher um formulário editável (POST
@@ -384,19 +396,6 @@ const SERVICES = [
   // e viram a última página do PDF (ver buildAsdPdfBuffer).
   // Gratuito (antes R$ 9,50).
   { id:'gerar-asd', name:'Gerar ASD', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'asd', icon:'📑' },
-  // Assinatura Consulta placas — consulta de placa exclusiva da aba, servida
-  // pelo MESMO endpoint Datacube da "Proprietário Atual" da Opção 2
-  // (/veiculos/proprietario-atual) e pelo mesmo builder de PDF. É um serviço
-  // separado de propósito: a "dc-proprietario-atual" continua exatamente como
-  // está (crédito por consulta, aba Opção 2), enquanto esta aqui não debita
-  // crédito nenhum — é paga pela assinatura mensal e consome cota
-  // (ver ASSINATURA_PLACAS_COTA e o bloco deste serviceId em processCatalogQuery).
-  // slowNote + modeloUrl: o painel mostra o aviso com um link para o PDF de
-  // exemplo (assets/modelo-consulta-placas.pdf), para o despachante ver o que
-  // recebe antes de assinar. O mesmo link aparece no popup da assinatura.
-  { id:'assinatura-consulta-placas', name:'Assinatura Consulta placas', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'placa', icon:'🔎',
-    slowNote:'Consulta de proprietário atual pela placa, com retorno em PDF no padrão MC Despachadoria. Incluída na Assinatura Consulta placas.',
-    modeloUrl:'/assets/modelo-consulta-placas.pdf', modeloLabel:'Veja modelo da consulta' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // API Vistocar (vistocarconsulta.com.br) — fonte para Reemissão de CRLV-e RJ,
@@ -4917,7 +4916,7 @@ async function refundQuery(queryId, userId, amount, reason) {
 // externa de chave (ver app.post('/api/v1/:serviceId')), debitando sempre o
 // userId explícito recebido — no painel é req.user.id, na API é o dono da
 // chave (req.apiUser.id).
-// ── Assinatura Consulta placas — vigência, cota e carência ───────────────────
+// ── Assinatura Consulta placas — vigência e cota ─────────────────────────────
 // Assinatura vigente = período pago que ainda não venceu. A vigência NUNCA é
 // decidida pelo campo "status" (o cron só o atualiza de tempos em tempos, e
 // entre duas execuções ele fica desatualizado) — a verdade é sempre expires_at.
@@ -4931,21 +4930,6 @@ async function getAssinaturaVigente(userId) {
   return r.rows[0] || null;
 }
 
-// Carência da virada (ver ASSINATURA_CARENCIA_ATE): quem já emitiu algum dos
-// três documentos que eram abertos continua liberado até a data limite. O
-// histórico de queries é a fonte da verdade de quem já usava a aba — não há
-// flag em users para isso.
-async function temCarenciaDespachantes(userId) {
-  if (Date.now() > ASSINATURA_CARENCIA_ATE.getTime()) return false;
-  const legado = ASSINATURA_SERVICE_IDS.filter(id => id !== ASSINATURA_PLACAS_SERVICE_ID);
-  const r = await pool.query(
-    `SELECT 1 FROM queries
-     WHERE user_id=$1 AND service_id = ANY($2::text[]) AND status='success' LIMIT 1`,
-    [userId, legado]
-  );
-  return r.rows.length > 0;
-}
-
 // Porteiro dos serviços do grupo "Para os Despachantes". Devolve o motivo do
 // bloqueio junto com o code, para o painel abrir o popup certo (assinar x cota
 // esgotada) em vez de mostrar um erro genérico.
@@ -4954,15 +4938,10 @@ async function assinaturaGateDespachantes(userId, serviceId) {
 
   const assinatura = await getAssinaturaVigente(userId);
   if (!assinatura) {
-    // A carência cobre só os três documentos que já eram gratuitos e abertos. A
-    // consulta de placa é nova e tem custo upstream a cada chamada, então exige
-    // assinatura desde o primeiro dia — senão a carência viraria consulta grátis.
-    if (serviceId !== ASSINATURA_PLACAS_SERVICE_ID && await temCarenciaDespachantes(userId))
-      return { ok: true, assinatura: null, carencia: true };
     return {
       ok: false,
       code: 'ASSINATURA_NECESSARIA',
-      error: 'Esta consulta só está liberada como Gratuita se você tem a "Assinatura Consulta placas". Assine por R$ 30,00 (30 dias) e pague com PIX para liberar.',
+      error: 'Esta consulta só está liberada como Gratuita, se você tem assinatura: "Assinatura Consulta placas", clique no botão assinar e pague com pix.',
     };
   }
 
@@ -8011,11 +7990,8 @@ app.get('/api/assinatura/status', requireAuth, async (req, res) => {
   try {
     const assinatura = await getAssinaturaVigente(req.user.id);
     if (!assinatura) {
-      const carencia = await temCarenciaDespachantes(req.user.id);
       return res.json({
         ativa: false,
-        carencia,
-        carenciaAte: carencia ? ASSINATURA_CARENCIA_ATE.toISOString() : null,
         preco: ASSINATURA_PLACAS_PRICE,
         dias: ASSINATURA_PLACAS_DIAS,
         cota: ASSINATURA_PLACAS_COTA,
@@ -8023,7 +7999,6 @@ app.get('/api/assinatura/status', requireAuth, async (req, res) => {
     }
     res.json({
       ativa: true,
-      carencia: false,
       expiraEm: assinatura.expires_at,
       consultasUsadas: assinatura.queries_used,
       consultasRestantes: Math.max(0, ASSINATURA_PLACAS_COTA - assinatura.queries_used),
