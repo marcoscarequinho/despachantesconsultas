@@ -6734,8 +6734,8 @@ app.post('/api/v1/crlv-rj-reemissao-2', requireApiKey, (req, res) => {
 // Mesmo núcleo (processCatalogQuery) e mesmo preço do painel (basePrice *
 // markup), mas autenticado por chave em vez de cookie JWT, e debitando sempre
 // da conta vinculada à chave — chave Geral (pós-paga, sem usuário) não serve
-// aqui, só para os endpoints ATPV-e MG e CRLV 2 Rio Reemissão (ver
-// proxyAtpveMgExternal adiante e runVistocarCrlvRj2General acima).
+// aqui, só para os endpoints ATPV-e (MG/SP) e CRLV 2 Rio Reemissão (ver
+// proxyAtpveExternal adiante e runVistocarCrlvRj2General acima).
 app.post('/api/v1/:serviceId', requireApiKey, (req, res) => {
   if (!req.apiUser)
     return res.status(403).json({ error: 'Esta chave é do tipo Geral e não pode ser usada para o catálogo de Nova Consulta.' });
@@ -7281,25 +7281,32 @@ app.post('/api/query-v3', requireAuth, async (req, res) => {
 const EXTERNAL_API_PRICE = 5.00;
 
 // Preço por serviço nas rotas de API externa que aceitam chave Geral (pós-paga)
-// e aparecem em Cobranças API — ATPV-e MG (cadastrar) usa o preço fixo padrão acima; CRLV 2
+// e aparecem em Cobranças API — ATPV-e MG/SP (cadastrar) usa o preço fixo padrão acima; CRLV 2
 // Rio Reemissão (fora do SERVICES_V3, via Vistocar) tem preço comercial próprio
 // (ver CRLV_RJ_REEMISSAO_2_API_PRICE / runVistocarCrlvRj2General).
 function externalApiPriceFor(serviceId) {
   return serviceId === 'crlv-rj-reemissao-2' ? CRLV_RJ_REEMISSAO_2_API_PRICE : EXTERNAL_API_PRICE;
 }
 
-// ── API externa /api/v1/atpve-mg — ATPV-e MG via Chekaki ─────────────────────
-// Substitui os antigos endpoints Infosimples (/api/v1/detran-mg/intencao-venda
-// e /api/v1/detran-mg/atpve): espelha 1:1 os 9 endpoints da API ATPV-e MG da
+// ── API externa /api/v1/atpve-<uf> — ATPV-e via Chekaki ──────────────────────
+// MG substituiu os antigos endpoints Infosimples (/api/v1/detran-mg/intencao-venda
+// e /api/v1/detran-mg/atpve). Espelha 1:1 os 9 endpoints da API ATPV-e da
 // Chekaki (mesmos caminhos, verbos e formatos de resposta da documentação de
 // integração), trocando só a autenticação — chave mcd_ aqui, chaveAcesso da
 // casa na upstream. Cobrança apenas no "cadastrar" (EXTERNAL_API_PRICE) e
 // somente após sucesso da upstream; os demais endpoints gerenciam um pedido já
 // criado/pago (consultar, PDF, atualizar, registrar no DETRAN, excluir) e não
 // debitam nada. Atenção: a upstream não segrega pedidos por cliente — qualquer
-// chave mcd_ enxerga/opera os pedidos ATPV-e MG de toda a chaveAcesso da casa
-// (aceitável no modelo contratual, chaves só para parceiros de confiança).
-async function proxyAtpveMgExternal(req, res, upstreamPath, { charge = false } = {}) {
+// chave mcd_ enxerga/opera os pedidos ATPV-e daquele estado de toda a chaveAcesso
+// da casa (aceitável no modelo contratual, chaves só para parceiros de confiança).
+//
+// UFs expostas na API externa (subconjunto de ATPVE_UFS: só os estados com
+// documentação de integração publicada para parceiros).
+const ATPVE_EXTERNAL_UFS = ['mg', 'sp'];
+
+async function proxyAtpveExternal(req, res, uf, upstreamPath, { charge = false } = {}) {
+  const serviceId = `atpve-${uf}`;
+  const ufLabel   = uf.toUpperCase();
   const price = EXTERNAL_API_PRICE;
   try {
     if (charge && req.apiUser) {
@@ -7345,18 +7352,19 @@ async function proxyAtpveMgExternal(req, res, upstreamPath, { charge = false } =
         await pool.query(
           `INSERT INTO api_general_queries (api_key_id, service_id, params, result_data)
            VALUES ($1,$2,$3,$4)`,
-          [req.apiKey.id, 'atpve-mg', JSON.stringify(params), JSON.stringify({ success: true })]
+          [req.apiKey.id, serviceId, JSON.stringify(params), JSON.stringify({ success: true })]
         );
       } else {
         await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.apiUser.id]);
         const txRow = await pool.query(
           `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
-          [req.apiUser.id, price, 'Consulta: ATPV-e MG — Cadastrar (API externa)']
+          [req.apiUser.id, price, `Consulta: ATPV-e ${ufLabel} — Cadastrar (API externa)`]
         );
         const qRow = await pool.query(
           `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type, result_data)
-           VALUES ($1,'atpve-mg','ATPV-e MG (API externa)',$2,'success',$3,$4,$5,$6) RETURNING id`,
-          [req.apiUser.id, JSON.stringify(params), price, txRow.rows[0].id,
+           VALUES ($1,$2,$3,$4,'success',$5,$6,$7,$8) RETURNING id`,
+          [req.apiUser.id, serviceId, `ATPV-e ${ufLabel} (API externa)`,
+           JSON.stringify(params), price, txRow.rows[0].id,
            isPdf ? 'pdf' : 'json', isPdf ? '{}' : buf.toString()]
         );
         if (isPdf) {
@@ -7367,7 +7375,7 @@ async function proxyAtpveMgExternal(req, res, upstreamPath, { charge = false } =
             `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
             [qRow.rows[0].id, req.apiUser.id, pdfToken, buf.toString('base64'),
              new Date(Date.now() + 7 * 24 * 3600 * 1000)]
-          ).catch(e => console.error('Erro ao salvar pdf_cache (atpve-mg externo):', e.message));
+          ).catch(e => console.error(`Erro ao salvar pdf_cache (${serviceId} externo):`, e.message));
         }
       }
     }
@@ -7376,17 +7384,17 @@ async function proxyAtpveMgExternal(req, res, upstreamPath, { charge = false } =
     if (isPdf) {
       const placa = (req.body?.placa || '').toString().toUpperCase().replace(/[\s-]/g, '');
       res.set('Content-Disposition', upRes.headers.get('content-disposition')
-        || `attachment; filename="atpve-mg${placa ? '-' + placa : ''}-${Date.now()}.pdf"`);
+        || `attachment; filename="${serviceId}${placa ? '-' + placa : ''}-${Date.now()}.pdf"`);
     }
     return res.send(buf);
   } catch (err) {
-    console.error(`Erro em API externa [atpve-mg ${upstreamPath}]:`, err.message);
+    console.error(`Erro em API externa [${serviceId} ${upstreamPath}]:`, err.message);
     res.status(500).json({ error: 'Erro interno. Tente novamente.' });
   }
 }
 
 // Valida o :id numérico antes de montá-lo na URL da upstream.
-function atpveMgIdParam(req, res) {
+function atpveExternalIdParam(req, res) {
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id) || id <= 0) {
     res.status(400).json({ error: 'ID do pedido inválido.' });
@@ -7395,63 +7403,70 @@ function atpveMgIdParam(req, res) {
   return id;
 }
 
-// ATPV-e MG — Listar pedidos
-app.get('/api/v1/atpve-mg', requireApiKey, (req, res) =>
-  proxyAtpveMgExternal(req, res, '/api/atpve-mg'));
+// Os 9 endpoints de cada UF exposta (MG, SP). A rota /protocolo/:protocolo é
+// registrada antes de /:id para não ser capturada pelo parâmetro numérico.
+for (const uf of ATPVE_EXTERNAL_UFS) {
+  const ext = `/api/v1/atpve-${uf}`;   // nossa rota
+  const up  = `/api/atpve-${uf}`;      // caminho na Chekaki
 
-// ATPV-e MG — Cadastrar (única rota cobrada)
-app.post('/api/v1/atpve-mg/cadastrar', requireApiKey, (req, res) => {
-  const placa   = (req.body?.placa || '').toString().toUpperCase().replace(/[\s-]/g, '');
-  const renavam = (req.body?.renavam || '').toString().replace(/\D/g, '');
-  if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
-  if (renavam.length < 9 || renavam.length > 11)
-    return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
-  return proxyAtpveMgExternal(req, res, '/api/atpve-mg/cadastrar', { charge: true });
-});
+  // Listar pedidos
+  app.get(ext, requireApiKey, (req, res) =>
+    proxyAtpveExternal(req, res, uf, up));
 
-// ATPV-e MG — Consultar por protocolo
-app.get('/api/v1/atpve-mg/protocolo/:protocolo', requireApiKey, (req, res) => {
-  const protocolo = (req.params.protocolo || '').trim();
-  if (!/^[A-Za-z0-9._-]{1,64}$/.test(protocolo))
-    return res.status(400).json({ error: 'Protocolo inválido.' });
-  return proxyAtpveMgExternal(req, res, `/api/atpve-mg/protocolo/${encodeURIComponent(protocolo)}`);
-});
+  // Cadastrar (única rota cobrada)
+  app.post(`${ext}/cadastrar`, requireApiKey, (req, res) => {
+    const placa   = (req.body?.placa || '').toString().toUpperCase().replace(/[\s-]/g, '');
+    const renavam = (req.body?.renavam || '').toString().replace(/\D/g, '');
+    if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+    if (renavam.length < 9 || renavam.length > 11)
+      return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+    return proxyAtpveExternal(req, res, uf, `${up}/cadastrar`, { charge: true });
+  });
 
-// ATPV-e MG — Consultar por ID
-app.get('/api/v1/atpve-mg/:id', requireApiKey, (req, res) => {
-  const id = atpveMgIdParam(req, res);
-  if (id) proxyAtpveMgExternal(req, res, `/api/atpve-mg/${id}`);
-});
+  // Consultar por protocolo
+  app.get(`${ext}/protocolo/:protocolo`, requireApiKey, (req, res) => {
+    const protocolo = (req.params.protocolo || '').trim();
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(protocolo))
+      return res.status(400).json({ error: 'Protocolo inválido.' });
+    return proxyAtpveExternal(req, res, uf, `${up}/protocolo/${encodeURIComponent(protocolo)}`);
+  });
 
-// ATPV-e MG — Baixar PDF
-app.get('/api/v1/atpve-mg/:id/pdf', requireApiKey, (req, res) => {
-  const id = atpveMgIdParam(req, res);
-  if (id) proxyAtpveMgExternal(req, res, `/api/atpve-mg/${id}/pdf`);
-});
+  // Consultar por ID
+  app.get(`${ext}/:id`, requireApiKey, (req, res) => {
+    const id = atpveExternalIdParam(req, res);
+    if (id) proxyAtpveExternal(req, res, uf, `${up}/${id}`);
+  });
 
-// ATPV-e MG — PDF em Base64
-app.get('/api/v1/atpve-mg/:id/pdf/base64', requireApiKey, (req, res) => {
-  const id = atpveMgIdParam(req, res);
-  if (id) proxyAtpveMgExternal(req, res, `/api/atpve-mg/${id}/pdf/base64`);
-});
+  // Baixar PDF
+  app.get(`${ext}/:id/pdf`, requireApiKey, (req, res) => {
+    const id = atpveExternalIdParam(req, res);
+    if (id) proxyAtpveExternal(req, res, uf, `${up}/${id}/pdf`);
+  });
 
-// ATPV-e MG — Atualizar situação/PDF
-app.post('/api/v1/atpve-mg/:id/atualizar', requireApiKey, (req, res) => {
-  const id = atpveMgIdParam(req, res);
-  if (id) proxyAtpveMgExternal(req, res, `/api/atpve-mg/${id}/atualizar`);
-});
+  // PDF em Base64
+  app.get(`${ext}/:id/pdf/base64`, requireApiKey, (req, res) => {
+    const id = atpveExternalIdParam(req, res);
+    if (id) proxyAtpveExternal(req, res, uf, `${up}/${id}/pdf/base64`);
+  });
 
-// ATPV-e MG — Registrar no DETRAN
-app.post('/api/v1/atpve-mg/:id/registrar', requireApiKey, (req, res) => {
-  const id = atpveMgIdParam(req, res);
-  if (id) proxyAtpveMgExternal(req, res, `/api/atpve-mg/${id}/registrar`);
-});
+  // Atualizar situação/PDF
+  app.post(`${ext}/:id/atualizar`, requireApiKey, (req, res) => {
+    const id = atpveExternalIdParam(req, res);
+    if (id) proxyAtpveExternal(req, res, uf, `${up}/${id}/atualizar`);
+  });
 
-// ATPV-e MG — Excluir
-app.post('/api/v1/atpve-mg/:id/excluir', requireApiKey, (req, res) => {
-  const id = atpveMgIdParam(req, res);
-  if (id) proxyAtpveMgExternal(req, res, `/api/atpve-mg/${id}/excluir`);
-});
+  // Registrar no DETRAN
+  app.post(`${ext}/:id/registrar`, requireApiKey, (req, res) => {
+    const id = atpveExternalIdParam(req, res);
+    if (id) proxyAtpveExternal(req, res, uf, `${up}/${id}/registrar`);
+  });
+
+  // Excluir
+  app.post(`${ext}/:id/excluir`, requireApiKey, (req, res) => {
+    const id = atpveExternalIdParam(req, res);
+    if (id) proxyAtpveExternal(req, res, uf, `${up}/${id}/excluir`);
+  });
+}
 
 // ── Gestão de chaves de API (admin) ───────────────────────────────────────────
 // A API é contratual (sem self-service, ver seção API da landing page): o admin
@@ -7566,7 +7581,12 @@ app.post('/api/admin/api-cobrancas/:id/cobrar', requireAuth, requireSuperAdmin, 
 
     let placa = '';
     try { placa = (JSON.parse(q.params || '{}').placa || '').toUpperCase(); } catch {}
-    const svcName = SERVICES_V3.find(s => s.id === q.service_id)?.name
+    // ATPV-e (MG/SP) não está em SERVICES/SERVICES_V3 — é rota exclusiva da API
+    // externa, então o nome amigável vem daqui para não vazar o id na mensagem.
+    const svcName = (ATPVE_EXTERNAL_UFS.includes(q.service_id.replace('atpve-', ''))
+        ? `ATPV-e ${q.service_id.replace('atpve-', '').toUpperCase()} — Cadastrar`
+        : null)
+      || SERVICES_V3.find(s => s.id === q.service_id)?.name
       || SERVICES.find(s => s.id === q.service_id)?.name || q.service_id;
     const price = externalApiPriceFor(q.service_id);
 
