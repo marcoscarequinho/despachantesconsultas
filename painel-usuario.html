@@ -1520,9 +1520,10 @@ function renderMeusAtpve() {
     // COMUNICADA (5) ou foi excluído — aí sim a Chekaki não oferece mais essas ações.
     const situacaoCodigo = String(meta.situacao_codigo || '');
     const podeRegistrarOuExcluir = !!meta.id && situacaoCodigo !== '5' && situacaoCodigo !== 'excluida';
-    // "Alterar" vale enquanto o pedido não foi comunicado ao DETRAN — mesma régua
-    // de Registrar/Excluir (o servidor confere de novo em atpveAlterarGuard).
-    const podeAlterar = podeRegistrarOuExcluir;
+    // "Alterar" é mais restrito que Registrar/Excluir: a Chekaki só aceita corrigir
+    // os dados em CADASTRADA (1) e PROCESSANDO (3) — daí em diante o pedido já saiu
+    // das mãos dela (o servidor confere de novo em atpveAlterarGuard).
+    const podeAlterar = !!meta.id && (situacaoCodigo === '1' || situacaoCodigo === '3');
     // Cobrança só acontece quando o PDF é confirmado (ver ensureAtpvePdfCached no
     // servidor) — 'aguardando_pdf'/'cancelado' significam que nada foi debitado.
     const aguardando = q.status === 'aguardando_pdf';

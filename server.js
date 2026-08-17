@@ -1981,17 +1981,21 @@ const atpveExcluirPostProcess = merged => ({
   situacao_descricao: merged.situacao_descricao || 'EXCLUÍDA',
 });
 
-// Botão "Alterar" — corrige os dados de um pedido ATPV-e que ainda não foi
-// comunicado ao DETRAN, sem cobrar de novo. Usa POST /api/atpve-<uf>/:id/alterar,
-// rota que existe nas quatro UFs (confirmado por teste direto na Chekaki) mas não
-// aparece na documentação de integração dela; o corpo é o pedido inteiro, igual ao
-// /cadastrar (a Chekaki substitui o registro). Depois de COMUNICADA (5) não faz mais
-// sentido — o documento já foi transmitido, correção só no DETRAN de origem.
+// Botão "Alterar" — corrige os dados de um pedido ATPV-e, sem cobrar de novo. Usa
+// POST /api/atpve-<uf>/:id/alterar, rota que existe nas quatro UFs (confirmado por
+// teste direto na Chekaki) mas não aparece na documentação de integração dela; o
+// corpo é o pedido inteiro, igual ao /cadastrar (a Chekaki substitui o registro).
+// Só vale em CADASTRADA (1) e PROCESSANDO (3): em qualquer situação posterior o
+// pedido já saiu das mãos da Chekaki (COMUNICADA = documento transmitido, correção
+// só no DETRAN de origem). Lista de permissão, não de bloqueio — situação
+// desconhecida/vazia também não libera a alteração.
+const ATPVE_SITUACOES_ALTERAVEIS = ['1', '3'];
+
 function atpveAlterarGuard(meta) {
   const cod = String(meta.situacao_codigo || '');
-  if (cod === '5') return 'Este ATPV-e já foi comunicado ao DETRAN e não pode mais ser alterado por aqui.';
-  if (cod === 'excluida') return 'Este pedido foi excluído e não pode ser alterado.';
-  return null;
+  if (ATPVE_SITUACOES_ALTERAVEIS.includes(cod)) return null;
+  const desc = meta.situacao_descricao ? ` (situação atual: ${meta.situacao_descricao})` : '';
+  return `Este ATPV-e só pode ser alterado enquanto está CADASTRADA ou PROCESSANDO${desc}.`;
 }
 
 for (const uf of ATPVE_UFS) {
