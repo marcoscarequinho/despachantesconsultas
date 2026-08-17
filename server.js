@@ -39,9 +39,15 @@ const ASSINATURA_PLACAS_DIAS  = 30;
 // previsível (ver ASSINATURA_PLACAS_SERVICE_ID).
 const ASSINATURA_PLACAS_COTA  = 50;
 const ASSINATURA_PLACAS_SERVICE_ID = 'assinatura-consulta-placas';
+// Código de Segurança CRV incluído na mesma assinatura, com cota PRÓPRIA e
+// menor: a consulta custa bem mais na Vistocar que a de placa, então ela não
+// divide as 50 do plano — tem teto separado, contado em queries_used_crv.
+const ASSINATURA_CRV_COTA = 5;
+const ASSINATURA_CRV_SERVICE_ID = 'assinatura-codigo-seguranca-crv';
 // Serviços que exigem assinatura ativa (todo o grupo "Para os Despachantes").
 const ASSINATURA_SERVICE_IDS = [
   ASSINATURA_PLACAS_SERVICE_ID,
+  ASSINATURA_CRV_SERVICE_ID,
   'declaracao-residencia-detran-rj',
   'nota-prestacao-servicos-despachante',
   'gerar-asd',
@@ -363,6 +369,15 @@ const SERVICES = [
   { id:'assinatura-consulta-placas', name:'Assinatura Consulta placas', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'placa', icon:'🔎',
     slowNote:'Consulta de proprietário atual pela placa, com retorno em PDF no padrão MC Despachadoria. Incluída na Assinatura Consulta placas.',
     modeloUrl:'/assets/modelo-consulta-placas.pdf', modeloLabel:'Veja modelo da consulta' },
+  // Código de Segurança CRV incluído na assinatura — mesmo desenho do item acima:
+  // usa a MESMA API do "Consulta 3 Código Segurança CRV (PDF)" pago (Vistocar
+  // security-code, ver VISTOCAR_ENDPOINTS), mas como serviço separado, para o
+  // security-code-vistocar-2 seguir intocado no grupo CRV (crédito por consulta,
+  // aba Nova Consulta). Não debita crédito: quem paga é a assinatura, e o custo
+  // do período é limitado pela cota própria (ver ASSINATURA_CRV_COTA e o bloco
+  // deste serviceId em processCatalogQuery).
+  { id:'assinatura-codigo-seguranca-crv', name:'Consulta 3 Código Segurança CRV (PDF)', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'placa', icon:'🔐',
+    slowNote:`Código de segurança do CRV em PDF. Incluído na Assinatura Consulta placas, com cota própria de ${ASSINATURA_CRV_COTA} consultas por período.` },
   // Gerar Declaração de Residência DETRAN RJ — fluxo em duas etapas, fora do padrão
   // padrão "chama upstream e cobra" dos demais serviços: primeiro o front busca dados
   // via Localização CPF V3 pra pré-preencher um formulário editável (POST
@@ -884,6 +899,18 @@ async function initDB() {
   await pool.query(
     `UPDATE subscriptions SET cota=$1 WHERE cota IS NULL AND origem='PIX'`,
     [ASSINATURA_PLACAS_COTA]
+  );
+  // Cota separada do Código de Segurança CRV (ver ASSINATURA_CRV_COTA). Mesma
+  // convenção da cota de placas: NULL = ilimitada, e os períodos pagos que já
+  // estavam correndo quando o serviço entrou também recebem o teto — o benefício
+  // vale de imediato para quem já é assinante, sem esperar renovar.
+  await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS cota_crv INTEGER`);
+  await pool.query(`
+    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS queries_used_crv INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(
+    `UPDATE subscriptions SET cota_crv=$1 WHERE cota_crv IS NULL AND origem='PIX'`,
+    [ASSINATURA_CRV_COTA]
   );
   await pool.query(`
     CREATE TABLE IF NOT EXISTS whatsapp_inbox (
@@ -5052,7 +5079,7 @@ async function refundQuery(queryId, userId, amount, reason) {
 // coisas, a indefinida é a que vale.
 async function getAssinaturaVigente(userId) {
   const r = await pool.query(
-    `SELECT id, expires_at, queries_used, cota, origem FROM subscriptions
+    `SELECT id, expires_at, queries_used, cota, queries_used_crv, cota_crv, origem FROM subscriptions
      WHERE user_id=$1 AND (expires_at IS NULL OR expires_at > NOW())
      ORDER BY expires_at DESC NULLS FIRST LIMIT 1`,
     [userId]
@@ -5082,6 +5109,16 @@ async function assinaturaGateDespachantes(userId, serviceId) {
       ok: false,
       code: 'COTA_ESGOTADA',
       error: `Você já usou as ${assinatura.cota} consultas de placa deste período da assinatura. A cota é renovada ao pagar um novo período.`,
+    };
+  }
+  // Cota do Código de Segurança CRV é independente da de placas — esgotar uma
+  // não bloqueia a outra.
+  if (serviceId === ASSINATURA_CRV_SERVICE_ID &&
+      assinatura.cota_crv !== null && assinatura.queries_used_crv >= assinatura.cota_crv) {
+    return {
+      ok: false,
+      code: 'COTA_ESGOTADA',
+      error: `Você já usou as ${assinatura.cota_crv} consultas de Código de Segurança CRV deste período da assinatura. A cota é renovada ao pagar um novo período.`,
     };
   }
   return { ok: true, assinatura };
@@ -5623,6 +5660,79 @@ async function processCatalogQuery(userId, serviceId, params, res) {
 
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="proprietario-atual-${placa}.pdf"`);
+      return res.send(pdfBuf);
+    }
+
+    // ── Código de Segurança CRV incluído na assinatura ──
+    // Mesma API do "Consulta 3 Código Segurança CRV (PDF)" pago (Vistocar
+    // security-code, JSON com o PDF pronto em base64), mas serviço à parte: o
+    // security-code-vistocar-2 segue cobrando crédito na aba Nova Consulta e
+    // este aqui não debita nada — quem paga é a assinatura, com cota própria
+    // (ASSINATURA_CRV_COTA), separada da cota de placas.
+    if (serviceId === ASSINATURA_CRV_SERVICE_ID) {
+      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (placa.length !== 7)
+        return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+
+      let parsed;
+      try {
+        const vRes = await fetch(`${VISTOCAR_BASE_URL}/apiclient/${VISTOCAR_ENDPOINTS['security-code-vistocar-2']}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await getVistocarToken()}` },
+          body: JSON.stringify({ plate: placa }),
+        });
+        parsed = await vRes.json().catch(() => null);
+        if (!vRes.ok) {
+          const msg = parsed ? extractApiErrorMsg(parsed) : `Erro HTTP ${vRes.status}.`;
+          console.error(`[${serviceId}] erro na Vistocar: ${msg}`);
+          return res.status(502).json({ error: msg });
+        }
+      } catch (e) {
+        console.error(`[${serviceId}] falha ao consultar a Vistocar:`, e.message);
+        return res.status(502).json({ error: 'Erro ao consultar a API. Tente novamente.' });
+      }
+
+      // Mesmo envelope conferido no fluxo pago: status/message na raiz e o
+      // resultado em "response" (success + paid + pdfBase64).
+      const ok = parsed?.status === 200 && parsed?.response?.success === true
+        && parsed?.response?.paid === true && parsed?.response?.pdfBase64;
+      if (!ok) {
+        const errMsg = parsed?.message || parsed?.response?.msg
+          || 'Nenhum resultado encontrado para essa consulta. Nada foi descontado da sua cota.';
+        console.error(`[${serviceId}] resposta inesperada da Vistocar: ${JSON.stringify(parsed)}`);
+        return res.status(422).json({ error: errMsg });
+      }
+      const pdfBuf = Buffer.from(parsed.response.pdfBase64, 'base64');
+
+      // Cota só é consumida com o PDF em mãos, e de forma atômica (o WHERE
+      // impede duas consultas simultâneas de furarem o teto do período).
+      const cota = await pool.query(
+        `UPDATE subscriptions SET queries_used_crv = queries_used_crv + 1
+         WHERE id=$1 AND (cota_crv IS NULL OR queries_used_crv < cota_crv) RETURNING queries_used_crv`,
+        [gate.assinatura.id]
+      );
+      if (!cota.rows.length)
+        return res.status(402).json({
+          error: `Você já usou as ${gate.assinatura.cota_crv} consultas de Código de Segurança CRV deste período da assinatura.`,
+          code: 'COTA_ESGOTADA',
+        });
+
+      // amount 0 e sem transaction_id: quem paga esta consulta é a assinatura.
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
+         VALUES ($1,$2,$3,$4,'success',0,'pdf','{}') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify({ placa })]
+      );
+
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), expiresAt]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="codigo-seguranca-crv-${placa}.pdf"`);
       return res.send(pdfBuf);
     }
 
@@ -8102,11 +8212,14 @@ app.get('/api/assinatura/status', requireAuth, async (req, res) => {
         preco: ASSINATURA_PLACAS_PRICE,
         dias: ASSINATURA_PLACAS_DIAS,
         cota: ASSINATURA_PLACAS_COTA,
+        cotaCrv: ASSINATURA_CRV_COTA,
       });
     }
     // expiraEm null = sem data limite; cota/consultasRestantes null = ilimitada.
-    // O painel trata os dois casos (ver renderAssinaturaBanner).
+    // O painel trata os dois casos (ver renderAssinaturaBanner). A cota do Código
+    // de Segurança CRV é contada à parte (cotaCrv/consultasCrvRestantes).
     const ilimitada = assinatura.cota === null;
+    const ilimitadaCrv = assinatura.cota_crv === null;
     res.json({
       ativa: true,
       indefinida: assinatura.expires_at === null,
@@ -8114,9 +8227,12 @@ app.get('/api/assinatura/status', requireAuth, async (req, res) => {
       expiraEm: assinatura.expires_at,
       consultasUsadas: assinatura.queries_used,
       consultasRestantes: ilimitada ? null : Math.max(0, assinatura.cota - assinatura.queries_used),
+      consultasCrvUsadas: assinatura.queries_used_crv,
+      consultasCrvRestantes: ilimitadaCrv ? null : Math.max(0, assinatura.cota_crv - assinatura.queries_used_crv),
       preco: ASSINATURA_PLACAS_PRICE,
       dias: ASSINATURA_PLACAS_DIAS,
       cota: assinatura.cota,
+      cotaCrv: assinatura.cota_crv,
     });
   } catch (err) {
     console.error('Erro em /api/assinatura/status:', err.message);
@@ -8218,13 +8334,14 @@ async function creditPixPaymentIfApproved(gatewayId) {
     // própria — por isso uma linha nova em vez de UPDATE no período anterior.
     if (p.purpose === 'ASSINATURA') {
       await client.query(
-        `INSERT INTO subscriptions (user_id, plan, status, starts_at, expires_at, gateway_id, origem, cota)
-         SELECT $1, $2, 'ACTIVE', inicio, inicio + ($3 || ' days')::interval, $4, 'PIX', $5
+        `INSERT INTO subscriptions (user_id, plan, status, starts_at, expires_at, gateway_id, origem, cota, cota_crv)
+         SELECT $1, $2, 'ACTIVE', inicio, inicio + ($3 || ' days')::interval, $4, 'PIX', $5, $6
            FROM (SELECT GREATEST(NOW(), COALESCE(
                    (SELECT MAX(expires_at) FROM subscriptions WHERE user_id=$1 AND expires_at > NOW()),
                    NOW())) AS inicio) t
          ON CONFLICT (gateway_id) DO NOTHING`,
-        [p.user_id, ASSINATURA_PLACAS_SERVICE_ID, String(ASSINATURA_PLACAS_DIAS), gatewayId, ASSINATURA_PLACAS_COTA]
+        [p.user_id, ASSINATURA_PLACAS_SERVICE_ID, String(ASSINATURA_PLACAS_DIAS), gatewayId,
+         ASSINATURA_PLACAS_COTA, ASSINATURA_CRV_COTA]
       );
       // De propósito não grava em transactions: aquele extrato é o de créditos
       // pré-pagos, e a assinatura não movimenta saldo. O pagamento fica
@@ -9126,14 +9243,19 @@ app.post('/api/admin/users/:id/assinatura', requireAuth, requireSuperAdmin, asyn
     const u = await pool.query('SELECT id, name FROM users WHERE id=$1', [userId]);
     if (!u.rows.length) return res.status(404).json({ error: 'Usuário não encontrado.' });
 
+    // A cortesia segue o formato do plano pago: cota de placas escolhida pelo
+    // admin e a do Código de Segurança CRV no padrão (ASSINATURA_CRV_COTA). Se o
+    // admin liberou sem teto, as duas ficam ilimitadas — é o sentido de "cota
+    // vazia" na tela do admin, que continua com um campo só.
+    const cotaCrvFinal = cotaFinal === null ? null : ASSINATURA_CRV_COTA;
     await pool.query(`DELETE FROM subscriptions WHERE user_id=$1 AND origem='CORTESIA'`, [userId]);
     const r = await pool.query(
-      `INSERT INTO subscriptions (user_id, plan, status, starts_at, expires_at, origem, cota)
-       VALUES ($1,$2,'ACTIVE',NOW(),$3,'CORTESIA',$4)
-       RETURNING id, expires_at, cota`,
-      [userId, ASSINATURA_PLACAS_SERVICE_ID, expiresAt, cotaFinal]
+      `INSERT INTO subscriptions (user_id, plan, status, starts_at, expires_at, origem, cota, cota_crv)
+       VALUES ($1,$2,'ACTIVE',NOW(),$3,'CORTESIA',$4,$5)
+       RETURNING id, expires_at, cota, cota_crv`,
+      [userId, ASSINATURA_PLACAS_SERVICE_ID, expiresAt, cotaFinal, cotaCrvFinal]
     );
-    console.log(`[admin] assinatura liberada para user ${userId} (${modo}${expiresAt ? ' até ' + data : ''}, cota ${cotaFinal ?? 'ilimitada'})`);
+    console.log(`[admin] assinatura liberada para user ${userId} (${modo}${expiresAt ? ' até ' + data : ''}, cota ${cotaFinal ?? 'ilimitada'}, cota CRV ${cotaCrvFinal ?? 'ilimitada'})`);
     res.json({ success: true, assinatura: r.rows[0] });
   } catch (err) {
     console.error('Erro ao liberar assinatura:', err.message);
