@@ -66,8 +66,10 @@
         <h2 id="form-title" class="font-bold text-blue-900 text-lg"></h2>
         <button onclick="backToServices()" class="text-sm text-gray-500 hover:text-orange-500">← Trocar serviço</button>
       </div>
-      <div class="bg-blue-50 border border-blue-200 text-blue-800 rounded-lg px-4 py-3 text-sm">
-        Devido ao formato como esta ATPVe é gerada, o QR Code não faz leitura — todas as demais informações deste documento são reais. Fica a seu critério.
+      <!-- Aviso em vermelho: vale como termo de aceite antes de informar a placa
+           (mesmo texto do slowNote/noteStyle:'danger' do catálogo no server.js). -->
+      <div class="bg-red-50 border border-red-300 text-red-700 rounded-lg px-4 py-3 text-sm font-medium">
+        ATENÇÃO, ao inserir a placa você concorda com os termos: "Devido ao formato como esta ATPVe é gerada, o QR Code não faz leitura — todas as demais informações deste documento são reais. Fica a seu critério."
         <a href="/assets/modelo-atpve.pdf" target="_blank" rel="noopener" class="underline font-semibold whitespace-nowrap">Visualize modelo da ATPVe</a>
       </div>
       <div id="form-fields" class="grid md:grid-cols-2 gap-4"></div>

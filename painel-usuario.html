@@ -2645,10 +2645,15 @@ function selectService(svc) {
   const slowNote = document.getElementById('form-slow-note');
   slowNote.classList.toggle('hidden', !svc.slowNote);
   if (svc.slowNote) {
-    const isWarning = svc.group === 'Número CRV (Apenas antigos)' || svc.unavailable;
-    slowNote.className = isWarning
-      ? 'bg-amber-50 border border-amber-300 text-amber-800 rounded-lg px-4 py-3 text-sm font-medium'
-      : 'bg-blue-50 border border-blue-200 text-blue-800 rounded-lg px-4 py-3 text-sm';
+    // noteStyle:'danger' (catálogo) força o aviso em vermelho — usado nos textos
+    // que valem como termo de aceite, não como simples observação.
+    const isDanger  = svc.noteStyle === 'danger';
+    const isWarning = !isDanger && (svc.group === 'Número CRV (Apenas antigos)' || svc.unavailable);
+    slowNote.className = isDanger
+      ? 'bg-red-50 border border-red-300 text-red-700 rounded-lg px-4 py-3 text-sm font-medium'
+      : isWarning
+        ? 'bg-amber-50 border border-amber-300 text-amber-800 rounded-lg px-4 py-3 text-sm font-medium'
+        : 'bg-blue-50 border border-blue-200 text-blue-800 rounded-lg px-4 py-3 text-sm';
     const noteText = (isWarning ? '⚠️ ' : '') + svc.slowNote;
     // modeloLabel deixa o rótulo do link ajustável por serviço; sem ele o texto
     // continua sendo o da ATPVe, que foi o primeiro a usar esse mecanismo.
