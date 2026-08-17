@@ -414,12 +414,13 @@ const SERVICES = [
   { id:'consultar-crlv-mg', name:'CRLV-e Minas Gerais (MG)',       group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ms', name:'CRLV-e Mato Grosso do Sul (MS)',group:'CRLV-e Digital', basePrice:15.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-mt', name:'CRLV-e Mato Grosso (MT)',        group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
-  // API Vistocar (vistocarconsulta.com.br) — alternativa instantânea ao "CRLV-e
-  // Agendado Pernambuco (PE)": mesmo padrão do CRLV 2 Rio Reemissão (auth JWT,
-  // POST apiclient/crlv-pe com { plate }, JSON com PDF pronto em base64, ver
-  // VISTOCAR_ENDPOINTS). Só placa — não pede renavam/CPF como os CRLV-e Digital
-  // da Chekaki. Preço fixo (noMarkup) definido pelo cliente.
-  { id:'crlv-pe-instantaneo', name:'CRLV-e Emissão Instantânea Pernambuco (PE)', group:'CRLV-e Digital', basePrice:49.00, noMarkup:true, inputType:'placa', icon:'⚡', uf:'pe' },
+  // API Vistocar (vistocarconsulta.com.br) — hoje a ÚNICA opção de PE no catálogo:
+  // substituiu de vez o antigo "CRLV-e Agendado Pernambuco (PE)", que foi removido.
+  // Mesmo padrão do CRLV 2 Rio Reemissão (auth JWT, POST apiclient/crlv-pe com
+  // { plate }, JSON com PDF pronto em base64, ver VISTOCAR_ENDPOINTS). Só placa —
+  // não pede renavam/CPF como os CRLV-e Digital da Chekaki. Preço fixo (noMarkup)
+  // definido pelo cliente.
+  { id:'crlv-pe-instantaneo', name:'CRLV-e Emissão Instantânea Pernambuco (PE)', group:'CRLV-e Digital', basePrice:35.00, noMarkup:true, inputType:'placa', icon:'⚡', uf:'pe' },
   { id:'consultar-crlv-pi', name:'CRLV-e Piauí (PI)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-pr', name:'CRLV-e Paraná (PR)',             group:'CRLV-e Digital', basePrice:15.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ro', name:'CRLV-e Rondônia (RO)',           group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -436,7 +437,8 @@ const SERVICES = [
   { id:'crlv-agendado-df', name:'CRLV-e Agendado Distrito Federal (DF)',   group:'CRLV-e Agendado', basePrice:38.50,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'df' },
   { id:'crlv-agendado-es', name:'CRLV-e Agendado Espírito Santo (ES)',     group:'CRLV-e Agendado', basePrice:20.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'es' },
   { id:'crlv-agendado-pb', name:'CRLV-e Agendado Paraíba (PB)',            group:'CRLV-e Agendado', basePrice:35.00,  inputType:'crlv_agendado_cpf',   icon:'⏳', uf:'pb' },
-  { id:'crlv-agendado-pe', name:'CRLV-e Agendado Pernambuco (PE)',         group:'CRLV-e Agendado', basePrice:45.00, noMarkup:true, inputType:'crlv_agendado_placa', icon:'⏳', uf:'pe' },
+  // PE saiu do agendado — hoje só a emissão instantânea via Vistocar
+  // (crlv-pe-instantaneo, acima).
   { id:'crlv-agendado-pr', name:'CRLV-e Agendado Paraná (PR)',             group:'CRLV-e Agendado', basePrice:15.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'pr' },
   { id:'crlv-agendado-rn', name:'CRLV-e Agendado Rio Grande do Norte (RN)',group:'CRLV-e Agendado', basePrice:55.00,  inputType:'crlv_agendado_cpf',   icon:'⏳', uf:'rn' },
   { id:'crlv-agendado-sc', name:'CRLV-e Agendado Santa Catarina (SC)',     group:'CRLV-e Agendado', basePrice:60.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'sc' },
@@ -1778,6 +1780,67 @@ app.get('/api/queries/:id/result', requireAuth, async (req, res) => {
 // Chekaki — cada um mapeia para /api/atpve-<uf>/... e service_id 'intencao-venda-<uf>'.
 const ATPVE_UFS = ['rj', 'sp', 'ms', 'mg'];
 
+// Monta e normaliza o payload de um pedido ATPV-e no formato que a Chekaki
+// espera (campos planos em snake_case; a Chekaki converte para a estrutura
+// aninhada do LAUDOCAR internamente). Compartilhado pelo cadastro
+// (processCatalogQuery → POST /api/atpve-<uf>/cadastrar) e pelo botão "Alterar"
+// (POST /api/atpve-<uf>/:id/alterar) — os dois mandam o pedido inteiro, então
+// manter um único builder evita que os fluxos divirjam na normalização.
+const ATPVE_CADASTRO_REQUIRED = [
+  'placa', 'renavam', 'ano_fabricacao', 'ano_modelo', 'chassi', 'kilometragem',
+  'crv_numero', 'crv_numero_via', 'crv_uf_emissao', 'crv_data_emissao',
+  'vendedor_tipo_pessoa', 'vendedor_documento', 'vendedor_nome', 'vendedor_email',
+  'venda_cidade', 'venda_valor', 'venda_data',
+  'comprador_tipo_pessoa', 'comprador_documento', 'comprador_nome', 'comprador_email',
+  'comprador_cep', 'comprador_logradouro', 'comprador_numero',
+  'comprador_bairro', 'comprador_cidade', 'comprador_uf',
+];
+
+function buildAtpveCadastroBody(uf, params) {
+  const p = params || {};
+  const missingFields = ATPVE_CADASTRO_REQUIRED.filter(k => !String(p[k] ?? '').trim());
+  if (missingFields.length)
+    return { error: `Campos obrigatórios ausentes: ${missingFields.join(', ')}` };
+
+  return {
+    body: {
+      placa: String(p.placa).toUpperCase().replace(/[\s-]/g, ''),
+      renavam: String(p.renavam).replace(/\D/g, ''),
+      ano_fabricacao: String(p.ano_fabricacao).trim(),
+      ano_modelo: String(p.ano_modelo).trim(),
+      chassi: String(p.chassi).toUpperCase().replace(/\s/g, ''),
+      kilometragem: String(p.kilometragem).replace(/\D/g, ''),
+      crv_numero: String(p.crv_numero).replace(/\D/g, ''),
+      crv_numero_via: String(p.crv_numero_via).trim(),
+      crv_uf_emissao: String(p.crv_uf_emissao).toUpperCase().trim(),
+      crv_data_emissao: String(p.crv_data_emissao).trim(),
+      crv_codigo_seguranca: String(p.crv_codigo_seguranca || '').replace(/\D/g, ''),
+      vendedor_tipo_pessoa: String(p.vendedor_tipo_pessoa).toUpperCase().trim(),
+      vendedor_documento: String(p.vendedor_documento).replace(/\D/g, ''),
+      vendedor_nome: String(p.vendedor_nome).trim().toUpperCase(),
+      vendedor_email: String(p.vendedor_email).trim(),
+      venda_cidade: String(p.venda_cidade).trim().toUpperCase(),
+      // venda_uf: documentado no /cadastrar da Chekaki mas ausente do nosso payload
+      // até agora — sempre igual ao UF do próprio endpoint (a venda é registrada
+      // nesse ATPV-e), sem precisar de campo novo no formulário.
+      venda_uf: uf.toUpperCase(),
+      venda_valor: String(p.venda_valor).trim(),
+      venda_data: String(p.venda_data).trim(),
+      comprador_tipo_pessoa: String(p.comprador_tipo_pessoa).toUpperCase().trim(),
+      comprador_documento: String(p.comprador_documento).replace(/\D/g, ''),
+      comprador_nome: String(p.comprador_nome).trim().toUpperCase(),
+      comprador_email: String(p.comprador_email).trim(),
+      comprador_cep: String(p.comprador_cep).replace(/\D/g, ''),
+      comprador_logradouro: String(p.comprador_logradouro).trim().toUpperCase(),
+      comprador_numero: String(p.comprador_numero).trim(),
+      comprador_complemento: (String(p.comprador_complemento || '').trim() || '-').toUpperCase(),
+      comprador_bairro: String(p.comprador_bairro).trim().toUpperCase(),
+      comprador_cidade: String(p.comprador_cidade).trim().toUpperCase(),
+      comprador_uf: String(p.comprador_uf).toUpperCase().trim(),
+    },
+  };
+}
+
 // Busca o estado canônico de um pedido ATPV-e direto na Chekaki (GET
 // /api/atpve-<uf>/:id — "Consultar por ID"). É a fonte confiável de situação: a
 // resposta da ação (atualizar/registrar/excluir) nem sempre traz o campo
@@ -1792,11 +1855,14 @@ async function fetchAtpveById(uf, atpveId) {
 }
 
 // ── Ações de ciclo de vida do ATPV-e já cadastrado (Atualizar / Registrar no
-// DETRAN / Excluir) — botões de "Meus ATPV-e", espelhando o próprio painel da
-// Chekaki (atpve-<uf>). Todas seguem o mesmo padrão: chamam POST /api/atpve-<uf>/:id/
+// DETRAN / Alterar / Excluir) — botões de "Meus ATPV-e", espelhando o próprio painel
+// da Chekaki (atpve-<uf>). Todas seguem o mesmo padrão: chamam POST /api/atpve-<uf>/:id/
 // <ação> usando o id que guardamos em result_data (ver correlateAtpveRecord).
 // Sem custo adicional para o usuário — nenhuma delas debita créditos.
-async function callAtpveAction(req, res, uf, action, postProcess) {
+// Opções: postProcess (ajusta o meta salvo), upstreamBody (corpo enviado à Chekaki,
+// default `{}`), guard (recusa a ação conforme a situação atual do pedido) e
+// onSuccess (efeito local extra depois do sucesso, ex.: salvar os params novos).
+async function callAtpveAction(req, res, uf, action, { postProcess, upstreamBody, guard, onSuccess } = {}) {
   try {
     const qr = await pool.query(
       `SELECT id, service_id, result_data FROM queries WHERE id=$1 AND user_id=$2`,
@@ -1810,6 +1876,11 @@ async function callAtpveAction(req, res, uf, action, postProcess) {
     const atpveId = meta.id;
     if (!atpveId)
       return res.status(400).json({ error: 'Este pedido ainda não tem um identificador da Chekaki vinculado. Tente novamente em alguns instantes.' });
+
+    if (guard) {
+      const guardError = guard(meta);
+      if (guardError) return res.status(400).json({ error: guardError });
+    }
 
     // "Registrar" e "Atualizar" podem ser quem efetivamente finaliza o pedido no
     // DETRAN — se o clique em "Registrar" falhar (ex.: pedido ainda PROCESSANDO na
@@ -1827,7 +1898,7 @@ async function callAtpveAction(req, res, uf, action, postProcess) {
     const upRes = await fetch(`${BASE_API_URL}/api/atpve-${uf}/${atpveId}/${action}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO },
-      body: JSON.stringify({}),
+      body: JSON.stringify(upstreamBody || {}),
     });
     const ct = upRes.headers.get('content-type') || '';
 
@@ -1867,6 +1938,8 @@ async function callAtpveAction(req, res, uf, action, postProcess) {
     }
     if (postProcess) merged = postProcess(merged);
     await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), qr.rows[0].id]);
+
+    if (onSuccess) await onSuccess(qr.rows[0].id, merged);
 
     if (pdfBuf) {
       const token = crypto.randomBytes(32).toString('hex');
@@ -1908,6 +1981,19 @@ const atpveExcluirPostProcess = merged => ({
   situacao_descricao: merged.situacao_descricao || 'EXCLUÍDA',
 });
 
+// Botão "Alterar" — corrige os dados de um pedido ATPV-e que ainda não foi
+// comunicado ao DETRAN, sem cobrar de novo. Usa POST /api/atpve-<uf>/:id/alterar,
+// rota que existe nas quatro UFs (confirmado por teste direto na Chekaki) mas não
+// aparece na documentação de integração dela; o corpo é o pedido inteiro, igual ao
+// /cadastrar (a Chekaki substitui o registro). Depois de COMUNICADA (5) não faz mais
+// sentido — o documento já foi transmitido, correção só no DETRAN de origem.
+function atpveAlterarGuard(meta) {
+  const cod = String(meta.situacao_codigo || '');
+  if (cod === '5') return 'Este ATPV-e já foi comunicado ao DETRAN e não pode mais ser alterado por aqui.';
+  if (cod === 'excluida') return 'Este pedido foi excluído e não pode ser alterado.';
+  return null;
+}
+
 for (const uf of ATPVE_UFS) {
   // Botão "Atualizar" — atualiza situação/PDF do pedido.
   app.post(`/api/queries/:id/atpve-${uf}-atualizar`, requireAuth, (req, res) =>
@@ -1919,7 +2005,26 @@ for (const uf of ATPVE_UFS) {
     callAtpveAction(req, res, uf, 'registrar'));
 
   app.post(`/api/queries/:id/atpve-${uf}-excluir`, requireAuth, (req, res) =>
-    callAtpveAction(req, res, uf, 'excluir', atpveExcluirPostProcess));
+    callAtpveAction(req, res, uf, 'excluir', { postProcess: atpveExcluirPostProcess }));
+
+  app.post(`/api/queries/:id/atpve-${uf}-alterar`, requireAuth, (req, res) => {
+    const built = buildAtpveCadastroBody(uf, req.body?.params);
+    if (built.error) return res.status(400).json({ error: built.error });
+    return callAtpveAction(req, res, uf, 'alterar', {
+      upstreamBody: built.body,
+      guard: atpveAlterarGuard,
+      onSuccess: async (queryId, merged) => {
+        // Guarda os dados corrigidos para o painel e o próximo "Alterar" abrirem
+        // com o que está de fato na Chekaki.
+        await pool.query('UPDATE queries SET params=$1 WHERE id=$2',
+          [JSON.stringify(req.body?.params || {}), queryId]);
+        // Um PDF em cache emitido ANTES da correção está desatualizado — descarta
+        // para o próximo download vir com os dados novos (ensureAtpvePdfCached logo
+        // abaixo já rebusca na Chekaki quando o PDF volta a estar disponível).
+        await pool.query('DELETE FROM pdf_cache WHERE query_id=$1', [queryId]);
+      },
+    });
+  });
 }
 
 // ── GET /api/pdf/:token ───────────────────────────────────────────────────────
@@ -5751,56 +5856,10 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     // PDF pronto. Mesmo corpo/validação para os três estados — só muda a URL.
     if (ATPVE_UFS.some(uf => serviceId === `intencao-venda-${uf}`)) {
       const atpveUf = serviceId.split('-')[2];
-      const p = params || {};
-      const requiredFields = [
-        'placa', 'renavam', 'ano_fabricacao', 'ano_modelo', 'chassi', 'kilometragem',
-        'crv_numero', 'crv_numero_via', 'crv_uf_emissao', 'crv_data_emissao',
-        'vendedor_tipo_pessoa', 'vendedor_documento', 'vendedor_nome', 'vendedor_email',
-        'venda_cidade', 'venda_valor', 'venda_data',
-        'comprador_tipo_pessoa', 'comprador_documento', 'comprador_nome', 'comprador_email',
-        'comprador_cep', 'comprador_logradouro', 'comprador_numero',
-        'comprador_bairro', 'comprador_cidade', 'comprador_uf',
-      ];
-      const missingFields = requiredFields.filter(k => !String(p[k] ?? '').trim());
-      if (missingFields.length)
-        return res.status(400).json({ error: `Campos obrigatórios ausentes: ${missingFields.join(', ')}` });
-
+      const built = buildAtpveCadastroBody(atpveUf, params);
+      if (built.error) return res.status(400).json({ error: built.error });
       apiUrl = `${BASE_API_URL}/api/atpve-${atpveUf}/cadastrar`;
-      body = {
-        placa: String(p.placa).toUpperCase().replace(/[\s-]/g, ''),
-        renavam: String(p.renavam).replace(/\D/g, ''),
-        ano_fabricacao: String(p.ano_fabricacao).trim(),
-        ano_modelo: String(p.ano_modelo).trim(),
-        chassi: String(p.chassi).toUpperCase().replace(/\s/g, ''),
-        kilometragem: String(p.kilometragem).replace(/\D/g, ''),
-        crv_numero: String(p.crv_numero).replace(/\D/g, ''),
-        crv_numero_via: String(p.crv_numero_via).trim(),
-        crv_uf_emissao: String(p.crv_uf_emissao).toUpperCase().trim(),
-        crv_data_emissao: String(p.crv_data_emissao).trim(),
-        crv_codigo_seguranca: String(p.crv_codigo_seguranca || '').replace(/\D/g, ''),
-        vendedor_tipo_pessoa: String(p.vendedor_tipo_pessoa).toUpperCase().trim(),
-        vendedor_documento: String(p.vendedor_documento).replace(/\D/g, ''),
-        vendedor_nome: String(p.vendedor_nome).trim().toUpperCase(),
-        vendedor_email: String(p.vendedor_email).trim(),
-        venda_cidade: String(p.venda_cidade).trim().toUpperCase(),
-        // venda_uf: documentado no /cadastrar da Chekaki mas ausente do nosso payload
-        // até agora — sempre igual ao UF do próprio endpoint (a venda é registrada
-        // nesse ATPV-e), sem precisar de campo novo no formulário.
-        venda_uf: atpveUf.toUpperCase(),
-        venda_valor: String(p.venda_valor).trim(),
-        venda_data: String(p.venda_data).trim(),
-        comprador_tipo_pessoa: String(p.comprador_tipo_pessoa).toUpperCase().trim(),
-        comprador_documento: String(p.comprador_documento).replace(/\D/g, ''),
-        comprador_nome: String(p.comprador_nome).trim().toUpperCase(),
-        comprador_email: String(p.comprador_email).trim(),
-        comprador_cep: String(p.comprador_cep).replace(/\D/g, ''),
-        comprador_logradouro: String(p.comprador_logradouro).trim().toUpperCase(),
-        comprador_numero: String(p.comprador_numero).trim(),
-        comprador_complemento: (String(p.comprador_complemento || '').trim() || '-').toUpperCase(),
-        comprador_bairro: String(p.comprador_bairro).trim().toUpperCase(),
-        comprador_cidade: String(p.comprador_cidade).trim().toUpperCase(),
-        comprador_uf: String(p.comprador_uf).toUpperCase().trim(),
-      };
+      body   = built.body;
     }
     // CNH: converte cpfCnpj → cpf para a nova API
     if (serviceId === 'consultar-cnh') {

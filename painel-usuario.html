@@ -418,15 +418,6 @@
           </div>
           <div class="price-tag text-base flex-shrink-0">R$ 65,00</div>
         </button>
-        <button type="button" onclick="openHeroService('crlv-agendado-pe')"
-          class="w-full sm:w-auto sm:min-w-[280px] flex items-center gap-4 rounded-xl border-2 border-orange-300 bg-gradient-to-r from-orange-50 to-white p-4 text-left shadow-sm hover:shadow-md hover:border-orange-400 transition-all">
-          <div class="w-14 h-14 rounded-full bg-orange-100 flex items-center justify-center text-3xl flex-shrink-0">⏳</div>
-          <div class="min-w-0 flex-1">
-            <div class="font-bold text-gray-800">CRLV-e Agendado Pernambuco (PE)</div>
-            <div class="text-sm text-orange-700 font-medium">⏳ Emissão Agendada</div>
-          </div>
-          <div class="price-tag text-base flex-shrink-0">R$ 45,00</div>
-        </button>
         <button type="button" onclick="openHeroService('crlv-pe-instantaneo')"
           class="w-full sm:w-auto sm:min-w-[280px] flex items-center gap-4 rounded-xl border-2 border-orange-300 bg-gradient-to-r from-orange-50 to-white p-4 text-left shadow-sm hover:shadow-md hover:border-orange-400 transition-all">
           <div class="w-14 h-14 rounded-full bg-orange-100 flex items-center justify-center text-3xl flex-shrink-0">⚡</div>
@@ -434,7 +425,7 @@
             <div class="font-bold text-gray-800">CRLV-e Emissão Instantânea Pernambuco (PE)</div>
             <div class="text-sm text-orange-700 font-medium">⚡ Emissão Instantânea</div>
           </div>
-          <div class="price-tag text-base flex-shrink-0">R$ 49,00</div>
+          <div class="price-tag text-base flex-shrink-0">R$ 35,00</div>
         </button>
         <button type="button" onclick="openHeroService('crlv-agendado-es')"
           class="w-full sm:w-auto sm:min-w-[280px] flex items-center gap-4 rounded-xl border-2 border-orange-300 bg-gradient-to-r from-orange-50 to-white p-4 text-left shadow-sm hover:shadow-md hover:border-orange-400 transition-all">
@@ -1318,6 +1309,10 @@ async function loadStats() {
 
 // ── Intenção de Venda (ATPVE) ────────────────────────────────────────────────
 let selectedIntencaoSvc = null;
+// Quando preenchido, o formulário está em modo "Alterar" (botão ✏️ Alterar de
+// "Meus ATPV-e"): submitIntencao corrige o pedido existente em vez de emitir um
+// novo. Guarda { queryId, uf } — ver alterarAtpve.
+let editingAtpve = null;
 const INTENCAO_ICONS = {
   'intencao-venda-rj': '🟢', 'intencao-venda-sp': '🟡', 'intencao-venda-ms': '🟠',
   'intencao-venda-mg': '🔵',
@@ -1338,6 +1333,10 @@ function buildIntencaoCategoryGrid() {
 function selectIntencaoCategory(svc, cardEl) {
   if (typeof svc === 'string') svc = JSON.parse(svc);
   selectedIntencaoSvc = svc;
+  // Escolher um estado sempre volta ao modo de emissão — se o formulário estava
+  // aberto em "Alterar", o clique aqui é o usuário desistindo da correção.
+  editingAtpve = null;
+  document.getElementById('intencao-submit-text').textContent = 'Emitir ATPV-e';
   document.querySelectorAll('#intencao-category-grid .service-cat').forEach(el => el.classList.remove('selected'));
   cardEl?.classList.add('selected');
 
@@ -1442,8 +1441,44 @@ function validateIntencaoRjParams(p) {
   return null;
 }
 
+function preencherIntencaoRjFields(p) {
+  ATPVE_RJ_FIELDS.forEach(g => g.fields.forEach(f => {
+    const el = document.getElementById('ir-' + f.name);
+    if (el) el.value = p[f.name] ?? '';
+  }));
+}
+
+// Botão "Alterar" de "Meus ATPV-e" — reabre o formulário do estado do pedido já
+// preenchido com os dados salvos, para corrigir algo (placa, nome do comprador,
+// valor) antes de o ATPV-e ser comunicado ao DETRAN. Sem custo: submitIntencao
+// detecta editingAtpve e envia para /api/queries/:id/atpve-<uf>-alterar em vez de
+// criar um novo pedido.
+function alterarAtpve(uf, queryId) {
+  const q = allQueries.find(x => x.id === queryId);
+  if (!q) return;
+  let p = {};
+  try { p = JSON.parse(q.params || '{}'); } catch {}
+  const svc = allServices.find(s => s.id === `intencao-venda-${uf}`);
+  if (!svc) return;
+
+  editingAtpve = { queryId, uf };
+  selectedIntencaoSvc = svc;
+  document.getElementById('intencao-form-name').textContent  = `✏️ Alterar ${svc.name}`;
+  document.getElementById('intencao-form-price').textContent = 'Grátis';
+  renderIntencaoRjFields(uf.toUpperCase());
+  preencherIntencaoRjFields(p);
+  document.getElementById('intencao-submit-text').textContent = 'Salvar Alterações';
+  document.getElementById('intencao-category-wrap').classList.add('hidden');
+  document.getElementById('intencao-form-wrap').classList.remove('hidden');
+  document.getElementById('intencao-result-wrap').classList.add('hidden');
+  document.getElementById('intencao-form-error').classList.add('hidden');
+  scrollToIntencaoForm('intencao-form-wrap');
+}
+
 function resetIntencaoForm(showCats = true) {
   selectedIntencaoSvc = null;
+  editingAtpve = null;
+  document.getElementById('intencao-submit-text').textContent = 'Emitir ATPV-e';
   document.getElementById('intencao-form').reset();
   document.getElementById('intencao-form-error').classList.add('hidden');
   document.getElementById('intencao-form-wrap').classList.add('hidden');
@@ -1485,6 +1520,9 @@ function renderMeusAtpve() {
     // COMUNICADA (5) ou foi excluído — aí sim a Chekaki não oferece mais essas ações.
     const situacaoCodigo = String(meta.situacao_codigo || '');
     const podeRegistrarOuExcluir = !!meta.id && situacaoCodigo !== '5' && situacaoCodigo !== 'excluida';
+    // "Alterar" vale enquanto o pedido não foi comunicado ao DETRAN — mesma régua
+    // de Registrar/Excluir (o servidor confere de novo em atpveAlterarGuard).
+    const podeAlterar = podeRegistrarOuExcluir;
     // Cobrança só acontece quando o PDF é confirmado (ver ensureAtpvePdfCached no
     // servidor) — 'aguardando_pdf'/'cancelado' significam que nada foi debitado.
     const aguardando = q.status === 'aguardando_pdf';
@@ -1515,6 +1553,7 @@ function renderMeusAtpve() {
         <div class="text-right flex-shrink-0 flex items-center gap-2 flex-wrap justify-end">
           ${amountDisplay}
           ${podeRegistrarOuExcluir ? `<button type="button" onclick="registrarAtpve('${uf}', ${q.id}, this)" class="text-xs bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded font-medium">✅ Registrar</button>` : ''}
+          ${podeAlterar ? `<button type="button" onclick="alterarAtpve('${uf}', ${q.id})" class="text-xs bg-amber-500 hover:bg-amber-600 text-white px-2 py-1 rounded font-medium">✏️ Alterar</button>` : ''}
           ${meta.id ? `<button type="button" onclick="atualizarAtpve('${uf}', ${q.id}, this)" class="text-xs bg-gray-600 hover:bg-gray-700 text-white px-2 py-1 rounded font-medium">🔄 Atualizar</button>` : ''}
           ${podeRegistrarOuExcluir ? `<button type="button" onclick="excluirAtpve('${uf}', ${q.id}, this)" class="text-xs bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded font-medium">🗑️ Excluir</button>` : ''}
           ${pdfDisplay}
@@ -1579,6 +1618,27 @@ async function submitIntencao(e) {
   btn.disabled = true; btnText.textContent = 'Processando...'; spinner.classList.remove('hidden');
 
   try {
+    // Modo "Alterar" (botão ✏️ Alterar em Meus ATPV-e): corrige o pedido existente
+    // na Chekaki, sem emitir um novo nem cobrar de novo.
+    if (editingAtpve) {
+      const { queryId, uf } = editingAtpve;
+      const r = await fetch(`/api/queries/${queryId}/atpve-${uf}-alterar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ params }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        errMsgEl.textContent = d.error || 'Erro ao alterar o pedido.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      toast('Pedido alterado!');
+      resetIntencaoForm();
+      await loadQueries();
+      return;
+    }
+
     const r = await fetch('/api/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1617,7 +1677,9 @@ async function submitIntencao(e) {
     errMsgEl.textContent = 'Erro de conexão. Tente novamente.';
     errEl.classList.remove('hidden');
   } finally {
-    btn.disabled = false; btnText.textContent = 'Emitir ATPV-e'; spinner.classList.add('hidden');
+    btn.disabled = false;
+    btnText.textContent = editingAtpve ? 'Salvar Alterações' : 'Emitir ATPV-e';
+    spinner.classList.add('hidden');
   }
 }
 
