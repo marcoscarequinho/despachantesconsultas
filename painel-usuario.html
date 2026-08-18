@@ -1597,15 +1597,17 @@ function renderMeusAtpve() {
     // os dados em CADASTRADA (1) e PROCESSANDO (3) — daí em diante o pedido já saiu
     // das mãos dela (o servidor confere de novo em atpveAlterarGuard).
     const podeAlterar = !!meta.id && (situacaoCodigo === '1' || situacaoCodigo === '3');
-    // Cobrança só acontece quando o PDF é confirmado (ver ensureAtpvePdfCached no
-    // servidor) — 'aguardando_pdf'/'cancelado' significam que nada foi debitado.
+    // O ATPV-e é cobrado no cadastro, então 'aguardando_pdf' já pode estar
+    // debitado — quem diz se houve cobrança é q.cobrada (transaction_id no
+    // servidor), não o status. Pedidos antigos, do modelo em que só o PDF
+    // confirmado cobrava, seguem aparecendo como aguardando/não cobrado.
     const aguardando = q.status === 'aguardando_pdf';
     const cancelado   = q.status === 'cancelado';
-    const amountDisplay = aguardando
-      ? `<span class="badge-amber">⏳ Aguardando</span>`
-      : cancelado
-        ? `<span class="badge-red">❌ Não cobrado</span>`
-        : `<div class="text-sm font-semibold text-red-500">-${fmt(q.amount)}</div>`;
+    const amountDisplay = !semCobranca(q)
+      ? `<div class="text-sm font-semibold text-red-500">-${fmt(q.amount)}</div>`
+      : aguardando
+        ? `<span class="badge-amber">⏳ Aguardando</span>`
+        : `<span class="badge-red">❌ Não cobrado</span>`;
     const pdfDisplay = q.pdf_token
       ? `<a href="/api/pdf/${q.pdf_token}" target="_blank" class="text-xs bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded font-medium">📥 PDF</a>`
       : aguardando
@@ -1758,6 +1760,15 @@ async function submitIntencao(e) {
 }
 
 // ── Consultas ──────────────────────────────────────────────────────────────────
+
+// O ATPV-e é cobrado no cadastro, antes de o PDF sair, então 'aguardando_pdf'
+// não significa mais "sem débito": quem responde por isso é q.cobrada
+// (transaction_id no servidor). Vale para os pedidos do modelo antigo, que
+// ficaram aguardando sem nunca terem sido cobrados, e para os cancelados.
+function semCobranca(q) {
+  return !q.cobrada && (q.status === 'aguardando_pdf' || q.status === 'cancelado');
+}
+
 async function loadQueries() {
   try {
     const r = await fetch('/api/queries');
@@ -1977,7 +1988,7 @@ function renderRecentQueries() {
         </div>
       </div>
       <div class="text-right flex-shrink-0 ml-3 flex flex-col items-end gap-1">
-        ${q.status === 'aguardando_pdf' || q.status === 'cancelado'
+        ${semCobranca(q)
           ? ''
           : `<div class="text-sm font-semibold text-red-500">-${fmt(q.amount)}</div>`}
         ${q.pdf_token
@@ -2082,7 +2093,7 @@ function renderHistoryTable() {
               : `<span class="badge-${q.result_type === 'pdf' ? 'blue' : 'green'}">${q.result_type.toUpperCase()}</span>`
           }
         </td>
-        <td class="px-5 py-3 text-right font-semibold text-red-500 text-sm">${q.status === 'aguardando_pdf' || q.status === 'cancelado' ? '—' : '-' + fmt(q.amount)}</td>
+        <td class="px-5 py-3 text-right font-semibold text-red-500 text-sm">${semCobranca(q) ? '—' : '-' + fmt(q.amount)}</td>
       </tr>`;
   }).join('');
 }

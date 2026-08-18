@@ -1720,6 +1720,9 @@ app.get('/api/queries', requireAuth, async (req, res) => {
     const r = await pool.query(
       `SELECT q.id, q.service_id, q.service_name, q.params, q.status, q.amount,
               q.result_type, q.created_at,
+              -- ATPV-e é cobrado no cadastro e só depois sai do 'aguardando_pdf':
+              -- o status não diz mais se houve débito, o transaction_id sim.
+              (q.transaction_id IS NOT NULL) AS cobrada,
               CASE WHEN q.service_id IN ('intencao-venda-rj','intencao-venda-sp','intencao-venda-ms','intencao-venda-mg')
                    THEN q.result_data ELSE NULL END AS atpve_meta,
               CASE WHEN q.service_id = 'inserir-comunicacao-venda'
@@ -2025,6 +2028,9 @@ async function callAtpveAction(req, res, uf, action, { postProcess, upstreamBody
     if (onSuccess) await onSuccess(qr.rows[0].id, merged);
 
     if (pdfBuf) {
+      // O documento saiu por aqui: fecha a consulta (sem isso ela ficaria presa
+      // em 'aguardando_pdf' e o cron trataria um pedido já entregue como atrasado).
+      await finalizeAtpveQuery(uf, qr.rows[0].id, req.user.id);
       const token = crypto.randomBytes(32).toString('hex');
       const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
       await pool.query(
@@ -4580,6 +4586,28 @@ function buildComunicacaoVendaPdfBuffer(service, data, params) {
   });
 }
 
+// Fecha a consulta de um ATPV-e cujo PDF já está em mãos: tira do
+// 'aguardando_pdf' (senão o cron trataria como atrasado um pedido já entregue).
+// Claim atômico para o cron e um clique em "Atualizar" não fecharem o mesmo
+// pedido duas vezes. Hoje a cobrança acontece no cadastro (ver
+// processCatalogQuery), então só debita aqui quem chegou sem transaction_id —
+// pedidos do modelo antigo, em que o débito era na chegada do PDF.
+async function finalizeAtpveQuery(uf, queryId, userId) {
+  const claimed = await pool.query(
+    `UPDATE queries SET status='success' WHERE id=$1 AND status='aguardando_pdf'
+     RETURNING amount, transaction_id`,
+    [queryId]
+  );
+  if (!claimed.rows.length || claimed.rows[0].transaction_id) return;
+  const amount = parseFloat(claimed.rows[0].amount);
+  await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [amount, userId]);
+  const txRow = await pool.query(
+    `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+    [userId, amount, `Consulta: Intenção de Venda ${uf.toUpperCase()}`]
+  );
+  await pool.query('UPDATE queries SET transaction_id=$1 WHERE id=$2', [txRow.rows[0].id, queryId]);
+}
+
 // Garante um PDF em cache válido (7 dias) pro pedido sempre que a Chekaki sinalizar
 // pdf_disponivel=true. O Cadastrar nem sempre devolve o PDF pronto na hora — placas
 // que passam por verificação extra (LAUDOCAR) respondem com JSON e só depois ficam
@@ -4588,16 +4616,17 @@ function buildComunicacaoVendaPdfBuffer(service, data, params) {
 // um PDF é cacheado aqui (ou seja, é a primeira vez que fica disponível) e
 // notifyPhone é informado, também envia por WhatsApp — cobre o caso em que o
 // cadastro original não devolveu PDF na hora e por isso o envio síncrono não rodou.
-// Também é o único lugar que efetivamente debita o usuário (ver claim atômico
-// abaixo) — a consulta só é cobrada quando o PDF já está confirmadamente em
-// mãos, nunca antes (ver processCatalogQuery e runAtpvePendingCheck).
+// Quem fecha/cobra a consulta é finalizeAtpveQuery, logo acima.
 async function ensureAtpvePdfCached(uf, queryId, userId, fresh, notifyPhone) {
   if (!fresh?.pdf_disponivel || !fresh?.id) return;
   try {
     const existing = await pool.query(
       `SELECT 1 FROM pdf_cache WHERE query_id=$1 AND expires_at > NOW()`, [queryId]
     );
-    if (existing.rows.length) return;
+    // PDF já entregue por outro caminho (ex.: veio direto na resposta de
+    // "Registrar") — nada a cachear, mas a consulta ainda pode estar presa em
+    // 'aguardando_pdf'.
+    if (existing.rows.length) return finalizeAtpveQuery(uf, queryId, userId);
 
     const pr = await fetch(`${BASE_API_URL}/api/atpve-${uf}/${fresh.id}/pdf`, {
       headers: { 'chaveAcesso': CHAVE_ACESSO },
@@ -4605,24 +4634,7 @@ async function ensureAtpvePdfCached(uf, queryId, userId, fresh, notifyPhone) {
     if (!pr.ok || !(pr.headers.get('content-type') || '').includes('application/pdf')) return;
     const buf = Buffer.from(await pr.arrayBuffer());
 
-    // Só cobra agora que o PDF está confirmadamente em mãos — nunca antes (ver
-    // processCatalogQuery). Claim atômico evita cobrar duas vezes se o cron e um
-    // clique em "Atualizar" caírem juntos aqui; pedidos do modelo antigo (já
-    // com status 'success') simplesmente não batem no WHERE e seguem direto
-    // para o cache/envio abaixo, sem cobrar de novo.
-    const claimed = await pool.query(
-      `UPDATE queries SET status='success' WHERE id=$1 AND status='aguardando_pdf' RETURNING amount`,
-      [queryId]
-    );
-    if (claimed.rows.length) {
-      const amount = parseFloat(claimed.rows[0].amount);
-      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [amount, userId]);
-      const txRow = await pool.query(
-        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
-        [userId, amount, `Consulta: Intenção de Venda ${uf.toUpperCase()}`]
-      );
-      await pool.query('UPDATE queries SET transaction_id=$1 WHERE id=$2', [txRow.rows[0].id, queryId]);
-    }
+    await finalizeAtpveQuery(uf, queryId, userId);
 
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
@@ -6654,15 +6666,15 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       }
     }
 
-    // ── Intenção de Venda (ATPVE): cobrança condicionada à confirmação do PDF ──
-    // A Chekaki aceita o cadastro mesmo quando o ATPV-e ainda não está pronto
-    // (verificação extra/LAUDOCAR) — cobrar nesse momento violaria a regra de
-    // nunca cobrar sem resultado. Por isso este serviço não entra no débito
-    // genérico abaixo: registra a consulta como 'aguardando_pdf' sem debitar,
-    // tenta confirmar na hora (o caso comum, instantâneo) e só cobra de fato
-    // quando o PDF é confirmado — na hora ou depois, sempre via
-    // ensureAtpvePdfCached (chamada também pelo cron runAtpvePendingCheck e
-    // pelos botões Registrar/Atualizar em "Meus ATPV-e").
+    // ── Intenção de Venda (ATPVE): cobrança no cadastro ───────────────────────
+    // Exceção deliberada à regra de nunca cobrar sem resultado: a Chekaki aceitou
+    // o pedido (situação CADASTRADA) e a partir daí o custo já foi assumido, mesmo
+    // que o PDF só saia depois (verificação extra/LAUDOCAR). Se o documento não
+    // for emitido, a devolução é feita manualmente pelo admin — por isso o cron
+    // runAtpvePendingCheck avisa o admin no lugar de estornar sozinho.
+    // O status continua 'aguardando_pdf' até o PDF sair (é ele que mantém o
+    // pedido na varredura do cron e o selo "Aguardando emissão" no painel);
+    // transaction_id preenchido é o que marca a consulta como já cobrada.
     if (ATPVE_UFS.some(uf => serviceId === `intencao-venda-${uf}`)) {
       const atpveUf = serviceId.split('-')[2];
       const placa = String(params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
@@ -6672,6 +6684,14 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         [userId, serviceId, service.name, JSON.stringify(stripAtpveAnexos(params)), price, JSON.stringify({ placa })]
       );
       const queryId = qRow.rows[0].id;
+
+      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name}`]
+      );
+      await pool.query('UPDATE queries SET transaction_id=$1 WHERE id=$2', [txRow.rows[0].id, queryId]);
+
       let match = await correlateAtpveRecord(atpveUf, queryId, placa);
       // MG não avança sozinho como RJ/SP/MS — ver autoRegistrarAtpveMg.
       if (atpveUf === 'mg' && match?.id && !match.pdf_disponivel && String(match.situacao_codigo) === '1') {
@@ -6683,8 +6703,8 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       await notifyAdminNewQuery(user, service, price, params);
 
       const after = await pool.query('SELECT status FROM queries WHERE id=$1', [queryId]);
-      const charged = after.rows[0]?.status === 'success';
-      if (charged) {
+      const emitido = after.rows[0]?.status === 'success';
+      if (emitido) {
         return res.json({
           success: true,
           result: { status: 'ATPV-e emitido com sucesso! O documento já está disponível no seu histórico e foi enviado pelo WhatsApp.' },
@@ -6694,8 +6714,8 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       return res.json({
         success: true,
         pending: true,
-        result: { status: 'Cadastro registrado! Seu ATPV-e está em processamento — assim que sair, você será cobrado automaticamente e receberá o documento pelo WhatsApp e aqui no histórico.' },
-        charged: 0,
+        result: { status: 'Cadastro registrado e cobrado! Seu ATPV-e está em processamento — assim que sair, você recebe o documento pelo WhatsApp e aqui no histórico. Se ele não for emitido, fale com o suporte para a devolução do valor.' },
+        charged: price,
       });
     }
 
@@ -10223,20 +10243,22 @@ app.post('/api/admin/crlv-agendado-status-check', requireAuth, requireSuperAdmin
 // tinha saído (verificação extra/LAUDOCAR) — reconsulta por id; (2) a correlação
 // inicial por placa falhou (corrida com a listagem da Chekaki) e nunca chegou a
 // ter id — tenta correlacionar de novo. Sem essa varredura periódica o usuário só
-// receberia o PDF/cobrança se clicasse manualmente em "Atualizar". A cobrança em
-// si só acontece dentro de ensureAtpvePdfCached, quando o PDF é confirmado — por
-// isso não há estorno aqui: se o prazo estourar sem confirmação, a consulta é só
-// marcada como 'cancelado' (nunca foi cobrada).
+// receberia o PDF se clicasse manualmente em "Atualizar". Como a cobrança é feita
+// no cadastro (ver processCatalogQuery), nada é estornado aqui: passado o prazo
+// sem PDF, o cron avisa admin e cliente uma única vez e a devolução fica a cargo
+// do admin. Pedidos do modelo antigo (sem transaction_id, nunca cobrados)
+// continuam sendo marcados como 'cancelado'.
 async function runAtpvePendingCheck() {
   const { rows } = await pool.query(
-    `SELECT q.id AS query_id, q.user_id, q.service_id, q.result_data, q.created_at, u.phone
+    `SELECT q.id AS query_id, q.user_id, q.service_id, q.result_data, q.created_at,
+            q.transaction_id, q.amount, u.phone, u.name AS user_name
      FROM queries q JOIN users u ON u.id = q.user_id
      WHERE q.service_id IN ('intencao-venda-rj','intencao-venda-sp','intencao-venda-ms','intencao-venda-mg')
        AND q.status = 'aguardando_pdf'
        AND q.created_at > NOW() - INTERVAL '7 days'
      ORDER BY q.created_at DESC LIMIT 200`
   );
-  let checked = 0, notified = 0, cancelled = 0;
+  let checked = 0, notified = 0, cancelled = 0, alerted = 0;
   for (const row of rows) {
     const uf = row.service_id.split('-')[2];
     let meta = {};
@@ -10262,6 +10284,9 @@ async function runAtpvePendingCheck() {
         if (meta.id) {
           await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), row.query_id]);
         }
+        // O aviso de atraso mais abaixo regrava result_data — parte do que acabou
+        // de ser persistido, não do meta lido no início da passada.
+        meta = merged;
         if (merged.pdf_disponivel) {
           await ensureAtpvePdfCached(uf, row.query_id, row.user_id, merged, row.phone);
           notified++;
@@ -10269,20 +10294,40 @@ async function runAtpvePendingCheck() {
         }
       }
 
-      // Ainda sem PDF — se já passou do prazo, desiste e marca como cancelado
-      // (sem cobrar nada, já que a cobrança só acontece quando o PDF sai).
+      // Ainda sem PDF e já passou do prazo. O pedido cobrado no cadastro NÃO é
+      // estornado nem cancelado automaticamente: a devolução é decisão do admin
+      // (pode ser que o documento ainda saia). O cron só avisa uma vez — o aviso
+      // fica marcado no result_data para não repetir a cada passada — e segue
+      // acompanhando o pedido enquanto ele estiver na janela de 7 dias.
       const ageMs = Date.now() - new Date(row.created_at).getTime();
       if (ageMs > ASYNC_PDF_REFUND_HOURS * 3600 * 1000) {
-        const cancelledRow = await pool.query(
-          `UPDATE queries SET status='cancelado' WHERE id=$1 AND status='aguardando_pdf' RETURNING id`,
-          [row.query_id]
-        );
-        if (cancelledRow.rows.length) {
-          cancelled++;
-          if (row.phone) {
-            const msg = `⚠️ *Intenção de Venda (ATPVE) — ${uf.toUpperCase()}*\n\nNão conseguimos confirmar a emissão do documento dentro do prazo esperado. Você não foi cobrado por essa tentativa. Se precisar, tente novamente ou fale com o suporte.`;
-            await sendWhatsApp(row.phone, msg).catch(() => {});
+        if (!row.transaction_id) {
+          // Pedido do modelo antigo (nunca cobrado) — segue cancelando como antes.
+          const cancelledRow = await pool.query(
+            `UPDATE queries SET status='cancelado' WHERE id=$1 AND status='aguardando_pdf' RETURNING id`,
+            [row.query_id]
+          );
+          if (cancelledRow.rows.length) {
+            cancelled++;
+            if (row.phone) {
+              const msg = `⚠️ *Intenção de Venda (ATPVE) — ${uf.toUpperCase()}*\n\nNão conseguimos confirmar a emissão do documento dentro do prazo esperado. Você não foi cobrado por essa tentativa. Se precisar, tente novamente ou fale com o suporte.`;
+              await sendWhatsApp(row.phone, msg).catch(() => {});
+            }
           }
+        } else if (!meta.aviso_atraso_enviado) {
+          alerted++;
+          const placa = (meta.placa || '').toUpperCase();
+          const valor = fmtMoneyBRL(parseFloat(row.amount || 0));
+          if (ADMIN_PHONE) {
+            const msgAdmin = `⚠️ *ATPV-e ${uf.toUpperCase()} sem PDF há ${ASYNC_PDF_REFUND_HOURS}h*\n\n🔤 Placa: ${placa || '-'}\n👤 Cliente: ${row.user_name || '-'}\n💰 Cobrado: ${valor}\n🧾 Consulta: ${row.query_id}\n\nO pedido foi cobrado no cadastro. Verifique na Chekaki e devolva o valor manualmente se o documento não sair.`;
+            await sendWhatsApp(ADMIN_PHONE, msgAdmin).catch(() => {});
+          }
+          if (row.phone) {
+            const msgCliente = `⚠️ *Intenção de Venda (ATPVE) — ${uf.toUpperCase()}*\n\nSeu ATPV-e${placa ? ` da placa ${placa}` : ''} ainda não foi emitido. Já estamos verificando com o DETRAN — se o documento não sair, o valor é devolvido. Qualquer dúvida, fale com o suporte.`;
+            await sendWhatsApp(row.phone, msgCliente).catch(() => {});
+          }
+          await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2',
+            [JSON.stringify({ ...meta, aviso_atraso_enviado: true }), row.query_id]);
         }
       }
     } catch (e) {
@@ -10290,8 +10335,8 @@ async function runAtpvePendingCheck() {
     }
     await new Promise(r => setTimeout(r, 400));
   }
-  console.log(`✅ Checagem ATPV-e pendentes: ${checked} verificados, ${notified} avisados, ${cancelled} cancelados`);
-  return { checked, notified, cancelled, total: rows.length };
+  console.log(`✅ Checagem ATPV-e pendentes: ${checked} verificados, ${notified} avisados, ${cancelled} cancelados, ${alerted} atrasados (devolução manual)`);
+  return { checked, notified, cancelled, alerted, total: rows.length };
 }
 
 // ── GET /api/cron/atpve-rj-status (Vercel Cron) — nome histórico, hoje varre

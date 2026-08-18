@@ -41,7 +41,7 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 ## Fluxo de /api/query (padrão importante)
 
 1. Valida serviço, saldo e monta `apiUrl`/`body` por `serviceId` (blocos `if` sequenciais).
-2. Chama a API upstream e valida a resposta ANTES de debitar créditos (nunca cobrar consulta sem resultado).
+2. Chama a API upstream e valida a resposta ANTES de debitar créditos (nunca cobrar consulta sem resultado). **Exceção: Intenção de Venda (ATPV-e)** — cobra assim que a Chekaki aceita o cadastro (situação CADASTRADA), mesmo que o PDF saia depois; a consulta fica em `aguardando_pdf` já com `transaction_id`, e se o documento não for emitido o admin devolve manualmente (o cron `runAtpvePendingCheck` avisa admin e cliente em vez de estornar).
 3. **Padrão "Débitos por Estado"**: quando a upstream devolve JSON mas o usuário deve receber um relatório, existe um builder `buildXxxPdfBuffer(service, data, params)` que monta o PDF com pdfkit usando os helpers `pdfReportHeader`, `pdfBar`, `pdfSubBar`, `pdfFieldGrid`, `pdfRenderGenericObject`, `pdfReportFooter`. Exemplos: `buildDebitoPdfBuffer`, `buildCnhPdfBuffer`, `buildLeilaoPdfBuffer`, `buildComunicacaoVendaPdfBuffer` (Inserir Comunicação Venda). Para adicionar um novo relatório PDF, siga esse padrão e conecte o buffer em `pdfToSend`, `result_type` e `resultData`.
 4. Debita créditos, grava `transactions` + `queries` (`result_type`: `'pdf' | 'html' | 'json'`).
 5. PDFs/HTML são salvos em `pdf_cache` por 7 dias (token) — o histórico do painel rebaixa por esse token, sem recobrar.
