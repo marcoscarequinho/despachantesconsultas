@@ -102,6 +102,9 @@ const VISTOCAR_PASSWORD = process.env.VISTOCAR_PASSWORD || '';
 const VISTOCAR_ENDPOINTS = {
   'crlv-rj-reemissao-2': 'crlv-rj',
   'crlv-pe-instantaneo': 'crlv-pe',
+  // Assíncrono: só registra a consulta (movementId) e o PDF chega por webhook —
+  // tratamento de resposta próprio, ver o bloco 'crlv-ce' em processCatalogQuery.
+  'crlv-ce': 'crlv-ce',
   'security-code-vistocar-2': 'security-code',
   'vistocar-completa': 'completa',
   'vistocar-debitos-cod-barra': 'debitos-cod-barra',
@@ -427,6 +430,14 @@ const SERVICES = [
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ba', name:'CRLV-e Bahia (BA)',              group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  // API Vistocar (vistocarconsulta.com.br) — hoje a ÚNICA opção de CE no catálogo:
+  // substituiu o antigo "CRLV-e Agendado Ceará (CE)", que foi removido. Diferente
+  // dos outros endpoints Vistocar, este é ASSÍNCRONO: o POST em apiclient/crlv-ce
+  // só registra a consulta (devolve movementId e "CONSULTA PENDENTE") e o
+  // documento chega depois por webhook (ver POST /api/webhooks/vistocar). Por isso
+  // não entra no tratamento de resposta com pdfBase64 dos demais.
+  { id:'crlv-ce', name:'CRLV-e Ceará (CE)', group:'CRLV-e Digital', basePrice:32.50, noMarkup:true, inputType:'placa', icon:'📄', uf:'ce',
+    slowNote:'Emissão assíncrona no Detran-CE: o pedido é registrado na hora e o documento chega pelo WhatsApp e no seu histórico assim que for emitido. Você só é cobrado quando o PDF sair.' },
   { id:'consultar-crlv-go', name:'CRLV-e Goiás (GO)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ma', name:'CRLV-e Maranhão (MA)',           group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-mg', name:'CRLV-e Minas Gerais (MG)',       group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -451,7 +462,7 @@ const SERVICES = [
   { id:'consultar-crlv-to', name:'CRLV-e Tocantins (TO)',          group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   // ── CRLV-e Agendado (assíncrono) ──
   { id:'crlv-agendado-al', name:'CRLV-e Agendado Alagoas (AL)',            group:'CRLV-e Agendado', basePrice:28.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'al' },
-  { id:'crlv-agendado-ce', name:'CRLV-e Agendado Ceará (CE)',              group:'CRLV-e Agendado', basePrice:38.50,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'ce' },
+  // CE saiu do agendado — hoje só o CRLV-e Ceará via Vistocar (crlv-ce, acima).
   { id:'crlv-agendado-df', name:'CRLV-e Agendado Distrito Federal (DF)',   group:'CRLV-e Agendado', basePrice:38.50,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'df' },
   { id:'crlv-agendado-es', name:'CRLV-e Agendado Espírito Santo (ES)',     group:'CRLV-e Agendado', basePrice:20.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'es' },
   { id:'crlv-agendado-pb', name:'CRLV-e Agendado Paraíba (PB)',            group:'CRLV-e Agendado', basePrice:35.00,  inputType:'crlv_agendado_cpf',   icon:'⏳', uf:'pb' },
@@ -955,6 +966,37 @@ async function initDB() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  // CRLV-e Ceará (Vistocar, assíncrono): guarda o pedido registrado até o webhook
+  // avisar que o documento saiu. movement_id é o identificador que a Vistocar
+  // devolve no registro e repete na notificação — é por ele que o webhook
+  // encontra de quem é o pedido.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vistocar_pending (
+      movement_id VARCHAR(100) PRIMARY KEY,
+      query_id    INTEGER REFERENCES queries(id) ON DELETE CASCADE,
+      user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      phone       VARCHAR(20),
+      service_id  VARCHAR(100),
+      placa       VARCHAR(20),
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  // Toda notificação recebida da Vistocar fica gravada aqui, processada ou não.
+  // O formato exato do corpo do webhook ainda não está documentado: quando um
+  // disparo chega com um formato que não reconhecemos, ele fica com
+  // processed=false e o payload inteiro guardado, dando para reprocessar depois
+  // de ajustar o parser — nenhuma notificação se perde.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vistocar_webhooks (
+      id          SERIAL PRIMARY KEY,
+      movement_id VARCHAR(100),
+      payload     TEXT,
+      processed   BOOLEAN DEFAULT FALSE,
+      erro        TEXT,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_vistocar_webhooks_movement ON vistocar_webhooks(movement_id);`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS intencao_venda_files (
       id         SERIAL PRIMARY KEY,
@@ -4586,13 +4628,12 @@ function buildComunicacaoVendaPdfBuffer(service, data, params) {
   });
 }
 
-// Fecha a consulta de um ATPV-e cujo PDF já está em mãos: tira do
-// 'aguardando_pdf' (senão o cron trataria como atrasado um pedido já entregue).
-// Claim atômico para o cron e um clique em "Atualizar" não fecharem o mesmo
-// pedido duas vezes. Hoje a cobrança acontece no cadastro (ver
-// processCatalogQuery), então só debita aqui quem chegou sem transaction_id —
-// pedidos do modelo antigo, em que o débito era na chegada do PDF.
-async function finalizeAtpveQuery(uf, queryId, userId) {
+// Fecha uma consulta assíncrona cujo documento acabou de chegar: tira do
+// 'aguardando_pdf' e debita se ainda não tiver sido cobrada. Claim atômico —
+// dois caminhos concorrentes (cron e clique do usuário, webhook duplicado) não
+// fecham nem cobram o mesmo pedido duas vezes. Quem já tem transaction_id foi
+// cobrado antes (é o caso do ATPV-e, cobrado no cadastro) e só muda de status.
+async function finalizePendingQuery(queryId, userId, descricao) {
   const claimed = await pool.query(
     `UPDATE queries SET status='success' WHERE id=$1 AND status='aguardando_pdf'
      RETURNING amount, transaction_id`,
@@ -4603,9 +4644,16 @@ async function finalizeAtpveQuery(uf, queryId, userId) {
   await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [amount, userId]);
   const txRow = await pool.query(
     `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
-    [userId, amount, `Consulta: Intenção de Venda ${uf.toUpperCase()}`]
+    [userId, amount, descricao]
   );
   await pool.query('UPDATE queries SET transaction_id=$1 WHERE id=$2', [txRow.rows[0].id, queryId]);
+}
+
+// ATPV-e: hoje a cobrança acontece no cadastro (ver processCatalogQuery), então
+// aqui só passam pelo débito os pedidos do modelo antigo, que ficaram
+// 'aguardando_pdf' sem transaction_id.
+function finalizeAtpveQuery(uf, queryId, userId) {
+  return finalizePendingQuery(queryId, userId, `Consulta: Intenção de Venda ${uf.toUpperCase()}`);
 }
 
 // Garante um PDF em cache válido (7 dias) pro pedido sempre que a Chekaki sinalizar
@@ -6492,6 +6540,9 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     // serviços que retornam JSON com pdf_base64
     const PDF_BASE64_SVCS = ['consultar-placa-crv', 'consulta-debitos-portal'];
     let base64PdfBuf = null;
+    // CRLV-e CE: identificador do registro na Vistocar, preenchido no tratamento
+    // de resposta abaixo e usado depois para criar a pendência do webhook.
+    let vistocarMovementId = null;
     if (PDF_BASE64_SVCS.includes(serviceId)) {
       let parsed;
       try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
@@ -6608,6 +6659,20 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
           return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
         }
+      } else if (serviceId === 'crlv-ce') {
+        // Assíncrono: a resposta de sucesso só confirma o REGISTRO da consulta
+        // ("CONSULTA PENDENTE", resultAvailable=false) e devolve o movementId; o
+        // documento chega depois em POST /api/webhooks/vistocar. Sem movementId
+        // não há como correlacionar a notificação com este pedido, então isso é
+        // tratado como falha (nada é cobrado — a cobrança só ocorre na entrega).
+        const ok = parsed?.status === 200 && parsed?.response?.success === true
+          && (parsed?.response?.movementId || parsed?.response?.movementId === 0);
+        if (!ok) {
+          const errMsg = parsed?.message || parsed?.response?.msg || 'Não foi possível registrar a consulta no Detran-CE.';
+          console.error(`[${serviceId}] resposta inesperada da Vistocar: ${JSON.stringify(parsed)}`);
+          return res.status(422).json({ error: errMsg });
+        }
+        vistocarMovementId = String(parsed.response.movementId);
       } else if (serviceId === 'vistocar-debitos-cod-barra') {
         // Mesmo padrão de envelope dos outros endpoints Vistocar: status/message no
         // nível raiz, dados de verdade dentro de "response" (aqui: success/registros).
@@ -6633,6 +6698,42 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         }
         base64PdfBuf = Buffer.from(parsed.response.pdfBase64, 'base64');
       }
+    }
+
+    // ── CRLV-e Ceará (Vistocar, assíncrono): registrado agora, cobrado na entrega ──
+    // A consulta foi só REGISTRADA no Detran-CE (ver tratamento de resposta acima):
+    // não há documento ainda, então nada é debitado aqui e o fluxo sai antes das
+    // validações de resultado abaixo, que esperam um documento. A consulta fica
+    // 'aguardando_pdf' e o débito acontece quando o webhook da Vistocar entrega o
+    // PDF (ver POST /api/webhooks/vistocar → finalizePendingQuery). Se o documento
+    // nunca sair, runVistocarPendingCleanup marca como 'cancelado' sem cobrar nada.
+    if (serviceId === 'crlv-ce') {
+      const placa = String(params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
+         VALUES ($1,$2,$3,$4,'aguardando_pdf',$5,'pdf',$6) RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify(params || {}), price,
+         JSON.stringify({ placa, movementId: vistocarMovementId })]
+      );
+      // ON CONFLICT: a Vistocar pode reaproveitar um movementId de um pedido
+      // anterior da mesma placa — a pendência nova é a que vale.
+      await pool.query(
+        `INSERT INTO vistocar_pending (movement_id, query_id, user_id, phone, service_id, placa)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (movement_id) DO UPDATE SET query_id=EXCLUDED.query_id, user_id=EXCLUDED.user_id,
+           phone=EXCLUDED.phone, placa=EXCLUDED.placa, created_at=NOW()`,
+        [vistocarMovementId, qRow.rows[0].id, userId, user.phone || null, serviceId, placa]
+      );
+      await notifyAdminNewQuery(user, service, price, params);
+      return res.json({
+        success: true,
+        pending: true,
+        result: {
+          status: 'Consulta registrada no Detran-CE! O documento ainda está sendo emitido — assim que sair, ele chega pelo WhatsApp e fica no seu histórico. Você só é cobrado quando o PDF for entregue.',
+          protocolo: vistocarMovementId,
+        },
+        charged: 0,
+      });
     }
 
     // Serviços que retornam HTML — capturado para servir via /api/html/:token
@@ -8623,6 +8724,138 @@ app.post('/api/admin/pix-reconcile', requireAuth, requireSuperAdmin, async (req,
 });
 
 // ── POST /api/webhooks/zapi ───────────────────────────────────────────────────
+// ── POST /api/webhooks/vistocar ───────────────────────────────────────────────
+// Notificação de resultado da Vistocar para as consultas assíncronas (hoje só o
+// CRLV-e Ceará, ver o bloco 'crlv-ce' em processCatalogQuery). Cadastre a URL
+// https://www.despachantesconsultas.com.br/api/webhooks/vistocar?token=<VISTOCAR_WEBHOOK_TOKEN>
+// no painel da Vistocar.
+//
+// O formato do corpo ainda não está documentado, então o parser é tolerante
+// (aceita os nomes de campo mais prováveis, no nível raiz ou dentro de "response"/
+// "data") e TODA notificação é gravada em vistocar_webhooks antes de qualquer
+// coisa: se o formato não for reconhecido, o payload fica salvo com
+// processed=false para reprocessar depois de ajustar o parser, sem perder nada
+// e sem cobrar ninguém indevidamente.
+const VISTOCAR_WEBHOOK_TOKEN = process.env.VISTOCAR_WEBHOOK_TOKEN || '';
+
+// Procura um valor em vários caminhos possíveis do payload (raiz, response, data).
+function pickWebhookField(payload, nomes) {
+  const escopos = [payload, payload?.response, payload?.data, payload?.result];
+  for (const escopo of escopos) {
+    if (!escopo || typeof escopo !== 'object') continue;
+    for (const nome of nomes) {
+      const v = escopo[nome];
+      if (v !== undefined && v !== null && v !== '') return v;
+    }
+  }
+  return null;
+}
+
+app.post('/api/webhooks/vistocar', async (req, res) => {
+  // Endpoint público: sem o token qualquer um poderia forjar uma notificação com
+  // um movementId (que é sequencial, fácil de adivinhar) e disparar cobrança e
+  // entrega de um PDF falso. Enquanto o token não estiver configurado, aceita e
+  // registra o aviso — assim um disparo de teste da Vistocar não se perde.
+  if (VISTOCAR_WEBHOOK_TOKEN) {
+    const enviado = req.query.token || req.headers['x-webhook-token'] || '';
+    if (enviado !== VISTOCAR_WEBHOOK_TOKEN) {
+      console.error('Webhook Vistocar recusado: token inválido ou ausente.');
+      return res.sendStatus(401);
+    }
+  } else {
+    console.error('⚠️ VISTOCAR_WEBHOOK_TOKEN não configurado — webhook da Vistocar aceito sem autenticação.');
+  }
+
+  const payload = req.body || {};
+  const movementId = pickWebhookField(payload, ['movementId', 'movement_id', 'movimentoId', 'idMovimento']);
+  const movementKey = movementId != null ? String(movementId) : null;
+
+  let logId = null;
+  try {
+    const logRow = await pool.query(
+      `INSERT INTO vistocar_webhooks (movement_id, payload) VALUES ($1,$2) RETURNING id`,
+      [movementKey, JSON.stringify(payload).slice(0, 200000)]
+    );
+    logId = logRow.rows[0].id;
+  } catch (e) {
+    console.error('Erro ao gravar webhook da Vistocar:', e.message);
+  }
+
+  // Responde antes de processar: a Vistocar não precisa esperar o download do
+  // PDF nem o envio por WhatsApp, e o registro acima já garante o reprocessamento.
+  res.sendStatus(200);
+
+  const falhar = async (motivo) => {
+    console.error(`Webhook Vistocar não processado [movementId ${movementKey || '-'}]: ${motivo}. Payload: ${JSON.stringify(payload).slice(0, 1000)}`);
+    if (logId) await pool.query('UPDATE vistocar_webhooks SET erro=$1 WHERE id=$2', [motivo, logId]).catch(() => {});
+  };
+
+  try {
+    if (!movementKey) return falhar('notificação sem movementId reconhecível');
+
+    const pr = await pool.query('SELECT * FROM vistocar_pending WHERE movement_id=$1', [movementKey]);
+    const pend = pr.rows[0];
+    if (!pend) return falhar('nenhum pedido pendente com esse movementId');
+
+    const pdfBuf = await extractVistocarPdf(payload);
+    if (!pdfBuf) {
+      // Pode ser uma notificação de andamento (ainda pendente) ou de recusa — nos
+      // dois casos não há o que entregar agora; o pedido segue na fila.
+      const msg = pickWebhookField(payload, ['msg', 'message', 'mensagem', 'status']);
+      return falhar(`sem PDF na notificação${msg ? ` (msg: ${String(msg).slice(0, 120)})` : ''}`);
+    }
+
+    await finalizePendingQuery(pend.query_id, pend.user_id, `Consulta: ${SERVICES.find(s => s.id === pend.service_id)?.name || pend.service_id}`);
+
+    const token = crypto.randomBytes(32).toString('hex');
+    await pool.query(
+      `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+      [pend.query_id, pend.user_id, token, pdfBuf.toString('base64'),
+       new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+    );
+
+    if (pend.phone) {
+      const placa = (pend.placa || '').toUpperCase();
+      const caption = `✅ *CRLV-e Ceará pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
+      await sendWhatsAppPdf(pend.phone, pdfBuf, `CRLV-e-CE-${placa || 'doc'}.pdf`, caption).catch(e =>
+        console.error('Erro ao enviar CRLV-e CE por WhatsApp:', e.message));
+    }
+
+    await pool.query('DELETE FROM vistocar_pending WHERE movement_id=$1', [movementKey]);
+    if (logId) await pool.query('UPDATE vistocar_webhooks SET processed=TRUE WHERE id=$1', [logId]).catch(() => {});
+    console.log(`✅ CRLV-e CE entregue via webhook [movementId ${movementKey}, query ${pend.query_id}]`);
+  } catch (e) {
+    await falhar(`erro ao processar: ${e.message}`);
+  }
+});
+
+// Extrai o documento da notificação: aceita o PDF em Base64 (com ou sem o prefixo
+// data:) ou um link para baixar. Devolve null quando a notificação não traz
+// documento nenhum (ex.: aviso de andamento).
+async function extractVistocarPdf(payload) {
+  const b64 = pickWebhookField(payload, ['pdfBase64', 'pdf_base64', 'base64', 'arquivoBase64', 'documentoBase64']);
+  if (b64) {
+    const limpo = String(b64).replace(/^data:[^,]+,/, '').replace(/\s/g, '');
+    const buf = Buffer.from(limpo, 'base64');
+    if (buf.slice(0, 4).toString() === '%PDF') return buf;
+    console.error('Webhook Vistocar: campo Base64 não é um PDF válido.');
+    return null;
+  }
+  const url = pickWebhookField(payload, ['pdfUrl', 'pdf_url', 'arquivoUrl', 'arquivo_url', 'url', 'link']);
+  if (!url) return null;
+  const r = await fetch(String(url));
+  if (!r.ok) {
+    console.error(`Webhook Vistocar: falha ao baixar o PDF (HTTP ${r.status}).`);
+    return null;
+  }
+  const buf = Buffer.from(await r.arrayBuffer());
+  if (buf.slice(0, 4).toString() !== '%PDF') {
+    console.error('Webhook Vistocar: o link informado não devolveu um PDF.');
+    return null;
+  }
+  return buf;
+}
+
 app.post('/api/webhooks/zapi', async (req, res) => {
   res.sendStatus(200);
   const event = req.body;
@@ -10211,6 +10444,42 @@ async function runCrlvAgendadoPendingCheck() {
   return { checked, notified, refunded, pending: pendentes.length };
 }
 
+// Desiste dos pedidos assíncronos da Vistocar (CRLV-e CE) cujo webhook nunca
+// chegou. Não há estorno a fazer: a cobrança só acontece na entrega do PDF, então
+// aqui a consulta é apenas marcada como 'cancelado' e o cliente é avisado de que
+// não pagou nada. Sem polling — a Vistocar não expõe consulta por movementId, o
+// resultado só chega por notificação.
+async function runVistocarPendingCleanup() {
+  const { rows } = await pool.query(
+    `SELECT p.movement_id, p.query_id, p.placa, p.phone, q.service_name
+     FROM vistocar_pending p
+     LEFT JOIN queries q ON q.id = p.query_id
+     WHERE p.created_at < NOW() - INTERVAL '${ASYNC_PDF_REFUND_HOURS} hours'
+     ORDER BY p.created_at ASC LIMIT 200`
+  );
+  let cancelled = 0;
+  for (const row of rows) {
+    try {
+      const marcado = await pool.query(
+        `UPDATE queries SET status='cancelado' WHERE id=$1 AND status='aguardando_pdf' RETURNING id`,
+        [row.query_id]
+      );
+      await pool.query('DELETE FROM vistocar_pending WHERE movement_id=$1', [row.movement_id]);
+      if (!marcado.rows.length) continue;   // já entregue ou já fechado por outro caminho
+      cancelled++;
+      if (row.phone) {
+        const placa = (row.placa || '').toUpperCase();
+        const msg = `⚠️ *${row.service_name || 'CRLV-e Ceará (CE)'}*\n\nO documento${placa ? ` da placa ${placa}` : ''} não foi emitido dentro do prazo esperado. Você não foi cobrado por essa tentativa. Se precisar, tente novamente ou fale com o suporte.`;
+        await sendWhatsApp(row.phone, msg).catch(() => {});
+      }
+    } catch (e) {
+      console.error(`Erro ao cancelar pendência Vistocar [movementId ${row.movement_id}]:`, e.message);
+    }
+  }
+  if (rows.length) console.log(`✅ Pendências Vistocar: ${rows.length} vencidas, ${cancelled} canceladas`);
+  return { vencidas: rows.length, cancelled };
+}
+
 // ── GET /api/cron/crlv-agendado-status (Vercel Cron) ──────────────────────────
 app.get('/api/cron/crlv-agendado-status', async (req, res) => {
   const secret = process.env.CRON_SECRET || '';
@@ -10219,7 +10488,8 @@ app.get('/api/cron/crlv-agendado-status', async (req, res) => {
   }
   try {
     const result = await runCrlvAgendadoPendingCheck();
-    res.json({ success: true, ...result });
+    const vistocar = await runVistocarPendingCleanup();
+    res.json({ success: true, ...result, vistocar });
   } catch (err) {
     console.error('Erro no cron crlv-agendado-status:', err.message);
     res.status(500).json({ error: err.message });

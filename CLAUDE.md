@@ -34,7 +34,7 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 | Infosimples | `https://api.infosimples.com/api/v2/consultas` | `INFOSIMPLES_TOKEN` |
 | Despbrasil (CRLV Rio Reemissão, Código de Segurança CRV) | `https://despbrasil.com.br/functions/apiConsulta` | header `chaveAcesso` (`DESPBRASIL_KEY`), ver `DESPBRASIL_SVCS` |
 | Consultas Fácil (CRLV Rio Reemissão v2) | `https://www.consultasfacil.net` | header `chaveAcesso` (`CONSULTASFACIL_KEY`) |
-| Vistocar (Débitos e Documentação) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
+| Vistocar (Débitos e Documentação, CRLV-e CE/PE/RJ) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
 | Mercado Pago (PIX) | `https://api.mercadopago.com` | `MP_ACCESS_TOKEN` |
 | Z-API (WhatsApp) | `https://api.z-api.io` | `ZAPI_*` |
 
@@ -62,8 +62,9 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 - Comentários no server.js explicam decisões não óbvias (peculiaridades das APIs upstream, campos não documentados) — mantenha esse estilo.
 - Validação de entrada sempre no servidor antes de chamar a upstream (placa 7 chars, renavam 11 dígitos, CPF 11/CNPJ 14, etc.), com mensagem de erro específica em português.
 - Nunca logar CPF/CNPJ completos — use máscara (ver `maskDoc` no payload de comunicação de venda).
-- Crons (Vercel): `/api/cron/broadcast-whatsapp`, `/api/cron/crlv-agendado-status`, `/api/cron/pix-reconcile`.
+- Crons (Vercel): `/api/cron/broadcast-whatsapp`, `/api/cron/crlv-agendado-status` (roda também `runVistocarPendingCleanup`), `/api/cron/pix-reconcile`.
+- **Consultas assíncronas da Vistocar** (hoje só `crlv-ce`): o POST em `apiclient/crlv-ce` apenas registra a consulta (devolve `movementId`, "CONSULTA PENDENTE") e o PDF chega em `POST /api/webhooks/vistocar` — a consulta fica `aguardando_pdf` e **só é cobrada na entrega** (`finalizePendingQuery`). Toda notificação é gravada em `vistocar_webhooks` antes de ser processada: o formato do corpo ainda não é documentado, então payload não reconhecido fica com `processed=false` para reprocessar. Pendência sem retorno em 48h é cancelada sem cobrar.
 
 ## Variáveis de ambiente (.env)
 
-`DATABASE_URL`, `JWT_SECRET`, `CHAVE_ACESSO`, `MP_ACCESS_TOKEN`, `AUTOCRLV_KEY`, `PORTAL_DESP_KEY`, `DATACUBE_TOKEN`, `INFOSIMPLES_TOKEN`, `DESPBRASIL_KEY`, `CONSULTASFACIL_KEY`, `VISTOCAR_LOGIN`, `VISTOCAR_PASSWORD`, `ZAPI_INSTANCE_ID`, `ZAPI_TOKEN`, `ZAPI_CLIENT_TOKEN`, `WEBHOOK_BASE_URL`, `ADMIN_PHONE`. O `.env` existe localmente e não é commitado.
+`DATABASE_URL`, `JWT_SECRET`, `CHAVE_ACESSO`, `MP_ACCESS_TOKEN`, `AUTOCRLV_KEY`, `PORTAL_DESP_KEY`, `DATACUBE_TOKEN`, `INFOSIMPLES_TOKEN`, `DESPBRASIL_KEY`, `CONSULTASFACIL_KEY`, `VISTOCAR_LOGIN`, `VISTOCAR_PASSWORD`, `VISTOCAR_WEBHOOK_TOKEN`, `ZAPI_INSTANCE_ID`, `ZAPI_TOKEN`, `ZAPI_CLIENT_TOKEN`, `WEBHOOK_BASE_URL`, `ADMIN_PHONE`. O `.env` existe localmente e não é commitado.
