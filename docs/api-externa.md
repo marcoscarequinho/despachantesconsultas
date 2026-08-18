@@ -60,6 +60,22 @@ Campos do corpo (JSON):
 | `comprador_cep` | CEP, só números (8 dígitos) |
 | `comprador_logradouro` / `comprador_numero` / `comprador_complemento` / `comprador_bairro` / `comprador_cidade` / `comprador_uf` | Endereço do comprador |
 
+#### Documentos anexos (Base64) — SP
+
+O cadastro aceita os documentos digitalizados junto do pedido, em **Base64 puro** (sem o prefixo `data:application/pdf;base64,`). São opcionais na nossa validação: quando o DETRAN exigir algum, a resposta vem `400` com a mensagem indicando o documento faltante.
+
+| Campo | Descrição |
+|---|---|
+| `crlve_pdf_base64` | PDF do CRLV-e |
+| `vendedor_cnh_pdf_base64` | CNH do vendedor — **pessoa física** |
+| `vendedor_cnh_representante_pdf_base64` | CNH do representante — usar quando o vendedor é **pessoa jurídica** |
+| `vendedor_comprovante_base64` | Comprovante de endereço do vendedor |
+| `comprador_cnh_pdf_base64` | CNH do comprador — **pessoa física** |
+| `comprador_cnh_representante_pdf_base64` | CNH do representante — usar quando o comprador é **pessoa jurídica** |
+| `comprador_comprovante_base64` | Comprovante de endereço do comprador |
+
+Cada anexo aceita até ~7 MB. Os anexos **não ficam guardados** no histórico do pedido — depois que o cadastro é aceito, o que fica disponível é o PDF do ATPV-e.
+
 Payload de exemplo:
 
 ```json
@@ -97,7 +113,22 @@ Payload de exemplo:
 }
 ```
 
-Para **SP**, o corpo é idêntico — muda apenas a rota (`/api/v1/atpve-sp/cadastrar`) e os campos de local (`crv_uf_emissao: "SP"`, `venda_uf: "SP"`, `venda_cidade: "SAO PAULO"`).
+Para **SP**, o corpo é o mesmo — muda a rota (`/api/v1/atpve-sp/cadastrar`), os campos de local (`crv_uf_emissao: "SP"`, `venda_uf: "SP"`, `venda_cidade: "SAO PAULO"`) e os anexos em Base64 descritos acima:
+
+```json
+{
+  "placa": "ABC1D23",
+  "…": "demais campos iguais ao exemplo de MG",
+  "crv_uf_emissao": "SP",
+  "venda_cidade": "SAO PAULO",
+  "venda_uf": "SP",
+  "crlve_pdf_base64": "JVBERi0xLjQK...",
+  "vendedor_cnh_pdf_base64": "JVBERi0xLjQK...",
+  "vendedor_comprovante_base64": "JVBERi0xLjQK...",
+  "comprador_cnh_pdf_base64": "JVBERi0xLjQK...",
+  "comprador_comprovante_base64": "JVBERi0xLjQK..."
+}
+```
 
 Resposta de sucesso (200): o **PDF do ATPV-e** em bytes (`Content-Type: application/pdf`).
 

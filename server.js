@@ -1826,14 +1826,67 @@ const ATPVE_CADASTRO_REQUIRED = [
   'comprador_bairro', 'comprador_cidade', 'comprador_uf',
 ];
 
+// Anexos em Base64 do /cadastrar (documentação de integração ATPV-e SP de
+// 18/08/2026): o pedido pode carregar os documentos digitalizados junto do
+// cadastro. Opcionais aqui — quem exige (e quando) é o DETRAN via Chekaki, que
+// responde 400 com a mensagem pedindo o anexo faltante; enviar sempre o que o
+// usuário tiver evita esse retrabalho. Pessoa jurídica troca a CNH pela CNH do
+// representante (…_cnh_representante_pdf_base64), conforme a documentação.
+const ATPVE_ANEXO_FIELDS = [
+  'crlve_pdf_base64',
+  'vendedor_cnh_pdf_base64',
+  'vendedor_cnh_representante_pdf_base64',
+  'vendedor_comprovante_base64',
+  'comprador_cnh_pdf_base64',
+  'comprador_cnh_representante_pdf_base64',
+  'comprador_comprovante_base64',
+];
+
+// Teto por anexo (~7 MB de arquivo). A Chekaki não documenta limite, mas um
+// pedido com 5 anexos precisa caber no limite de 50 MB do express.json.
+const ATPVE_ANEXO_MAX_B64 = 10 * 1024 * 1024;
+
+// Normaliza um anexo: aceita tanto o Base64 puro quanto o data URL que o
+// FileReader do navegador devolve (data:application/pdf;base64,JVBER...).
+function normalizeAtpveAnexo(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const semPrefixo = raw.startsWith('data:') ? (raw.split(',')[1] || '') : raw;
+  return semPrefixo.replace(/\s/g, '');
+}
+
+// Remove os anexos antes de gravar/repassar os params do pedido: são vários MB
+// de Base64 que não têm serventia no histórico (o PDF final é o que importa) e
+// só inchariam a coluna params. Guarda a lista do que foi enviado para o
+// suporte conseguir conferir depois.
+function stripAtpveAnexos(params) {
+  const p = { ...(params || {}) };
+  const enviados = ATPVE_ANEXO_FIELDS.filter(k => normalizeAtpveAnexo(p[k]));
+  ATPVE_ANEXO_FIELDS.forEach(k => { delete p[k]; });
+  if (enviados.length) p.anexos_enviados = enviados;
+  return p;
+}
+
 function buildAtpveCadastroBody(uf, params) {
   const p = params || {};
   const missingFields = ATPVE_CADASTRO_REQUIRED.filter(k => !String(p[k] ?? '').trim());
   if (missingFields.length)
     return { error: `Campos obrigatórios ausentes: ${missingFields.join(', ')}` };
 
+  const anexos = {};
+  for (const campo of ATPVE_ANEXO_FIELDS) {
+    const b64 = normalizeAtpveAnexo(p[campo]);
+    if (!b64) continue;
+    if (b64.length > ATPVE_ANEXO_MAX_B64)
+      return { error: `Anexo muito grande: ${campo}. Envie um arquivo de até 7 MB.` };
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(b64))
+      return { error: `Anexo inválido: ${campo}. Envie o arquivo em Base64.` };
+    anexos[campo] = b64;
+  }
+
   return {
     body: {
+      ...anexos,
       placa: String(p.placa).toUpperCase().replace(/[\s-]/g, ''),
       renavam: String(p.renavam).replace(/\D/g, ''),
       ano_fabricacao: String(p.ano_fabricacao).trim(),
@@ -2051,7 +2104,7 @@ for (const uf of ATPVE_UFS) {
         // Guarda os dados corrigidos para o painel e o próximo "Alterar" abrirem
         // com o que está de fato na Chekaki.
         await pool.query('UPDATE queries SET params=$1 WHERE id=$2',
-          [JSON.stringify(req.body?.params || {}), queryId]);
+          [JSON.stringify(stripAtpveAnexos(req.body?.params)), queryId]);
         // Um PDF em cache emitido ANTES da correção está desatualizado — descarta
         // para o próximo download vir com os dados novos (ensureAtpvePdfCached logo
         // abaixo já rebusca na Chekaki quando o PDF volta a estar disponível).
@@ -6616,7 +6669,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       const qRow = await pool.query(
         `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
          VALUES ($1,$2,$3,$4,'aguardando_pdf',$5,'pdf',$6) RETURNING id`,
-        [userId, serviceId, service.name, JSON.stringify(params || {}), price, JSON.stringify({ placa })]
+        [userId, serviceId, service.name, JSON.stringify(stripAtpveAnexos(params)), price, JSON.stringify({ placa })]
       );
       const queryId = qRow.rows[0].id;
       let match = await correlateAtpveRecord(atpveUf, queryId, placa);
@@ -7522,7 +7575,9 @@ async function proxyAtpveExternal(req, res, uf, upstreamPath, { charge = false }
     if (!upRes.ok) return res.status(upRes.status).set('Content-Type', contentType).send(buf);
 
     if (charge) {
-      const params = req.body || {};
+      // Sem os anexos em Base64 do /cadastrar (podem somar dezenas de MB e não
+      // servem para nada depois que a upstream aceitou o pedido).
+      const params = stripAtpveAnexos(req.body);
       if (!req.apiUser) {
         // Chave geral (pós-paga): registra para a página Cobranças API do admin.
         await pool.query(

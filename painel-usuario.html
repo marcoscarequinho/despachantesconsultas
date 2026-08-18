@@ -1402,6 +1402,73 @@ const ATPVE_RJ_FIELDS = [
   ]},
 ];
 
+// Anexos em Base64 do /cadastrar (documentação de integração ATPV-e SP de
+// 18/08/2026) — só aparecem no formulário de SP, o único estado com os anexos
+// documentados. Opcionais: se o DETRAN exigir algum, a Chekaki responde com a
+// mensagem pedindo o documento. A CNH muda de campo quando a parte é pessoa
+// jurídica (CNH do representante), por isso `key` recebe os params já montados.
+const ATPVE_SP_ANEXOS = [
+  { slot: 'crlve', label: 'CRLV-e (PDF)', key: () => 'crlve_pdf_base64' },
+  { slot: 'vendedor_cnh', label: 'CNH do vendedor (ou do representante, se PJ)',
+    key: p => p.vendedor_tipo_pessoa === 'J' ? 'vendedor_cnh_representante_pdf_base64' : 'vendedor_cnh_pdf_base64' },
+  { slot: 'vendedor_comprovante', label: 'Comprovante de endereço do vendedor', key: () => 'vendedor_comprovante_base64' },
+  { slot: 'comprador_cnh', label: 'CNH do comprador (ou do representante, se PJ)',
+    key: p => p.comprador_tipo_pessoa === 'J' ? 'comprador_cnh_representante_pdf_base64' : 'comprador_cnh_pdf_base64' },
+  { slot: 'comprador_comprovante', label: 'Comprovante de endereço do comprador', key: () => 'comprador_comprovante_base64' },
+];
+
+const ATPVE_ANEXO_MAX_BYTES = 7 * 1024 * 1024;
+
+// Lê o anexo escolhido e guarda só o Base64 (sem o prefixo data:) no input
+// oculto que buildIntencaoRjParams envia — mesmo padrão do comprovante da
+// Comunicação de Venda (handleComprovanteUploadV2).
+function handleAtpveAnexoUpload(input, slot) {
+  const statusEl = document.getElementById('ia-status-' + slot);
+  const hiddenEl = document.getElementById('ia-' + slot);
+  const file = input.files && input.files[0];
+  const falha = msg => {
+    statusEl.textContent = msg;
+    statusEl.className = 'text-xs text-red-500 mt-1';
+    input.value = '';
+    hiddenEl.value = '';
+  };
+  if (!file) { hiddenEl.value = ''; statusEl.textContent = ''; return; }
+  if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf'))
+    return falha('Arquivo inválido. Selecione um PDF.');
+  if (file.size > ATPVE_ANEXO_MAX_BYTES)
+    return falha('Arquivo muito grande. Envie um PDF de até 7 MB.');
+
+  statusEl.textContent = 'Carregando...';
+  statusEl.className = 'text-xs text-gray-500 mt-1';
+  const reader = new FileReader();
+  reader.onload = () => {
+    hiddenEl.value = String(reader.result).split(',')[1] || '';
+    statusEl.textContent = `✓ ${file.name} (${(file.size / 1024).toFixed(0)} KB)`;
+    statusEl.className = 'text-xs text-green-600 mt-1';
+  };
+  reader.onerror = () => falha('Erro ao ler o arquivo. Tente novamente.');
+  reader.readAsDataURL(file);
+}
+
+function renderAtpveAnexosGroup() {
+  const campo = a => `
+    <div>
+      <label class="label">${escapeHtml(a.label)}</label>
+      <input type="file" class="input-field" accept="application/pdf,.pdf"
+             onchange="handleAtpveAnexoUpload(this, '${a.slot}')">
+      <input type="hidden" id="ia-${a.slot}">
+      <div id="ia-status-${a.slot}" class="text-xs text-gray-500 mt-1"></div>
+    </div>`;
+  return `
+    <div class="mb-4">
+      <h4 class="text-xs font-semibold text-gray-500 uppercase mb-2">Documentos (PDF)</h4>
+      <p class="text-xs text-gray-500 mb-2">
+        Opcionais — envie os que tiver. Ao alterar um pedido, os anexos precisam ser reenviados.
+      </p>
+      <div class="grid sm:grid-cols-2 gap-4">${ATPVE_SP_ANEXOS.map(campo).join('')}</div>
+    </div>`;
+}
+
 function renderIntencaoRjFields(ufPlaceholder = 'RJ') {
   const field = f => {
     const req = f.required ? ' <span class="text-red-500">*</span>' : '';
@@ -1421,7 +1488,7 @@ function renderIntencaoRjFields(ufPlaceholder = 'RJ') {
     <div class="mb-4">
       <h4 class="text-xs font-semibold text-gray-500 uppercase mb-2">${escapeHtml(g.group)}</h4>
       <div class="grid sm:grid-cols-2 gap-4">${g.fields.map(field).join('')}</div>
-    </div>`).join('');
+    </div>`).join('') + (ufPlaceholder === 'SP' ? renderAtpveAnexosGroup() : '');
 }
 
 function buildIntencaoRjParams() {
@@ -1429,6 +1496,12 @@ function buildIntencaoRjParams() {
   ATPVE_RJ_FIELDS.forEach(g => g.fields.forEach(f => {
     params[f.name] = (document.getElementById('ir-' + f.name)?.value || '').trim();
   }));
+  // Anexos só existem no formulário de SP; nos demais estados os inputs não
+  // foram renderizados e nada é acrescentado ao payload.
+  ATPVE_SP_ANEXOS.forEach(a => {
+    const b64 = document.getElementById('ia-' + a.slot)?.value || '';
+    if (b64) params[a.key(params)] = b64;
+  });
   return params;
 }
 
