@@ -1085,8 +1085,9 @@ async function initDB() {
 // arquivo): se a conexão cair justo nesse momento, a instância continua
 // servindo requisições com as tabelas faltando — e mesmo quando dá certo, uma
 // requisição pode chegar antes de ele terminar. Quem depende de tabela recente
-// (as rotas da ASD) espera por aqui em vez de estourar com "relation does not
-// exist"; se a tentativa anterior falhou, a próxima chamada tenta de novo.
+// (as rotas da ASD e as do CRLV-e CE/Vistocar) espera por aqui em vez de estourar
+// com "relation does not exist"; se a tentativa anterior falhou, a próxima
+// chamada tenta de novo.
 let dbReadyPromise = null;
 function ensureDbReady() {
   if (!dbReadyPromise) {
@@ -6708,6 +6709,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     // PDF (ver POST /api/webhooks/vistocar → finalizePendingQuery). Se o documento
     // nunca sair, runVistocarPendingCleanup marca como 'cancelado' sem cobrar nada.
     if (serviceId === 'crlv-ce') {
+      await ensureDbReady();   // vistocar_pending é tabela nova — ver ensureDbReady
       const placa = String(params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
       const qRow = await pool.query(
         `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
@@ -8772,6 +8774,8 @@ app.post('/api/webhooks/vistocar', async (req, res) => {
 
   let logId = null;
   try {
+    // vistocar_webhooks/vistocar_pending são tabelas novas — ver ensureDbReady.
+    await ensureDbReady();
     const logRow = await pool.query(
       `INSERT INTO vistocar_webhooks (movement_id, payload) VALUES ($1,$2) RETURNING id`,
       [movementKey, JSON.stringify(payload).slice(0, 200000)]
@@ -10450,6 +10454,7 @@ async function runCrlvAgendadoPendingCheck() {
 // não pagou nada. Sem polling — a Vistocar não expõe consulta por movementId, o
 // resultado só chega por notificação.
 async function runVistocarPendingCleanup() {
+  await ensureDbReady();   // vistocar_pending é tabela nova — ver ensureDbReady
   const { rows } = await pool.query(
     `SELECT p.movement_id, p.query_id, p.placa, p.phone, q.service_name
      FROM vistocar_pending p
