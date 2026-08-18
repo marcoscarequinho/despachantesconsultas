@@ -981,15 +981,16 @@ async function initDB() {
       created_at  TIMESTAMPTZ DEFAULT NOW()
     );
   `);
-  // Toda notificação recebida da Vistocar fica gravada aqui, processada ou não.
-  // O formato exato do corpo do webhook ainda não está documentado: quando um
-  // disparo chega com um formato que não reconhecemos, ele fica com
-  // processed=false e o payload inteiro guardado, dando para reprocessar depois
-  // de ajustar o parser — nenhuma notificação se perde.
+  // Toda notificação recebida da Vistocar fica gravada aqui, processada ou não —
+  // serve de trilha para conferir entregas e diagnosticar problemas. event_id é
+  // UNIQUE porque a Vistocar reenvia o mesmo evento (mesmo eventId) até receber
+  // 2xx: o ON CONFLICT descarta o reenvio em vez de processar duas vezes.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS vistocar_webhooks (
       id          SERIAL PRIMARY KEY,
+      event_id    VARCHAR(100) UNIQUE,
       movement_id VARCHAR(100),
+      evento      VARCHAR(60),
       payload     TEXT,
       processed   BOOLEAN DEFAULT FALSE,
       erro        TEXT,
@@ -997,6 +998,24 @@ async function initDB() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_vistocar_webhooks_movement ON vistocar_webhooks(movement_id);`);
+  // A tabela nasceu sem event_id/evento (primeira versão, antes da documentação
+  // do webhook) — CREATE TABLE IF NOT EXISTS não acrescenta coluna em tabela que
+  // já existe, então as duas entram por ALTER.
+  await pool.query(`ALTER TABLE vistocar_webhooks ADD COLUMN IF NOT EXISTS event_id VARCHAR(100);`);
+  await pool.query(`ALTER TABLE vistocar_webhooks ADD COLUMN IF NOT EXISTS evento VARCHAR(60);`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_vistocar_webhooks_event ON vistocar_webhooks(event_id);`);
+  // Cadastro do nosso endpoint na Vistocar: a chaveSeguranca que valida a
+  // assinatura das notificações fica aqui, não em variável de ambiente — o
+  // cadastro é feito pela própria API (ver registrarWebhookVistocar).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vistocar_webhook_config (
+      id             SERIAL PRIMARY KEY,
+      webhook_id     VARCHAR(50),
+      url            TEXT,
+      chave_seguranca TEXT,
+      created_at     TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS intencao_venda_files (
       id         SERIAL PRIMARY KEY,
@@ -1099,7 +1118,15 @@ function ensureDbReady() {
 // ── Middlewares ──────────────────────────────────────────────────────────────
 // Limite elevado para acomodar o envio de Intenção de Venda (4 documentos em base64
 // numa única requisição — fotos de RG/CNH tiradas do celular somam bem mais que 1 PDF).
-app.use(express.json({ limit: '50mb' }));
+// verify: a assinatura do webhook da Vistocar é calculada sobre o corpo BRUTO
+// (bytes recebidos, antes do parse), então guardamos o buffer só nessa rota —
+// manter a cópia em todas encareceria os envios de 50 MB da Intenção de Venda.
+app.use(express.json({
+  limit: '50mb',
+  verify: (req, res, buf) => {
+    if (req.originalUrl && req.originalUrl.startsWith('/api/webhooks/vistocar')) req.rawBody = buf;
+  },
+}));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
 // A página avulsa não pode sair pelo servidor de estáticos (isso pularia a
@@ -6707,7 +6734,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     // validações de resultado abaixo, que esperam um documento. A consulta fica
     // 'aguardando_pdf' e o débito acontece quando o webhook da Vistocar entrega o
     // PDF (ver POST /api/webhooks/vistocar → finalizePendingQuery). Se o documento
-    // nunca sair, runVistocarPendingCleanup marca como 'cancelado' sem cobrar nada.
+    // nunca sair, runVistocarPendingCheck marca como 'cancelado' sem cobrar nada.
     if (serviceId === 'crlv-ce') {
       await ensureDbReady();   // vistocar_pending é tabela nova — ver ensureDbReady
       const placa = String(params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
@@ -8725,141 +8752,235 @@ app.post('/api/admin/pix-reconcile', requireAuth, requireSuperAdmin, async (req,
   }
 });
 
-// ── POST /api/webhooks/zapi ───────────────────────────────────────────────────
-// ── POST /api/webhooks/vistocar ───────────────────────────────────────────────
-// Notificação de resultado da Vistocar para as consultas assíncronas (hoje só o
-// CRLV-e Ceará, ver o bloco 'crlv-ce' em processCatalogQuery). Cadastre a URL
-// https://www.despachantesconsultas.com.br/api/webhooks/vistocar?token=<VISTOCAR_WEBHOOK_TOKEN>
-// no painel da Vistocar.
+// ── Webhook Vistocar (consultas assíncronas) ─────────────────────────────────
+// Documentação de integração "Webhook Vistocar Consultas" v1.2 (agosto/2026).
+// Fluxo: a consulta é registrada (devolve movementId) → a Vistocar dispara
+// 'consulta.pendente' → depois 'consulta.atualizada' → quando
+// data.resultAvailable é true, o PDF é buscado em GET /apiclient/consult/:id.
 //
-// O formato do corpo ainda não está documentado, então o parser é tolerante
-// (aceita os nomes de campo mais prováveis, no nível raiz ou dentro de "response"/
-// "data") e TODA notificação é gravada em vistocar_webhooks antes de qualquer
-// coisa: se o formato não for reconhecido, o payload fica salvo com
-// processed=false para reprocessar depois de ajustar o parser, sem perder nada
-// e sem cobrar ninguém indevidamente.
-const VISTOCAR_WEBHOOK_TOKEN = process.env.VISTOCAR_WEBHOOK_TOKEN || '';
+// A notificação NUNCA traz o documento, só avisa que ele existe: o PDF vem de
+// uma chamada nossa, autenticada com o JWT de sempre. Por isso uma notificação
+// forjada não consegue injetar documento nenhum — no máximo faz o servidor
+// consultar um pedido da própria conta.
+//
+// O cadastro do endpoint é feito pela própria API (POST /apiclient/webhook/save,
+// ver registrarWebhookVistocar) e a chaveSeguranca fica no banco, não em
+// variável de ambiente — nada para configurar à mão.
+const VISTOCAR_WEBHOOK_URL = `${WEBHOOK_BASE_URL || 'https://www.despachantesconsultas.com.br'}/api/webhooks/vistocar`;
 
-// Procura um valor em vários caminhos possíveis do payload (raiz, response, data).
-function pickWebhookField(payload, nomes) {
-  const escopos = [payload, payload?.response, payload?.data, payload?.result];
-  for (const escopo of escopos) {
-    if (!escopo || typeof escopo !== 'object') continue;
-    for (const nome of nomes) {
-      const v = escopo[nome];
-      if (v !== undefined && v !== null && v !== '') return v;
-    }
+async function getVistocarWebhookSecret() {
+  const r = await pool.query('SELECT chave_seguranca FROM vistocar_webhook_config ORDER BY id DESC LIMIT 1');
+  return r.rows[0]?.chave_seguranca || '';
+}
+
+// Assinatura documentada: HMAC-SHA256(chaveSeguranca, corpoBruto + timestamp),
+// hexadecimal minúsculo com prefixo "sha256=". O corpo tem que ser o BRUTO
+// (bytes recebidos), por isso express.json guarda req.rawBody nesta rota.
+function validarAssinaturaVistocar(rawBody, timestamp, chave, assinaturaRecebida) {
+  if (!chave || !assinaturaRecebida) return false;
+  const esperado = 'sha256=' + crypto
+    .createHmac('sha256', chave)
+    .update(Buffer.concat([Buffer.from(rawBody || ''), Buffer.from(String(timestamp || ''), 'utf8')]))
+    .digest('hex');
+  const a = Buffer.from(esperado);
+  const b = Buffer.from(String(assinaturaRecebida));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// Busca o resultado de uma consulta concluída e entrega ao dono do pedido:
+// cobra (só agora, com o documento em mãos), guarda no pdf_cache e manda por
+// WhatsApp. Usado pelo webhook e pela varredura periódica — daí o claim atômico
+// em finalizePendingQuery e a checagem de cache, que evitam entrega dupla.
+async function entregarResultadoVistocar(pend) {
+  const movementId = pend.movement_id;
+  const r = await fetch(`${VISTOCAR_BASE_URL}/apiclient/consult/${encodeURIComponent(movementId)}`, {
+    headers: { 'Authorization': `Bearer ${await getVistocarToken()}` },
+  });
+  if (r.status === 404) return { entregue: false, motivo: 'resultado ainda não disponível' };
+  if (!r.ok) return { entregue: false, motivo: `HTTP ${r.status} ao buscar o resultado` };
+
+  const data = await r.json().catch(() => null);
+  // CRLV usa response.pdfBase64; ATPV-e usa response.arquivoPdfBase64 (doc, seção 8).
+  const b64 = data?.response?.pdfBase64 || data?.response?.arquivoPdfBase64;
+  if (!b64) return { entregue: false, motivo: 'resposta sem PDF' };
+  const buf = Buffer.from(String(b64).replace(/^data:[^,]+,/, '').replace(/\s/g, ''), 'base64');
+  if (buf.slice(0, 4).toString() !== '%PDF') return { entregue: false, motivo: 'conteúdo devolvido não é um PDF' };
+
+  const jaTem = await pool.query('SELECT 1 FROM pdf_cache WHERE query_id=$1 AND expires_at > NOW()', [pend.query_id]);
+  if (jaTem.rows.length) {
+    await pool.query('DELETE FROM vistocar_pending WHERE movement_id=$1', [movementId]);
+    return { entregue: false, motivo: 'documento já havia sido entregue' };
   }
-  return null;
+
+  const service = SERVICES.find(s => s.id === pend.service_id);
+  await finalizePendingQuery(pend.query_id, pend.user_id, `Consulta: ${service?.name || pend.service_id}`);
+
+  const token = crypto.randomBytes(32).toString('hex');
+  await pool.query(
+    `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+    [pend.query_id, pend.user_id, token, buf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+  );
+
+  if (pend.phone) {
+    const placa = (pend.placa || '').toUpperCase();
+    const nome = service?.name || 'Documento';
+    const caption = `✅ *${nome} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
+    await sendWhatsAppPdf(pend.phone, buf, `${pend.service_id}-${placa || 'doc'}.pdf`, caption).catch(e =>
+      console.error(`Erro ao enviar ${nome} por WhatsApp:`, e.message));
+  }
+
+  await pool.query('DELETE FROM vistocar_pending WHERE movement_id=$1', [movementId]);
+  console.log(`✅ Resultado Vistocar entregue [movementId ${movementId}, query ${pend.query_id}]`);
+  return { entregue: true };
+}
+
+// A consulta foi estornada/cancelada pelo fornecedor (status 3): nada a entregar
+// e nada a estornar — a cobrança só acontece na entrega.
+async function cancelarPendenciaVistocar(pend, motivo) {
+  const marcado = await pool.query(
+    `UPDATE queries SET status='cancelado' WHERE id=$1 AND status='aguardando_pdf' RETURNING id`,
+    [pend.query_id]
+  );
+  await pool.query('DELETE FROM vistocar_pending WHERE movement_id=$1', [pend.movement_id]);
+  if (marcado.rows.length && pend.phone) {
+    const placa = (pend.placa || '').toUpperCase();
+    const msg = `⚠️ *${SERVICES.find(s => s.id === pend.service_id)?.name || 'Consulta'}*\n\nO documento${placa ? ` da placa ${placa}` : ''} não pôde ser emitido${motivo ? `: ${motivo}` : '.'}\n\nVocê não foi cobrado por essa tentativa. Se precisar, tente novamente ou fale com o suporte.`;
+    await sendWhatsApp(pend.phone, msg).catch(() => {});
+  }
 }
 
 app.post('/api/webhooks/vistocar', async (req, res) => {
-  // Endpoint público: sem o token qualquer um poderia forjar uma notificação com
-  // um movementId (que é sequencial, fácil de adivinhar) e disparar cobrança e
-  // entrega de um PDF falso. Enquanto o token não estiver configurado, aceita e
-  // registra o aviso — assim um disparo de teste da Vistocar não se perde.
-  if (VISTOCAR_WEBHOOK_TOKEN) {
-    const enviado = req.query.token || req.headers['x-webhook-token'] || '';
-    if (enviado !== VISTOCAR_WEBHOOK_TOKEN) {
-      console.error('Webhook Vistocar recusado: token inválido ou ausente.');
-      return res.sendStatus(401);
-    }
-  } else {
-    console.error('⚠️ VISTOCAR_WEBHOOK_TOKEN não configurado — webhook da Vistocar aceito sem autenticação.');
-  }
-
   const payload = req.body || {};
-  const movementId = pickWebhookField(payload, ['movementId', 'movement_id', 'movimentoId', 'idMovimento']);
-  const movementKey = movementId != null ? String(movementId) : null;
+  const eventId = req.headers['x-webhook-id'] || payload.eventId || null;
+  const movementKey = payload?.data?.movementId != null ? String(payload.data.movementId) : null;
 
   let logId = null;
   try {
-    // vistocar_webhooks/vistocar_pending são tabelas novas — ver ensureDbReady.
-    await ensureDbReady();
+    await ensureDbReady();   // vistocar_webhooks/vistocar_pending são tabelas novas
+    // event_id é UNIQUE: reenvio da mesma notificação (a Vistocar repete até
+    // receber 2xx, com o mesmo eventId) não é processado duas vezes.
     const logRow = await pool.query(
-      `INSERT INTO vistocar_webhooks (movement_id, payload) VALUES ($1,$2) RETURNING id`,
-      [movementKey, JSON.stringify(payload).slice(0, 200000)]
+      `INSERT INTO vistocar_webhooks (event_id, movement_id, evento, payload)
+       VALUES ($1,$2,$3,$4) ON CONFLICT (event_id) DO NOTHING RETURNING id`,
+      [eventId, movementKey, payload.event || null, JSON.stringify(payload).slice(0, 200000)]
     );
-    logId = logRow.rows[0].id;
+    if (!logRow.rows.length && eventId) {
+      console.log(`Webhook Vistocar ignorado (reenvio do evento ${eventId}).`);
+      return res.sendStatus(200);
+    }
+    logId = logRow.rows[0]?.id || null;
   } catch (e) {
     console.error('Erro ao gravar webhook da Vistocar:', e.message);
   }
 
-  // Responde antes de processar: a Vistocar não precisa esperar o download do
-  // PDF nem o envio por WhatsApp, e o registro acima já garante o reprocessamento.
+  // 2xx imediato, como a doc recomenda — o processamento continua depois.
   res.sendStatus(200);
 
-  const falhar = async (motivo) => {
-    console.error(`Webhook Vistocar não processado [movementId ${movementKey || '-'}]: ${motivo}. Payload: ${JSON.stringify(payload).slice(0, 1000)}`);
-    if (logId) await pool.query('UPDATE vistocar_webhooks SET erro=$1 WHERE id=$2', [motivo, logId]).catch(() => {});
+  const registrar = async (msg, ok = false) => {
+    if (!ok) console.error(`Webhook Vistocar [movementId ${movementKey || '-'}]: ${msg}`);
+    if (logId) await pool.query('UPDATE vistocar_webhooks SET processed=$1, erro=$2 WHERE id=$3',
+      [ok, ok ? null : msg, logId]).catch(() => {});
   };
 
   try {
-    if (!movementKey) return falhar('notificação sem movementId reconhecível');
+    const chave = await getVistocarWebhookSecret();
+    const assinatura = req.headers['x-webhook-signature'];
+    const timestamp = req.headers['x-webhook-timestamp'] || payload.timestamp;
+    if (chave) {
+      if (!validarAssinaturaVistocar(req.rawBody, timestamp, chave, assinatura))
+        return registrar('assinatura inválida — notificação descartada');
+    } else {
+      // Sem chave salva o webhook ainda não foi cadastrado por nós; segue em
+      // frente porque o documento vem da chamada autenticada, não daqui.
+      console.error('Webhook Vistocar recebido sem chaveSeguranca cadastrada — assinatura não verificada.');
+    }
+
+    if (!movementKey) return registrar('notificação sem data.movementId');
 
     const pr = await pool.query('SELECT * FROM vistocar_pending WHERE movement_id=$1', [movementKey]);
     const pend = pr.rows[0];
-    if (!pend) return falhar('nenhum pedido pendente com esse movementId');
+    if (!pend) return registrar('nenhum pedido pendente com esse movementId');
 
-    const pdfBuf = await extractVistocarPdf(payload);
-    if (!pdfBuf) {
-      // Pode ser uma notificação de andamento (ainda pendente) ou de recusa — nos
-      // dois casos não há o que entregar agora; o pedido segue na fila.
-      const msg = pickWebhookField(payload, ['msg', 'message', 'mensagem', 'status']);
-      return falhar(`sem PDF na notificação${msg ? ` (msg: ${String(msg).slice(0, 120)})` : ''}`);
+    const status = Number(payload?.data?.status);
+    const statusMessage = payload?.data?.statusMessage || '';
+
+    // 3 = estornada/cancelada pelo fornecedor.
+    if (status === 3) {
+      await cancelarPendenciaVistocar(pend, statusMessage);
+      return registrar(`consulta cancelada pelo fornecedor: ${statusMessage}`, true);
     }
 
-    await finalizePendingQuery(pend.query_id, pend.user_id, `Consulta: ${SERVICES.find(s => s.id === pend.service_id)?.name || pend.service_id}`);
+    // O sinal confiável é resultAvailable, não o status (doc, seção 6): em alguns
+    // produtos 'consulta.atualizada' chega mais de uma vez antes do documento.
+    if (payload?.data?.resultAvailable !== true)
+      return registrar(`sem resultado disponível ainda (${payload.event || 'evento'}${statusMessage ? `: ${statusMessage}` : ''})`, true);
 
-    const token = crypto.randomBytes(32).toString('hex');
-    await pool.query(
-      `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
-      [pend.query_id, pend.user_id, token, pdfBuf.toString('base64'),
-       new Date(Date.now() + 7 * 24 * 3600 * 1000)]
-    );
-
-    if (pend.phone) {
-      const placa = (pend.placa || '').toUpperCase();
-      const caption = `✅ *CRLV-e Ceará pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
-      await sendWhatsAppPdf(pend.phone, pdfBuf, `CRLV-e-CE-${placa || 'doc'}.pdf`, caption).catch(e =>
-        console.error('Erro ao enviar CRLV-e CE por WhatsApp:', e.message));
-    }
-
-    await pool.query('DELETE FROM vistocar_pending WHERE movement_id=$1', [movementKey]);
-    if (logId) await pool.query('UPDATE vistocar_webhooks SET processed=TRUE WHERE id=$1', [logId]).catch(() => {});
-    console.log(`✅ CRLV-e CE entregue via webhook [movementId ${movementKey}, query ${pend.query_id}]`);
+    const r = await entregarResultadoVistocar(pend);
+    return registrar(r.entregue ? 'resultado entregue' : r.motivo, r.entregue);
   } catch (e) {
-    await falhar(`erro ao processar: ${e.message}`);
+    await registrar(`erro ao processar: ${e.message}`);
   }
 });
 
-// Extrai o documento da notificação: aceita o PDF em Base64 (com ou sem o prefixo
-// data:) ou um link para baixar. Devolve null quando a notificação não traz
-// documento nenhum (ex.: aviso de andamento).
-async function extractVistocarPdf(payload) {
-  const b64 = pickWebhookField(payload, ['pdfBase64', 'pdf_base64', 'base64', 'arquivoBase64', 'documentoBase64']);
-  if (b64) {
-    const limpo = String(b64).replace(/^data:[^,]+,/, '').replace(/\s/g, '');
-    const buf = Buffer.from(limpo, 'base64');
-    if (buf.slice(0, 4).toString() === '%PDF') return buf;
-    console.error('Webhook Vistocar: campo Base64 não é um PDF válido.');
-    return null;
-  }
-  const url = pickWebhookField(payload, ['pdfUrl', 'pdf_url', 'arquivoUrl', 'arquivo_url', 'url', 'link']);
-  if (!url) return null;
-  const r = await fetch(String(url));
-  if (!r.ok) {
-    console.error(`Webhook Vistocar: falha ao baixar o PDF (HTTP ${r.status}).`);
-    return null;
-  }
-  const buf = Buffer.from(await r.arrayBuffer());
-  if (buf.slice(0, 4).toString() !== '%PDF') {
-    console.error('Webhook Vistocar: o link informado não devolveu um PDF.');
-    return null;
-  }
-  return buf;
+// ── Cadastro do nosso endpoint na Vistocar (POST /apiclient/webhook/save) ─────
+// Só pode existir um webhook ATIVO por conta (doc, seção 2): quando já houver
+// outro cadastrado, este helper não sobrescreve nada — devolve o que encontrou
+// para o admin decidir. A chaveSeguranca gerada fica no banco e é o que valida
+// a assinatura das notificações.
+async function registrarWebhookVistocar() {
+  await ensureDbReady();
+  const token = await getVistocarToken();
+  const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
+
+  const listaRes = await fetch(`${VISTOCAR_BASE_URL}/apiclient/webhook`, { headers });
+  const lista = listaRes.status === 204 ? [] : await listaRes.json().catch(() => []);
+  const ativos = (Array.isArray(lista) ? lista : [lista]).filter(w => w && w.status === 'ATIVO');
+  const nosso = ativos.find(w => w.url === VISTOCAR_WEBHOOK_URL);
+  if (ativos.length && !nosso)
+    return { ok: false, error: `Já existe um webhook ATIVO nesta conta Vistocar (${ativos[0].url}). Inative-o antes de cadastrar o nosso.`, webhooks: ativos };
+  if (nosso && await getVistocarWebhookSecret())
+    return { ok: true, jaCadastrado: true, webhook: nosso };
+
+  const chaveSeguranca = crypto.randomBytes(24).toString('hex');
+  const saveRes = await fetch(`${VISTOCAR_BASE_URL}/apiclient/webhook/save`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ url: VISTOCAR_WEBHOOK_URL, chaveSeguranca }),
+  });
+  const saved = await saveRes.json().catch(() => null);
+  if (!saveRes.ok || !saved?.id)
+    return { ok: false, error: saved?.message || `Falha ao cadastrar o webhook (HTTP ${saveRes.status}).` };
+
+  await pool.query(
+    `INSERT INTO vistocar_webhook_config (webhook_id, url, chave_seguranca) VALUES ($1,$2,$3)`,
+    [String(saved.id), saved.url || VISTOCAR_WEBHOOK_URL, saved.chaveSeguranca || chaveSeguranca]
+  );
+  return { ok: true, webhook: { id: saved.id, url: saved.url, status: saved.status } };
 }
 
+// ── ADMIN: gestão do webhook da Vistocar ─────────────────────────────────────
+app.get('/api/admin/vistocar-webhook', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const listaRes = await fetch(`${VISTOCAR_BASE_URL}/apiclient/webhook`, {
+      headers: { 'Authorization': `Bearer ${await getVistocarToken()}` },
+    });
+    const lista = listaRes.status === 204 ? [] : await listaRes.json().catch(() => []);
+    const cfg = await pool.query('SELECT webhook_id, url, created_at FROM vistocar_webhook_config ORDER BY id DESC LIMIT 1');
+    res.json({ success: true, urlEsperada: VISTOCAR_WEBHOOK_URL, vistocar: lista, local: cfg.rows[0] || null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/vistocar-webhook', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await registrarWebhookVistocar();
+    res.status(r.ok ? 200 : 400).json(r);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/webhooks/zapi ───────────────────────────────────────────────────
 app.post('/api/webhooks/zapi', async (req, res) => {
   res.sendStatus(200);
   const event = req.body;
@@ -10448,41 +10569,37 @@ async function runCrlvAgendadoPendingCheck() {
   return { checked, notified, refunded, pending: pendentes.length };
 }
 
-// Desiste dos pedidos assíncronos da Vistocar (CRLV-e CE) cujo webhook nunca
-// chegou. Não há estorno a fazer: a cobrança só acontece na entrega do PDF, então
-// aqui a consulta é apenas marcada como 'cancelado' e o cliente é avisado de que
-// não pagou nada. Sem polling — a Vistocar não expõe consulta por movementId, o
-// resultado só chega por notificação.
-async function runVistocarPendingCleanup() {
+// Varre os pedidos assíncronos da Vistocar (hoje o CRLV-e CE) que ainda não
+// foram entregues e tenta buscar o resultado em GET /apiclient/consult/:id —
+// rede de segurança para a notificação que se perder (webhook fora do ar,
+// cadastro inativo, 5xx nosso além das 5 tentativas dela). Passado o prazo sem
+// documento, desiste: como a cobrança só acontece na entrega, não há estorno a
+// fazer — a consulta é marcada como 'cancelado' e o cliente avisado de que não
+// pagou nada.
+async function runVistocarPendingCheck() {
   await ensureDbReady();   // vistocar_pending é tabela nova — ver ensureDbReady
   const { rows } = await pool.query(
-    `SELECT p.movement_id, p.query_id, p.placa, p.phone, q.service_name
-     FROM vistocar_pending p
+    `SELECT p.*, q.service_name FROM vistocar_pending p
      LEFT JOIN queries q ON q.id = p.query_id
-     WHERE p.created_at < NOW() - INTERVAL '${ASYNC_PDF_REFUND_HOURS} hours'
      ORDER BY p.created_at ASC LIMIT 200`
   );
-  let cancelled = 0;
+  let entregues = 0, cancelled = 0;
   for (const row of rows) {
     try {
-      const marcado = await pool.query(
-        `UPDATE queries SET status='cancelado' WHERE id=$1 AND status='aguardando_pdf' RETURNING id`,
-        [row.query_id]
-      );
-      await pool.query('DELETE FROM vistocar_pending WHERE movement_id=$1', [row.movement_id]);
-      if (!marcado.rows.length) continue;   // já entregue ou já fechado por outro caminho
+      const r = await entregarResultadoVistocar(row);
+      if (r.entregue) { entregues++; continue; }
+
+      const ageMs = Date.now() - new Date(row.created_at).getTime();
+      if (ageMs <= ASYNC_PDF_REFUND_HOURS * 3600 * 1000) continue;   // ainda dentro do prazo
+      await cancelarPendenciaVistocar(row, 'não foi emitido dentro do prazo esperado');
       cancelled++;
-      if (row.phone) {
-        const placa = (row.placa || '').toUpperCase();
-        const msg = `⚠️ *${row.service_name || 'CRLV-e Ceará (CE)'}*\n\nO documento${placa ? ` da placa ${placa}` : ''} não foi emitido dentro do prazo esperado. Você não foi cobrado por essa tentativa. Se precisar, tente novamente ou fale com o suporte.`;
-        await sendWhatsApp(row.phone, msg).catch(() => {});
-      }
     } catch (e) {
-      console.error(`Erro ao cancelar pendência Vistocar [movementId ${row.movement_id}]:`, e.message);
+      console.error(`Erro ao checar pendência Vistocar [movementId ${row.movement_id}]:`, e.message);
     }
+    await new Promise(r => setTimeout(r, 300));
   }
-  if (rows.length) console.log(`✅ Pendências Vistocar: ${rows.length} vencidas, ${cancelled} canceladas`);
-  return { vencidas: rows.length, cancelled };
+  if (rows.length) console.log(`✅ Pendências Vistocar: ${rows.length} verificadas, ${entregues} entregues, ${cancelled} canceladas`);
+  return { verificadas: rows.length, entregues, cancelled };
 }
 
 // ── GET /api/cron/crlv-agendado-status (Vercel Cron) ──────────────────────────
@@ -10493,7 +10610,7 @@ app.get('/api/cron/crlv-agendado-status', async (req, res) => {
   }
   try {
     const result = await runCrlvAgendadoPendingCheck();
-    const vistocar = await runVistocarPendingCleanup();
+    const vistocar = await runVistocarPendingCheck();
     res.json({ success: true, ...result, vistocar });
   } catch (err) {
     console.error('Erro no cron crlv-agendado-status:', err.message);
