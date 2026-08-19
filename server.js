@@ -258,7 +258,14 @@ async function mpReq(method, endpoint, body = null, extraHeaders = {}) {
   const data = await r.json();
   if (!r.ok) {
     const msg = data.message || data.error || data.cause?.[0]?.description || 'Erro Mercado Pago';
-    throw new Error(msg);
+    // Status e código do gateway viajam no próprio Error para quem chama poder
+    // distinguir "credencial recusada" de "payload inválido" sem reparsear a
+    // string da mensagem (ver isMpCredencialErro / mpErroAmigavel).
+    const err = new Error(msg);
+    err.mpStatus   = r.status;
+    err.mpCode     = data.code || data.error || '';
+    err.mpEndpoint = endpoint;
+    throw err;
   }
   return data;
 }
@@ -270,6 +277,55 @@ async function mpReq(method, endpoint, body = null, extraHeaders = {}) {
 // estorno em caso de retry de rede.
 async function mpRefundPayment(paymentId) {
   await mpReq('POST', `/v1/payments/${paymentId}/refunds`, {}, { 'X-Idempotency-Key': `refund-${paymentId}` });
+}
+
+// ── Falha de credencial do Mercado Pago ──────────────────────────────────────
+// Quando a conta/aplicação perde autorização para criar pagamentos, o gateway
+// responde 401/403 com um texto em inglês do próprio PolicyAgent ("At least one
+// policy returned UNAUTHORIZED.", code PA_UNAUTHORIZED_RESULT_FROM_POLICIES).
+// Esse texto vazava direto para a tela do cliente, que não entende a mensagem e
+// ainda fica achando que errou algum dado. Aqui ele vira um aviso em pt-BR e o
+// admin é notificado, porque nesse estado NENHUMA cobrança nova é gerada.
+const MP_CREDENCIAL_MSG =
+  'Pagamento via PIX temporariamente indisponível: o gateway recusou a geração '
+  + 'da cobrança. Nossa equipe já foi avisada — tente novamente em alguns '
+  + 'minutos ou fale com o suporte.';
+
+function isMpCredencialErro(err) {
+  if (err?.mpStatus === 401 || err?.mpStatus === 403) return true;
+  const txt = `${err?.mpCode || ''} ${err?.message || ''}`;
+  return /PA_UNAUTHORIZED_RESULT_FROM_POLICIES|policy returned UNAUTHORIZED/i.test(txt);
+}
+
+function mpErroAmigavel(err, fallback) {
+  if (isMpCredencialErro(err)) return MP_CREDENCIAL_MSG;
+  return err?.message || fallback;
+}
+
+// Throttle do alerta: uma credencial recusada derruba todas as cobranças de uma
+// vez, então sem janela um pico de tentativas viraria dezenas de mensagens no
+// WhatsApp. A janela vive em memória — na Vercel isso limita a um alerta por
+// hora por instância, o que já basta para não virar spam.
+let ultimoAlertaMpCredencial = 0;
+const ALERTA_MP_INTERVALO_MS = 60 * 60 * 1000;
+
+async function alertAdminPixFalha(err, contexto) {
+  if (!isMpCredencialErro(err) || !ADMIN_PHONE) return;
+  const agora = Date.now();
+  if (agora - ultimoAlertaMpCredencial < ALERTA_MP_INTERVALO_MS) return;
+  ultimoAlertaMpCredencial = agora;
+  const msg = [
+    '🚨 *PIX fora do ar — credencial do Mercado Pago recusada*',
+    '',
+    `📍 *Origem:* ${contexto}`,
+    `🔢 *HTTP:* ${err.mpStatus || '-'}`,
+    `🏷️ *Código:* ${err.mpCode || '-'}`,
+    `💬 *Mensagem:* ${err.message}`,
+    '',
+    'Nenhuma cobrança nova está sendo gerada. Confira pendências cadastrais e '
+      + 'as credenciais da aplicação no painel do Mercado Pago.',
+  ].join('\n');
+  await sendWhatsApp(ADMIN_PHONE, msg).catch(() => {});
 }
 
 const SERVICES = [
@@ -8012,6 +8068,7 @@ app.post('/api/admin/api-cobrancas/:id/cobrar', requireAuth, requireSuperAdmin, 
     res.json({ success: true, whatsappEnviado: enviado });
   } catch (e) {
     console.error('Erro ao cobrar consulta API:', e.message);
+    await alertAdminPixFalha(e, 'Cobrança API (painel admin)');
     res.status(500).json({ error: e.message || 'Erro ao gerar a cobrança.' });
   }
 });
@@ -8245,7 +8302,8 @@ app.post('/api/public/pedido', async (req, res) => {
     });
   } catch (err) {
     console.error('Erro ao criar pedido avulso:', err.message);
-    res.status(500).json({ error: err.message || 'Erro ao gerar o PIX. Tente novamente.' });
+    await alertAdminPixFalha(err, 'Consulta avulsa (/api/public/pedido)');
+    res.status(500).json({ error: mpErroAmigavel(err, 'Erro ao gerar o PIX. Tente novamente.') });
   }
 });
 
@@ -8404,7 +8462,8 @@ app.post('/api/pix/criar', requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('Erro PIX criar:', err.message);
-    res.status(500).json({ error: err.message || 'Erro ao criar cobrança PIX.' });
+    await alertAdminPixFalha(err, 'Recarga de créditos (/api/pix/criar)');
+    res.status(500).json({ error: mpErroAmigavel(err, 'Erro ao criar cobrança PIX.') });
   }
 });
 
@@ -8497,7 +8556,8 @@ app.post('/api/assinatura/pix', requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('Erro ao criar PIX da assinatura:', err.message);
-    res.status(500).json({ error: err.message || 'Erro ao criar a cobrança PIX da assinatura.' });
+    await alertAdminPixFalha(err, 'Assinatura de placas (/api/assinatura/pix)');
+    res.status(500).json({ error: mpErroAmigavel(err, 'Erro ao criar a cobrança PIX da assinatura.') });
   }
 });
 
