@@ -94,6 +94,9 @@
     <div class="nav-item" data-section="api-cobrancas" onclick="showSection('api-cobrancas')">
       <span class="text-lg">💰</span> Cobranças API
     </div>
+    <div class="nav-item" data-section="assinantes" onclick="showSection('assinantes')">
+      <span class="text-lg">📜</span> Lista de Assinantes
+    </div>
   </nav>
 
   <div class="p-3 border-t border-gray-700 space-y-1">
@@ -495,6 +498,69 @@
       </div>
     </section>
 
+    <!-- ── LISTA DE ASSINANTES ──────────────────────────────────────────────── -->
+    <section id="section-assinantes" class="admin-section hidden space-y-4">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Lista de Assinantes Cadastrados</h2>
+        <p class="text-sm text-gray-500">Assinantes de <strong>Coisas de Despachantes</strong>. A assinatura não renova sozinha — cada período de 30 dias exige um PIX novo, então quem aparece como vencido é candidato a renovação.</p>
+      </div>
+
+      <div class="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        <div class="stat-card border-l-green-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Assinaturas Ativas</div>
+          <div id="as-ativas" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">dentro da vigência</div>
+        </div>
+        <div class="stat-card border-l-amber-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Vencendo em 5 dias</div>
+          <div id="as-vencendo" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">renovação próxima</div>
+        </div>
+        <div class="stat-card border-l-red-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Vencidas</div>
+          <div id="as-vencidas" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">sem assinatura vigente</div>
+        </div>
+        <div class="stat-card border-l-blue-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Já Assinaram</div>
+          <div id="as-total" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">clientes distintos</div>
+        </div>
+      </div>
+
+      <div class="card p-0 overflow-hidden">
+        <div class="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-gray-100">
+          <input id="as-search" type="text" class="input-field flex-1 min-w-48" placeholder="Buscar por nome, e-mail, CPF/CNPJ ou telefone..." oninput="renderAssinantes()">
+          <select id="as-filtro" class="input-field w-auto" onchange="renderAssinantes()">
+            <option value="todos">Todos</option>
+            <option value="ativos">Somente ativos</option>
+            <option value="vencendo">Vencendo em 5 dias</option>
+            <option value="vencidos">Somente vencidos</option>
+          </select>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Cliente</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">WhatsApp</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden lg:table-cell">Início</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Vencimento</th>
+                <th class="px-4 py-3 text-center font-semibold text-gray-600">Placas</th>
+                <th class="px-4 py-3 text-center font-semibold text-gray-600">CRV</th>
+                <th class="px-4 py-3 text-center font-semibold text-gray-600 hidden lg:table-cell">Períodos</th>
+                <th class="px-4 py-3 text-center font-semibold text-gray-600">Status</th>
+              </tr>
+            </thead>
+            <tbody id="assinantes-tbody" class="divide-y divide-gray-50">
+              <tr><td colspan="8" class="px-4 py-8"><div class="space-y-2"><div class="skeleton"></div><div class="skeleton"></div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="assinantes-count" class="px-4 py-2 text-xs text-gray-400 border-t border-gray-100"></div>
+      </div>
+    </section>
+
     <!-- ── COBRANÇAS API ────────────────────────────────────────────────────── -->
     <section id="section-api-cobrancas" class="admin-section hidden space-y-4">
       <div>
@@ -829,7 +895,7 @@ const fmt = v => 'R$ ' + parseFloat(v||0).toLocaleString('pt-BR',{minimumFractio
 const fmtDate = s => { const d=new Date(s); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
 
 let allUsers = [], allTx = [], allQueries = [], allServices = [], allManualQueries = [];
-const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API' };
+const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API', 'assinantes':'Lista de Assinantes Cadastrados' };
 
 function toast(msg, type='success') {
   const el = document.getElementById('toast');
@@ -859,6 +925,7 @@ function showSection(id) {
   if (id === 'api-keys') { loadApiKeys(); toggleApiKeyType(); }
   if (id === 'avulsas') loadPublicOrders();
   if (id === 'api-cobrancas') loadApiCharges();
+  if (id === 'assinantes') loadAssinantes();
 }
 
 function refreshCurrentSection() {
@@ -874,6 +941,7 @@ function refreshCurrentSection() {
   if (id === 'api-keys')  loadApiKeys();
   if (id === 'avulsas')   loadPublicOrders();
   if (id === 'api-cobrancas') loadApiCharges();
+  if (id === 'assinantes')    loadAssinantes();
 }
 
 function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
@@ -1199,6 +1267,104 @@ function renderPublicOrders(orders) {
   const pagas = orders.filter(o => o.status === 'DONE').length;
   document.getElementById('avulsas-count').textContent =
     `${orders.length} pedido${orders.length > 1 ? 's' : ''} — ${pagas} concluído${pagas === 1 ? '' : 's'}`;
+}
+
+// ── Lista de assinantes (Coisas de Despachantes) ─────────────────────────────
+let allAssinantes = [];
+
+async function loadAssinantes() {
+  try {
+    const r = await fetch('/api/admin/assinantes');
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      toast(err.error || 'Erro ao carregar assinantes.', 'error');
+      return;
+    }
+    allAssinantes = await r.json();
+    renderAssinantes();
+  } catch { toast('Erro de conexão ao carregar assinantes.', 'error'); }
+}
+
+// Dias inteiros que faltam para vencer; null quando a liberação é sem prazo.
+function diasRestantes(a) {
+  if (!a.expires_at) return null;
+  return Math.ceil((new Date(a.expires_at) - new Date()) / 86400000);
+}
+
+function renderAssinantes() {
+  const busca  = (document.getElementById('as-search').value || '').toLowerCase().trim();
+  const filtro = document.getElementById('as-filtro').value;
+
+  const ativos   = allAssinantes.filter(a => a.vigente);
+  const vencendo = ativos.filter(a => { const d = diasRestantes(a); return d !== null && d <= 5; });
+  document.getElementById('as-ativas').textContent   = ativos.length;
+  document.getElementById('as-vencendo').textContent = vencendo.length;
+  document.getElementById('as-vencidas').textContent = allAssinantes.length - ativos.length;
+  document.getElementById('as-total').textContent    = allAssinantes.length;
+
+  const lista = allAssinantes.filter(a => {
+    const d = diasRestantes(a);
+    if (filtro === 'ativos'   && !a.vigente) return false;
+    if (filtro === 'vencidos' && a.vigente)  return false;
+    if (filtro === 'vencendo' && !(a.vigente && d !== null && d <= 5)) return false;
+    if (!busca) return true;
+    return [a.name, a.email, a.cpf_cnpj, a.phone]
+      .some(v => (v || '').toLowerCase().includes(busca));
+  });
+
+  const tbody = document.getElementById('assinantes-tbody');
+  if (!lista.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-8 text-center text-gray-400">'
+      + (allAssinantes.length ? 'Nenhum assinante com esse filtro.' : 'Nenhum assinante cadastrado ainda.')
+      + '</td></tr>';
+    document.getElementById('assinantes-count').textContent = '0 assinantes';
+    return;
+  }
+
+  tbody.innerHTML = lista.map(a => {
+    const d = diasRestantes(a);
+    let venc, status;
+    if (!a.expires_at) {
+      venc   = '<span class="text-gray-500">sem prazo</span>';
+      status = '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">Liberado</span>';
+    } else {
+      const data = new Date(a.expires_at).toLocaleDateString('pt-BR');
+      if (!a.vigente) {
+        venc   = `<span class="text-red-600">${data}</span><div class="text-xs text-gray-400">há ${Math.abs(d)} dia(s)</div>`;
+        status = '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">Vencida</span>';
+      } else if (d <= 5) {
+        venc   = `<span class="text-amber-600 font-medium">${data}</span><div class="text-xs text-amber-500">faltam ${d} dia(s)</div>`;
+        status = '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">Vencendo</span>';
+      } else {
+        venc   = `${data}<div class="text-xs text-gray-400">faltam ${d} dia(s)</div>`;
+        status = '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">Ativa</span>';
+      }
+    }
+    // cota null = período de cortesia sem teto definido (origem diferente de PIX).
+    const cotaTxt = (usado, cota) => cota === null
+      ? `${usado} <span class="text-gray-400">/ ∞</span>`
+      : `<span class="${usado >= cota ? 'text-red-600 font-semibold' : ''}">${usado} / ${cota}</span>`;
+    const zap = (a.phone || '').replace(/\D/g, '');
+    return `
+    <tr>
+      <td class="px-4 py-3">
+        <div class="font-medium text-gray-800">${a.name}${a.user_active ? '' : ' <span class="text-xs text-red-500">(bloqueado)</span>'}</div>
+        <div class="text-xs text-gray-400 break-all">${a.email}</div>
+      </td>
+      <td class="px-4 py-3 hidden md:table-cell text-gray-600">
+        ${zap ? `<a href="https://wa.me/55${zap}" target="_blank" rel="noopener" class="text-green-600 hover:underline">${a.phone}</a>` : '-'}
+      </td>
+      <td class="px-4 py-3 hidden lg:table-cell text-xs text-gray-500 whitespace-nowrap">${new Date(a.starts_at).toLocaleDateString('pt-BR')}</td>
+      <td class="px-4 py-3 whitespace-nowrap">${venc}</td>
+      <td class="px-4 py-3 text-center whitespace-nowrap">${cotaTxt(a.queries_used, a.cota)}</td>
+      <td class="px-4 py-3 text-center whitespace-nowrap">${cotaTxt(a.queries_used_crv, a.cota_crv)}</td>
+      <td class="px-4 py-3 text-center hidden lg:table-cell text-gray-600">${a.periodos}</td>
+      <td class="px-4 py-3 text-center">${status}<div class="text-xs text-gray-400 mt-1">${a.origem}</div></td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('assinantes-count').textContent =
+    `${lista.length} de ${allAssinantes.length} assinante${allAssinantes.length === 1 ? '' : 's'}`;
 }
 
 async function toggleApiKey(id, isActive) {
