@@ -8561,6 +8561,44 @@ app.post('/api/assinatura/pix', requireAuth, async (req, res) => {
   }
 });
 
+// ── GET /api/admin/assinantes ────────────────────────────────────────────────
+// Lista de quem assina "Coisas de Despachantes". Cada pagamento cria uma linha
+// nova em subscriptions (um período), então aqui interessa UMA linha por
+// usuário: o DISTINCT ON repete a regra do getAssinaturaVigente — expires_at
+// NULL (liberação sem prazo dada pelo admin) vem primeiro, depois o vencimento
+// mais distante. Quem já teve assinatura e deixou vencer continua na lista,
+// marcado como vencido, porque é justamente esse o pessoal que vale a pena
+// chamar para renovar.
+app.get('/api/admin/assinantes', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT * FROM (
+         SELECT DISTINCT ON (s.user_id)
+                s.id, s.user_id, s.starts_at, s.expires_at, s.origem,
+                s.queries_used, s.cota, s.queries_used_crv, s.cota_crv,
+                u.name, u.email, u.phone, u.cpf_cnpj, u.active AS user_active,
+                (SELECT COUNT(*) FROM subscriptions s2 WHERE s2.user_id = s.user_id) AS periodos
+           FROM subscriptions s
+           JOIN users u ON u.id = s.user_id
+          ORDER BY s.user_id, (s.expires_at IS NULL) DESC, s.expires_at DESC
+       ) t
+       ORDER BY (t.expires_at IS NULL OR t.expires_at > NOW()) DESC,
+                t.expires_at DESC NULLS FIRST`
+    );
+    res.json(r.rows.map(s => ({
+      ...s,
+      periodos: parseInt(s.periodos, 10),
+      // Quem decide a vigência é o servidor, não o front: a verdade é sempre
+      // expires_at (o campo "status" da tabela fica defasado entre duas
+      // execuções do cron de expiração).
+      vigente: s.expires_at === null || new Date(s.expires_at) > new Date(),
+    })));
+  } catch (e) {
+    console.error('Erro ao listar assinantes:', e.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
 // ── Crédito de pagamento PIX aprovado — ponto único usado por /status, /webhook
 // e pelo cron de reconciliação. O passo que credita o usuário é uma única
 // UPDATE ... WHERE credited=false, cujo lock de linha do Postgres garante que
