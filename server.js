@@ -1072,6 +1072,15 @@ async function initDB() {
       created_at     TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  // Contador de disparos por canal do broadcast: e ele que faz as campanhas
+  // alternarem (ver proximaCampanhaBroadcast). Uma linha por canal.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS broadcast_campanha_state (
+      canal      VARCHAR(20) PRIMARY KEY,
+      disparos   INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS intencao_venda_files (
       id         SERIAL PRIMARY KEY,
@@ -10352,10 +10361,17 @@ app.get('/admin', requireAuth, async (req, res) => {
   }
 });
 
-// ── Broadcast WhatsApp (disparo automático a cada 2 dias) ────────────────────
-const BROADCAST_IMAGE_PATH = path.join(__dirname, 'promo-atpve.png');
+// ── Broadcast WhatsApp — campanhas em rodízio ───────────────────────────────
+// Duas campanhas em rodizio: os grupos recebem uma a cada disparo, alternando,
+// para o mesmo card nao se repetir sempre no mesmo grupo. O video (marcos.mp4)
+// e comum as duas e vai logo depois da imagem.
 const BROADCAST_VIDEO_PATH = path.join(__dirname, 'marcos.mp4');
-const BROADCAST_MESSAGE =
+
+const BROADCAST_CAMPANHAS = [
+  {
+    id: 'atpve',
+    imagem: path.join(__dirname, 'promo-atpve.png'),
+    mensagem:
 `🛑ATENÇÃO CADASTRE COM SEU NUMERO WHATSAPP CORRETO PARA RECEBER AS NOTIFICAÇÕES
 ✅ FAÇA SEU CADASTRO:
 ✅ PAGAMENTO INSTANTÂNEO: PIX: QRcod, copia e Cola, na tela.
@@ -10365,7 +10381,43 @@ const BROADCAST_MESSAGE =
 🛑Agora temos Intenção de venda para os seguintes Estados, RJ, SP, MG e MS
 🛑Numero do CRV Antigo, dos Estados: RJ, SP, MG, CE, ES, BA, RN, PE, PB, e outros, total de 21 Estados veja em seu painel🛑
 ✅ Sem mensalidade. Pague só pelo que usar.
-👉 https://www.despachantesconsultas.com.br`;
+👉 https://www.despachantesconsultas.com.br`,
+  },
+  {
+    id: 'despachantes',
+    imagem: path.join(__dirname, 'promo-despachantes.png'),
+    mensagem:
+`🛑 NO CARD: Coisas de Despachantes.
+🛑 ATENÇÃO DESPACHANTES ESSA É SÓ PARA VOCÊS ASSINATURA POR 30 REAIS MÊS, INCLUINDO 5 CONSULTAS:
+✅ Consulta placas 50
+✅ Consulta 3 Código Segurança CRV (PDF) 5
+✅ Gerar Declaração de Residência DETRAN RJ
+✅ Nota de Prestação de Serviços Para Despachantes
+✅ Gerar ASD
+################################################################################
+✅CRLVe CE 32,50 Você Recebe no WhatsApp em minutos
+✅CRLVe PE 35,00 Imediato
+✅CRLVe Rio 1° via 20,00 imediato
+✅CRLVe Rio 2° via Reemissão 55,00 imediato
+👉 https://www.despachantesconsultas.com.br`,
+  },
+];
+
+// Rodizio por canal (geral / portal / servicos): cada canal tem cadencia
+// propria, entao guardar um contador por canal faz os tres alternarem sem se
+// atrapalhar. Precisa de estado no banco porque na Vercel cada execucao do cron
+// e um processo novo — variavel em memoria voltaria sempre a mesma campanha.
+async function proximaCampanhaBroadcast(canal) {
+  const r = await pool.query(
+    `INSERT INTO broadcast_campanha_state (canal, disparos) VALUES ($1, 1)
+     ON CONFLICT (canal) DO UPDATE SET disparos = broadcast_campanha_state.disparos + 1,
+                                       updated_at = NOW()
+     RETURNING disparos`,
+    [canal]
+  );
+  const n = r.rows[0].disparos;
+  return BROADCAST_CAMPANHAS[(n - 1) % BROADCAST_CAMPANHAS.length];
+}
 
 // Envia broadcast apenas para grupos — envio para contatos individuais foi
 // desativado por estar sendo denunciado como spam no WhatsApp.
@@ -10454,34 +10506,38 @@ async function sendBroadcastVideo(dest, base64Mp4) {
   }
 }
 
-// Grupos com disparo prioritário (além do disparo geral de 2 em 2
-// dias, que continua valendo para todos os grupos, inclusive estes).
-// PORTAL⚔️DESPACHANTES roda só em horário comercial (seg-sex, 10h-18h BRT) — ver
-// schedule do cron em vercel.json (13-21h UTC = 10h-18h BRT, sem horário de verão),
-// de 2 em 2 horas.
-// SERVIÇOS, OFERTAS E AMIGOS dispara de 30 em 30 minutos, o dia todo, todos os dias.
+// Grupos com disparo proprio, em cadencia diferente do resto:
+// PORTAL⚔️DESPACHANTES roda de 3 em 3 horas em horario comercial (seg-sex,
+// 10h/13h/16h BRT) e SERVIÇOS, OFERTAS E AMIGOS de 3 em 3 horas todos os dias
+// (ver schedules em vercel.json). Como ja tem cadencia propria, os dois ficam
+// FORA do disparo geral — antes recebiam os dois e viam a mensagem repetida.
 const BROADCAST_GROUP_PORTAL = 'PORTAL⚔️DESPACHANTES';
 const BROADCAST_GROUP_SERVICOS = 'SERVIÇOS, OFERTAS E AMIGOS';
 
-async function runWhatsAppBroadcast(groupNames) {
+// Nome de grupo no WhatsApp costuma ter emoji/sufixo extra
+// (ex.: "PORTAL⚔️DESPACHANTES🇧🇷📌"), por isso startsWith e nao igualdade.
+function nomeGrupoCombina(nome, alvos) {
+  const n = (nome || '').trim().toUpperCase();
+  return alvos.some(a => n.startsWith(a.trim().toUpperCase()));
+}
+
+// canal identifica o rodizio de campanha (ver proximaCampanhaBroadcast);
+// incluir = so estes grupos; excluir = todos menos estes.
+async function runWhatsAppBroadcast({ canal, incluir, excluir } = {}) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN) throw new Error('Z-API não configurada');
   let dests = await fetchZApiDestinations();
-  if (groupNames?.length) {
-    // startsWith em vez de igualdade exata: nomes de grupo no WhatsApp costumam
-    // ter emojis/sufixos extras (ex.: "PORTAL⚔️DESPACHANTES🇧🇷📌").
-    const wanted = groupNames.map(n => n.trim().toUpperCase());
-    dests = dests.filter(d => {
-      const name = (d.name || '').trim().toUpperCase();
-      return wanted.some(w => name.startsWith(w));
-    });
-  }
-  console.log(`📢 Broadcast: ${dests.length} grupos`);
-  const imageBase64 = fs.readFileSync(BROADCAST_IMAGE_PATH).toString('base64');
+  if (incluir?.length) dests = dests.filter(d => nomeGrupoCombina(d.name, incluir));
+  if (excluir?.length) dests = dests.filter(d => !nomeGrupoCombina(d.name, excluir));
+
+  const campanha = await proximaCampanhaBroadcast(canal || 'geral');
+  console.log(`📢 Broadcast [${canal || 'geral'}] campanha "${campanha.id}": ${dests.length} grupos`);
+
+  const imageBase64 = fs.readFileSync(campanha.imagem).toString('base64');
   const videoBase64 = fs.readFileSync(BROADCAST_VIDEO_PATH).toString('base64');
   let sent = 0, failed = 0;
   for (const dest of dests) {
     try {
-      await sendBroadcastImage(dest.phone, imageBase64, BROADCAST_MESSAGE);
+      await sendBroadcastImage(dest.phone, imageBase64, campanha.mensagem);
       await new Promise(r => setTimeout(r, 1000));
       await sendBroadcastVideo(dest.phone, videoBase64);
       sent++;
@@ -10491,17 +10547,22 @@ async function runWhatsAppBroadcast(groupNames) {
     await new Promise(r => setTimeout(r, 1000));
   }
   console.log(`✅ Broadcast concluído: ${sent} enviados, ${failed} falhas`);
-  return { sent, failed, total: dests.length };
+  return { sent, failed, total: dests.length, campanha: campanha.id };
 }
 
-// ── GET /api/cron/broadcast-whatsapp (Vercel Cron — 8h BRT = 11h UTC) ────────
+// ── GET /api/cron/broadcast-whatsapp (Vercel Cron — 8h BRT = 11h UTC, de 3 em
+// 3 dias) ── Vai para os DEMAIS grupos: PORTAL e SERVIÇOS ficam de fora porque
+// ja tem disparo proprio, varias vezes ao dia.
 app.get('/api/cron/broadcast-whatsapp', async (req, res) => {
   const secret = process.env.CRON_SECRET || '';
   if (secret && req.headers.authorization !== `Bearer ${secret}`) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
-    const result = await runWhatsAppBroadcast();
+    const result = await runWhatsAppBroadcast({
+      canal: 'geral',
+      excluir: [BROADCAST_GROUP_PORTAL, BROADCAST_GROUP_SERVICOS],
+    });
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('Erro no cron broadcast:', err.message);
@@ -10512,7 +10573,10 @@ app.get('/api/cron/broadcast-whatsapp', async (req, res) => {
 // ── POST /api/admin/broadcast-whatsapp (teste manual pelo admin) ──────────────
 app.post('/api/admin/broadcast-whatsapp', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
-    const result = await runWhatsAppBroadcast();
+    const result = await runWhatsAppBroadcast({
+      canal: 'geral',
+      excluir: [BROADCAST_GROUP_PORTAL, BROADCAST_GROUP_SERVICOS],
+    });
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('Erro no broadcast manual:', err.message);
@@ -10520,7 +10584,7 @@ app.post('/api/admin/broadcast-whatsapp', requireAuth, requireSuperAdmin, async 
   }
 });
 
-// ── GET /api/cron/broadcast-whatsapp-priority (Vercel Cron — de 30 em 30 minutos, todo dia) ─
+// ── GET /api/cron/broadcast-whatsapp-priority (Vercel Cron — de 3 em 3 horas, todo dia) ─
 // Só para o grupo SERVIÇOS, OFERTAS E AMIGOS.
 app.get('/api/cron/broadcast-whatsapp-priority', async (req, res) => {
   const secret = process.env.CRON_SECRET || '';
@@ -10528,7 +10592,7 @@ app.get('/api/cron/broadcast-whatsapp-priority', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
-    const result = await runWhatsAppBroadcast([BROADCAST_GROUP_SERVICOS]);
+    const result = await runWhatsAppBroadcast({ canal: 'servicos', incluir: [BROADCAST_GROUP_SERVICOS] });
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('Erro no cron broadcast prioritário:', err.message);
@@ -10539,7 +10603,7 @@ app.get('/api/cron/broadcast-whatsapp-priority', async (req, res) => {
 // ── POST /api/admin/broadcast-whatsapp-priority (teste manual pelo admin) ────
 app.post('/api/admin/broadcast-whatsapp-priority', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
-    const result = await runWhatsAppBroadcast([BROADCAST_GROUP_SERVICOS]);
+    const result = await runWhatsAppBroadcast({ canal: 'servicos', incluir: [BROADCAST_GROUP_SERVICOS] });
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('Erro no broadcast prioritário manual:', err.message);
@@ -10547,15 +10611,15 @@ app.post('/api/admin/broadcast-whatsapp-priority', requireAuth, requireSuperAdmi
   }
 });
 
-// ── GET /api/cron/broadcast-whatsapp-portal (Vercel Cron — de 2 em 2 horas,
-// seg-sex, 10h-18h BRT) ── Só para o grupo PORTAL⚔️DESPACHANTES.
+// ── GET /api/cron/broadcast-whatsapp-portal (Vercel Cron — de 3 em 3 horas,
+// seg-sex, 10h/13h/16h BRT) ── Só para o grupo PORTAL⚔️DESPACHANTES.
 app.get('/api/cron/broadcast-whatsapp-portal', async (req, res) => {
   const secret = process.env.CRON_SECRET || '';
   if (secret && req.headers.authorization !== `Bearer ${secret}`) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
-    const result = await runWhatsAppBroadcast([BROADCAST_GROUP_PORTAL]);
+    const result = await runWhatsAppBroadcast({ canal: 'portal', incluir: [BROADCAST_GROUP_PORTAL] });
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('Erro no cron broadcast portal:', err.message);
@@ -10566,7 +10630,7 @@ app.get('/api/cron/broadcast-whatsapp-portal', async (req, res) => {
 // ── POST /api/admin/broadcast-whatsapp-portal (teste manual pelo admin) ──────
 app.post('/api/admin/broadcast-whatsapp-portal', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
-    const result = await runWhatsAppBroadcast([BROADCAST_GROUP_PORTAL]);
+    const result = await runWhatsAppBroadcast({ canal: 'portal', incluir: [BROADCAST_GROUP_PORTAL] });
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('Erro no broadcast portal manual:', err.message);

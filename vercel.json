@@ -12,15 +12,15 @@
   "crons": [
     {
       "path": "/api/cron/broadcast-whatsapp",
-      "schedule": "0 11 */2 * *"
+      "schedule": "0 11 */3 * *"
     },
     {
       "path": "/api/cron/broadcast-whatsapp-priority",
-      "schedule": "*/30 * * * *"
+      "schedule": "40 */3 * * *"
     },
     {
       "path": "/api/cron/broadcast-whatsapp-portal",
-      "schedule": "0 13-21/2 * * 1-5"
+      "schedule": "20 13-19/3 * * 1-5"
     },
     {
       "path": "/api/cron/crlv-agendado-status",
