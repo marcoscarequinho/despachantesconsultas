@@ -2193,7 +2193,7 @@ function inputTypeLabel(t) {
     contrato_aluguel:    'Entrada: Tipo + CPF/CNPJ Locador/Locatário + Endereço + Datas + Valor',
     procuracao_veicular: 'Entrada: Placa + CPF/CNPJ do Outorgado (com busca automática)',
     nota_prestacao_servicos: 'Entrada: Matrícula CRDD-UF + Dados do Prestador/Tomador + Discriminação + Valor Total',
-    asd:                 'Entrada: Serviço + UF + Contratante + Profissional + Beneficiário + Placa (com busca automática)',
+    asd:                 'Entrada: Logo + Serviço + UF + Contratante + Profissional + Beneficiário + Placa (com busca automática)',
   };
   return map[t] || t;
 }
@@ -2272,6 +2272,7 @@ function apiExampleParams(inputType) {
       },
     },
     asd: {
+      logo: 'rj',
       servico: 'Transferência de Propriedade', uf: 'RJ', contratante: 'NOME DO CONTRATANTE',
       profissionalNome: 'NOME DO DESPACHANTE', profissionalCpfCnpj: '00000000000',
       profissionalMatricula: 'RJ 12.345', profissionalTelefone: '(21) 90000-0000', profissionalEmail: 'despachante@email.com',
@@ -3064,6 +3065,13 @@ function renderFormFields(inputType, svc) {
       <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 text-xs text-blue-800">
         ℹ️ Use os botões "🔎 Buscar" para preencher automaticamente o Profissional e o Beneficiário (Localização CPF V3, só para CPF) e a Descrição Documental a partir da placa (Proprietário Atual). Confira e edite o que precisar antes de gerar a ASD.
       </div>
+      <div>
+        <label class="label">Logo do cabeçalho</label>
+        <select id="f-asd_logo" class="input-field">
+          <option value="">Carregando…</option>
+        </select>
+        <p class="text-xs text-gray-500 mt-1">Escolha o conselho que aparece no topo da ASD.</p>
+      </div>
       <div class="grid grid-cols-3 gap-3">
         <div class="col-span-2">${field('asd_servico', 'Serviço', 'text', 'Ex.: Transferência de Propriedade')}</div>
         ${field('asd_uf', 'UF', 'text', 'RJ', true, 'maxlength="2"')}
@@ -3298,6 +3306,7 @@ function renderFormFields(inputType, svc) {
   // form.reset() limpa o <input type="file">, mas não o data URL já lido).
   if (inputType === 'asd') {
     asdCarteirinha = { frente: null, verso: null };
+    preencherLogosAsd();
     const ufEl = document.getElementById('f-asd_uf');
     if (ufEl) ufEl.addEventListener('input', function() {
       this.value = this.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
@@ -3483,6 +3492,29 @@ async function buscarVeiculoProcuracao() {
 }
 
 // ── Gerar ASD ─────────────────────────────────────────────────────────────────
+
+// Opções do menu de logo do cabeçalho. A lista vem de /api/asd-logos para o
+// painel não repetir o catálogo do servidor — conselho novo aparece aqui sozinho.
+let asdLogosCache = null;
+async function preencherLogosAsd() {
+  const sel = document.getElementById('f-asd_logo');
+  if (!sel) return;
+  try {
+    if (!asdLogosCache) {
+      const r = await fetch('/api/asd-logos');
+      if (!r.ok) throw new Error('falha ao carregar');
+      asdLogosCache = await r.json();
+    }
+    // O formulário pode ter sido trocado enquanto a lista carregava.
+    if (!document.getElementById('f-asd_logo')) return;
+    sel.innerHTML = asdLogosCache.logos
+      .map(l => `<option value="${l.id}"${l.id === asdLogosCache.padrao ? ' selected' : ''}>${l.label}</option>`)
+      .join('');
+  } catch {
+    // Sem a lista, o servidor usa o logo padrão — não trava a emissão da ASD.
+    sel.innerHTML = '<option value="">Padrão</option>';
+  }
+}
 // Digitalizações da carteirinha do despachante, já redimensionadas, guardadas
 // como data URL até o submit (input file não sobrevive a um form.reset()).
 let asdCarteirinha = { frente: null, verso: null };
@@ -3851,6 +3883,7 @@ function buildParams(inputType) {
 
   if (inputType === 'asd')
     return {
+      logo: g('asd_logo'),
       servico: g('asd_servico'),
       uf: g('asd_uf').toUpperCase(),
       contratante: g('asd_contratante'),

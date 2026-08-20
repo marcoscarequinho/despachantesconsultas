@@ -22,6 +22,7 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 - `SERVICES` — serviços da aba "Nova Consulta" (`/api/query`). Cada item tem `id`, `name`, `group`, `basePrice`, `inputType`, `icon`; opcionais: `noMarkup` (preço fixo, sem markup de 40%), `dcPath` (rota Datacube), `uf`.
 - `SERVICES_V2` — aba "Opção 2 Nova Consulta" (`/api/query-v2`), fluxo isolado só com API Datacube.
 - Markup padrão: `MARKUP = 1.40`; Infosimples usa `INFOSIMPLES_MARKUP = 1.70`.
+- **Logo da ASD** (Gerar ASD, aba "Coisas de Despachantes"): o brasão do cabeçalho vem de um menu suspenso alimentado por `ASD_LOGOS` (padrão `ASD_LOGO_PADRAO = 'br'`; pedido sem `logo` sai como antes). Para oferecer outro estado, coloque o PNG em `assets/` e acrescente uma linha em `ASD_LOGOS` — o painel monta o menu por `GET /api/asd-logos`, sem mexer no front-end.
 
 ### Integrações upstream
 

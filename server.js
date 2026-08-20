@@ -1782,6 +1782,16 @@ app.get('/api/services', requireAuth, async (req, res) => {
   }
 });
 
+// ── GET /api/asd-logos (menu de logos do cabeçalho da ASD) ────────────────────
+// Lista servida pelo servidor para o painel não precisar repetir o catálogo:
+// acrescentar um conselho estadual é mexer só em ASD_LOGOS.
+app.get('/api/asd-logos', requireAuth, (req, res) => {
+  res.json({
+    padrao: ASD_LOGO_PADRAO,
+    logos: Object.entries(ASD_LOGOS).map(([id, l]) => ({ id, label: l.label })),
+  });
+});
+
 // ── GET /api/services/public (sem auth — homepage) ────────────────────────────
 app.get('/api/services/public', (req, res) => {
   res.json({
@@ -2861,10 +2871,27 @@ function extractDeclaracaoResidenciaFields(localizacaoData) {
 // no PDF de referência, sem precisar do passo de conversão top→bottom do ATPVe.
 const DECLARACAO_RESIDENCIA_TEMPLATE_PATH = path.join(__dirname, 'assets', 'declaracao-residencia-detran-rj-template.pdf');
 
-// Brasão do Conselho Regional dos Despachantes Documentalistas do Rio de Janeiro
-// (CRDD-RJ), usado no cabeçalho da Nota de Prestação de Serviços Para
-// Despachantes RJ — serviço fixo em RJ (ver nome do serviço em SERVICES).
+// Brasão nacional dos Despachantes Documentalistas (CRDD BR), usado no cabeçalho
+// da Nota de Prestação de Serviços Para Despachantes RJ. Não confundir com
+// assets/crdd-rj-logo.png (brasão do conselho do Rio), que é só uma das opções
+// do menu da ASD — ver ASD_LOGOS abaixo.
 const CRDD_BR_LOGO_PATH = path.join(__dirname, 'assets', 'crdd-br-logo.png');
+
+// Logos disponíveis no cabeçalho da ASD — o despachante escolhe o conselho no
+// menu suspenso do formulário (Coisas de Despachantes → Gerar ASD). Para
+// acrescentar um estado: solte o PNG em assets/ e adicione uma linha aqui. O
+// painel monta o menu a partir de GET /api/asd-logos, então nada muda no
+// front-end. A ordem deste objeto é a ordem exibida no menu.
+const ASD_LOGOS = {
+  br: { label: 'CRDD BR — Nacional',        path: path.join(__dirname, 'assets', 'crdd-br-logo.png') },
+  rj: { label: 'CRDD-RJ — Rio de Janeiro',  path: path.join(__dirname, 'assets', 'crdd-rj-logo.png') },
+};
+// Mantém o comportamento de antes do menu existir (ASDs antigas saíam com o
+// CRDD BR), então pedido sem "logo" continua saindo igual.
+const ASD_LOGO_PADRAO = 'br';
+function asdLogoPath(id) {
+  return (ASD_LOGOS[String(id || '').toLowerCase()] || ASD_LOGOS[ASD_LOGO_PADRAO]).path;
+}
 const MESES_EXTENSO = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
 
 function drawDeclaracaoValue(page, font, text, { x, y, maxX, size = 9, minSize = 6 }) {
@@ -3397,12 +3424,13 @@ function buildAsdPdfBuffer(params) {
       // de altura): a ASD completa precisa caber com a assinatura na 1ª página.
       const logoW = 72;
       let logoH = 0;
+      const logoPath = asdLogoPath(params.logo);
       try {
-        const img = doc.openImage(CRDD_BR_LOGO_PATH);
+        const img = doc.openImage(logoPath);
         logoH = logoW * (img.height / img.width);
         doc.image(img, left, headerY, { width: logoW });
       } catch (e) {
-        console.warn('[gerar-asd] logo CRDD-BR não encontrado:', e.message);
+        console.warn('[gerar-asd] logo não encontrado:', logoPath, e.message);
       }
 
       const titleX = left + logoW + 12;
@@ -5667,6 +5695,11 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       const beneficiarioCpfCnpj = (params?.beneficiarioCpfCnpj || '').replace(/\D/g, '');
       const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
       const descricaoDocumental = (params?.descricaoDocumental || '').trim();
+      // Logo do cabeçalho (menu suspenso do formulário). Vazio = padrão, para
+      // pedidos antigos e integrações que não mandam o campo continuarem valendo.
+      const logo = (params?.logo || '').trim().toLowerCase() || ASD_LOGO_PADRAO;
+      if (!ASD_LOGOS[logo])
+        return res.status(400).json({ error: 'Logo da ASD inválido. Escolha uma das opções do menu.' });
 
       if (!servico) return res.status(400).json({ error: 'Informe o serviço prestado.' });
       if (uf.length !== 2) return res.status(400).json({ error: 'Informe a UF (2 letras).' });
@@ -5728,7 +5761,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           beneficiarioNome, beneficiarioCpfCnpj,
           beneficiarioTelefone: (params?.beneficiarioTelefone || '').trim(),
           beneficiarioEmail: (params?.beneficiarioEmail || '').trim(),
-          verificacao, qrPng,
+          verificacao, qrPng, logo,
           placa,
           marcaModelo: (params?.marcaModelo || '').trim(),
           chassi: (params?.chassi || '').trim(),
