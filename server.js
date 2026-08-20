@@ -10513,6 +10513,15 @@ async function sendBroadcastVideo(dest, base64Mp4) {
 // FORA do disparo geral — antes recebiam os dois e viam a mensagem repetida.
 const BROADCAST_GROUP_PORTAL = 'PORTAL⚔️DESPACHANTES';
 const BROADCAST_GROUP_SERVICOS = 'SERVIÇOS, OFERTAS E AMIGOS';
+const BROADCAST_GROUP_DOCUMENTALISTAS = 'Despachantes Documentalistas do Brasil';
+// Grupos do canal "servicos" — mesma cadencia e mesmo rodizio de campanhas.
+const BROADCAST_GRUPOS_SERVICOS = [BROADCAST_GROUP_SERVICOS, BROADCAST_GROUP_DOCUMENTALISTAS];
+// Grupo ainda em formacao: so entra na cadencia do canal "servicos" (de 3 em 3
+// horas) quando atingir este numero de membros. Ate la ele recebe o disparo
+// geral (de 3 em 3 dias) junto com os demais grupos — por isso a mesma regra
+// serve para os dois lados: incluir no "servicos" a partir do minimo e excluir
+// do "geral" a partir do minimo, sem nunca receber os dois.
+const BROADCAST_MIN_MEMBROS = [{ nome: BROADCAST_GROUP_DOCUMENTALISTAS, minimo: 200 }];
 
 // Nome de grupo no WhatsApp costuma ter emoji/sufixo extra
 // (ex.: "PORTAL⚔️DESPACHANTES🇧🇷📌"), por isso startsWith e nao igualdade.
@@ -10521,13 +10530,55 @@ function nomeGrupoCombina(nome, alvos) {
   return alvos.some(a => n.startsWith(a.trim().toUpperCase()));
 }
 
+// Quantos membros um grupo tem hoje (Z-API group-metadata). Retorna null se a
+// consulta falhar — quem chama decide o que fazer com a incerteza.
+async function contarMembrosGrupo(phone) {
+  const headers = ZAPI_CLIENT_TOKEN ? { 'Client-Token': ZAPI_CLIENT_TOKEN } : {};
+  try {
+    const r = await fetch(
+      `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/group-metadata/${encodeURIComponent(phone)}`,
+      { headers }
+    );
+    if (!r.ok) return null;
+    const d = await r.json().catch(() => null);
+    if (!d) return null;
+    if (Array.isArray(d.participants)) return d.participants.length;
+    // Algumas respostas trazem so o total, sem a lista de participantes.
+    const n = Number(d.participantsCount ?? d.size ?? d.membersCount);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 // canal identifica o rodizio de campanha (ver proximaCampanhaBroadcast);
-// incluir = so estes grupos; excluir = todos menos estes.
-async function runWhatsAppBroadcast({ canal, incluir, excluir } = {}) {
+// incluir = so estes grupos; excluir = todos menos estes; minMembros =
+// [{ nome, minimo }] so dispara para o grupo depois que ele cresceu;
+// excluirAoAtingir = o inverso, tira o grupo assim que ele cresce.
+async function runWhatsAppBroadcast({ canal, incluir, excluir, minMembros, excluirAoAtingir } = {}) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN) throw new Error('Z-API não configurada');
   let dests = await fetchZApiDestinations();
   if (incluir?.length) dests = dests.filter(d => nomeGrupoCombina(d.name, incluir));
   if (excluir?.length) dests = dests.filter(d => !nomeGrupoCombina(d.name, excluir));
+
+  // Regras de minimo de membros. No canal "servicos" (minMembros) o grupo so
+  // entra depois de atingir a marca; no disparo geral (excluirAoAtingir) ele
+  // sai justamente quando atinge, porque passa a receber pela outra cadencia.
+  // Se nao der para contar (Z-API fora do ar), trata como "ainda nao atingiu":
+  // o grupo continua no geral e fica fora do servicos, nunca nos dois.
+  const regrasMin = minMembros || excluirAoAtingir;
+  if (regrasMin?.length) {
+    const manter = [];
+    for (const d of dests) {
+      const regra = regrasMin.find(r => nomeGrupoCombina(d.name, [r.nome]));
+      if (!regra) { manter.push(d); continue; }
+      const membros = await contarMembrosGrupo(d.phone);
+      const atingiu = membros !== null && membros >= regra.minimo;
+      if (atingiu === Boolean(minMembros)) manter.push(d);
+      else console.log(`⏭️  Broadcast [${canal || 'geral'}] pulou "${d.name}": ${membros ?? '?'} membros (minimo ${regra.minimo})`);
+    }
+    dests = manter;
+  }
 
   const campanha = await proximaCampanhaBroadcast(canal || 'geral');
   console.log(`📢 Broadcast [${canal || 'geral'}] campanha "${campanha.id}": ${dests.length} grupos`);
@@ -10562,6 +10613,7 @@ app.get('/api/cron/broadcast-whatsapp', async (req, res) => {
     const result = await runWhatsAppBroadcast({
       canal: 'geral',
       excluir: [BROADCAST_GROUP_PORTAL, BROADCAST_GROUP_SERVICOS],
+      excluirAoAtingir: BROADCAST_MIN_MEMBROS,
     });
     res.json({ success: true, ...result });
   } catch (err) {
@@ -10576,6 +10628,7 @@ app.post('/api/admin/broadcast-whatsapp', requireAuth, requireSuperAdmin, async 
     const result = await runWhatsAppBroadcast({
       canal: 'geral',
       excluir: [BROADCAST_GROUP_PORTAL, BROADCAST_GROUP_SERVICOS],
+      excluirAoAtingir: BROADCAST_MIN_MEMBROS,
     });
     res.json({ success: true, ...result });
   } catch (err) {
@@ -10592,7 +10645,7 @@ app.get('/api/cron/broadcast-whatsapp-priority', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
-    const result = await runWhatsAppBroadcast({ canal: 'servicos', incluir: [BROADCAST_GROUP_SERVICOS] });
+    const result = await runWhatsAppBroadcast({ canal: 'servicos', incluir: BROADCAST_GRUPOS_SERVICOS, minMembros: BROADCAST_MIN_MEMBROS });
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('Erro no cron broadcast prioritário:', err.message);
@@ -10603,7 +10656,7 @@ app.get('/api/cron/broadcast-whatsapp-priority', async (req, res) => {
 // ── POST /api/admin/broadcast-whatsapp-priority (teste manual pelo admin) ────
 app.post('/api/admin/broadcast-whatsapp-priority', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
-    const result = await runWhatsAppBroadcast({ canal: 'servicos', incluir: [BROADCAST_GROUP_SERVICOS] });
+    const result = await runWhatsAppBroadcast({ canal: 'servicos', incluir: BROADCAST_GRUPOS_SERVICOS, minMembros: BROADCAST_MIN_MEMBROS });
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('Erro no broadcast prioritário manual:', err.message);
