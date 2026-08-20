@@ -3410,7 +3410,10 @@ async function generateAsdQrPng(url) {
 function buildAsdPdfBuffer(params) {
   return new Promise((resolve, reject) => {
     try {
-      const doc = new PDFDocument({ size: 'A4', margin: 55 });
+      // Margem menor que o padrão da casa (55): o brasão de 125pt só cabe com a
+      // assinatura na 1ª página se a folha devolver essa altura. Mexer aqui, no
+      // logoW ou nos moveDown abaixo é mexer no mesmo orçamento vertical.
+      const doc = new PDFDocument({ size: 'A4', margin: 40 });
       const chunks = [];
       doc.on('data', c => chunks.push(c));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -3420,9 +3423,12 @@ function buildAsdPdfBuffer(params) {
       const { left, width } = pdfContentBox(doc);
 
       const headerY = doc.y;
-      // Logo menor que o da Nota (o CRDD-BR é quase quadrado, a 95pt come 94pt
-      // de altura): a ASD completa precisa caber com a assinatura na 1ª página.
-      const logoW = 72;
+      // O brasão é quase quadrado, então cada ponto de largura é um ponto de
+      // altura tirado da página. 125pt é o tamanho pedido pelo cliente e fica
+      // abaixo do teto medido (127pt com esta margem e estes espaçamentos):
+      // acima disso a assinatura escorrega para a 2ª página em ASD com
+      // descrição documental longa.
+      const logoW = 125;
       let logoH = 0;
       const logoPath = asdLogoPath(params.logo);
       try {
@@ -3452,7 +3458,7 @@ function buildAsdPdfBuffer(params) {
         ['Nome do Contratante', params.contratante],
         ['Data', now.toLocaleDateString('pt-BR')],
       ]);
-      doc.moveDown(0.3);
+      doc.moveDown(0.2);
 
       // Telefone e e-mail entram numa célula só ("Contato"): como pares
       // separados eles somavam uma linha inteira de grade a cada seção e
@@ -3467,7 +3473,7 @@ function buildAsdPdfBuffer(params) {
         ...(contato(params.profissionalTelefone, params.profissionalEmail)
           ? [['Contato', contato(params.profissionalTelefone, params.profissionalEmail)]] : []),
       ]);
-      doc.moveDown(0.3);
+      doc.moveDown(0.2);
 
       pdfBar(doc, 'BENEFICIÁRIO DO SERVIÇO');
       pdfFieldGrid(doc, [
@@ -3476,7 +3482,7 @@ function buildAsdPdfBuffer(params) {
         ...(contato(params.beneficiarioTelefone, params.beneficiarioEmail)
           ? [['Contato', contato(params.beneficiarioTelefone, params.beneficiarioEmail)]] : []),
       ]);
-      doc.moveDown(0.3);
+      doc.moveDown(0.2);
 
       pdfBar(doc, 'DESCRIÇÃO DOCUMENTAL');
       const veiculoPairs = [
@@ -3492,7 +3498,7 @@ function buildAsdPdfBuffer(params) {
         pdfEnsureSpace(doc, 40);
         doc.font('Helvetica').fontSize(9.5).fillColor('#111827')
           .text(params.descricaoDocumental, left, doc.y, { width, align: 'left', lineGap: 2 });
-        doc.moveDown(0.3);
+        doc.moveDown(0.2);
       }
       if (!veiculoPairs.length && !params.descricaoDocumental) {
         pdfEmptyNotice(doc, 'Nenhuma descrição documental informada.');
@@ -3517,7 +3523,7 @@ function buildAsdPdfBuffer(params) {
         .text(`${params.uf ? params.uf + ', ' : ''}${formatDateExtenso(now.toISOString().slice(0, 10))}.`,
           left, doc.y, { width, align: 'center' });
 
-      doc.moveDown(1.8);
+      doc.moveDown(1.2);
       const y1 = doc.y;
       doc.moveTo(left + width / 2 - 110, y1).lineTo(left + width / 2 + 110, y1).stroke();
       doc.fontSize(9).font('Helvetica-Bold').text(params.profissionalNome, left, y1 + 4, { width, align: 'center' });
