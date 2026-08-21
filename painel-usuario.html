@@ -96,6 +96,13 @@
       </svg>
       <span style="color:#fbbf24;font-weight:bold">Coisas de Despachantes</span>
     </div>
+    <div class="nav-item" data-section="extras" onclick="showSection('extras')">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      <span style="color:#c4b5fd;font-weight:bold">Consultas Extras</span>
+    </div>
     <div class="nav-item" data-section="query2" onclick="showSection('query2')">
       <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -246,7 +253,7 @@
         </div>
       </div>
 
-      <!-- Quick actions — 7 atalhos: 4 colunas fecham em 4+3 (com 5 sobravam
+      <!-- Quick actions — 8 atalhos: 4 colunas fecham em 4+4 (com 5 sobravam
            dois cards soltos na segunda linha) -->
       <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <button onclick="showSection('query')"
@@ -263,6 +270,14 @@
           <div class="text-center">
             <div class="font-bold text-amber-600">Coisas de Despachantes</div>
             <div class="text-xs text-gray-500 mt-0.5">Declaração de Residência, Nota de Serviços e ASD</div>
+          </div>
+        </button>
+        <button onclick="showSection('extras')"
+          class="card flex flex-col items-center gap-3 hover:shadow-md transition-shadow cursor-pointer border-2 border-transparent hover:border-violet-200">
+          <div class="w-12 h-12 bg-violet-100 rounded-xl flex items-center justify-center text-2xl">⏳</div>
+          <div class="text-center">
+            <div class="font-bold text-violet-600">Consultas Extras</div>
+            <div class="text-xs text-gray-500 mt-0.5">CRLV-e DF, ES, PB, RN, RS, SC, CE e ATPV-e</div>
           </div>
         </button>
         <button onclick="showSection('query2')"
@@ -605,6 +620,50 @@
 
       <!-- Slot do formulário/resultado compartilhado (ver #query-form-host) -->
       <div id="despachantes-form-slot" class="space-y-5"></div>
+    </section>
+
+    <!-- ── CONSULTAS EXTRAS ───────────────────────────────────────────────────
+         Reúne num lugar só os CRLV-e das UFs que NÃO saem na hora (DF, ES, PB,
+         RN, RS, SC, CE) mais o ATPV-e. São os produtos que a doc da Vistocar
+         ("Integração API") lista como assíncronos: o pedido é registrado agora e
+         o documento chega depois. Hoje cada um vem de um fornecedor diferente
+         (ver EXTRAS_SERVICE_IDS) — a aba é só a vitrine, o formulário e o
+         resultado continuam sendo os mesmos da aba principal (#query-form-host,
+         movido para cá por showSection(), igual "Coisas de Despachantes"). -->
+    <section id="section-extras" class="dash-section hidden space-y-5">
+
+      <div>
+        <h2 class="text-xl font-bold text-violet-600">Consultas Extras</h2>
+        <p class="text-sm text-gray-500">CRLV-e das UFs com emissão agendada e ATPV-e — o pedido é registrado na hora e o documento chega depois</p>
+      </div>
+
+      <!-- Saldo disponível -->
+      <div class="card bg-gradient-to-br from-violet-50 to-white border border-violet-200 flex items-center gap-4">
+        <div class="w-10 h-10 bg-violet-100 rounded-full flex items-center justify-center text-xl flex-shrink-0">💳</div>
+        <div>
+          <div class="text-sm text-gray-600">Saldo disponível</div>
+          <div id="extras-credits" class="text-2xl font-bold text-violet-600">R$ 0,00</div>
+        </div>
+        <div class="ml-auto text-xs text-gray-400">Mesmo saldo das demais abas</div>
+      </div>
+
+      <div class="card bg-violet-50 border border-violet-200 flex gap-3">
+        <span class="text-violet-500 text-xl flex-shrink-0 mt-0.5">⏳</span>
+        <div class="text-sm text-violet-900 leading-relaxed">
+          <strong>Como funciona:</strong> estas consultas <strong>não saem na hora</strong>. O pedido é registrado
+          no DETRAN e o documento chega pelo WhatsApp e no seu <strong>Histórico</strong> assim que for emitido.
+          Nas consultas com cobrança na entrega, <strong>seus créditos só são debitados quando o PDF sair</strong>.
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="font-semibold text-gray-800 mb-1">Selecione a consulta</h3>
+        <p class="text-xs text-gray-500 mb-4">Clique no serviço desejado e preencha os dados.</p>
+        <div class="grid sm:grid-cols-2 gap-2" id="extras-service-list"></div>
+      </div>
+
+      <!-- Slot do formulário/resultado compartilhado (ver #query-form-host) -->
+      <div id="extras-form-slot" class="space-y-5"></div>
     </section>
 
     <!-- ── OPÇÃO 2 NOVA CONSULTA (API Datacube) ───────────────────────────── -->
@@ -1168,6 +1227,7 @@ const sectionTitles = {
   overview:  'Visão Geral',
   query:    'Acesse Aqui Para as Principais Consultas',
   despachantes: 'Coisas de Despachantes',
+  extras:   'Consultas Extras',
   query2:   'Opção 2 Nova Consulta',
   query3:   'Infosimples Nova Consulta',
   intencao: 'Intenção de Venda (ATPVE)',
@@ -1226,13 +1286,14 @@ function toggleSidebar() {
 function showSection(id) {
   document.querySelectorAll('.dash-section').forEach(s => s.classList.add('hidden'));
   document.getElementById('section-' + id).classList.remove('hidden');
-  // "Acesse Aqui Para as Principais Consultas" e "Coisas de Despachantes"
-  // dividem o MESMO formulário/resultado (#query-form-host, ids f-*). Ao trocar
-  // de aba, o bloco é movido para o slot da aba de destino e o formulário é
-  // zerado — senão o documento aberto numa aba apareceria na outra.
-  if (id === 'query' || id === 'despachantes') {
+  // "Acesse Aqui Para as Principais Consultas", "Coisas de Despachantes" e
+  // "Consultas Extras" dividem o MESMO formulário/resultado (#query-form-host,
+  // ids f-*). Ao trocar de aba, o bloco é movido para o slot da aba de destino e
+  // o formulário é zerado — senão o documento aberto numa aba apareceria na outra.
+  const FORM_SLOTS = { query:'query-form-slot', despachantes:'despachantes-form-slot', extras:'extras-form-slot' };
+  if (FORM_SLOTS[id]) {
     const host = document.getElementById('query-form-host');
-    const slot = document.getElementById(id === 'query' ? 'query-form-slot' : 'despachantes-form-slot');
+    const slot = document.getElementById(FORM_SLOTS[id]);
     if (host && slot && host.parentElement !== slot) { resetForm(); slot.appendChild(host); }
   }
   document.querySelectorAll('.nav-item[data-section]').forEach(n => n.classList.remove('active'));
@@ -1280,6 +1341,7 @@ async function init() {
 
     buildCategoryGrid();
     buildDespachantesList();
+    buildExtrasList();
     buildIntencaoCategoryGrid();
     renderServiceListV2();
     await Promise.all([loadStats(), loadQueries(), loadAssinaturaStatus()]);
@@ -1300,6 +1362,7 @@ async function loadStats() {
     document.getElementById('stat-total-spent').textContent   = fmt(d.total_spent);
     document.getElementById('query-credits').textContent      = fmt(d.credits);
     document.getElementById('despachantes-credits').textContent = fmt(d.credits);
+    document.getElementById('extras-credits').textContent      = fmt(d.credits);
     document.getElementById('query2-credits').textContent     = fmt(d.credits);
     document.getElementById('query3-credits').textContent     = fmt(d.credits);
     document.getElementById('intencao-credits').textContent   = fmt(d.credits);
@@ -2646,6 +2709,54 @@ function buildDespachantesList() {
       </div>
       <div class="price-tag text-sm flex-shrink-0">${fmtPrice(s.price)}</div>
     </button>`).join('');
+}
+
+// ── Consultas Extras ───────────────────────────────────────────────────────────
+// Vitrine única dos CRLV-e que NÃO saem na hora, na ordem da doc da Vistocar
+// ("Integração API": DF, ES, PB, RN, RS, SC, CE), mais o ATPV-e. Cada id aponta
+// para o serviço que ATENDE aquela UF hoje — e eles vêm de fornecedores
+// diferentes (Chekaki no "CRLV-e Agendado", Datacube no RS, Vistocar no CE), por
+// isso continuam aparecendo também nas abas de origem: esta aba não duplica
+// cadastro nenhum, só reúne os atalhos num lugar só.
+const EXTRAS_SERVICE_IDS = [
+  'crlv-agendado-df',
+  'crlv-agendado-es',
+  'crlv-agendado-pb',
+  'crlv-agendado-rn',
+  'dc-crlve-rs-v2',
+  'crlv-agendado-sc',
+  'crlv-ce',
+];
+
+function buildExtrasList() {
+  const svcs = EXTRAS_SERVICE_IDS
+    .map(id => allServices.find(s => s.id === id))
+    .filter(Boolean);
+  const botoes = svcs.map(s => `
+    <button type="button"
+      onclick="selectService(${JSON.stringify(s).replace(/"/g,"&quot;")})"
+      class="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-violet-300 hover:bg-violet-50 text-left transition-all">
+      <span class="text-xl flex-shrink-0">${s.icon}</span>
+      <div class="min-w-0 flex-1">
+        <div class="font-medium text-gray-800 text-sm">${s.name}</div>
+        <div class="text-xs text-gray-400 mt-0.5">${inputTypeLabel(s.inputType)}</div>
+      </div>
+      <div class="price-tag text-sm flex-shrink-0">${fmtPrice(s.price)}</div>
+    </button>`);
+  // ATPV-e não é um serviço solto: o cadastro pede as duas partes, valor e
+  // documentos, num formulário próprio na aba "Intenção de Venda (ATPVE)" —
+  // aqui vira um atalho para lá em vez de uma cópia do formulário.
+  botoes.push(`
+    <button type="button" onclick="showSection('intencao')"
+      class="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-violet-300 hover:bg-violet-50 text-left transition-all">
+      <span class="text-xl flex-shrink-0">📝</span>
+      <div class="min-w-0 flex-1">
+        <div class="font-medium text-gray-800 text-sm">ATPV-e (Intenção de Venda)</div>
+        <div class="text-xs text-gray-400 mt-0.5">RJ, SP, MS e MG — abre a aba própria</div>
+      </div>
+      <div class="text-xs text-violet-600 font-semibold flex-shrink-0">Abrir →</div>
+    </button>`);
+  document.getElementById('extras-service-list').innerHTML = botoes.join('');
 }
 
 function openHeroService(serviceId) {

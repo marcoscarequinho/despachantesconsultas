@@ -103,12 +103,26 @@ const VISTOCAR_ENDPOINTS = {
   'crlv-rj-reemissao-2': 'crlv-rj',
   'crlv-pe-instantaneo': 'crlv-pe',
   // Assíncrono: só registra a consulta (movementId) e o PDF chega por webhook —
-  // tratamento de resposta próprio, ver o bloco 'crlv-ce' em processCatalogQuery.
+  // tratamento de resposta próprio, ver VISTOCAR_ASYNC_SVCS abaixo.
   'crlv-ce': 'crlv-ce',
   'security-code-vistocar-2': 'security-code',
   'vistocar-completa': 'completa',
   'vistocar-debitos-cod-barra': 'debitos-cod-barra',
 };
+
+// Serviços Vistocar ASSÍNCRONOS: o POST não devolve documento nenhum, só REGISTRA
+// a consulta (devolve movementId + "CONSULTA PENDENTE") e o PDF chega depois em
+// POST /api/webhooks/vistocar. Por isso não passam pelo tratamento de resposta com
+// pdfBase64 dos demais e só são cobrados na entrega (ver finalizePendingQuery).
+//
+// A doc da Vistocar ("Integração API", seção "Consultas Assíncronas e Webhooks")
+// lista DF/ES/PB/RN/RS/SC/CE e ATPV-e como produtos desse fluxo, mas hoje só o CE
+// está liberado na nossa conta — as rotas apiclient/crlv-df, crlv-es, crlv-pb,
+// crlv-rn, crlv-rs, crlv-sc e atpve ainda não existem (respondem o 500 genérico
+// de rota inexistente do Spring, idêntico ao de um caminho inventado). Quando a
+// Vistocar liberar, habilitar cada uma é: rota em VISTOCAR_ENDPOINTS + serviço em
+// SERVICES + id aqui — o resto do fluxo (webhook, entrega, cobrança) já é genérico.
+const VISTOCAR_ASYNC_SVCS = new Set(['crlv-ce']);
 
 // Cache do token JWT da Vistocar em memória do processo — o login devolve um token
 // válido por 40 min (doc da Vistocar), então evitamos logar a cada consulta. Renova
@@ -6791,7 +6805,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
           return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
         }
-      } else if (serviceId === 'crlv-ce') {
+      } else if (VISTOCAR_ASYNC_SVCS.has(serviceId)) {
         // Assíncrono: a resposta de sucesso só confirma o REGISTRO da consulta
         // ("CONSULTA PENDENTE", resultAvailable=false) e devolve o movementId; o
         // documento chega depois em POST /api/webhooks/vistocar. Sem movementId
@@ -6800,7 +6814,8 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         const ok = parsed?.status === 200 && parsed?.response?.success === true
           && (parsed?.response?.movementId || parsed?.response?.movementId === 0);
         if (!ok) {
-          const errMsg = parsed?.message || parsed?.response?.msg || 'Não foi possível registrar a consulta no Detran-CE.';
+          const orgao = service.uf ? `Detran-${service.uf.toUpperCase()}` : 'órgão';
+          const errMsg = parsed?.message || parsed?.response?.msg || `Não foi possível registrar a consulta no ${orgao}.`;
           console.error(`[${serviceId}] resposta inesperada da Vistocar: ${JSON.stringify(parsed)}`);
           return res.status(422).json({ error: errMsg });
         }
@@ -6832,14 +6847,14 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       }
     }
 
-    // ── CRLV-e Ceará (Vistocar, assíncrono): registrado agora, cobrado na entrega ──
-    // A consulta foi só REGISTRADA no Detran-CE (ver tratamento de resposta acima):
+    // ── Vistocar assíncrono (hoje CRLV-e Ceará): registrado agora, cobrado na entrega ──
+    // A consulta foi só REGISTRADA no Detran (ver tratamento de resposta acima):
     // não há documento ainda, então nada é debitado aqui e o fluxo sai antes das
     // validações de resultado abaixo, que esperam um documento. A consulta fica
     // 'aguardando_pdf' e o débito acontece quando o webhook da Vistocar entrega o
     // PDF (ver POST /api/webhooks/vistocar → finalizePendingQuery). Se o documento
     // nunca sair, runVistocarPendingCheck marca como 'cancelado' sem cobrar nada.
-    if (serviceId === 'crlv-ce') {
+    if (VISTOCAR_ASYNC_SVCS.has(serviceId)) {
       await ensureDbReady();   // vistocar_pending é tabela nova — ver ensureDbReady
       const placa = String(params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
       const qRow = await pool.query(
@@ -6862,7 +6877,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         success: true,
         pending: true,
         result: {
-          status: 'Consulta registrada no Detran-CE! O documento ainda está sendo emitido — assim que sair, ele chega pelo WhatsApp e fica no seu histórico. Você só é cobrado quando o PDF for entregue.',
+          status: `Consulta registrada no ${service.uf ? `Detran-${service.uf.toUpperCase()}` : 'Detran'}! O documento ainda está sendo emitido — assim que sair, ele chega pelo WhatsApp e fica no seu histórico. Você só é cobrado quando o PDF for entregue.`,
           protocolo: vistocarMovementId,
         },
         charged: 0,
