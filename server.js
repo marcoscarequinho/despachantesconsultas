@@ -483,18 +483,19 @@ const SERVICES = [
   // sem overlay de PDF oficial (ver buildNotaPrestacaoServicosPdfBuffer).
   // Gratuito (antes R$ 1,00).
   { id:'nota-prestacao-servicos-despachante', name:'Nota de Prestação de Serviços Para Despachantes', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'nota_prestacao_servicos', icon:'🧾' },
-  // Gerar ASD (Anotação de Serviço Documental) — documento que o despachante
-  // emite identificando o serviço contratado, o profissional responsável e o
-  // beneficiário. Mesmo padrão em duas etapas da Procuração Veicular e usa
-  // exatamente os mesmos 3 endpoints de pré-preenchimento (sem custo, sem nova
-  // chamada upstream no /api/query): Localização CPF V3 para o Profissional e
-  // para o Beneficiário (POST /api/procuracao-veicular/localizar-cpf, uma
-  // chamada por parte) e Proprietário Atual para a Descrição Documental a
-  // partir da placa (POST /api/procuracao-veicular/localizar-placa). As duas
-  // digitalizações da carteirinha (frente/verso) chegam como data URL nos params
-  // e viram a última página do PDF (ver buildAsdPdfBuffer).
+  // Gerar ASD RJ (Anotação de Serviço Documental) — reproduz o formulário
+  // oficial em papel do CRDD-RJ (ver ASD_FAIXAS/buildAsdPdfBuffer), identificando
+  // o serviço contratado, o profissional responsável e o beneficiário. Mesmo
+  // padrão em duas etapas da Procuração Veicular e usa exatamente os mesmos 3
+  // endpoints de pré-preenchimento (sem custo, sem nova chamada upstream no
+  // /api/query): Localização CPF V3 para o Profissional e para o Beneficiário
+  // (POST /api/procuracao-veicular/localizar-cpf, uma chamada por parte) e
+  // Proprietário Atual para os dados do veículo a partir da placa (POST
+  // /api/procuracao-veicular/localizar-placa). As duas digitalizações da
+  // carteirinha (frente/verso) chegam como data URL nos params e ocupam a metade
+  // de baixo da mesma folha, no espaço que o formulário reserva para elas.
   // Gratuito (antes R$ 9,50).
-  { id:'gerar-asd', name:'Gerar ASD', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'asd', icon:'📑' },
+  { id:'gerar-asd', name:'Gerar ASD RJ', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'asd', icon:'📑' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // API Vistocar (vistocarconsulta.com.br) — fonte para Reemissão de CRLV-e RJ,
@@ -2845,6 +2846,18 @@ function extractProprietarioAtualFields(data) {
     cor:           deepFindAlias(data, ['cor', 'cor_veiculo']),
     anoFabricacao: deepFindAlias(data, ['ano_fabricacao', 'anofabricacao', 'ano_fab']),
     anoModelo:     deepFindAlias(data, ['ano_modelo', 'anomodelo', 'ano_mod']),
+    // Campos que só a ASD RJ usa: o formulário oficial do CRDD-RJ tem uma
+    // célula para cada um. Os apelidos cobrem as variações vistas entre a
+    // Proprietário Atual (Datacube) e a Veicular Completa (Vistocar) — campo
+    // ausente vira célula em branco, que o despachante preenche à mão.
+    especie:       deepFindAlias(data, ['especie', 'especie_veiculo', 'descricao_especie']),
+    capacidade:    deepFindAlias(data, ['capacidade', 'capacidade_carga', 'capacidade_passageiros', 'lotacao']),
+    procedencia:   deepFindAlias(data, ['procedencia', 'nacionalidade', 'origem']),
+    categoria:     deepFindAlias(data, ['categoria', 'categoria_veiculo', 'descricao_categoria']),
+    tipo:          deepFindAlias(data, ['tipo_veiculo', 'tipo', 'descricao_tipo']),
+    potencia:      deepFindAlias(data, ['potencia', 'potencia_motor', 'cilindradas', 'cilindrada']),
+    combustivel:   deepFindAlias(data, ['combustivel', 'tipo_combustivel', 'descricao_combustivel']),
+    municipio:     deepFindAlias(data, ['municipio', 'cidade', 'municipio_veiculo']),
   };
 }
 
@@ -2893,24 +2906,21 @@ function extractDeclaracaoResidenciaFields(localizacaoData) {
 // no PDF de referência, sem precisar do passo de conversão top→bottom do ATPVe.
 const DECLARACAO_RESIDENCIA_TEMPLATE_PATH = path.join(__dirname, 'assets', 'declaracao-residencia-detran-rj-template.pdf');
 
-// Brasão nacional dos Despachantes Documentalistas (CRDD BR), usado no cabeçalho
-// da Nota de Prestação de Serviços Para Despachantes RJ. Não confundir com
-// assets/crdd-rj-logo.png (brasão do conselho do Rio), que é só uma das opções
-// do menu da ASD — ver ASD_LOGOS abaixo.
-const CRDD_BR_LOGO_PATH = path.join(__dirname, 'assets', 'crdd-br-logo.png');
+// Brasão do CRDD-RJ, usado no cabeçalho da Nota de Prestação de Serviços Para
+// Despachantes RJ e da ASD RJ. Substituiu o brasão nacional (CRDD BR) nos dois
+// documentos a pedido do cliente — assets/crdd-br-logo.png continua no repo,
+// mas não é mais usado por nenhum serviço.
+const CRDD_RJ_LOGO_PATH = path.join(__dirname, 'assets', 'crdd-rj-logo.png');
 
-// Logos disponíveis no cabeçalho da ASD — o despachante escolhe o conselho no
-// menu suspenso do formulário (Coisas de Despachantes → Gerar ASD). Para
-// acrescentar um estado: solte o PNG em assets/ e adicione uma linha aqui. O
-// painel monta o menu a partir de GET /api/asd-logos, então nada muda no
-// front-end. A ordem deste objeto é a ordem exibida no menu.
+// Logos disponíveis no cabeçalho da ASD. Hoje só o CRDD-RJ: o serviço é a
+// "Gerar ASD RJ" e reproduz o formulário oficial do conselho do Rio, então não
+// há o que escolher — o painel esconde o menu enquanto houver uma opção só (ver
+// preencherLogosAsd). Para acrescentar um estado: solte o PNG em assets/ e
+// adicione uma linha aqui; o menu volta sozinho, sem mexer no front-end.
 const ASD_LOGOS = {
-  br: { label: 'CRDD BR — Nacional',        path: path.join(__dirname, 'assets', 'crdd-br-logo.png') },
   rj: { label: 'CRDD-RJ — Rio de Janeiro',  path: path.join(__dirname, 'assets', 'crdd-rj-logo.png') },
 };
-// Mantém o comportamento de antes do menu existir (ASDs antigas saíam com o
-// CRDD BR), então pedido sem "logo" continua saindo igual.
-const ASD_LOGO_PADRAO = 'br';
+const ASD_LOGO_PADRAO = 'rj';
 function asdLogoPath(id) {
   return (ASD_LOGOS[String(id || '').toLowerCase()] || ASD_LOGOS[ASD_LOGO_PADRAO]).path;
 }
@@ -3248,11 +3258,11 @@ function buildNotaPrestacaoServicosPdfBuffer(params) {
       const logoW = 95;
       let logoH = 0;
       try {
-        const img = doc.openImage(CRDD_BR_LOGO_PATH);
+        const img = doc.openImage(CRDD_RJ_LOGO_PATH);
         logoH = logoW * (img.height / img.width);
         doc.image(img, left, headerY, { width: logoW });
       } catch (e) {
-        console.warn('[nota-prestacao-servicos] logo CRDD-BR não encontrado:', e.message);
+        console.warn('[nota-prestacao-servicos] logo CRDD-RJ não encontrado:', e.message);
       }
 
       const titleX = left + logoW + 12;
@@ -3421,207 +3431,307 @@ async function generateAsdQrPng(url) {
   }
 }
 
-// ── Geração de PDF — Gerar ASD (Anotação de Serviço Documental). Mesma técnica
-// da Procuração Veicular e da Nota de Prestação de Serviços: documento montado
-// do zero com pdfkit, sem template oficial. Os dados chegam prontos do
-// formulário (Profissional e Beneficiário pré-preenchidos via Localização CPF
-// V3, Descrição Documental via Proprietário Atual), já conferidos pelo usuário.
-// As digitalizações da carteirinha do despachante, quando enviadas, viram uma
-// página de anexo no FINAL da ASD — é o que dá fé da habilitação profissional
-// de quem assina.
+// ── Geração de PDF — Gerar ASD RJ (Anotação de Serviço Documental) ───────────
+// Ao contrário da Procuração Veicular e da Nota de Prestação de Serviços, que
+// são documentos montados livremente, esta REPRODUZ o formulário oficial em
+// papel do CRDD-RJ: mesma grade de células, mesmas tarjas de seção, tudo em
+// preto e branco. Os dados chegam prontos do formulário do painel (Profissional
+// e Beneficiário pré-preenchidos via Localização CPF V3, veículo via
+// Proprietário Atual), já conferidos pelo usuário; célula sem dado sai em
+// branco, para completar à mão depois de imprimir. As digitalizações da
+// carteirinha entram na metade de baixo da MESMA folha, frente e verso lado a
+// lado, no espaço que o formulário reserva para elas.
+// ── ASD RJ: medidas do formulário oficial do CRDD-RJ ─────────────────────────
+// O cliente pediu a ASD idêntica ao formulário em papel do conselho, em preto e
+// branco. Para não desenhar "de olho", as coordenadas abaixo foram MEDIDAS no
+// modelo escaneado (1240x1753 px = A4 a 150 dpi), varrendo a imagem em busca das
+// linhas da tabela. Tudo aqui está em pixels DO MODELO e vira ponto por asdPx()
+// — mexer num número é sair do modelo oficial.
+const ASD_MODELO_LARGURA = 1240;
+const asdPx = v => v * (595.28 / ASD_MODELO_LARGURA);
+const ASD_TABELA = { x0: 40, x1: 1199 };
+
+// Cada faixa é uma linha da tabela: `cols` são as divisórias verticais internas
+// (também medidas) e `barra` marca as tarjas pretas de seção.
+const ASD_FAIXAS = [
+  { y0: 182,  y1: 253,  cols: [899] },
+  { y0: 253,  y1: 314,  cols: [214, 1124] },
+  { y0: 314,  y1: 374,  cols: [761] },
+  { y0: 374,  y1: 406,  barra: 'PROFISSIONAL' },
+  { y0: 406,  y1: 480,  cols: [723, 919] },
+  { y0: 480,  y1: 554,  cols: [723, 880, 1126] },
+  { y0: 554,  y1: 586,  barra: 'BENEFICIÁRIO DO SERVIÇO' },
+  { y0: 586,  y1: 652,  cols: [723, 958, 1126] },
+  { y0: 652,  y1: 717,  cols: [236, 297, 722, 919] },
+  { y0: 717,  y1: 780,  cols: [196, 493, 549] },
+  { y0: 780,  y1: 844,  cols: [302, 437] },
+  { y0: 844,  y1: 907,  cols: [881] },
+  { y0: 907,  y1: 939,  barra: 'DESCRIÇÃO DOCUMENTAL' },
+  { y0: 939,  y1: 999,  cols: [197, 377, 551, 704, 783, 1069] },
+  { y0: 999,  y1: 1056, cols: [] },                    // DUDAS Nº (traços curtos)
+  { y0: 1056, y1: 1117, cols: [510, 627, 782, 940, 1067] },
+  { y0: 1117, y1: 1177, cols: [281, 510, 735, 965] },
+  { y0: 1177, y1: 1303, cols: [622] },
+  { y0: 1303, y1: 1331, barra: 'CARTEIRINHA DO DESPACHANTE', centro: true },
+];
+
+// Células do formulário oficial além das que o painel sempre exige. Os campos do
+// veículo chegam da busca por placa; os de pessoa/serviço o despachante preenche
+// (ou deixa em branco para completar à mão no papel). Uma lista só, usada tanto
+// no hash da cadeia quanto no desenho do PDF, para os dois nunca divergirem.
+const ASD_CAMPOS_OPCIONAIS = [
+  'codigoServico', 'contratanteCpfCnpj',
+  'profissionalEndereco', 'profissionalCep', 'profissionalMunicipio',
+  'beneficiarioIdentidade', 'beneficiarioOrgao', 'beneficiarioDataExpedicao',
+  'beneficiarioUfIdentidade', 'beneficiarioEndereco', 'beneficiarioComplemento',
+  'beneficiarioBairro', 'beneficiarioCep', 'beneficiarioMunicipio', 'beneficiarioUf',
+  'restricao', 'proprietarioAnterior', 'proprietarioAnteriorCpfCnpj',
+  'crvNotaFiscal', 'dataCrv', 'ufCrv', 'remarcado',
+  'marcaModelo', 'chassi', 'renavam', 'cor', 'anoFabricacao', 'anoModelo',
+  'especie', 'capacidade', 'procedencia', 'categoria', 'tipo', 'potencia',
+  'combustivel', 'municipio',
+];
+
 function buildAsdPdfBuffer(params) {
   return new Promise((resolve, reject) => {
     try {
-      // Margem menor que o padrão da casa (55): o brasão de 125pt só cabe com a
-      // assinatura na 1ª página se a folha devolver essa altura. Mexer aqui, no
-      // logoW ou nos moveDown abaixo é mexer no mesmo orçamento vertical.
-      const doc = new PDFDocument({ size: 'A4', margin: 40 });
+      // margin 0: a folha inteira é posicionada por coordenada absoluta medida
+      // no modelo — não há fluxo de texto para uma margem controlar.
+      const doc = new PDFDocument({ size: 'A4', margin: 0 });
       const chunks = [];
       doc.on('data', c => chunks.push(c));
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
 
       const now = new Date();
-      const { left, width } = pdfContentBox(doc);
+      const P = asdPx;
+      const T = ASD_TABELA;
+      const larguraTabela = T.x1 - T.x0;
+      doc.fillColor('#000000').strokeColor('#000000').lineWidth(0.8);
 
-      const headerY = doc.y;
-      // O brasão é quase quadrado, então cada ponto de largura é um ponto de
-      // altura tirado da página. 125pt é o tamanho pedido pelo cliente e fica
-      // abaixo do teto medido (127pt com esta margem e estes espaçamentos):
-      // acima disso a assinatura escorrega para a 2ª página em ASD com
-      // descrição documental longa.
-      const logoW = 125;
-      let logoH = 0;
-      const logoPath = asdLogoPath(params.logo);
+      // ── Cabeçalho ─────────────────────────────────────────────────────────
       try {
-        const img = doc.openImage(logoPath);
-        logoH = logoW * (img.height / img.width);
-        doc.image(img, left, headerY, { width: logoW });
+        doc.image(asdLogoPath(params.logo), P(43), P(14), { fit: [P(187), P(168)] });
       } catch (e) {
-        console.warn('[gerar-asd] logo não encontrado:', logoPath, e.message);
+        console.warn('[gerar-asd] logo não encontrado:', e.message);
+      }
+      // Corpos resolvidos para bater com a LARGURA medida de cada linha no
+      // modelo (ex.: o título ocupa 576 px lá, o que dá 8.6pt aqui) e postos na
+      // coordenada x medida — assim não há centralização a adivinhar.
+      doc.font('Helvetica-Bold').fontSize(8.6)
+        .text('CONSELHO REGIONAL DOS DESPACHANTES DOCUMENTALISTAS', P(246), P(42), { lineBreak: false })
+        .text('DO ESTADO DO RIO DE JANEIRO', P(377), P(69), { lineBreak: false });
+      doc.font('Helvetica').fontSize(10.75)
+        .text('ASD - Anotação de serviços documental', P(287), P(104), { lineBreak: false });
+      // Instrução do formulário em papel: o selo do conselho é colado à mão.
+      doc.font('Helvetica-Bold').fontSize(8.25)
+        .text('COLE AQUI O SELO', P(992), P(82), { lineBreak: false });
+
+      // ── Grade ─────────────────────────────────────────────────────────────
+      ASD_FAIXAS.forEach(f => {
+        if (f.barra) {
+          doc.rect(P(T.x0), P(f.y0), P(larguraTabela), P(f.y1 - f.y0)).fill('#000000');
+          const recuo = f.centro ? 0 : 12;
+          doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(10.5)
+            .text(f.barra, P(T.x0 + recuo), P(f.y0 + 8),
+              { width: P(larguraTabela - recuo), align: f.centro ? 'center' : 'left', lineBreak: false });
+          doc.fillColor('#000000');
+          return;
+        }
+        doc.rect(P(T.x0), P(f.y0), P(larguraTabela), P(f.y1 - f.y0)).stroke();
+        (f.cols || []).forEach(x => doc.moveTo(P(x), P(f.y0)).lineTo(P(x), P(f.y1)).stroke());
+      });
+
+      // Célula do formulário: rótulo miúdo no alto e o valor preenchido logo
+      // abaixo, como no impresso. O valor encolhe até 5.5pt em vez de quebrar
+      // linha — nome de proprietário e marca/modelo estouram a célula com
+      // frequência, e o formulário não tem altura sobrando para uma 2ª linha.
+      const celula = (x0, y0, x1, rotulo, valor, opts = {}) => {
+        const larg = x1 - x0 - 12;
+        if (rotulo) {
+          doc.font('Helvetica').fontSize(opts.rotuloSize || 7.5).fillColor('#000000')
+            .text(rotulo, P(x0 + 6), P(y0 + 6), { width: P(larg), align: opts.align || 'left', lineBreak: false });
+        }
+        const v = (valor ?? '').toString().trim();
+        if (!v) return;
+        doc.font(opts.negrito ? 'Helvetica-Bold' : 'Helvetica');
+        let size = opts.valorSize || 9;
+        while (size > 5.5 && doc.fontSize(size).widthOfString(v) > P(larg)) size -= 0.25;
+        doc.fontSize(size).fillColor('#000000')
+          .text(v, P(x0 + 6), P(y0 + (opts.valorY ?? 26)), { width: P(larg), align: opts.align || 'left', lineBreak: false });
+      };
+
+      const d = (s) => (s ?? '').toString().trim();
+
+      // ── Identificação do serviço ──────────────────────────────────────────
+      celula(40, 182, 899, 'Natureza Documental',
+        'Departamento Estadual de Trânsito do Rio de Janeiro - DETRAN/RJ', { valorSize: 11, valorY: 32 });
+      // Nº ASD é numerado pelo próprio conselho no papel — sai em branco.
+      celula(899, 182, 1199, 'Nº ASD', 'Para uso Exclusivo do CRDD',
+        { align: 'center', valorSize: 8, valorY: 36 });
+
+      celula(40,   253, 214,  'Código do Serviço', params.codigoServico);
+      celula(214,  253, 1124, 'Serviço',           params.servico);
+      celula(1124, 253, 1199, 'UF',                params.uf, { align: 'center' });
+
+      celula(40,  314, 761,  'Nome do Contratante', params.contratante);
+      celula(761, 314, 1199, 'CPF/CNPJ',            d(params.contratanteCpfCnpj) ? maskDocDisplay(params.contratanteCpfCnpj) : '');
+
+      // ── Profissional ──────────────────────────────────────────────────────
+      celula(40,  406, 723,  'Nome',                  params.profissionalNome);
+      celula(723, 406, 919,  'Registro Profissional', params.profissionalMatricula);
+      // Fixos do formulário do CRDD-RJ: a ASD do Rio é sempre DETRAN/RJ.
+      celula(919, 406, 1199, 'Esfera Administrativa', 'DETRAN',
+        { align: 'center', negrito: true, valorSize: 12, valorY: 34 });
+
+      celula(40,   480, 723,  'Endereço',  params.profissionalEndereco);
+      celula(723,  480, 880,  'CEP',       params.profissionalCep);
+      celula(880,  480, 1126, 'Município', params.profissionalMunicipio);
+      celula(1126, 480, 1199, 'UF', 'RJ',
+        { align: 'center', negrito: true, valorSize: 12, valorY: 34 });
+
+      // ── Beneficiário do serviço ───────────────────────────────────────────
+      celula(40,   586, 723,  'Proprietário Atual', params.beneficiarioNome);
+      celula(723,  586, 958,  'CPF/CNPJ',           d(params.beneficiarioCpfCnpj) ? maskDocDisplay(params.beneficiarioCpfCnpj) : '');
+      celula(958,  586, 1126, 'Identidade',         params.beneficiarioIdentidade);
+      celula(1126, 586, 1199, 'Órgão',              params.beneficiarioOrgao, { align: 'center' });
+
+      celula(40,  652, 236,  'Data da Expedição', params.beneficiarioDataExpedicao);
+      celula(236, 652, 297,  'UF',                params.beneficiarioUfIdentidade, { align: 'center' });
+      celula(297, 652, 722,  'Endereço',          params.beneficiarioEndereco);
+      celula(722, 652, 919,  'Complemento',       params.beneficiarioComplemento);
+      celula(919, 652, 1199, 'Bairro',            params.beneficiarioBairro);
+
+      celula(40,  717, 196,  'CEP',       params.beneficiarioCep);
+      celula(196, 717, 493,  'Município', params.beneficiarioMunicipio);
+      celula(493, 717, 549,  'UF',        params.beneficiarioUf, { align: 'center' });
+      celula(549, 717, 1199, 'Restrição', params.restricao);
+
+      // "Observação" do formulário: o rótulo mora na 1ª célula, mas o texto vai
+      // na 3ª (a larga) — é a única com espaço para o que o despachante escreve
+      // na Descrição Documental do painel.
+      celula(40,  780, 302,  'Observação', '');
+      celula(302, 780, 437,  '', '');
+      if (d(params.descricaoDocumental)) {
+        doc.font('Helvetica').fontSize(8).fillColor('#000000')
+          .text(d(params.descricaoDocumental), P(443), P(786),
+            { width: P(1199 - 437 - 12), height: P(52), ellipsis: true, lineGap: 1 });
       }
 
-      const titleX = left + logoW + 12;
-      const titleWidth = width - logoW - 12;
-      doc.font('Helvetica-Bold').fontSize(14)
-        .text('ANOTAÇÃO DE SERVIÇO DOCUMENTAL', titleX, headerY + 4, { width: titleWidth, align: 'center' });
-      doc.font('Helvetica-Bold').fontSize(11).fillColor('#1e40af')
-        .text('ASD', titleX, doc.y + 1, { width: titleWidth, align: 'center' });
-      doc.font('Helvetica').fontSize(9).fillColor('#6b7280')
-        .text(`Emitida em ${now.toLocaleString('pt-BR')}`, titleX, doc.y + 2, { width: titleWidth, align: 'center' });
-      doc.fillColor('#111827').fontSize(10);
+      celula(40,  844, 881,  'Nome do Proprietário Anterior', params.proprietarioAnterior);
+      celula(881, 844, 1199, 'CPF/CNPJ', d(params.proprietarioAnteriorCpfCnpj) ? maskDocDisplay(params.proprietarioAnteriorCpfCnpj) : '');
 
-      doc.y = Math.max(doc.y, headerY + logoH) + 4;
+      // ── Descrição documental ──────────────────────────────────────────────
+      celula(40,   939, 197,  'Placa',             params.placa ? maskPlacaDisplay(params.placa) : '');
+      celula(197,  939, 377,  'RENAVAM',           params.renavam);
+      celula(377,  939, 551,  'CRV / Nota Fiscal', params.crvNotaFiscal);
+      celula(551,  939, 704,  'Data',              params.dataCrv);
+      celula(704,  939, 783,  'UF',                params.ufCrv, { align: 'center' });
+      celula(783,  939, 1069, 'Chassi',            params.chassi);
+      celula(1069, 939, 1199, 'Remarcado',         params.remarcado, { align: 'center' });
 
-      pdfBar(doc, 'DADOS DO SERVIÇO');
-      pdfFieldGrid(doc, [
-        ['Serviço', params.servico],
-        ['UF', params.uf],
-        ['Nome do Contratante', params.contratante],
-        ['Data', now.toLocaleDateString('pt-BR')],
-      ]);
-      doc.moveDown(0.2);
+      // DUDAS: 5 campos separados por traços curtos, como no impresso.
+      doc.font('Helvetica').fontSize(7.5).fillColor('#000000')
+        .text('DUDAS Nº', P(46), P(1005), { lineBreak: false });
+      [76, 280, 319, 511, 550, 735, 769, 1028].forEach(x =>
+        doc.moveTo(P(x), P(1018)).lineTo(P(x), P(1054)).stroke());
+      const dudas = Array.isArray(params.dudas) ? params.dudas : [];
+      [[50, 0], [292, 1], [523, 2], [747, 3], [1040, 4]].forEach(([x, i]) => {
+        doc.font('Helvetica').fontSize(8.5).fillColor('#000000')
+          .text(String(i + 1), P(x), P(1030), { lineBreak: false });
+        if (d(dudas[i])) {
+          doc.fontSize(8).text(d(dudas[i]), P(x + 32), P(1030), { width: P(150), lineBreak: false });
+        }
+      });
 
-      // Telefone e e-mail entram numa célula só ("Contato"): como pares
-      // separados eles somavam uma linha inteira de grade a cada seção e
-      // empurravam a assinatura para uma segunda página.
-      const contato = (tel, mail) => [tel, mail].filter(Boolean).join('  ·  ');
+      celula(40,   1056, 510,  'Marca/Modelo',   params.marcaModelo, { valorY: 24 });
+      celula(510,  1056, 627,  'Ano Modelo',     params.anoModelo,     { valorY: 24 });
+      celula(627,  1056, 782,  'Ano Fabricação', params.anoFabricacao, { valorY: 24 });
+      celula(782,  1056, 940,  'Espécie',        params.especie,       { valorY: 24 });
+      celula(940,  1056, 1067, 'Capacidade',     params.capacidade,    { valorY: 24 });
+      celula(1067, 1056, 1199, 'Procedência',    params.procedencia,   { valorY: 24 });
 
-      pdfBar(doc, 'PROFISSIONAL (DESPACHANTE DOCUMENTALISTA)');
-      pdfFieldGrid(doc, [
-        ['Nome / Razão Social', params.profissionalNome],
-        ['CPF/CNPJ', maskDocDisplay(params.profissionalCpfCnpj)],
-        ...(params.profissionalMatricula ? [['Matrícula (CRDD-UF)', params.profissionalMatricula]] : []),
-        ...(contato(params.profissionalTelefone, params.profissionalEmail)
-          ? [['Contato', contato(params.profissionalTelefone, params.profissionalEmail)]] : []),
-      ]);
-      doc.moveDown(0.2);
+      celula(40,  1117, 281,  'Categoria',   params.categoria,   { valorY: 24 });
+      celula(281, 1117, 510,  'Tipo',        params.tipo,        { valorY: 24 });
+      celula(510, 1117, 735,  'Potência',    params.potencia,    { valorY: 24 });
+      celula(735, 1117, 965,  'Cor',         params.cor,         { valorY: 24 });
+      celula(965, 1117, 1199, 'Combustível', params.combustivel, { valorY: 24 });
 
-      pdfBar(doc, 'BENEFICIÁRIO DO SERVIÇO');
-      pdfFieldGrid(doc, [
-        ['Nome / Razão Social', params.beneficiarioNome],
-        ['CPF/CNPJ', maskDocDisplay(params.beneficiarioCpfCnpj)],
-        ...(contato(params.beneficiarioTelefone, params.beneficiarioEmail)
-          ? [['Contato', contato(params.beneficiarioTelefone, params.beneficiarioEmail)]] : []),
-      ]);
-      doc.moveDown(0.2);
+      // ── Rodapé do formulário: local, data e assinatura ────────────────────
+      doc.font('Helvetica').fontSize(7.5).fillColor('#000000')
+        .text('Município', P(53), P(1183), { lineBreak: false })
+        .text('UF',        P(252), P(1183), { lineBreak: false })
+        .text('Data',      P(331), P(1183), { lineBreak: false })
+        .text('Assinatura do Profissional', P(628), P(1183), { lineBreak: false });
+      doc.fontSize(9)
+        .text(d(params.municipio), P(53), P(1205), { width: P(190), lineBreak: false })
+        .text(d(params.uf),        P(252), P(1205), { width: P(70),  lineBreak: false })
+        .text(now.toLocaleDateString('pt-BR'), P(331), P(1205), { width: P(200), lineBreak: false });
+      doc.moveTo(P(700), P(1290)).lineTo(P(1125), P(1290)).stroke();
+      doc.font('Helvetica').fontSize(7.5)
+        .text(d(params.profissionalNome), P(700), P(1294), { width: P(425), align: 'center', lineBreak: false });
 
-      pdfBar(doc, 'DESCRIÇÃO DOCUMENTAL');
-      const veiculoPairs = [
-        ['Placa', params.placa ? maskPlacaDisplay(params.placa) : ''],
-        ['Marca/Modelo', params.marcaModelo],
-        ['Chassi', params.chassi],
-        ['RENAVAM', params.renavam],
-        ['Cor', params.cor],
-        ['Ano Fabricação/Modelo', (params.anoFabricacao || params.anoModelo) ? `${params.anoFabricacao || '-'}/${params.anoModelo || '-'}` : ''],
-      ].filter(([, v]) => v);
-      if (veiculoPairs.length) { pdfFieldGrid(doc, veiculoPairs); doc.moveDown(0.25); }
-      if (params.descricaoDocumental) {
-        pdfEnsureSpace(doc, 40);
-        doc.font('Helvetica').fontSize(9.5).fillColor('#111827')
-          .text(params.descricaoDocumental, left, doc.y, { width, align: 'left', lineGap: 2 });
-        doc.moveDown(0.2);
-      }
-      if (!veiculoPairs.length && !params.descricaoDocumental) {
-        pdfEmptyNotice(doc, 'Nenhuma descrição documental informada.');
-      }
-
-      pdfEnsureSpace(doc, 70);
-      doc.font('Helvetica-Bold').fontSize(8).fillColor('#374151').text('OBSERVAÇÕES:', left, doc.y, { width });
-      doc.font('Helvetica').fontSize(8).fillColor('#6b7280').text(
-        'Documento declaratório emitido nos termos da Lei nº 14.282/2021, que regulamenta a profissão de despachante ' +
-        'documentalista. O profissional identificado é responsável cível e criminal pelo conteúdo aqui declarado.',
-        left, doc.y, { width, lineGap: 1.5 }
-      );
-      doc.fillColor('#111827').fontSize(10);
-
-      // Local/data + assinatura + verificação são checados como um bloco só, e a
-      // folga do moveDown entra na reserva: separados, a ASD saía com uma página
-      // extra contendo apenas a linha de assinatura.
+      // ── QR de verificação, no lugar que o modelo reserva para ele ─────────
+      // Verificação numa faixa fina logo abaixo da tarja, e o QR numa coluna
+      // estreita à esquerda: empilhado sobre as carteirinhas, como estava, o
+      // bloco comia ~100 px de altura e era ele que limitava o tamanho delas.
+      // Assim a metade de baixo da folha fica quase toda para as digitalizações.
       const v = params.verificacao;
-      pdfEnsureSpace(doc, v ? 128 : 105);
-      doc.moveDown(0.8);
-      doc.font('Helvetica').fontSize(9.5)
-        .text(`${params.uf ? params.uf + ', ' : ''}${formatDateExtenso(now.toISOString().slice(0, 10))}.`,
-          left, doc.y, { width, align: 'center' });
-
-      doc.moveDown(1.2);
-      const y1 = doc.y;
-      doc.moveTo(left + width / 2 - 110, y1).lineTo(left + width / 2 + 110, y1).stroke();
-      doc.fontSize(9).font('Helvetica-Bold').text(params.profissionalNome, left, y1 + 4, { width, align: 'center' });
-      doc.font('Helvetica').text(
-        `Despachante Documentalista${params.profissionalMatricula ? ' - Matrícula ' + params.profissionalMatricula : ''}`,
-        left, y1 + 16, { width, align: 'center' }
-      );
-
-      // Bloco de verificação — QR + código na faixa livre à esquerda da
-      // assinatura (a linha de assinatura ocupa só os 220pt centrais), para não
-      // gastar altura extra na página.
+      const QR_COL = { x: 40, larg: 100 };
       if (v) {
-        const qrSize = 62;
-        const qrY = y1 - 12;
+        doc.font('Helvetica-Bold').fontSize(6.5).fillColor('#000000')
+          .text(v.codigo, P(T.x0), P(1338), { width: P(larguraTabela), lineBreak: false });
+        doc.font('Helvetica').fontSize(6)
+          .text(`ASD nº ${v.seq} deste profissional  ·  SHA-256: ${v.docHash.slice(0, 32)}…  ·  Confira em ${v.urlCurta}`,
+            P(T.x0), P(1338), { width: P(larguraTabela), align: 'right', lineBreak: false });
         if (params.qrPng) {
-          try { doc.image(params.qrPng, left, qrY, { fit: [qrSize, qrSize] }); }
+          try { doc.image(params.qrPng, P(QR_COL.x), P(1500), { fit: [P(QR_COL.larg), P(QR_COL.larg)] }); }
           catch (e) { console.warn('[gerar-asd] falha ao embutir QR:', e.message); }
         }
-        const txtY = qrY + qrSize + 3;
-        doc.font('Helvetica-Bold').fontSize(6.5).fillColor('#1e40af')
-          .text(v.codigo, left, txtY, { width: 190 });
-        doc.font('Helvetica').fontSize(5.8).fillColor('#6b7280')
-          .text(`ASD nº ${v.seq} deste profissional`, left, txtY + 8, { width: 190 })
-          .text(`SHA-256: ${v.docHash.slice(0, 32)}…`, left, txtY + 15, { width: 190 })
-          .text(`Confira em ${v.urlCurta}`, left, txtY + 22, { width: 190 });
-        doc.fillColor('#111827').font('Helvetica').fontSize(10);
-        doc.y = Math.max(doc.y, txtY + 32);
       }
 
-      // Anexo: carteirinha digitalizada pelo próprio despachante (frente/verso),
-      // sempre em página própria no final. Cada digitalização é centralizada
-      // numa moldura de altura fixa: as fotos chegam em proporções bem
-      // diferentes (retrato ou paisagem) e o fit preserva o aspecto — a moldura
-      // dá o enquadramento e mantém as duas do mesmo tamanho na página.
+      // ── Carteirinha do despachante: frente e verso lado a lado ────────────
+      // O modelo reserva a metade de baixo da folha para isso ("frente de um
+      // lado e verso do outro"), então elas ficam na MESMA página, sem moldura
+      // nem legenda — o formulário oficial não tem nenhuma das duas coisas.
       const frente = decodeAsdCarteirinha(params.carteirinhaFrente);
       const verso  = decodeAsdCarteirinha(params.carteirinhaVerso);
-      if (frente || verso) {
-        doc.addPage();
-        pdfBar(doc, 'ANEXO — IDENTIDADE DE DESPACHANTE DOCUMENTALISTA');
-        doc.font('Helvetica').fontSize(8.5).fillColor('#6b7280').text(
-          'Digitalização da carteira profissional do despachante documentalista responsável pelo serviço, ' +
-          'apresentada como comprovação de habilitação (Lei nº 14.282/2021).' +
-          // Repete o código aqui para amarrar o anexo ao documento: as imagens
-          // entram no doc_hash, então trocar a carteirinha muda o hash impresso
-          // na 1ª página e a verificação acusa.
-          (v ? ` Anexo da ${v.codigo}.` : ''),
-          left, doc.y, { width, lineGap: 1.5 }
-        );
-        doc.fillColor('#111827').fontSize(10);
-        doc.moveDown(0.8);
-
-        const boxH = 285;
-        const padding = 10;
-        [['FRENTE', frente], ['VERSO', verso]].forEach(([label, buf]) => {
-          if (!buf) return;
-          pdfEnsureSpace(doc, boxH + 34);
-          doc.font('Helvetica-Bold').fontSize(9).fillColor('#1e40af')
-            .text(label, left, doc.y, { width });
-          doc.fillColor('#111827').font('Helvetica').fontSize(10);
-          doc.moveDown(0.25);
-          const boxY = doc.y;
-          doc.strokeColor('#d1d5db').lineWidth(0.75).rect(left, boxY, width, boxH).stroke();
-          try {
-            doc.image(buf, left + padding, boxY + padding, {
-              fit: [width - padding * 2, boxH - padding * 2],
-              align: 'center', valign: 'center',
-            });
-          } catch (e) {
-            console.warn('[gerar-asd] falha ao embutir digitalização da carteirinha:', e.message);
-            doc.font('Helvetica-Oblique').fontSize(9.5).fillColor('#9ca3af')
-              .text('Não foi possível embutir esta digitalização.', left + padding, boxY + boxH / 2,
-                { width: width - padding * 2, align: 'center' });
-            doc.fillColor('#111827').font('Helvetica').fontSize(10);
+      const scans = [frente, verso].filter(Boolean);
+      if (scans.length) {
+        // As duas o maior possível e encostadas: quem limita é a ALTURA que
+        // sobra (o bloco do QR fica acima), então cada digitalização é escalada
+        // por ela e o par vai centralizado com um vão pequeno no meio. Um `fit`
+        // em caixas largas, como antes, centralizava cada uma na sua caixa e
+        // abria um vão enorme entre elas.
+        // A faixa vai da linha de verificação até quase o pé da folha, e começa
+        // depois da coluna do QR — é todo o espaço que sobra na metade de baixo.
+        const areaY = 1360, areaH = 380, vao = 16;
+        const esquerda = v ? QR_COL.x + QR_COL.larg + 15 : ASD_TABELA.x0;
+        const larguraUtil = ASD_TABELA.x1 - esquerda;
+        const imgs = scans.map(b => {
+          try { return doc.openImage(b); }
+          catch (e) { console.warn('[gerar-asd] falha ao ler digitalização da carteirinha:', e.message); return null; }
+        }).filter(Boolean);
+        if (imgs.length) {
+          let alt = areaH;
+          let largs = imgs.map(i => alt * (i.width / i.height));
+          const total = () => largs.reduce((a, b) => a + b, 0) + vao * (imgs.length - 1);
+          // Digitalização muito deitada estouraria a largura da folha.
+          if (total() > larguraUtil) {
+            const k = larguraUtil / total();
+            alt *= k;
+            largs = largs.map(w => w * k);
           }
-          doc.y = boxY + boxH + 14;
-        });
+          let x = esquerda + (larguraUtil - total()) / 2;
+          imgs.forEach((img, i) => {
+            try {
+              doc.image(img, P(x), P(areaY + (areaH - alt) / 2), { width: P(largs[i]), height: P(alt) });
+            } catch (e) {
+              console.warn('[gerar-asd] falha ao embutir digitalização da carteirinha:', e.message);
+            }
+            x += largs[i] + vao;
+          });
+        }
       }
 
       doc.end();
@@ -5773,6 +5883,15 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       const beneficiarioCpfCnpj = (params?.beneficiarioCpfCnpj || '').replace(/\D/g, '');
       const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
       const descricaoDocumental = (params?.descricaoDocumental || '').trim();
+      // Demais células do formulário (ver ASD_CAMPOS_OPCIONAIS): todas opcionais,
+      // saem em branco quando não vierem — é o comportamento pedido, o papel é
+      // completado à mão.
+      const asdOpcionais = Object.fromEntries(
+        ASD_CAMPOS_OPCIONAIS.map(k => [k, (params?.[k] ?? '').toString().trim()])
+      );
+      asdOpcionais.dudas = Array.isArray(params?.dudas)
+        ? params.dudas.slice(0, 5).map(x => (x ?? '').toString().trim())
+        : [];
       // Logo do cabeçalho (menu suspenso do formulário). Vazio = padrão, para
       // pedidos antigos e integrações que não mandam o campo continuarem valendo.
       const logo = (params?.logo || '').trim().toLowerCase() || ASD_LOGO_PADRAO;
@@ -5799,12 +5918,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         profissionalNome, profissionalCpfCnpj, profissionalMatricula,
         beneficiarioNome, beneficiarioCpfCnpj,
         placa,
-        marcaModelo: (params?.marcaModelo || '').trim(),
-        chassi: (params?.chassi || '').trim(),
-        renavam: (params?.renavam || '').trim(),
-        cor: (params?.cor || '').trim(),
-        anoFabricacao: (params?.anoFabricacao || '').trim(),
-        anoModelo: (params?.anoModelo || '').trim(),
+        ...asdOpcionais,
         descricaoDocumental,
         carteirinhaFrente: params?.carteirinhaFrente,
         carteirinhaVerso: params?.carteirinhaVerso,
@@ -5841,12 +5955,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           beneficiarioEmail: (params?.beneficiarioEmail || '').trim(),
           verificacao, qrPng, logo,
           placa,
-          marcaModelo: (params?.marcaModelo || '').trim(),
-          chassi: (params?.chassi || '').trim(),
-          renavam: (params?.renavam || '').trim(),
-          cor: (params?.cor || '').trim(),
-          anoFabricacao: (params?.anoFabricacao || '').trim(),
-          anoModelo: (params?.anoModelo || '').trim(),
+          ...asdOpcionais,
           descricaoDocumental,
           carteirinhaFrente: params?.carteirinhaFrente,
           carteirinhaVerso: params?.carteirinhaVerso,
@@ -9463,6 +9572,13 @@ app.post('/api/procuracao-veicular/localizar-placa', requireAuth, async (req, re
         nome: fields.nome, cpfCnpj: fields.cpfCnpj, endereco,
         marcaModelo: fields.marcaModelo, chassi: fields.chassi, renavam: fields.renavam,
         cor: fields.cor, anoFabricacao: fields.anoFabricacao, anoModelo: fields.anoModelo,
+        // Só a ASD RJ consome estes — a Procuração Veicular ignora.
+        especie: fields.especie, capacidade: fields.capacidade, procedencia: fields.procedencia,
+        categoria: fields.categoria, tipo: fields.tipo, potencia: fields.potencia,
+        combustivel: fields.combustivel, municipio: fields.municipio,
+        // Endereço em partes, para as células separadas do formulário da ASD.
+        logradouro: fields.logradouro, numero: fields.numero, complemento: fields.complemento,
+        bairro: fields.bairro, cidade: fields.cidade, uf: fields.uf, cep: fields.cep,
       },
     });
   } catch (err) {

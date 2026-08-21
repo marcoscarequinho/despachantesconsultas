@@ -2878,7 +2878,7 @@ function queryActionLabel(inputType) {
   if (inputType === 'contrato_aluguel') return 'Gerar Contrato';
   if (inputType === 'procuracao_veicular') return 'Gerar Procuração';
   if (inputType === 'nota_prestacao_servicos') return 'Gerar Nota';
-  if (inputType === 'asd') return 'Gerar ASD';
+  if (inputType === 'asd') return 'Gerar ASD RJ';
   return 'Realizar Consulta';
 }
 
@@ -3168,26 +3168,34 @@ function renderFormFields(inputType, svc) {
       </div>
       ${field('valor_total', 'Valor Total dos Serviços (R$)', 'text', '793.20')}`,
 
-    // Gerar ASD (Anotação de Serviço Documental) — Profissional e Beneficiário
-    // buscam o nome na Localização CPF V3, a Descrição Documental busca os dados
-    // do veículo na Proprietário Atual, e as duas digitalizações da carteirinha
-    // (opcionais) viram a última página do PDF.
+    // Gerar ASD RJ — o PDF reproduz o formulário oficial em papel do CRDD-RJ
+    // (ver buildAsdPdfBuffer/ASD_FAIXAS no server.js), então os campos aqui
+    // seguem a ordem das células daquele formulário. Quase tudo é opcional: o
+    // que ficar vazio sai como célula em branco, para o despachante completar à
+    // mão depois de imprimir. Profissional e Beneficiário buscam o nome na
+    // Localização CPF V3, os dados do veículo vêm da placa (Proprietário Atual)
+    // e as duas digitalizações da carteirinha entram no rodapé da folha.
     asd: `
       <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 text-xs text-blue-800">
-        ℹ️ Use os botões "🔎 Buscar" para preencher automaticamente o Profissional e o Beneficiário (Localização CPF V3, só para CPF) e a Descrição Documental a partir da placa (Proprietário Atual). Confira e edite o que precisar antes de gerar a ASD.
+        ℹ️ A ASD sai no formato oficial do CRDD-RJ. Use os botões "🔎 Buscar" para preencher o Profissional e o Beneficiário (Localização CPF V3, só para CPF) e os dados do veículo a partir da placa (Proprietário Atual).
+        <strong>Só Serviço, UF, Contratante, Profissional e Beneficiário são obrigatórios</strong> — o que ficar em branco sai como campo vazio no formulário, para preencher à mão.
       </div>
-      <div>
+      <div id="asd-logo-wrap">
         <label class="label">Logo do cabeçalho</label>
         <select id="f-asd_logo" class="input-field">
           <option value="">Carregando…</option>
         </select>
         <p class="text-xs text-gray-500 mt-1">Escolha o conselho que aparece no topo da ASD.</p>
       </div>
-      <div class="grid grid-cols-3 gap-3">
+      <div class="grid grid-cols-4 gap-3">
+        ${field('asd_codigo_servico', 'Código do Serviço', 'text', '(opcional)', false)}
         <div class="col-span-2">${field('asd_servico', 'Serviço', 'text', 'Ex.: Transferência de Propriedade')}</div>
         ${field('asd_uf', 'UF', 'text', 'RJ', true, 'maxlength="2"')}
       </div>
-      ${field('asd_contratante', 'Nome do Contratante', 'text', 'NOME COMPLETO / RAZÃO SOCIAL')}
+      <div class="grid grid-cols-3 gap-3">
+        <div class="col-span-2">${field('asd_contratante', 'Nome do Contratante', 'text', 'NOME COMPLETO / RAZÃO SOCIAL')}</div>
+        ${field('asd_contratante_cpf', 'CPF/CNPJ do Contratante', 'text', '(opcional)', false)}
+      </div>
 
       <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Profissional (despachante documentalista)</div>
       <div class="flex gap-2 items-end mb-1">
@@ -3196,22 +3204,40 @@ function renderFormFields(inputType, svc) {
       </div>
       <p id="asd-busca-status-profissional" class="text-xs mb-2 hidden"></p>
       ${field('asd_profissional_nome', 'Nome do Profissional', 'text', 'NOME COMPLETO / RAZÃO SOCIAL')}
-      <div class="grid grid-cols-3 gap-3">
-        ${field('asd_profissional_matricula', 'Matrícula (CRDD-UF)', 'text', 'Ex.: RJ 12.345', false)}
-        ${field('asd_profissional_telefone', 'Telefone', 'text', '(21) 90000-0000', false)}
-        ${field('asd_profissional_email', 'E-mail', 'email', 'email@exemplo.com', false)}
+      ${field('asd_profissional_matricula', 'Registro Profissional', 'text', 'Ex.: RJ 12.345', false)}
+      <div class="grid grid-cols-4 gap-3">
+        <div class="col-span-2">${field('asd_profissional_endereco', 'Endereço', 'text', '(opcional)', false)}</div>
+        ${field('asd_profissional_cep', 'CEP', 'text', '(opcional)', false)}
+        ${field('asd_profissional_municipio', 'Município', 'text', '(opcional)', false)}
       </div>
 
-      <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Beneficiário do Serviço</div>
+      <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Beneficiário do Serviço (proprietário atual)</div>
       <div class="flex gap-2 items-end mb-1">
         <div class="flex-1">${field('asd_beneficiario_cpf', 'CPF/CNPJ do Beneficiário', 'text', '000.000.000-00 ou CNPJ')}</div>
         <button type="button" onclick="buscarPessoaAsd('beneficiario')" class="btn-primary text-xs px-4 py-2.5 whitespace-nowrap">🔎 Buscar</button>
       </div>
       <p id="asd-busca-status-beneficiario" class="text-xs mb-2 hidden"></p>
       ${field('asd_beneficiario_nome', 'Nome do Beneficiário', 'text', 'NOME COMPLETO / RAZÃO SOCIAL')}
-      <div class="grid grid-cols-2 gap-3">
-        ${field('asd_beneficiario_telefone', 'Telefone', 'text', '(21) 90000-0000', false)}
-        ${field('asd_beneficiario_email', 'E-mail', 'email', 'email@exemplo.com', false)}
+      <div class="grid grid-cols-4 gap-3">
+        ${field('asd_beneficiario_identidade', 'Identidade', 'text', '(opcional)', false)}
+        ${field('asd_beneficiario_orgao', 'Órgão', 'text', '(opcional)', false)}
+        ${field('asd_beneficiario_data_expedicao', 'Data da Expedição', 'text', 'DD/MM/AAAA', false)}
+        ${field('asd_beneficiario_uf_identidade', 'UF da Identidade', 'text', '(opcional)', false, 'maxlength="2"')}
+      </div>
+      <div class="grid grid-cols-4 gap-3">
+        <div class="col-span-2">${field('asd_beneficiario_endereco', 'Endereço', 'text', '(opcional)', false)}</div>
+        ${field('asd_beneficiario_complemento', 'Complemento', 'text', '(opcional)', false)}
+        ${field('asd_beneficiario_bairro', 'Bairro', 'text', '(opcional)', false)}
+      </div>
+      <div class="grid grid-cols-4 gap-3">
+        ${field('asd_beneficiario_cep', 'CEP', 'text', '(opcional)', false)}
+        ${field('asd_beneficiario_municipio', 'Município', 'text', '(opcional)', false)}
+        ${field('asd_beneficiario_uf', 'UF', 'text', '(opcional)', false, 'maxlength="2"')}
+        ${field('asd_restricao', 'Restrição', 'text', '(opcional)', false)}
+      </div>
+      <div class="grid grid-cols-3 gap-3">
+        <div class="col-span-2">${field('asd_proprietario_anterior', 'Nome do Proprietário Anterior', 'text', '(opcional)', false)}</div>
+        ${field('asd_proprietario_anterior_cpf', 'CPF/CNPJ do Anterior', 'text', '(opcional)', false)}
       </div>
 
       <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Descrição Documental</div>
@@ -3220,23 +3246,47 @@ function renderFormFields(inputType, svc) {
         <button type="button" onclick="buscarVeiculoAsd()" class="btn-primary text-xs px-4 py-2.5 whitespace-nowrap">🔎 Buscar</button>
       </div>
       <p id="asd-busca-status-veiculo" class="text-xs mb-2 hidden"></p>
-      <div class="grid grid-cols-2 gap-3">
-        ${field('asd_marca_modelo', 'Marca/Modelo', 'text', '(preenchido pela busca)', false)}
-        ${field('asd_chassi', 'Chassi', 'text', '(preenchido pela busca)', false)}
+      <div class="grid grid-cols-4 gap-3">
+        ${field('asd_renavam', 'Renavam', 'text', '(pela busca)', false)}
+        ${field('asd_crv_nota_fiscal', 'CRV / Nota Fiscal', 'text', '(opcional)', false)}
+        ${field('asd_data_crv', 'Data do CRV', 'text', 'DD/MM/AAAA', false)}
+        ${field('asd_uf_crv', 'UF do CRV', 'text', '(opcional)', false, 'maxlength="2"')}
       </div>
       <div class="grid grid-cols-3 gap-3">
-        ${field('asd_renavam', 'Renavam', 'text', '(preenchido pela busca)', false)}
-        ${field('asd_cor', 'Cor', 'text', '(preenchido pela busca)', false)}
-        ${field('asd_ano_fabricacao', 'Ano Fab.', 'text', '(preenchido pela busca)', false)}
+        <div class="col-span-2">${field('asd_chassi', 'Chassi', 'text', '(pela busca)', false)}</div>
+        ${field('asd_remarcado', 'Remarcado', 'text', 'SIM / NÃO', false)}
       </div>
-      ${field('asd_ano_modelo', 'Ano Modelo', 'text', '(preenchido pela busca)', false)}
       <div>
-        <label class="label">Observações da Descrição Documental</label>
-        <textarea id="f-asd_descricao" class="input-field" rows="4" placeholder="Ex.: Documentos recebidos: CRV original, comprovante de residência e cópia do CPF do beneficiário..."></textarea>
+        <label class="label">DUDAS Nº</label>
+        <div class="grid grid-cols-5 gap-2">
+          ${[1,2,3,4,5].map(i => `<input id="f-asd_duda_${i}" type="text" placeholder="${i}" class="input-field">`).join('')}
+        </div>
       </div>
+      <div class="grid grid-cols-3 gap-3">
+        <div class="col-span-2">${field('asd_marca_modelo', 'Marca/Modelo', 'text', '(pela busca)', false)}</div>
+        ${field('asd_ano_modelo', 'Ano Modelo', 'text', '(pela busca)', false)}
+      </div>
+      <div class="grid grid-cols-4 gap-3">
+        ${field('asd_ano_fabricacao', 'Ano Fabricação', 'text', '(pela busca)', false)}
+        ${field('asd_especie', 'Espécie', 'text', '(pela busca)', false)}
+        ${field('asd_capacidade', 'Capacidade', 'text', '(pela busca)', false)}
+        ${field('asd_procedencia', 'Procedência', 'text', '(pela busca)', false)}
+      </div>
+      <div class="grid grid-cols-5 gap-2">
+        ${field('asd_categoria', 'Categoria', 'text', '(pela busca)', false)}
+        ${field('asd_tipo', 'Tipo', 'text', '(pela busca)', false)}
+        ${field('asd_potencia', 'Potência', 'text', '(pela busca)', false)}
+        ${field('asd_cor', 'Cor', 'text', '(pela busca)', false)}
+        ${field('asd_combustivel', 'Combustível', 'text', '(pela busca)', false)}
+      </div>
+      <div>
+        <label class="label">Observação</label>
+        <textarea id="f-asd_descricao" class="input-field" rows="3" placeholder="Ex.: Documentos recebidos: CRV original, comprovante de residência e cópia do CPF do beneficiário..."></textarea>
+      </div>
+      ${field('asd_municipio', 'Município da assinatura', 'text', 'Ex.: Niterói (opcional)', false)}
 
       <div class="font-semibold text-gray-700 text-sm mt-3 mb-1">Carteirinha do Despachante</div>
-      <p class="text-xs text-gray-500 mb-2">As duas digitalizações são anexadas como última página da ASD. Opcional — envie JPG ou PNG.</p>
+      <p class="text-xs text-gray-500 mb-2">As duas digitalizações entram na metade de baixo da folha, frente de um lado e verso do outro, como no formulário oficial. Opcional — envie JPG ou PNG.</p>
       <div class="grid grid-cols-2 gap-3">
         <div>
           <label class="label">Digitalizando Frente</label>
@@ -3621,6 +3671,11 @@ async function preencherLogosAsd() {
     sel.innerHTML = asdLogosCache.logos
       .map(l => `<option value="${l.id}"${l.id === asdLogosCache.padrao ? ' selected' : ''}>${l.label}</option>`)
       .join('');
+    // Com um conselho só cadastrado (hoje é o caso: a ASD é a do RJ) não há o
+    // que escolher — esconde o menu em vez de mostrar uma lista de um item. Ele
+    // reaparece sozinho quando outro estado entrar em ASD_LOGOS no server.js.
+    document.getElementById('asd-logo-wrap')
+      ?.classList.toggle('hidden', asdLogosCache.logos.length < 2);
   } catch {
     // Sem a lista, o servidor usa o logo padrão — não trava a emissão da ASD.
     sel.innerHTML = '<option value="">Padrão</option>';
@@ -3692,6 +3747,23 @@ async function buscarVeiculoAsd() {
     set('asd_cor', data.data.cor);
     set('asd_ano_fabricacao', data.data.anoFabricacao);
     set('asd_ano_modelo', data.data.anoModelo);
+    // Células que só existem no formulário oficial do CRDD-RJ — campo que a
+    // API não trouxer fica vazio e o despachante completa à mão.
+    set('asd_especie', data.data.especie);
+    set('asd_capacidade', data.data.capacidade);
+    set('asd_procedencia', data.data.procedencia);
+    set('asd_categoria', data.data.categoria);
+    set('asd_tipo', data.data.tipo);
+    set('asd_potencia', data.data.potencia);
+    set('asd_combustivel', data.data.combustivel);
+    set('asd_municipio', data.data.municipio);
+    // Endereço do proprietário atual = endereço do beneficiário do serviço.
+    set('asd_beneficiario_endereco', [data.data.logradouro, data.data.numero].filter(Boolean).join(', '));
+    set('asd_beneficiario_complemento', data.data.complemento);
+    set('asd_beneficiario_bairro', data.data.bairro);
+    set('asd_beneficiario_cep', data.data.cep);
+    set('asd_beneficiario_municipio', data.data.cidade);
+    set('asd_beneficiario_uf', (data.data.uf || '').toUpperCase());
 
     // O proprietário atual costuma ser o próprio beneficiário do serviço — só
     // preenche se o campo ainda estiver vazio, para não sobrescrever o que o
@@ -3992,28 +4064,57 @@ function buildParams(inputType) {
       valorTotal: g('valor_total'),
     };
 
+  // Um campo por célula do formulário oficial do CRDD-RJ (ver ASD_CAMPOS_OPCIONAIS
+  // no server.js). Só os cinco primeiros são obrigatórios; o resto sai em branco.
   if (inputType === 'asd')
     return {
       logo: g('asd_logo'),
       servico: g('asd_servico'),
       uf: g('asd_uf').toUpperCase(),
       contratante: g('asd_contratante'),
+      codigoServico: g('asd_codigo_servico'),
+      contratanteCpfCnpj: cd(g('asd_contratante_cpf')),
       profissionalNome: g('asd_profissional_nome'),
       profissionalCpfCnpj: cd(g('asd_profissional_cpf')),
       profissionalMatricula: g('asd_profissional_matricula'),
-      profissionalTelefone: g('asd_profissional_telefone'),
-      profissionalEmail: g('asd_profissional_email'),
+      profissionalEndereco: g('asd_profissional_endereco'),
+      profissionalCep: g('asd_profissional_cep'),
+      profissionalMunicipio: g('asd_profissional_municipio'),
       beneficiarioNome: g('asd_beneficiario_nome'),
       beneficiarioCpfCnpj: cd(g('asd_beneficiario_cpf')),
-      beneficiarioTelefone: g('asd_beneficiario_telefone'),
-      beneficiarioEmail: g('asd_beneficiario_email'),
+      beneficiarioIdentidade: g('asd_beneficiario_identidade'),
+      beneficiarioOrgao: g('asd_beneficiario_orgao'),
+      beneficiarioDataExpedicao: g('asd_beneficiario_data_expedicao'),
+      beneficiarioUfIdentidade: g('asd_beneficiario_uf_identidade').toUpperCase(),
+      beneficiarioEndereco: g('asd_beneficiario_endereco'),
+      beneficiarioComplemento: g('asd_beneficiario_complemento'),
+      beneficiarioBairro: g('asd_beneficiario_bairro'),
+      beneficiarioCep: g('asd_beneficiario_cep'),
+      beneficiarioMunicipio: g('asd_beneficiario_municipio'),
+      beneficiarioUf: g('asd_beneficiario_uf').toUpperCase(),
+      restricao: g('asd_restricao'),
+      proprietarioAnterior: g('asd_proprietario_anterior'),
+      proprietarioAnteriorCpfCnpj: cd(g('asd_proprietario_anterior_cpf')),
       placa: g('placa'),
-      marcaModelo: g('asd_marca_modelo'),
-      chassi: g('asd_chassi'),
       renavam: g('asd_renavam'),
-      cor: g('asd_cor'),
-      anoFabricacao: g('asd_ano_fabricacao'),
+      crvNotaFiscal: g('asd_crv_nota_fiscal'),
+      dataCrv: g('asd_data_crv'),
+      ufCrv: g('asd_uf_crv').toUpperCase(),
+      chassi: g('asd_chassi'),
+      remarcado: g('asd_remarcado'),
+      dudas: [1, 2, 3, 4, 5].map(i => g('asd_duda_' + i)),
+      marcaModelo: g('asd_marca_modelo'),
       anoModelo: g('asd_ano_modelo'),
+      anoFabricacao: g('asd_ano_fabricacao'),
+      especie: g('asd_especie'),
+      capacidade: g('asd_capacidade'),
+      procedencia: g('asd_procedencia'),
+      categoria: g('asd_categoria'),
+      tipo: g('asd_tipo'),
+      potencia: g('asd_potencia'),
+      cor: g('asd_cor'),
+      combustivel: g('asd_combustivel'),
+      municipio: g('asd_municipio'),
       descricaoDocumental: g('asd_descricao'),
       carteirinhaFrente: asdCarteirinha.frente || '',
       carteirinhaVerso: asdCarteirinha.verso || '',
