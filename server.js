@@ -392,8 +392,16 @@ const SERVICES = [
   // lista de débitos (multas, IPVA etc.) já com código de barras/linha digitável do
   // boleto pronto para pagamento, sem PDF pronto — montado a partir do JSON por
   // buildDebitosCodBarraPdfBuffer. Valor fixo (noMarkup) definido pelo usuário.
+  //
+  // O aviso é termo de aceite (noteStyle 'danger'), não observação: débito que o
+  // órgão ainda não colocou em cobrança (statusPagamento 'notice', "aviso de
+  // cobrança") vem SEM linha digitável e SEM código de barras, e a consulta é
+  // cobrada assim mesmo — decisão do cliente. Sem esse texto antes do envio, o
+  // relatório sem código de pagamento parece consulta quebrada (ver o aviso
+  // equivalente dentro do PDF, em buildDebitosCodBarraPdfBuffer).
   { id:'vistocar-debitos-cod-barra',      name:'Débitos + Código de Barras',    group:'Débitos e Documentação', basePrice:8.00, noMarkup:true, inputType:'placa', icon:'💳',
-    slowNote:'Só sai para pagamento de Multas.' },
+    noteStyle:'danger',
+    slowNote:'Só sai para pagamento de Multas. A linha digitável e o código de barras só existem depois que o órgão abre a cobrança do débito: multa que ainda está em "aviso de cobrança" vem sem código de pagamento, e a consulta é cobrada mesmo assim. Ao continuar, você concorda com essa condição.' },
   // ── Procurações e Contratos ──
   // Gerar Contrato de Aluguel — mesmo padrão em duas etapas da Declaração de
   // Residência acima: o front busca o nome do Locatário e do Locador via
@@ -4630,11 +4638,24 @@ async function generateBoletoBarcodePng(codigoBarra) {
   }
 }
 
+// A Vistocar manda dataVencimento em ISO ("2026-10-05"); o relatório é pt-BR.
+// Qualquer outro formato passa direto, para não estragar o que já vier pronto.
+function fmtVencimentoBR(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v || ''));
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : (v || '-');
+}
+
 // ── Geração de PDF — Débitos + Código de Barras (API Vistocar retorna JSON com a
 // lista de débitos já com código de barras/linha digitável do boleto, não PDF pronto) ──
 async function buildDebitosCodBarraPdfBuffer(service, data, params) {
   const registros = Array.isArray(data?.registros) ? data.registros : [];
   const barcodePngs = await Promise.all(registros.map(r => generateBoletoBarcodePng(r.codigoBarra)));
+  // Débito só tem boleto quando o órgão já o emitiu: enquanto a multa está apenas
+  // em aviso de cobrança (statusPagamento 'notice'), a Vistocar devolve o registro
+  // completo mas com codigoBarra/linhaDigitavel vazios. Isso é comum e não é falha
+  // da consulta — o relatório precisa explicar, senão o campo sai como um "-" mudo
+  // e parece que a geração do código de barras quebrou.
+  const temBoleto = (r, idx) => !!(r.linhaDigitavel || barcodePngs[idx]);
 
   return new Promise((resolve, reject) => {
     try {
@@ -4664,6 +4685,25 @@ async function buildDebitosCodBarraPdfBuffer(service, data, params) {
       doc.fillColor('#111827').font('Helvetica').fontSize(10);
       doc.moveDown(0.4);
 
+      // Aviso no topo quando NENHUM débito tem boleto: é a situação que mais gera
+      // dúvida ("a consulta não gerou código de barras"), então precisa aparecer
+      // antes da lista, não só no rodapé de cada débito.
+      if (registros.length && !registros.some(temBoleto)) {
+        pdfEnsureSpace(doc, 50);
+        const avisoY = doc.y;
+        const avisoH = 40;
+        doc.rect(left, avisoY, width, avisoH).fill('#fef3c7');
+        doc.fillColor('#92400e').font('Helvetica-Bold').fontSize(9)
+          .text('SEM LINHA DIGITÁVEL E SEM CÓDIGO DE BARRAS', left + 10, avisoY + 6, { width: width - 20 });
+        doc.font('Helvetica').fontSize(8)
+          .text('O órgão ainda não abriu a cobrança destes débitos — eles constam apenas como aviso de cobrança. '
+            + 'Enquanto isso não existe linha digitável nem código de barras para pagamento. '
+            + 'Consulte novamente mais perto do vencimento, quando o boleto for disponibilizado.',
+            left + 10, avisoY + 19, { width: width - 20 });
+        doc.y = avisoY + avisoH + 6;
+        doc.fillColor('#111827').font('Helvetica').fontSize(10);
+      }
+
       pdfBar(doc, 'DÉBITOS');
       if (!registros.length) {
         pdfEmptyNotice(doc, 'Nenhum débito encontrado para esta placa.');
@@ -4677,28 +4717,46 @@ async function buildDebitosCodBarraPdfBuffer(service, data, params) {
           doc.fillColor('#111827').font('Helvetica').fontSize(10);
           doc.moveDown(0.3);
 
+          const vencimento = fmtVencimentoBR(r.dataVencimento);
           pdfFieldGrid(doc, [
             ['Valor', fmtMoneyBRL(r.valor)],
-            ['Vencimento', r.dataVencimento || '-'],
+            ['Vencimento', vencimento],
             ['Situação', DEBITOS_COD_BARRA_STATUS_LABELS[r.statusPagamento] || r.statusPagamento || '-'],
           ]);
           doc.moveDown(0.25);
 
           // Linha digitável (texto, para digitar manualmente) + código de barras
           // (imagem, para leitura por app do banco) — mesmo layout de um boleto real.
-          doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#111827')
-            .text('Linha Digitável (pagamento):', left, doc.y, { width });
-          doc.font('Helvetica').fontSize(9.5).fillColor('#374151')
-            .text(r.linhaDigitavel || '-', left, doc.y, { width });
-          doc.fillColor('#111827').font('Helvetica').fontSize(10);
-          doc.moveDown(0.3);
-
           const barcodePng = barcodePngs[idx];
-          if (barcodePng) {
-            const barcodeW = Math.min(width * 0.65, 260);
-            pdfEnsureSpace(doc, 55);
-            doc.image(barcodePng, left, doc.y, { width: barcodeW });
-            doc.y += 42;
+          if (temBoleto(r, idx)) {
+            doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#111827')
+              .text('Linha Digitável (pagamento):', left, doc.y, { width });
+            doc.font('Helvetica').fontSize(9.5).fillColor('#374151')
+              .text(r.linhaDigitavel || '-', left, doc.y, { width });
+            doc.fillColor('#111827').font('Helvetica').fontSize(10);
+            doc.moveDown(0.3);
+
+            if (barcodePng) {
+              const barcodeW = Math.min(width * 0.65, 260);
+              pdfEnsureSpace(doc, 55);
+              doc.image(barcodePng, left, doc.y, { width: barcodeW });
+              doc.y += 42;
+            }
+          } else {
+            // Sem boleto emitido: diz o motivo em vez de imprimir "-" e nenhuma
+            // imagem, que é o que fazia a consulta parecer quebrada.
+            const motivo = r.statusPagamento === 'notice'
+              ? `O órgão ainda não abriu a cobrança deste débito — ele consta apenas como aviso de cobrança`
+                + `${vencimento && vencimento !== '-' ? `, com vencimento em ${vencimento}` : ''}. `
+                + `Por isso não existe linha digitável nem código de barras para pagamento: os dois só são `
+                + `gerados quando o débito entra em cobrança.`
+              : 'O órgão não disponibilizou linha digitável nem código de barras para este débito.';
+            doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#b45309')
+              .text('Sem linha digitável e sem código de barras:', left, doc.y, { width });
+            doc.font('Helvetica').fontSize(9).fillColor('#92400e')
+              .text(motivo, left, doc.y, { width });
+            doc.fillColor('#111827').font('Helvetica').fontSize(10);
+            doc.moveDown(0.3);
           }
 
           const detalhes = Array.isArray(r.detalhes) ? r.detalhes : [];
