@@ -472,7 +472,7 @@ const SERVICES = [
   // oficial (ver buildDeclaracaoResidenciaPdfBuffer).
   // Gratuito (antes R$ 8,00).
   { id:'declaracao-residencia-detran-rj', name:'Gerar Declaração de Residência DETRAN RJ', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'declaracao_residencia', icon:'🏠' },
-  // Gerar Nota de Prestação de Serviços Para Despachantes — mesmo padrão dos
+  // Gerar Nota de Prestação de Serviços Para Despachantes Rio — mesmo padrão dos
   // itens acima: o usuário digita livremente a Matrícula (CRDD-UF), os dados
   // do Prestador (despachante) e do Tomador (cliente), e a Discriminação dos
   // Serviços Prestados (texto livre com itens/valores/total, reproduzido como
@@ -482,7 +482,7 @@ const SERVICES = [
   // montada do zero no padrão de Nota de Serviços Eletrônica de despachante,
   // sem overlay de PDF oficial (ver buildNotaPrestacaoServicosPdfBuffer).
   // Gratuito (antes R$ 1,00).
-  { id:'nota-prestacao-servicos-despachante', name:'Nota de Prestação de Serviços Para Despachantes', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'nota_prestacao_servicos', icon:'🧾' },
+  { id:'nota-prestacao-servicos-despachante', name:'Nota de Prestação de Serviços Para Despachantes Rio', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'nota_prestacao_servicos', icon:'🧾' },
   // Gerar ASD RJ (Anotação de Serviço Documental) — reproduz o formulário
   // oficial em papel do CRDD-RJ (ver ASD_FAIXAS/buildAsdPdfBuffer), identificando
   // o serviço contratado, o profissional responsável e o beneficiário. Mesmo
@@ -3233,7 +3233,7 @@ function buildProcuracaoVeicularPdfBuffer(params) {
   });
 }
 
-// ── Geração de PDF — Gerar Nota de Prestação de Serviços Para Despachantes.
+// ── Geração de PDF — Gerar Nota de Prestação de Serviços Para Despachantes Rio.
 // Mesma técnica dos dois anteriores (documento montado do zero com pdfkit,
 // sem PDF/template oficial), no padrão de uma Nota de Serviços Eletrônica
 // emitida por despachante documentalista — documento meramente declaratório
@@ -3269,6 +3269,10 @@ function buildNotaPrestacaoServicosPdfBuffer(params) {
       const titleWidth = width - logoW - 12;
       doc.font('Helvetica-Bold').fontSize(15)
         .text('NOTA DE PRESTAÇÃO DE SERVIÇOS', titleX, headerY + 6, { width: titleWidth, align: 'center' });
+      // O brasão do cabeçalho é o do CRDD-RJ, então a nota precisa dizer na cara
+      // que é o modelo dos despachantes do Rio — não vale para outro estado.
+      doc.font('Helvetica-Bold').fontSize(9).fillColor('#374151')
+        .text('DESPACHANTES DOCUMENTALISTAS DO RIO DE JANEIRO — CRDD/RJ', titleX, doc.y + 2, { width: titleWidth, align: 'center' });
       doc.font('Helvetica').fontSize(9).fillColor('#6b7280')
         .text(`Emitida em ${now.toLocaleString('pt-BR')}`, titleX, doc.y + 2, { width: titleWidth, align: 'center' });
       doc.fillColor('#111827').fontSize(10);
@@ -10620,7 +10624,7 @@ const BROADCAST_CAMPANHAS = [
 ✅ Consulta placas 50
 ✅ Consulta 3 Código Segurança CRV (PDF) 5
 ✅ Gerar Declaração de Residência DETRAN RJ
-✅ Nota de Prestação de Serviços Para Despachantes
+✅ Nota de Prestação de Serviços Para Despachantes Rio
 ✅ Gerar ASD
 ################################################################################
 ✅CRLVe CE 32,50 Você Recebe no WhatsApp em minutos
