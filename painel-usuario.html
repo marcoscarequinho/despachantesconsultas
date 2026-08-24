@@ -2492,6 +2492,9 @@ let catalogFilter = 'all';
 // acrescentar o id nesta lista.
 const CATALOG_DESTAQUES = [
   'consultar-Numero-ATPVE',   // Reemissão da ATPVe Com Comunicação de Venda
+  'crlv-pe-instantaneo',      // CRLV-e Emissão Instantânea Pernambuco (PE)
+  'crlv-agendado-es',         // CRLV-e Agendado Espírito Santo (ES)
+  'crlv-ce',                  // CRLV-e Ceará (CE)
 ];
 const CATALOG_GRUPO_DESTAQUE = 'Destaques';
 
@@ -2631,6 +2634,11 @@ function renderCatalog() {
     if (!porGrupo.has(g)) porGrupo.set(g, []);
     porGrupo.get(g).push(s);
   });
+
+  // Nos demais blocos a ordem é a do servidor; nos Destaques é a da lista
+  // CATALOG_DESTAQUES, para o topo do catálogo ficar na ordem que escolhemos.
+  porGrupo.get(CATALOG_GRUPO_DESTAQUE)?.sort(
+    (a, b) => CATALOG_DESTAQUES.indexOf(a.id) - CATALOG_DESTAQUES.indexOf(b.id));
 
   grid.innerHTML = [...porGrupo.keys()]
     .sort((a, b) => catalogGroupRank(a) - catalogGroupRank(b))
