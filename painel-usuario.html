@@ -44,6 +44,17 @@
     .input-field { width:100%;padding:.625rem 1rem;border:1px solid #d1d5db;border-radius:.5rem;font-size:.875rem;transition:.15s; }
     .input-field:focus { outline:none;border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.15); }
     .label { display:block;font-size:.875rem;font-weight:600;color:#374151;margin-bottom:.35rem; }
+    /* ── Catálogo da Visão Geral (vitrine de consultas com busca) ───────────── */
+    .cat-chip { display:inline-flex;align-items:center;gap:.35rem;flex-shrink:0;padding:.35rem .8rem;border-radius:9999px;font-size:.78rem;font-weight:600;background:#f3f4f6;color:#4b5563;border:1px solid #e5e7eb;cursor:pointer;transition:.15s;white-space:nowrap; }
+    .cat-chip:hover { background:#e5e7eb;color:#111827; }
+    .cat-chip.active { background:var(--primary);color:#fff;border-color:var(--primary); }
+    .cat-chip .cat-chip-n { font-size:.7rem;opacity:.7;font-weight:700; }
+    .svc-card { display:flex;flex-direction:column;gap:.45rem;height:100%;text-align:left;background:#fff;border:1px solid #e5e7eb;border-radius:.75rem;padding:.9rem;cursor:pointer;transition:.15s; }
+    .svc-card:hover { border-color:var(--accent);box-shadow:0 6px 16px rgba(0,0,0,.08);transform:translateY(-2px); }
+    .svc-card-title { font-weight:700;font-size:.85rem;line-height:1.25;color:#111827; }
+    .svc-cta { margin-top:auto;display:block;text-align:center;background:#eff6ff;color:var(--primary);font-weight:700;font-size:.78rem;padding:.45rem;border-radius:.5rem;transition:.15s; }
+    .svc-card:hover .svc-cta { background:var(--primary);color:#fff; }
+    .svc-badge { display:inline-flex;align-items:center;gap:.2rem;padding:.1rem .45rem;border-radius:9999px;font-size:.62rem;font-weight:700;text-transform:uppercase;letter-spacing:.03em; }
   </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
@@ -108,21 +119,21 @@
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
           d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z"/>
       </svg>
-      Opção 2 Nova Consulta
+      <span style="color:#5eead4;font-weight:bold">Opção 2 Nova Consulta</span>
     </div>
     <div class="nav-item" data-section="query3" onclick="showSection('query3')">
       <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
           d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
       </svg>
-      Infosimples Nova Consulta
+      <span style="color:#a5b4fc;font-weight:bold">Infosimples Nova Consulta</span>
     </div>
     <div class="nav-item" data-section="intencao" onclick="showSection('intencao')">
       <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
           d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
       </svg>
-      Intenção de Venda (ATPVE)
+      <span style="color:#f9a8d4;font-weight:bold">Intenção de Venda (ATPVE)</span>
     </div>
     <a href="/recarga-pix"
       class="nav-item"
@@ -138,21 +149,21 @@
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
           d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
       </svg>
-      Histórico
+      <span style="color:#7dd3fc;font-weight:bold">Histórico</span>
     </div>
     <div class="nav-item" data-section="prices" onclick="showSection('prices')">
       <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
           d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z"/>
       </svg>
-      Tabela de Preços
+      <span style="color:#fdba74;font-weight:bold">Tabela de Preços</span>
     </div>
     <div class="nav-item" data-section="apidocs" onclick="showSection('apidocs')">
       <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
           d="M10 20l4-16m4 4l4 4-4 4M6 8l-4 4 4 4"/>
       </svg>
-      Integração API
+      <span style="color:#cbd5e1;font-weight:bold">Integração API</span>
     </div>
     <div class="nav-item" data-section="profile" onclick="showSection('profile')">
       <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -253,74 +264,39 @@
         </div>
       </div>
 
-      <!-- Quick actions — 8 atalhos: 4 colunas fecham em 4+4 (com 5 sobravam
-           dois cards soltos na segunda linha) -->
-      <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <button onclick="showSection('query')"
-          class="card flex flex-col items-center gap-3 hover:shadow-md transition-shadow cursor-pointer border-2 border-transparent hover:border-orange-200">
-          <div class="w-12 h-12 bg-orange-100 rounded-xl flex items-center justify-center text-2xl">🔍</div>
-          <div class="text-center">
-            <div class="font-bold text-red-600">Acesse Aqui Para as Principais Consultas</div>
-            <div class="text-xs text-gray-500 mt-0.5">Realize uma consulta veicular</div>
+      <!-- Catálogo rápido — todas as consultas das abas "Acesse Aqui Para as
+           Principais Consultas", "Intenção de Venda (ATPVE)" e "Coisas de
+           Despachantes" numa vitrine só, com busca. Os atalhos das demais
+           seções (Opção 2, Infosimples, Extras, Histórico, Preços) saíram
+           daqui de propósito: ficam só no menu lateral, destacados por cor —
+           o usuário chegava na Visão Geral e não achava a consulta. -->
+      <div class="card p-4 sm:p-5">
+        <div class="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
+          <div class="relative flex-1">
+            <span class="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-lg pointer-events-none">🔎</span>
+            <input id="catalog-search" type="search" autocomplete="off"
+              placeholder="Pesquise sua consulta rapidamente..."
+              oninput="renderCatalog()" onkeydown="catalogKeydown(event)"
+              class="input-field pl-11 py-3 text-base">
           </div>
-        </button>
-        <button onclick="showSection('despachantes')"
-          class="card flex flex-col items-center gap-3 hover:shadow-md transition-shadow cursor-pointer border-2 border-transparent hover:border-amber-200">
-          <div class="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center text-2xl">🧑‍💼</div>
-          <div class="text-center">
-            <div class="font-bold text-amber-600">Coisas de Despachantes</div>
-            <div class="text-xs text-gray-500 mt-0.5">Declaração de Residência, Nota de Serviços e ASD</div>
+          <div class="flex items-center gap-2 flex-shrink-0">
+            <span id="catalog-count" class="text-xs text-gray-500"></span>
+            <button type="button" id="catalog-clear" onclick="clearCatalogFilters()"
+              class="hidden text-xs text-blue-600 hover:text-orange-500 font-semibold">Limpar</button>
           </div>
-        </button>
-        <button onclick="showSection('extras')"
-          class="card flex flex-col items-center gap-3 hover:shadow-md transition-shadow cursor-pointer border-2 border-transparent hover:border-violet-200">
-          <div class="w-12 h-12 bg-violet-100 rounded-xl flex items-center justify-center text-2xl">⏳</div>
-          <div class="text-center">
-            <div class="font-bold text-violet-600">Consultas Extras</div>
-            <div class="text-xs text-gray-500 mt-0.5">CRLV-e DF, ES, PB, RN, RS, SC, CE e ATPV-e</div>
+        </div>
+
+        <!-- No celular a fila de categorias rola na horizontal em vez de quebrar
+             em 8 linhas e empurrar os cards para fora da tela. -->
+        <div id="catalog-filters" class="flex gap-2 mb-5 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible"></div>
+        <div id="catalog-grid" class="space-y-7">
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div class="skeleton h-36 w-full"></div>
+            <div class="skeleton h-36 w-full"></div>
+            <div class="skeleton h-36 w-full"></div>
+            <div class="skeleton h-36 w-full"></div>
           </div>
-        </button>
-        <button onclick="showSection('query2')"
-          class="card flex flex-col items-center gap-3 hover:shadow-md transition-shadow cursor-pointer border-2 border-transparent hover:border-teal-200">
-          <div class="w-12 h-12 bg-teal-100 rounded-xl flex items-center justify-center text-2xl">🚗</div>
-          <div class="text-center">
-            <div class="font-semibold text-gray-800">Opção 2 Nova Consulta</div>
-            <div class="text-xs text-gray-500 mt-0.5">Documentos e débitos via Datacube</div>
-          </div>
-        </button>
-        <button onclick="showSection('intencao')"
-          class="card flex flex-col items-center gap-3 hover:shadow-md transition-shadow cursor-pointer border-2 border-transparent hover:border-pink-200">
-          <div class="w-12 h-12 bg-pink-100 rounded-xl flex items-center justify-center text-2xl">📝</div>
-          <div class="text-center">
-            <div class="font-semibold text-gray-800">Intenção de Venda (ATPVE)</div>
-            <div class="text-xs text-gray-500 mt-0.5">RJ, SP, MS e MG: emissão automática na hora</div>
-            <div class="text-xs text-gray-500 mt-0.5"><strong>Consulta via API, sem envio de documentos</strong></div>
-          </div>
-        </button>
-        <button onclick="showSection('query3')"
-          class="card flex flex-col items-center gap-3 hover:shadow-md transition-shadow cursor-pointer border-2 border-transparent hover:border-indigo-200">
-          <div class="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center text-2xl">🗂️</div>
-          <div class="text-center">
-            <div class="font-semibold text-gray-800">Infosimples Nova Consulta</div>
-            <div class="text-xs text-gray-500 mt-0.5">866 consultas via API Infosimples</div>
-          </div>
-        </button>
-        <button onclick="showSection('history')"
-          class="card flex flex-col items-center gap-3 hover:shadow-md transition-shadow cursor-pointer border-2 border-transparent hover:border-blue-200">
-          <div class="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center text-2xl">📋</div>
-          <div class="text-center">
-            <div class="font-semibold text-gray-800">Histórico</div>
-            <div class="text-xs text-gray-500 mt-0.5">Veja suas consultas anteriores</div>
-          </div>
-        </button>
-        <button onclick="showSection('prices')"
-          class="card flex flex-col items-center gap-3 hover:shadow-md transition-shadow cursor-pointer border-2 border-transparent hover:border-green-200">
-          <div class="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center text-2xl">💰</div>
-          <div class="text-center">
-            <div class="font-semibold text-gray-800">Tabela de Preços</div>
-            <div class="text-xs text-gray-500 mt-0.5">Veja todos os serviços</div>
-          </div>
-        </button>
+        </div>
       </div>
 
       <!-- Últimas consultas -->
@@ -1340,6 +1316,7 @@ async function init() {
       document.getElementById('nav-superadmin').classList.remove('hidden');
 
     buildCategoryGrid();
+    buildCatalog();
     buildDespachantesList();
     buildExtrasList();
     buildIntencaoCategoryGrid();
@@ -1386,7 +1363,7 @@ const ATPVE_UF_LABELS = { 'intencao-venda-rj': 'RJ', 'intencao-venda-sp': 'SP', 
 function buildIntencaoCategoryGrid() {
   const svcs = allServices.filter(s => s.group === 'Intenção de Venda (ATPVE)');
   document.getElementById('intencao-category-grid').innerHTML = svcs.map(s => `
-    <div class="service-cat" onclick="selectIntencaoCategory(${JSON.stringify(s).replace(/"/g,"&quot;")}, this)">
+    <div class="service-cat" data-svc="${s.id}" onclick="selectIntencaoCategory(${JSON.stringify(s).replace(/"/g,"&quot;")}, this)">
       <div class="text-2xl mb-1">${INTENCAO_ICONS[s.id] || s.icon}</div>
       <div class="font-semibold text-gray-800 text-sm leading-tight">${s.name}</div>
       <div class="text-xs text-gray-400 mt-0.5">${fmt(s.price)}</div>
@@ -2438,6 +2415,13 @@ function quickSelect(serviceId) {
     selectService(svc);
     return;
   }
+  // Intenção de Venda (ATPVE) também tem aba própria — formulário grande, com
+  // as duas partes da venda —, então abre lá com o estado já selecionado.
+  if (svc.group === 'Intenção de Venda (ATPVE)') {
+    showSection('intencao');
+    selectIntencaoCategory(svc, document.querySelector(`#intencao-category-grid .service-cat[data-svc="${svc.id}"]`));
+    return;
+  }
   showSection('query');
   // Select the category first, then the service
   selectedCat = svc.group;
@@ -2489,6 +2473,197 @@ function requery(serviceId, paramsJson) {
   }
 
   alert('Este serviço não está mais disponível para nova consulta.');
+}
+
+// ── Catálogo da Visão Geral ────────────────────────────────────────────────────
+// Vitrine única com TODAS as consultas das três abas que o usuário mais usa
+// ("Acesse Aqui Para as Principais Consultas", "Intenção de Venda (ATPVE)" e
+// "Coisas de Despachantes") — a Visão Geral era só um menu de atalhos e o
+// usuário não achava a consulta. Não duplica catálogo nem formulário: o card
+// só encaminha para a aba de origem já com o serviço aberto (openCatalogService
+// → quickSelect). Os demais destinos (Opção 2, Infosimples, Consultas Extras,
+// Histórico, Preços) ficam só no menu lateral, cada um com sua cor.
+let catalogFilter = 'all';
+
+// Ordem dos blocos. Grupo que exista no catálogo e não esteja aqui vai para o
+// fim, na ordem do servidor — grupo novo no server.js aparece sozinho.
+const CATALOG_GROUP_ORDER = [
+  'CRLV-e Rio de Janeiro',
+  'CRLV-e Digital',
+  'CRLV-e Agendado',
+  'Débitos e Documentação',
+  'Débitos por Estado',
+  'Consultas Básicas',
+  'Consulta Completa',
+  'Intenção de Venda (ATPVE)',
+  'Para os Despachantes',
+  'Comunicação Venda',
+  'CRV',
+  'Número CRV (Apenas antigos)',
+  'CNH',
+  'Divida Ativa',
+  'Análise de Crédito',
+  'Óbito',
+  'Procurações e Contratos',
+];
+
+// badge = selo do card; serve para separar na hora o que sai na hora do que é
+// agendado, que é a dúvida que mais chega no suporte.
+const CATALOG_GROUP_META = {
+  'CRLV-e Rio de Janeiro':  { icon:'📄', badge:'⚡ Na hora',    badgeClass:'bg-orange-100 text-orange-700' },
+  'CRLV-e Digital':         { icon:'📄' },
+  'CRLV-e Agendado':        { icon:'⏳', badge:'⏳ Agendado',   badgeClass:'bg-amber-100 text-amber-800' },
+  'Débitos e Documentação': { icon:'💳' },
+  'Débitos por Estado':     { icon:'🏛️' },
+  'Consultas Básicas':      { icon:'🔍' },
+  'Consulta Completa':      { icon:'🧾' },
+  'Intenção de Venda (ATPVE)': { icon:'📝', badge:'Formulário', badgeClass:'bg-pink-100 text-pink-700' },
+  'Para os Despachantes':   { icon:'🧑‍💼', badge:'Assinatura',  badgeClass:'bg-emerald-100 text-emerald-700' },
+  'Comunicação Venda':      { icon:'📨' },
+  'CRV':                    { icon:'🔐' },
+  'Número CRV (Apenas antigos)': { icon:'📁' },
+  'CNH':                    { icon:'🪪' },
+  'Divida Ativa':           { icon:'⚖️' },
+  'Análise de Crédito':     { icon:'📊' },
+  'Óbito':                  { icon:'⚰️' },
+  'Procurações e Contratos':{ icon:'📜' },
+};
+
+// Busca sem acento e sem caixa: "debito rj" acha "Débitos RJ".
+const catNorm = s => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+function catalogGroupRank(g) {
+  const i = CATALOG_GROUP_ORDER.indexOf(g);
+  return i === -1 ? CATALOG_GROUP_ORDER.length : i;
+}
+
+function catalogFiltered() {
+  // Cada palavra é procurada separadamente: "debito rj" acha "Débitos RJ" mesmo
+  // com outras palavras no meio do nome.
+  const termos = catNorm(document.getElementById('catalog-search')?.value.trim() || '')
+    .split(/\s+/).filter(Boolean);
+  return allServices.filter(s => {
+    if (catalogFilter !== 'all' && s.group !== catalogFilter) return false;
+    if (!termos.length) return true;
+    const alvo = catNorm(`${s.name} ${s.group} ${s.id}`);
+    return termos.every(t => alvo.includes(t));
+  });
+}
+
+function buildCatalog() {
+  renderCatalogFilters();
+  renderCatalog();
+}
+
+function renderCatalogFilters() {
+  const grupos = [...new Set(allServices.map(s => s.group))]
+    .sort((a, b) => catalogGroupRank(a) - catalogGroupRank(b));
+  const chip = (valor, rotulo, n) => `
+    <button type="button" class="cat-chip ${catalogFilter === valor ? 'active' : ''}"
+      onclick="setCatalogFilter(${JSON.stringify(valor).replace(/"/g, '&quot;')})">
+      ${rotulo} <span class="cat-chip-n">${n}</span>
+    </button>`;
+  const html = [chip('all', '⭐ Todas', allServices.length)];
+  grupos.forEach(g => {
+    const meta = CATALOG_GROUP_META[g] || { icon: '📌' };
+    const n = allServices.filter(s => s.group === g).length;
+    html.push(chip(g, `${meta.icon} ${escapeHtml(g)}`, n));
+  });
+  document.getElementById('catalog-filters').innerHTML = html.join('');
+}
+
+function setCatalogFilter(g) {
+  catalogFilter = g;
+  renderCatalogFilters();
+  renderCatalog();
+}
+
+function clearCatalogFilters() {
+  const busca = document.getElementById('catalog-search');
+  if (busca) busca.value = '';
+  setCatalogFilter('all');
+  busca?.focus();
+}
+
+function renderCatalog() {
+  const grid = document.getElementById('catalog-grid');
+  if (!grid) return;
+  const termo = document.getElementById('catalog-search')?.value.trim() || '';
+  const svcs  = catalogFiltered();
+
+  document.getElementById('catalog-clear')
+    .classList.toggle('hidden', !termo && catalogFilter === 'all');
+  document.getElementById('catalog-count').textContent =
+    `${svcs.length} de ${allServices.length} consultas`;
+
+  if (!svcs.length) {
+    grid.innerHTML = `
+      <div class="text-center py-10">
+        <div class="text-3xl mb-2">🔎</div>
+        <p class="text-sm text-gray-500">Nenhuma consulta encontrada para <strong>${escapeHtml(termo)}</strong>.</p>
+        <button type="button" onclick="clearCatalogFilters()" class="mt-3 btn-secondary text-xs">Ver todas as consultas</button>
+      </div>`;
+    return;
+  }
+
+  const porGrupo = new Map();
+  svcs.forEach(s => {
+    if (!porGrupo.has(s.group)) porGrupo.set(s.group, []);
+    porGrupo.get(s.group).push(s);
+  });
+
+  grid.innerHTML = [...porGrupo.keys()]
+    .sort((a, b) => catalogGroupRank(a) - catalogGroupRank(b))
+    .map(g => {
+      const meta  = CATALOG_GROUP_META[g] || { icon: '📌' };
+      const itens = porGrupo.get(g);
+      return `
+        <div>
+          <div class="flex items-center gap-2 mb-3">
+            <span class="text-lg flex-shrink-0">${meta.icon}</span>
+            <h3 class="font-bold text-gray-800 text-sm">${escapeHtml(g)}</h3>
+            <span class="text-xs text-gray-400">${itens.length}</span>
+            <div class="flex-1 h-px bg-gray-200"></div>
+          </div>
+          <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
+            ${itens.map(catalogCard).join('')}
+          </div>
+        </div>`;
+    }).join('');
+}
+
+function catalogCard(s) {
+  const meta    = CATALOG_GROUP_META[s.group] || {};
+  const entrada = inputTypeLabel(s.inputType).replace(/^Entrada:\s*/, '');
+  const selo = s.unavailable
+    ? '<span class="svc-badge bg-gray-200 text-gray-600">Indisponível</span>'
+    : (meta.badge ? `<span class="svc-badge ${meta.badgeClass}">${meta.badge}</span>` : '');
+  return `
+    <button type="button" class="svc-card" onclick="openCatalogService('${s.id}')">
+      <div class="flex items-start gap-2">
+        <span class="text-lg leading-none flex-shrink-0">${s.icon || '📌'}</span>
+        <span class="svc-card-title flex-1">${escapeHtml(s.name)}</span>
+      </div>
+      ${selo ? `<div>${selo}</div>` : ''}
+      <div class="price-tag">${fmtPrice(s.price)}</div>
+      <div class="text-xs text-gray-500 leading-snug">${escapeHtml(entrada)}</div>
+      <span class="svc-cta">${s.group === 'Para os Despachantes' ? 'Gerar' : 'Consultar'}</span>
+    </button>`;
+}
+
+// Enter na busca com um único resultado abre direto — é o caminho de quem já
+// sabe o nome da consulta e só quer digitar e emitir.
+function catalogKeydown(ev) {
+  if (ev.key !== 'Enter') return;
+  ev.preventDefault();
+  const svcs = catalogFiltered();
+  if (svcs.length === 1) openCatalogService(svcs[0].id);
+}
+
+function openCatalogService(id) {
+  const svc = allServices.find(s => s.id === id);
+  if (!svc) { toast('Este serviço não está mais disponível.', 'error'); return; }
+  quickSelect(id);
 }
 
 // ── Nova Consulta ──────────────────────────────────────────────────────────────
