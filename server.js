@@ -502,11 +502,12 @@ const SERVICES = [
   // ver PORTAL_PLACA_MAP): mesmo contrato — POST { placa }, header chaveAcesso e
   // o PDF pronto em bytes na resposta.
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
-  { id:'crlv-rj-reemissao-2', name:'CRLV 2 Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
-  // Diferente dos dois acima, este NÃO é na hora: o documento é agendado e sai em
-  // até 2 horas — por isso o aviso de prazo antes de consultar.
+  // Fica logo depois do CRLV-e do Rio de propósito: é a alternativa dele quando o
+  // cliente pode esperar. Diferente dos outros do grupo, NÃO é na hora — o pedido
+  // é agendado e sai em até 2 horas, daí o aviso de prazo antes de consultar.
   { id:'crlv-rj-agendado', name:'CRLV-e Rio de Janeiro Agendado', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'⏳', uf:'rj',
     slowNote:'Atenção: este CRLV-e não é emitido na hora. O pedido é agendado e o documento sai em até 2 horas — ele chega pelo WhatsApp e fica no seu histórico.' },
+  { id:'crlv-rj-reemissao-2', name:'CRLV 2 Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // Backup da CRLV 2 Rio Reemissão (acima): quando a API estiver fora do ar, o cliente
   // usa esta em vez de esperar. Fonte alternativa via API consultasfacil.net (ver
   // CONSULTASFACIL_BASE_URL), devolve o PDF pronto na hora — não é mais fila manual.
