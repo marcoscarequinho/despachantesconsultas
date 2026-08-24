@@ -3819,7 +3819,7 @@ async function buscarOutorgadoProcuracao() {
 
 // ── Gerar Procuração Veicular: busca o proprietário atual (Outorgante) e os
 // dados do veículo via Proprietário Atual (Opção 2 Nova Consulta/Datacube) a
-// partir da placa — com fallback para Veicular Completa quando o endereço não
+// partir da placa — com fallback para a consulta completa da Vistocar quando o endereço não
 // vier. Não cobra créditos.
 async function buscarVeiculoProcuracao() {
   const placa = (document.getElementById('f-placa')?.value || '').toUpperCase().replace(/[\s-]/g, '');

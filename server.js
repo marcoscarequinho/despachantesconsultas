@@ -64,6 +64,10 @@ const MP_ACCESS_TOKEN = (process.env.MP_ACCESS_TOKEN || '')
 const MP_BASE = 'https://api.mercadopago.com';
 const AUTOCRLV_KEY    = process.env.AUTOCRLV_KEY    || '';
 const PORTAL_DESP_KEY = process.env.PORTAL_DESP_KEY || '';
+// CRLV-e do Rio servidos pelo portaldespachantes.online cujo id NÃO começa com
+// "consultar-crlv-" — a regra de envio do PDF por WhatsApp usa esse prefixo, então
+// estes dois precisam ser nomeados (ver PORTAL_PLACA_MAP em processCatalogQuery).
+const CRLV_RJ_PORTAL_SVCS = new Set(['crlv-rj-reemissao-2', 'crlv-rj-agendado']);
 const DATACUBE_API_URL = 'https://api.consultasdeveiculos.com';
 const DATACUBE_TOKEN   = process.env.DATACUBE_TOKEN || '';
 const INFOSIMPLES_API_URL = 'https://api.infosimples.com/api/v2/consultas';
@@ -93,20 +97,17 @@ const DESPBRASIL_SVCS = {
 
 // API Vistocar (vistocarconsulta.com.br) — login JWT (VISTOCAR_LOGIN/VISTOCAR_PASSWORD)
 // + POST em apiclient/<endpoint> com Bearer, corpo { plate: "ABC1D23" } (campo em
-// inglês, não "placa"). A maioria devolve JSON com PDF pronto em base64 — exceção:
-// "vistocar-completa" devolve um relatório JSON estruturado (sem PDF pronto), montado
-// em PDF por buildVeicularCompletaPdfBuffer (ver tratamento de resposta específico).
+// inglês, não "placa"). Devolvem JSON com PDF pronto em base64, menos os assíncronos
+// (VISTOCAR_ASYNC_SVCS) e o débitos-cod-barra, que manda a lista de débitos em JSON.
 const VISTOCAR_BASE_URL = 'https://vistocarconsulta.com.br/api/v1';
 const VISTOCAR_LOGIN    = process.env.VISTOCAR_LOGIN    || '';
 const VISTOCAR_PASSWORD = process.env.VISTOCAR_PASSWORD || '';
 const VISTOCAR_ENDPOINTS = {
-  'crlv-rj-reemissao-2': 'crlv-rj',
   'crlv-pe-instantaneo': 'crlv-pe',
   // Assíncrono: só registra a consulta (movementId) e o PDF chega por webhook —
   // tratamento de resposta próprio, ver VISTOCAR_ASYNC_SVCS abaixo.
   'crlv-ce': 'crlv-ce',
   'security-code-vistocar-2': 'security-code',
-  'vistocar-completa': 'completa',
   'vistocar-debitos-cod-barra': 'debitos-cod-barra',
 };
 
@@ -387,8 +388,8 @@ const SERVICES = [
   // Localização CPF V3 — também movida da Opção 2 (grupo Cadastros), mesmo relatório
   // em PDF da Localização CPF acima (buildLocalizacaoCpfPdfBuffer), valor fixo R$8,00.
   { id:'dc-cadastro-localizacao-v3',      name:'Localização CPF V3',           group:'Débitos e Documentação', basePrice:8.00, noMarkup:true, inputType:'dc_cpf', icon:'📍', dcPath:'/pessoas/localizacao_v3' },
-  // API Vistocar (vistocarconsulta.com.br) — mesmo padrão do Veicular Completa: usa
-  // a auth JWT da Vistocar (ver VISTOCAR_ENDPOINTS) e devolve um relatório JSON com a
+  // API Vistocar (vistocarconsulta.com.br) — auth JWT (ver VISTOCAR_ENDPOINTS);
+  // devolve um relatório JSON com a
   // lista de débitos (multas, IPVA etc.) já com código de barras/linha digitável do
   // boleto pronto para pagamento, sem PDF pronto — montado a partir do JSON por
   // buildDebitosCodBarraPdfBuffer. Valor fixo (noMarkup) definido pelo usuário.
@@ -497,10 +498,12 @@ const SERVICES = [
   // Gratuito (antes R$ 9,50).
   { id:'gerar-asd', name:'Gerar ASD RJ', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'asd', icon:'📑' },
   // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
+  // Os três saem da API portaldespachantes.online (consultar-crlv-rj, -rj2 e -rj3,
+  // ver PORTAL_PLACA_MAP): mesmo contrato — POST { placa }, header chaveAcesso e
+  // o PDF pronto em bytes na resposta.
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
-  // API Vistocar (vistocarconsulta.com.br) — fonte para Reemissão de CRLV-e RJ,
-  // resposta em JSON com PDF pronto em base64 (ver VISTOCAR_ENDPOINTS).
   { id:'crlv-rj-reemissao-2', name:'CRLV 2 Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
+  { id:'crlv-rj-agendado', name:'CRLV-e Rio de Janeiro Agendado', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'⏳', uf:'rj' },
   // Backup da CRLV 2 Rio Reemissão (acima): quando a API estiver fora do ar, o cliente
   // usa esta em vez de esperar. Fonte alternativa via API consultasfacil.net (ver
   // CONSULTASFACIL_BASE_URL), devolve o PDF pronto na hora — não é mais fila manual.
@@ -668,12 +671,6 @@ const SERVICES = [
   // o PDF é montado a partir do JSON retornado (ver buildBinEstadualPdfBuffer),
   // no mesmo padrão visual do relatório de Débitos por Estado.
   { id:'dc-bin-estadual', name:'Base Estadual (BIN)', group:'Consulta Completa', basePrice:9.90, noMarkup:true, inputType:'placa', icon:'🚗', dcPath:'/veiculos/bin-estadual' },
-  // ── Veicular Completa (API Vistocar — vistocarconsulta.com.br) ───────────────
-  // Diferente dos itens acima (Datacube): usa a auth JWT da Vistocar (getVistocarToken,
-  // ver VISTOCAR_ENDPOINTS) e devolve um relatório JSON completo (veículo, proprietário,
-  // restrições, débitos, gravames e leilão) sem PDF pronto — montado a partir do JSON
-  // por buildVeicularCompletaPdfBuffer, no mesmo padrão visual dos demais relatórios.
-  { id:'vistocar-completa', name:'Veicular Completa', group:'Consulta Completa', basePrice:25.00, noMarkup:true, inputType:'placa', icon:'🚗' },
   // ── Número CRV (Apenas antigos) — processamento manual (entrega via upload no admin) ──
   // slowNote: mesmo aviso de prazo que antes aparecia num popup global, agora exibido
   // só ao selecionar uma consulta deste grupo (ver form-slow-note em painel-usuario.html).
@@ -2848,7 +2845,7 @@ function extractProprietarioAtualFields(data) {
     anoModelo:     deepFindAlias(data, ['ano_modelo', 'anomodelo', 'ano_mod']),
     // Campos que só a ASD RJ usa: o formulário oficial do CRDD-RJ tem uma
     // célula para cada um. Os apelidos cobrem as variações vistas entre a
-    // Proprietário Atual (Datacube) e a Veicular Completa (Vistocar) — campo
+    // Proprietário Atual (Datacube) e a consulta completa da Vistocar — campo
     // ausente vira célula em branco, que o despachante preenche à mão.
     especie:       deepFindAlias(data, ['especie', 'especie_veiculo', 'descricao_especie']),
     capacidade:    deepFindAlias(data, ['capacidade', 'capacidade_carga', 'capacidade_passageiros', 'lotacao']),
@@ -2862,7 +2859,7 @@ function extractProprietarioAtualFields(data) {
 }
 
 // Junta os componentes de endereço (de Proprietário Atual ou, em fallback, da
-// Veicular Completa) numa única linha de texto pronta para o parágrafo da
+// consulta completa da Vistocar) numa única linha de texto pronta para o parágrafo da
 // procuração — mais simples e robusto do que expor 7 campos separados no
 // formulário para um dado que é só impresso numa frase.
 function composeEndereco({ logradouro, numero, complemento, bairro, cidade, uf, cep }) {
@@ -4556,169 +4553,6 @@ function buildBinEstadualPdfBuffer(service, data, params) {
   });
 }
 
-// ── Geração de PDF — Veicular Completa (API Vistocar retorna JSON, não PDF pronto) ──
-function boolLabel(v) {
-  return v === true ? 'Sim' : v === false ? 'Não' : 'Nada consta';
-}
-
-function buildVeicularCompletaPdfBuffer(service, data, params) {
-  return new Promise((resolve, reject) => {
-    try {
-      const doc = new PDFDocument({ size: 'A4', margin: 50 });
-      const chunks = [];
-      doc.on('data', c => chunks.push(c));
-      doc.on('end', () => resolve(Buffer.concat(chunks)));
-      doc.on('error', reject);
-      const { left, width } = pdfContentBox(doc);
-      const now = new Date();
-      const v = data?.dadosVeicular || {};
-      const prop = v.proprietario || {};
-      const contatos = prop.contatos || {};
-
-      pdfReportHeader(doc, 'VEICULAR COMPLETA', now);
-
-      pdfBar(doc, 'DADOS DA CONSULTA');
-      pdfFieldGrid(doc, [['Placa', maskPlacaDisplay(params?.placa)]]);
-      doc.moveDown(0.4);
-
-      pdfBar(doc, 'VEÍCULO');
-      pdfFieldGrid(doc, [
-        ['Placa', v.placa ? v.placa.toUpperCase() : '-'],
-        ['Chassi', v.chassi || '-'],
-        ['Número do Motor', v.numeroMotor || '-'],
-        ['Renavam', v.renavam || '-'],
-        ['UF da Placa', v.ufPlaca || '-'],
-        ['Município da Placa', v.municipioPlaca || '-'],
-        ['Status', v.status || '-'],
-        ['Marca/Modelo', v.marcaModelo || '-'],
-        ['Tipo de Veículo', v.tipoVeiculo || '-'],
-        ['Espécie', v.especie || '-'],
-        ['Categoria', v.categoria || '-'],
-        ['Cor', v.cor || '-'],
-        ['Combustível', v.combustivel || '-'],
-        ['Procedência', v.procedencia || '-'],
-        ['Ano Fabricação', v.anoFabricacao ?? '-'],
-        ['Ano Modelo', v.anoModelo ?? '-'],
-        ['Potência', v.potencia ?? '-'],
-        ['Cilindrada', v.cilindrada ?? '-'],
-        ['Capacidade de Passageiros', v.capacidadePassageiros ?? '-'],
-        ['Capacidade de Carga (Kg)', v.capacidadeCargaKg ?? '-'],
-        ['Peso Bruto Total', v.pesoBrutoTotal ?? '-'],
-        ['Capacidade Máx. de Tração', v.capacidadeMaximaTracao ?? '-'],
-        ['Capacidade do Tanque (L)', v.capacidadeTanqueLitros ?? '-'],
-        ['Qtd. de Eixos', v.quantidadeEixos ?? '-'],
-        ['Chassi Remarcado', boolLabel(v.chassiRemarcado)],
-      ]);
-      doc.moveDown(0.4);
-
-      pdfBar(doc, 'LICENCIAMENTO');
-      pdfFieldGrid(doc, [
-        ['Situação', v.situacaoLicenciamento || '-'],
-        ['Licenciado até', v.licenciadoAte || '-'],
-        ['Ano Último Licenciamento', v.anoUltimoLicenciamento ?? '-'],
-        ['Documento Faturado', v.tipoDocumentoFaturado || '-'],
-        ['Nº Documento Faturado', maskDocDisplay(v.numeroDocumentoFaturado)],
-        ['UF de Faturamento', v.ufFaturamento || '-'],
-      ]);
-      doc.moveDown(0.4);
-
-      pdfBar(doc, 'PROPRIETÁRIO');
-      pdfFieldGrid(doc, [
-        ['Nome', prop.nome || '-'],
-        ['Nome Legal', prop.nomeLegal || '-'],
-        ['Documento', maskDocDisplay(prop.documento)],
-        ['Tipo de Documento', prop.tipoDocumento || '-'],
-        ['Nome da Mãe', prop.nomeMae || '-'],
-        ['Nome do Pai', prop.nomePai || '-'],
-        ['Situação', prop.situacao || '-'],
-        ['Porte', prop.porte || '-'],
-        ['Natureza Jurídica', [prop.naturezaJuridicaCodigo, prop.naturezaJuridicaDescricao].filter(Boolean).join(' - ') || '-'],
-        ['Telefones', (contatos.telefones || []).join(', ') || 'Nada consta'],
-        ['E-mails', (contatos.emails || []).join(', ') || 'Nada consta'],
-      ]);
-      doc.moveDown(0.4);
-
-      pdfSubBar(doc, 'Endereços');
-      const enderecos = Array.isArray(prop.enderecos) ? prop.enderecos : [];
-      if (enderecos.length) pdfDebtSection(doc, enderecos, 'Endereço');
-      else pdfEmptyNotice(doc, 'Nenhum endereço encontrado.');
-
-      const r = v.restricoes || {};
-      pdfBar(doc, 'RESTRIÇÕES');
-      pdfFieldGrid(doc, [
-        ['Roubo ou Furto', boolLabel(r.rouboOuFurto)],
-        ['Sinistro', boolLabel(r.sinistro)],
-        ['Recall', boolLabel(r.recall)],
-        ['Restrição Renainf', boolLabel(r.restricaoRenainf)],
-        ['Restrição Renajud', boolLabel(r.restricaoRenajud)],
-        ['Restrição RFB', boolLabel(r.restricaoRfb)],
-        ['Restrição Administrativa', boolLabel(r.administrativa)],
-        ['Anúncio de Venda', boolLabel(r.anuncioVenda)],
-        ['Intenção de Venda', boolLabel(r.intencaoVenda)],
-        ['Ocorrência', r.ocorrencia || '-'],
-        ['Restrição 1', r.restricao1 || '-'],
-        ['Restrição 2', r.restricao2 || '-'],
-        ['Restrição 3', r.restricao3 || '-'],
-        ['Restrição 4', r.restricao4 || '-'],
-      ]);
-      doc.moveDown(0.4);
-
-      const deb = v.debitos || {};
-      const totalDebitos = ['dpvat', 'ipva', 'licenciamento', 'multa']
-        .reduce((acc, k) => acc + (Number(deb[k]) || 0), 0);
-      pdfBar(doc, 'DÉBITOS');
-      pdfEnsureSpace(doc, 36);
-      const boxY = doc.y;
-      const boxH = 28;
-      doc.rect(left, boxY, width, boxH).fill('#f97316');
-      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(9.5)
-        .text('TOTAL ESTIMADO DE DÉBITOS', left + 12, boxY + 9);
-      doc.fontSize(13).text(fmtMoneyBRL(totalDebitos), left, boxY + 7, { width: width - 12, align: 'right' });
-      doc.y = boxY + boxH + 4;
-      doc.fillColor('#111827').font('Helvetica').fontSize(10);
-      doc.moveDown(0.3);
-      pdfFieldGrid(doc, [
-        ['DPVAT', fmtMoneyBRL(deb.dpvat)],
-        ['IPVA', fmtMoneyBRL(deb.ipva)],
-        ['Licenciamento', fmtMoneyBRL(deb.licenciamento)],
-        ['Multa', fmtMoneyBRL(deb.multa)],
-      ]);
-      doc.moveDown(0.4);
-
-      pdfBar(doc, 'GRAVAMES');
-      const gravames = Array.isArray(v.gravames) ? v.gravames : [];
-      if (gravames.length) pdfDebtSection(doc, gravames, 'Gravame');
-      else pdfEmptyNotice(doc);
-
-      const leilao = data?.leilao;
-      pdfBar(doc, 'LEILÃO');
-      if (leilao?.baseDisponivel) {
-        pdfFieldGrid(doc, [
-          ['Marca/Modelo', leilao.marcaModelo || '-'],
-          ['Ano Fabricação', leilao.anoFabricacao || '-'],
-          ['Ano Modelo', leilao.anoModelo || '-'],
-          ['Placa', leilao.placa || '-'],
-          ['Chassi', leilao.chassi || '-'],
-          ['Renavam', leilao.renavam || '-'],
-        ]);
-        doc.moveDown(0.3);
-        const ocorrencias = Array.isArray(leilao.ocorrencias) ? leilao.ocorrencias : [];
-        if (ocorrencias.length) pdfDebtSection(doc, ocorrencias, 'Ocorrência de Leilão');
-        else pdfEmptyNotice(doc, 'Sem ocorrências de leilão encontradas.');
-      } else {
-        pdfEmptyNotice(doc, 'Base de leilão indisponível para esta consulta.');
-      }
-      doc.moveDown(0.4);
-
-      pdfReportFooter(doc, now);
-
-      doc.end();
-    } catch (e) {
-      reject(e);
-    }
-  });
-}
-
 // Rótulos amigáveis para o campo "statusPagamento" da Vistocar (débitos-cod-barra) —
 // só documentados os valores vistos em produção até agora; qualquer outro valor cai
 // no fallback (o próprio texto retornado pela API).
@@ -6351,6 +6185,12 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       'consultar-gravame':        'consultar-gravame',
       'consultar-licenciamento':  'consultar-licenciamento',
       'consultar-placa-obito':    'consultar-placa-obito',
+      // CRLV-e do Rio: os três endpoints do portal (doc "Documentação de
+      // Integração — 3 endpoints", 24/08/2026). O rj2 substituiu a fonte
+      // Vistocar (apiclient/crlv-rj) e o rj3 é o Agendado, novo no catálogo.
+      'consultar-crlv-rj':        'consultar-crlv-rj',
+      'crlv-rj-reemissao-2':      'consultar-crlv-rj2',
+      'crlv-rj-agendado':         'consultar-crlv-rj3',
     };
     if (PORTAL_PLACA_MAP[serviceId]) {
       const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
@@ -6954,29 +6794,12 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       }
     }
 
-    // Serviço Vistocar (CRLV RJ Reemissão 2, Código de Segurança) — resposta em JSON
-    // com PDF pronto em base64 (mesmo padrão dos serviços em PDF_BASE64_SVCS).
-    // Exceção: "vistocar-completa" devolve um relatório JSON estruturado, sem PDF
-    // pronto — o PDF é montado aqui a partir do JSON (ver buildVeicularCompletaPdfBuffer).
+    // Serviço Vistocar (CRLV-e PE, Código de Segurança) — resposta em JSON com PDF
+    // pronto em base64 (mesmo padrão dos serviços em PDF_BASE64_SVCS).
     if (VISTOCAR_ENDPOINTS[serviceId]) {
       let parsed;
       try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
-      if (serviceId === 'vistocar-completa') {
-        // Mesmo padrão de envelope dos outros endpoints Vistocar: status/message no
-        // nível raiz, dados de verdade dentro de "response" (aqui: success/dadosVeicular).
-        const ok = parsed?.status === 200 && parsed?.response?.success === true && parsed?.response?.dadosVeicular;
-        if (!ok) {
-          const errMsg = parsed?.message || parsed?.response?.msg || 'Nenhum resultado encontrado para essa consulta.';
-          console.error(`[${serviceId}] resposta inesperada da Vistocar: ${JSON.stringify(parsed)}`);
-          return res.status(422).json({ error: errMsg });
-        }
-        try {
-          dcDebitoPdfBuf = await buildVeicularCompletaPdfBuffer(service, parsed.response, params);
-        } catch (e) {
-          console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
-          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
-        }
-      } else if (VISTOCAR_ASYNC_SVCS.has(serviceId)) {
+      if (VISTOCAR_ASYNC_SVCS.has(serviceId)) {
         // Assíncrono: a resposta de sucesso só confirma o REGISTRO da consulta
         // ("CONSULTA PENDENTE", resultAvailable=false) e devolve o movementId; o
         // documento chega depois em POST /api/webhooks/vistocar. Sem movementId
@@ -7194,12 +7017,20 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           const fileName = `${DESPBRASIL_SVCS[serviceId].servico}-${placa || 'doc'}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
         }
-        // Envia PDF via WhatsApp para serviços Vistocar (CRLV RJ Reemissão 2)
+        // Envia PDF via WhatsApp para os CRLV-e do Rio que não começam com
+        // "consultar-crlv-" (o da regra acima) — Reemissão 2 e Agendado, hoje
+        // também no portaldespachantes.online.
+        if (CRLV_RJ_PORTAL_SVCS.has(serviceId) && user.phone) {
+          const placa = (params?.placa || '').toUpperCase();
+          const caption = `✅ *${service.name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
+          const fileName = `${serviceId}-${placa || 'doc'}.pdf`;
+          await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
+        }
+        // Envia PDF via WhatsApp para serviços Vistocar (CRLV-e PE, Código de Segurança)
         if (VISTOCAR_ENDPOINTS[serviceId] && user.phone) {
           const placa = (params?.placa || '').toUpperCase();
           const caption = `✅ *${service.name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
-          const fileNamePrefix = serviceId === 'vistocar-completa' ? 'mc-completa' : serviceId;
-          const fileName = `${fileNamePrefix}-${placa || 'doc'}.pdf`;
+          const fileName = `${serviceId}-${placa || 'doc'}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
         }
         // Envia PDF via WhatsApp para Localização CPF (e V3)
@@ -7343,33 +7174,34 @@ const CRLV_RJ_REEMISSAO_2_API_PRICE = 28.00;
 // debita ninguém, registra em api_general_queries para cobrança posterior
 // (página Cobranças API do admin) e devolve o PDF pronto na hora — mesmo
 // contrato de resposta do endpoint pré-pago (processCatalogQuery).
-async function runVistocarCrlvRj2General(req, res) {
+async function runCrlvRj2General(req, res) {
   const placa = (req.body?.placa || '').toUpperCase().replace(/[\s-]/g, '');
   if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
 
   try {
-    let parsed;
+    let bodyBuffer;
     try {
-      const apiRes = await fetch(`${VISTOCAR_BASE_URL}/apiclient/crlv-rj`, {
+      const apiRes = await fetch('https://portaldespachantes.online/consultar-crlv-rj2', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await getVistocarToken()}` },
-        body: JSON.stringify({ plate: placa }),
+        headers: { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY },
+        body: JSON.stringify({ placa }),
       });
-      const bodyStr = await apiRes.text();
-      try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
+      bodyBuffer = Buffer.from(await apiRes.arrayBuffer());
     } catch (e) {
-      console.error('Erro na API Vistocar [crlv-rj-reemissao-2 externo]:', e.message);
+      console.error('Erro na API portaldespachantes [crlv-rj-reemissao-2 externo]:', e.message);
       return res.status(502).json({ error: 'Erro ao consultar a API. Tente novamente.' });
     }
 
-    const ok = parsed?.status === 200 && parsed?.response?.success === true
-      && parsed?.response?.paid === true && parsed?.response?.pdfBase64;
-    if (!ok) {
-      const errMsg = parsed?.message || parsed?.response?.msg || 'Nenhum resultado encontrado para essa consulta.';
-      console.error(`[crlv-rj-reemissao-2 externo] resposta inesperada da Vistocar: ${JSON.stringify(parsed)}`);
+    // Sucesso é o PDF em bytes; qualquer outra coisa é o JSON de erro do portal
+    // ({ error } ou { erro }), inclusive nos 401/403 de chave.
+    if (bodyBuffer.slice(0, 4).toString() !== '%PDF') {
+      let parsed;
+      try { parsed = JSON.parse(bodyBuffer.toString('utf8')); } catch { parsed = null; }
+      const errMsg = parsed?.error || parsed?.erro || parsed?.message || 'Nenhum resultado encontrado para essa consulta.';
+      console.error(`[crlv-rj-reemissao-2 externo] resposta inesperada do portal: ${bodyBuffer.toString('utf8').slice(0, 300)}`);
       return res.status(422).json({ error: errMsg });
     }
-    const pdfBuffer = Buffer.from(parsed.response.pdfBase64, 'base64');
+    const pdfBuffer = bodyBuffer;
 
     await pool.query(
       `INSERT INTO api_general_queries (api_key_id, service_id, params, result_data)
@@ -7387,12 +7219,12 @@ async function runVistocarCrlvRj2General(req, res) {
 }
 
 // ── POST /api/v1/crlv-rj-reemissao-2 — único serviço do catálogo liberado
-// para chave Geral (pós-paga, R$ 28,00 via runVistocarCrlvRj2General acima).
+// para chave Geral (pós-paga, R$ 28,00 via runCrlvRj2General acima).
 // Registrada ANTES da rota genérica /api/v1/:serviceId para interceptar esse
 // serviceId específico também para chaves Gerais; chave vinculada cai no
 // mesmo fluxo pré-pago de sempre (processCatalogQuery, preço do painel).
 app.post('/api/v1/crlv-rj-reemissao-2', requireApiKey, (req, res) => {
-  if (!req.apiUser) return runVistocarCrlvRj2General(req, res);
+  if (!req.apiUser) return runCrlvRj2General(req, res);
   if (!isV1Eligible('crlv-rj-reemissao-2'))
     return res.status(404).json({ error: 'Serviço não disponível pela API.' });
   return processCatalogQuery(req.apiUser.id, 'crlv-rj-reemissao-2', req.body, res);
@@ -7404,7 +7236,7 @@ app.post('/api/v1/crlv-rj-reemissao-2', requireApiKey, (req, res) => {
 // markup), mas autenticado por chave em vez de cookie JWT, e debitando sempre
 // da conta vinculada à chave — chave Geral (pós-paga, sem usuário) não serve
 // aqui, só para os endpoints ATPV-e (MG/SP) e CRLV 2 Rio Reemissão (ver
-// proxyAtpveExternal adiante e runVistocarCrlvRj2General acima).
+// proxyAtpveExternal adiante e runCrlvRj2General acima).
 app.post('/api/v1/:serviceId', requireApiKey, (req, res) => {
   if (!req.apiUser)
     return res.status(403).json({ error: 'Esta chave é do tipo Geral e não pode ser usada para o catálogo de Nova Consulta.' });
@@ -7952,7 +7784,7 @@ const EXTERNAL_API_PRICE = 5.00;
 // Preço por serviço nas rotas de API externa que aceitam chave Geral (pós-paga)
 // e aparecem em Cobranças API — ATPV-e MG/SP (cadastrar) usa o preço fixo padrão acima; CRLV 2
 // Rio Reemissão (fora do SERVICES_V3, via Vistocar) tem preço comercial próprio
-// (ver CRLV_RJ_REEMISSAO_2_API_PRICE / runVistocarCrlvRj2General).
+// (ver CRLV_RJ_REEMISSAO_2_API_PRICE / runCrlvRj2General).
 function externalApiPriceFor(serviceId) {
   return serviceId === 'crlv-rj-reemissao-2' ? CRLV_RJ_REEMISSAO_2_API_PRICE : EXTERNAL_API_PRICE;
 }
@@ -9508,7 +9340,7 @@ app.post('/api/procuracao-veicular/localizar-cpf', requireAuth, async (req, res)
 // "Opção 2 Nova Consulta" — dc-proprietario-atual) a partir da placa, pra
 // pré-preencher o OUTORGANTE (nome + CPF/CNPJ vêm junto do proprietário atual
 // do veículo) e os campos do veículo. Se a Proprietário Atual não trouxer
-// endereço, cai pra Veicular Completa (Vistocar) só pra completar esse dado
+// endereço, cai pra consulta completa da Vistocar só pra completar esse dado
 // (ver fallback abaixo). Não cobra créditos. Reaproveitado pela "Gerar ASD"
 // (aba Coisas de Despachantes) no botão de busca da Descrição Documental.
 app.post('/api/procuracao-veicular/localizar-placa', requireAuth, async (req, res) => {
@@ -9536,9 +9368,9 @@ app.post('/api/procuracao-veicular/localizar-placa', requireAuth, async (req, re
     const fields = extractProprietarioAtualFields(result);
     let endereco = composeEndereco(fields);
 
-    // Proprietário Atual nem sempre traz endereço — cai pra Veicular Completa
-    // (API Vistocar, schema documentado em buildVeicularCompletaPdfBuffer) só
-    // pra completar esse dado. Best-effort: se falhar ou também não trouxer
+    // Proprietário Atual nem sempre traz endereço — cai pra consulta completa
+    // da Vistocar (POST apiclient/completa, envelope status/response) só pra
+    // completar esse dado. Best-effort: se falhar ou também não trouxer
     // endereço, segue sem — o formulário fica editável de qualquer forma.
     if (!endereco) {
       try {
@@ -9566,7 +9398,7 @@ app.post('/api/procuracao-veicular/localizar-placa', requireAuth, async (req, re
           }
         }
       } catch (e) {
-        console.warn('[procuracao-veicular] fallback Veicular Completa (endereço) falhou:', e.message);
+        console.warn('[procuracao-veicular] fallback consulta completa Vistocar (endereço) falhou:', e.message);
       }
     }
 

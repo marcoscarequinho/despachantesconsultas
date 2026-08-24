@@ -30,14 +30,18 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 |---|---|---|
 | Chekaki (base) | `https://chekaki.online` | header `chaveAcesso` (`CHAVE_ACESSO`) |
 | Datacube | `https://api.consultasdeveiculos.com` | form-urlencoded `auth_token` (`DATACUBE_TOKEN`) |
-| Portal Despachantes | `https://portaldespachantes.online` | header `chaveAcesso` (`PORTAL_DESP_KEY`) |
+| Portal Despachantes (inclui os 3 CRLV-e do Rio) | `https://portaldespachantes.online` | header `chaveAcesso` (`PORTAL_DESP_KEY`), ver `PORTAL_PLACA_MAP` |
 | AutoCRLV | `https://autocrlv.com.br` | Bearer (`AUTOCRLV_KEY`) |
 | Infosimples | `https://api.infosimples.com/api/v2/consultas` | `INFOSIMPLES_TOKEN` |
 | Despbrasil (CRLV Rio Reemissão, Código de Segurança CRV) | `https://despbrasil.com.br/functions/apiConsulta` | header `chaveAcesso` (`DESPBRASIL_KEY`), ver `DESPBRASIL_SVCS` |
 | Consultas Fácil (CRLV Rio Reemissão v2) | `https://www.consultasfacil.net` | header `chaveAcesso` (`CONSULTASFACIL_KEY`) |
-| Vistocar (Débitos e Documentação, CRLV-e CE/PE/RJ) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
+| Vistocar (Débitos e Documentação, CRLV-e CE/PE) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
 | Mercado Pago (PIX) | `https://api.mercadopago.com` | `MP_ACCESS_TOKEN` |
 | Z-API (WhatsApp) | `https://api.z-api.io` | `ZAPI_*` |
+
+### Grupo "CRLV-e Rio de Janeiro"
+
+Os três serviços do grupo saem da mesma API do Portal Despachantes (doc "Documentação de Integração — 3 endpoints", 24/08/2026), com o mesmo contrato: `POST { placa }`, header `chaveAcesso`, PDF pronto em bytes na resposta e JSON `{ error }` no erro. `consultar-crlv-rj` → `/consultar-crlv-rj` (R$ 20,00), `crlv-rj-reemissao-2` → `/consultar-crlv-rj2` (R$ 55,00, era Vistocar `apiclient/crlv-rj`) e `crlv-rj-agendado` → `/consultar-crlv-rj3` (R$ 20,00). Ligar/mudar cada um é uma linha em `PORTAL_PLACA_MAP`; o envio do PDF por WhatsApp usa o prefixo `consultar-crlv-`, então os ids fora desse padrão ficam em `CRLV_RJ_PORTAL_SVCS`. A chave Geral (pós-paga) do `crlv-rj-reemissao-2` usa a mesma rota do portal em `runCrlvRj2General`.
 
 ## Fluxo de /api/query (padrão importante)
 
