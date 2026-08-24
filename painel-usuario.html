@@ -2546,6 +2546,13 @@ const CATALOG_GROUP_META = {
   'Procurações e Contratos':{ icon:'📜' },
 };
 
+// Selo por serviço, quando o do grupo mentiria. O grupo "CRLV-e Rio de Janeiro"
+// é "⚡ Na hora", mas o Agendado sai em até 2 horas — e prazo é justamente o que
+// o selo existe para responder.
+const CATALOG_BADGE_SERVICO = {
+  'crlv-rj-agendado': { badge:'⏳ Em até 2h', badgeClass:'bg-amber-100 text-amber-800' },
+};
+
 // Busca sem acento e sem caixa: "debito rj" acha "Débitos RJ".
 const catNorm = s => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
@@ -2668,7 +2675,9 @@ function catalogCard(s) {
   const entrada  = inputTypeLabel(s.inputType).replace(/^Entrada:\s*/, '');
   const selo = s.unavailable
     ? '<span class="svc-badge bg-gray-200 text-gray-600">Indisponível</span>'
-    : (meta.badge ? `<span class="svc-badge ${meta.badgeClass}">${meta.badge}</span>` : '');
+    : (CATALOG_BADGE_SERVICO[s.id] || meta.badge
+        ? `<span class="svc-badge ${(CATALOG_BADGE_SERVICO[s.id] || meta).badgeClass}">${(CATALOG_BADGE_SERVICO[s.id] || meta).badge}</span>`
+        : '');
   return `
     <button type="button" class="svc-card ${destaque ? 'svc-card-destaque' : ''}" onclick="openCatalogService('${s.id}')">
       <div class="flex items-start gap-2">
@@ -2925,6 +2934,9 @@ function buildDespachantesList() {
 // isso continuam aparecendo também nas abas de origem: esta aba não duplica
 // cadastro nenhum, só reúne os atalhos num lugar só.
 const EXTRAS_SERVICE_IDS = [
+  // Fora da lista da Vistocar: o Rio agendado (portaldespachantes) sai em até
+  // 2 horas, então é desta aba também.
+  'crlv-rj-agendado',
   'crlv-agendado-df',
   'crlv-agendado-es',
   'crlv-agendado-pb',

@@ -497,13 +497,16 @@ const SERVICES = [
   // de baixo da mesma folha, no espaço que o formulário reserva para elas.
   // Gratuito (antes R$ 9,50).
   { id:'gerar-asd', name:'Gerar ASD RJ', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'asd', icon:'📑' },
-  // ── CRLV-e Rio de Janeiro (instantâneo, destaque no topo da Nova Consulta) ──
+  // ── CRLV-e Rio de Janeiro (destaque no topo da Nova Consulta) ──
   // Os três saem da API portaldespachantes.online (consultar-crlv-rj, -rj2 e -rj3,
   // ver PORTAL_PLACA_MAP): mesmo contrato — POST { placa }, header chaveAcesso e
   // o PDF pronto em bytes na resposta.
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   { id:'crlv-rj-reemissao-2', name:'CRLV 2 Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
-  { id:'crlv-rj-agendado', name:'CRLV-e Rio de Janeiro Agendado', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'⏳', uf:'rj' },
+  // Diferente dos dois acima, este NÃO é na hora: o documento é agendado e sai em
+  // até 2 horas — por isso o aviso de prazo antes de consultar.
+  { id:'crlv-rj-agendado', name:'CRLV-e Rio de Janeiro Agendado', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'⏳', uf:'rj',
+    slowNote:'Atenção: este CRLV-e não é emitido na hora. O pedido é agendado e o documento sai em até 2 horas — ele chega pelo WhatsApp e fica no seu histórico.' },
   // Backup da CRLV 2 Rio Reemissão (acima): quando a API estiver fora do ar, o cliente
   // usa esta em vez de esperar. Fonte alternativa via API consultasfacil.net (ver
   // CONSULTASFACIL_BASE_URL), devolve o PDF pronto na hora — não é mais fila manual.
