@@ -69,7 +69,7 @@ const PORTAL_BASE_URL = 'https://portaldespachantes.online';
 // começa com "consultar-crlv-" — a regra de envio do PDF por WhatsApp usa esse
 // prefixo, então estes precisam ser nomeados (ver PORTAL_PLACA_MAP).
 const CRLV_PORTAL_PDF_SVCS = new Set([
-  'crlv-rj-reemissao-2', 'crlv-rj-agendado', 'crlv-pe-instantaneo', 'crlv-ce-instantaneo',
+  'crlv-rj-reemissao-2', 'crlv-pe-instantaneo', 'crlv-ce-instantaneo',
 ]);
 // CRLV-e Agendado servido pelo portaldespachantes.online em vez do chekaki (doc
 // "Documentação de Integração — 2 endpoints", 24/08/2026). Mesmo contrato dos
@@ -80,7 +80,12 @@ const CRLV_PORTAL_PDF_SVCS = new Set([
 // Status" recebe só esse número digitado pelo cliente — sem marca não dá para
 // saber a quem perguntar. Por isso ele é guardado e mostrado com prefixo, mesma
 // convenção já usada no "AUTOCRLV-" (ver checkCrlvAgendadoStatus).
-const PORTAL_AGENDADO_SVCS = new Set(['crlv-ce']);
+//
+// HOJE A LISTA ESTÁ VAZIA: o CE, único que usava esse fluxo, foi removido do
+// catálogo e ficou só a emissão na hora (crlv-ce-instantaneo). O caminho segue de
+// pé porque ainda pode haver pedido PORTAL- em crlv_agendado_pending esperando o
+// documento — e religar uma UF volta a ser só acrescentar o id aqui.
+const PORTAL_AGENDADO_SVCS = new Set();
 const PORTAL_PEDIDO_PREFIX = 'PORTAL-';
 // "Solicitar" do CRLV-e Agendado: os crlv-agendado-<uf> do chekaki mais o CE do
 // portal. O "Ver Status" é outro fluxo e fica de fora.
@@ -514,15 +519,11 @@ const SERVICES = [
   // Gratuito (antes R$ 9,50).
   { id:'gerar-asd', name:'Gerar ASD RJ', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'asd', icon:'📑' },
   // ── CRLV-e Rio de Janeiro (destaque no topo da Nova Consulta) ──
-  // Os três saem da API portaldespachantes.online (consultar-crlv-rj, -rj2 e -rj3,
-  // ver PORTAL_PLACA_MAP): mesmo contrato — POST { placa }, header chaveAcesso e
-  // o PDF pronto em bytes na resposta.
+  // Saem da API portaldespachantes.online (consultar-crlv-rj e -rj2, ver
+  // PORTAL_PLACA_MAP): mesmo contrato — POST { placa }, header chaveAcesso e o
+  // PDF pronto em bytes na resposta. O -rj3 (Agendado) chegou a existir aqui e
+  // foi removido do catálogo; religá-lo é uma linha em PORTAL_PLACA_MAP.
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
-  // Fica logo depois do CRLV-e do Rio de propósito: é a alternativa dele quando o
-  // cliente pode esperar. Diferente dos outros do grupo, NÃO é na hora — o pedido
-  // é agendado e sai em até 2 horas, daí o aviso de prazo antes de consultar.
-  { id:'crlv-rj-agendado', name:'CRLV-e Rio de Janeiro Agendado', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'⏳', uf:'rj',
-    slowNote:'Atenção: este CRLV-e não é emitido na hora. O pedido é agendado e o documento sai em até 2 horas — ele chega pelo WhatsApp e fica no seu histórico.' },
   { id:'crlv-rj-reemissao-2', name:'CRLV 2 Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // Backup da CRLV 2 Rio Reemissão (acima): quando a API estiver fora do ar, o cliente
   // usa esta em vez de esperar. Fonte alternativa via API consultasfacil.net (ver
@@ -532,18 +533,11 @@ const SERVICES = [
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ba', name:'CRLV-e Bahia (BA)',              group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
-  // Hoje a ÚNICA opção de CE no catálogo. Saiu da Vistocar (apiclient/crlv-ce,
-  // assíncrono por webhook) e passou para o CRLV-e Agendado do portal — mesmo
-  // nome e mesmo preço, ver PORTAL_AGENDADO_SVCS. O POST em
-  // /api/crlv-agendado/solicitar devolve um pedido_id e o documento sai depois:
-  // o cron de sempre (runCrlvAgendadoPendingCheck) acompanha o status, entrega o
-  // PDF por WhatsApp e estorna se não sair em 48h.
-  { id:'crlv-ce', name:'CRLV-e Ceará (CE)', group:'CRLV-e Digital', basePrice:32.50, noMarkup:true, inputType:'placa', icon:'📄', uf:'ce',
-    slowNote:'Emissão agendada no Detran-CE: o pedido é registrado na hora e o documento chega pelo WhatsApp assim que for emitido. Se não sair em 48 horas, o valor volta automaticamente para o seu saldo.' },
-  // A outra ponta do CE, ao lado do agendado acima e pelo mesmo preço: aqui o
-  // portal devolve o PDF na hora (POST /consultar-crlv-ce com { placa }, doc
-  // "Documentação de Integração — 1 endpoint", 24/08/2026, ver PORTAL_PLACA_MAP).
-  // Quem pode esperar usa o agendado; quem precisa agora usa este.
+  // Hoje a ÚNICA opção de CE no catálogo: o agendado foi removido e ficou só a
+  // emissão na hora do portal (POST /consultar-crlv-ce com { placa }, PDF pronto
+  // em bytes — doc "Documentação de Integração — 1 endpoint", 24/08/2026, ver
+  // PORTAL_PLACA_MAP). Antes dele o CE passou pela Vistocar (apiclient/crlv-ce,
+  // assíncrono por webhook) e pelo CRLV-e Agendado do portal.
   { id:'crlv-ce-instantaneo', name:'CRLV-e Emissão Instantânea Ceará (CE)', group:'CRLV-e Digital', basePrice:32.50, noMarkup:true, inputType:'placa', icon:'⚡', uf:'ce' },
   { id:'consultar-crlv-go', name:'CRLV-e Goiás (GO)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ma', name:'CRLV-e Maranhão (MA)',           group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -6220,16 +6214,13 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       'consultar-gravame':        'consultar-gravame',
       'consultar-licenciamento':  'consultar-licenciamento',
       'consultar-placa-obito':    'consultar-placa-obito',
-      // CRLV-e do Rio: os três endpoints do portal (doc "Documentação de
-      // Integração — 3 endpoints", 24/08/2026). O rj2 substituiu a fonte
-      // Vistocar (apiclient/crlv-rj) e o rj3 é o Agendado, novo no catálogo.
+      // CRLV-e do Rio (doc "Documentação de Integração — 3 endpoints",
+      // 24/08/2026): o rj2 substituiu a fonte Vistocar (apiclient/crlv-rj). O
+      // rj3 é o Agendado, que saiu do catálogo.
       'consultar-crlv-rj':        'consultar-crlv-rj',
       'crlv-rj-reemissao-2':      'consultar-crlv-rj2',
-      'crlv-rj-agendado':         'consultar-crlv-rj3',
-      // CRLV-e de Pernambuco (doc "Documentação de Integração — 2 endpoints",
-      // 24/08/2026), que era da Vistocar (apiclient/crlv-pe), e o do Ceará que
-      // sai na hora (doc de 1 endpoint) — o CE agendado é o crlv-ce, que segue
-      // por /api/crlv-agendado/solicitar.
+      // CRLV-e de Pernambuco (doc de 2 endpoints), que era da Vistocar
+      // (apiclient/crlv-pe), e o do Ceará (doc de 1 endpoint).
       'crlv-pe-instantaneo':      'consultar-crlv-pe',
       'crlv-ce-instantaneo':      'consultar-crlv-ce',
     };

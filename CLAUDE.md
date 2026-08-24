@@ -49,15 +49,14 @@ Quase todo o CRLV-e do catálogo saiu para o `portaldespachantes.online` (docs "
 |---|---|---|
 | `consultar-crlv-rj` | `/consultar-crlv-rj` | R$ 20,00 |
 | `crlv-rj-reemissao-2` | `/consultar-crlv-rj2` | R$ 55,00 |
-| `crlv-rj-agendado` | `/consultar-crlv-rj3` | R$ 20,00 |
 | `crlv-pe-instantaneo` | `/consultar-crlv-pe` | R$ 35,00 |
 | `crlv-ce-instantaneo` | `/consultar-crlv-ce` | R$ 32,50 |
 
 O envio do PDF por WhatsApp é decidido pelo prefixo `consultar-crlv-`, então os ids fora desse padrão precisam estar em `CRLV_PORTAL_PDF_SVCS` — esquecer disso não quebra a consulta, só faz o cliente parar de receber o documento no WhatsApp. A chave Geral (pós-paga) do `crlv-rj-reemissao-2` usa a mesma rota em `runCrlvRj2General`.
 
-**CRLV-e Agendado** (`PORTAL_AGENDADO_SVCS`, hoje só `crlv-ce`, R$ 32,50) — mesmo contrato dos agendados da Chekaki (`POST /api/crlv-agendado/solicitar` → `pedido_id`; `GET /api/crlv-agendado/:id` → status; `GET .../:id/pdf`), só muda o host e a chave, então reaproveita `crlv_agendado_pending` e o cron `runCrlvAgendadoPendingCheck` (entrega por WhatsApp, estorno em 48h). O `pedido_id` do portal é numérico igual ao da Chekaki: ele é gravado, exibido e devolvido na resposta com o prefixo `PORTAL-` (`PORTAL_PEDIDO_PREFIX`, mesma convenção do `AUTOCRLV-`) — é isso que faz o "Ver Status" e o cron perguntarem no host certo, inclusive quando o cliente copia o id da tela.
+**CRLV-e Agendado** (`PORTAL_AGENDADO_SVCS`, **hoje vazio** — o CE agendado foi removido do catálogo e o caminho segue de pé para os pedidos `PORTAL-` já criados) — mesmo contrato dos agendados da Chekaki (`POST /api/crlv-agendado/solicitar` → `pedido_id`; `GET /api/crlv-agendado/:id` → status; `GET .../:id/pdf`), só muda o host e a chave, então reaproveita `crlv_agendado_pending` e o cron `runCrlvAgendadoPendingCheck` (entrega por WhatsApp, estorno em 48h). O `pedido_id` do portal é numérico igual ao da Chekaki: ele é gravado, exibido e devolvido na resposta com o prefixo `PORTAL-` (`PORTAL_PEDIDO_PREFIX`, mesma convenção do `AUTOCRLV-`) — é isso que faz o "Ver Status" e o cron perguntarem no host certo, inclusive quando o cliente copia o id da tela.
 
-O CE saiu da Vistocar (`apiclient/crlv-ce` + webhook), então `VISTOCAR_ASYNC_SVCS` está vazio hoje — o webhook e a entrega continuam de pé para os pedidos antigos ainda em `vistocar_pending`.
+O CE hoje é só `crlv-ce-instantaneo`: passou pela Vistocar (`apiclient/crlv-ce` + webhook) e pelo agendado do portal antes de ficar só na emissão na hora. Por isso `VISTOCAR_ASYNC_SVCS` e `PORTAL_AGENDADO_SVCS` estão vazios — os dois caminhos continuam de pé para entregar pedido antigo (`vistocar_pending`, `crlv_agendado_pending`).
 
 ## Fluxo de /api/query (padrão importante)
 
@@ -92,7 +91,7 @@ A Visão Geral é a **vitrine de consultas**, não um menu de atalhos: abaixo do
 
 ### Aba "Consultas Extras" (painel-usuario.html)
 
-Vitrine que reúne num lugar só os CRLV-e que **não saem na hora** (DF, ES, PB, RN, RS, SC, CE) mais o ATPV-e — os produtos que a doc da Vistocar trata como assíncronos. É só front-end: `EXTRAS_SERVICE_IDS` aponta para os serviços que atendem cada UF hoje (Chekaki no `crlv-agendado-*`, Datacube no `dc-crlve-rs-v2`, Portal Despachantes no `crlv-ce` e no `crlv-rj-agendado`), que continuam também nas abas de origem — nada é duplicado no catálogo. O ATPV-e é um atalho para a aba "Intenção de Venda (ATPVE)", que tem formulário próprio. O formulário/resultado é o mesmo `#query-form-host` das abas "Acesse Aqui..." e "Coisas de Despachantes" (ver `FORM_SLOTS` em `showSection`).
+Vitrine que reúne num lugar só os CRLV-e que **não saem na hora** (DF, ES, PB, RN, RS, SC) mais o ATPV-e — os produtos que a doc da Vistocar trata como assíncronos. É só front-end: `EXTRAS_SERVICE_IDS` aponta para os serviços que atendem cada UF hoje (Chekaki no `crlv-agendado-*`, Datacube no `dc-crlve-rs-v2`), que continuam também nas abas de origem — nada é duplicado no catálogo. O ATPV-e é um atalho para a aba "Intenção de Venda (ATPVE)", que tem formulário próprio. O formulário/resultado é o mesmo `#query-form-host` das abas "Acesse Aqui..." e "Coisas de Despachantes" (ver `FORM_SLOTS` em `showSection`).
 
 ## Variáveis de ambiente (.env)
 

@@ -365,17 +365,6 @@
           </div>
           <div class="price-tag text-base flex-shrink-0">R$ 20,00</div>
         </button>
-        <!-- Mesmo card do CRLV-e do Rio acima, em âmbar: este é agendado, sai em
-             até 2 horas — o laranja aqui é "na hora". -->
-        <button type="button" onclick="openHeroService('crlv-rj-agendado')"
-          class="w-full sm:w-auto sm:min-w-[280px] flex items-center gap-4 rounded-xl border-2 border-amber-300 bg-gradient-to-r from-amber-50 to-white p-4 text-left shadow-sm hover:shadow-md hover:border-amber-400 transition-all">
-          <div class="w-14 h-14 rounded-full bg-amber-100 flex items-center justify-center text-3xl flex-shrink-0">⏳</div>
-          <div class="min-w-0 flex-1">
-            <div class="font-bold text-gray-800">CRLV-e Rio de Janeiro Agendado</div>
-            <div class="text-sm text-amber-700 font-medium">⏳ Sai em até 2 horas</div>
-          </div>
-          <div class="price-tag text-base flex-shrink-0">R$ 20,00</div>
-        </button>
         <button type="button" onclick="openHeroService('crlv-rj-reemissao-2')"
           class="w-full sm:w-auto sm:min-w-[280px] flex items-center gap-4 rounded-xl border-2 border-orange-300 bg-gradient-to-r from-orange-50 to-white p-4 text-left shadow-sm hover:shadow-md hover:border-orange-400 transition-all">
           <div class="w-14 h-14 rounded-full bg-orange-100 flex items-center justify-center text-3xl flex-shrink-0">📄</div>
@@ -2507,7 +2496,6 @@ const CATALOG_DESTAQUES = [
   'consultar-atpve',          // Reemissão ATPV-e (Chassi)
   'crlv-pe-instantaneo',      // CRLV-e Emissão Instantânea Pernambuco (PE)
   'crlv-agendado-es',         // CRLV-e Agendado Espírito Santo (ES)
-  'crlv-ce',                  // CRLV-e Ceará (CE) — agendado
   'crlv-ce-instantaneo',      // CRLV-e Emissão Instantânea Ceará (CE)
 ];
 const CATALOG_GRUPO_DESTAQUE = 'Destaques';
@@ -2558,12 +2546,10 @@ const CATALOG_GROUP_META = {
   'Procurações e Contratos':{ icon:'📜' },
 };
 
-// Selo por serviço, quando o do grupo mentiria. O grupo "CRLV-e Rio de Janeiro"
-// é "⚡ Na hora", mas o Agendado sai em até 2 horas — e prazo é justamente o que
-// o selo existe para responder.
-const CATALOG_BADGE_SERVICO = {
-  'crlv-rj-agendado': { badge:'⏳ Em até 2h', badgeClass:'bg-amber-100 text-amber-800' },
-};
+// Selo por serviço, para quando o do grupo mentiria — por exemplo um serviço que
+// não sai na hora dentro de um grupo marcado como "⚡ Na hora". Hoje vazio: o
+// único que usava (CRLV-e Rio Agendado) saiu do catálogo.
+const CATALOG_BADGE_SERVICO = {};
 
 // Busca sem acento e sem caixa: "debito rj" acha "Débitos RJ".
 const catNorm = s => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -2940,22 +2926,18 @@ function buildDespachantesList() {
 
 // ── Consultas Extras ───────────────────────────────────────────────────────────
 // Vitrine única dos CRLV-e que NÃO saem na hora, na ordem da doc da Vistocar
-// ("Integração API": DF, ES, PB, RN, RS, SC, CE), mais o ATPV-e. Cada id aponta
+// ("Integração API": DF, ES, PB, RN, RS, SC), mais o ATPV-e. Cada id aponta
 // para o serviço que ATENDE aquela UF hoje — e eles vêm de fornecedores
-// diferentes (Chekaki no "CRLV-e Agendado", Datacube no RS, Vistocar no CE), por
+// diferentes (Chekaki no "CRLV-e Agendado", Datacube no RS), por
 // isso continuam aparecendo também nas abas de origem: esta aba não duplica
 // cadastro nenhum, só reúne os atalhos num lugar só.
 const EXTRAS_SERVICE_IDS = [
-  // Fora da lista da Vistocar: o Rio agendado (portaldespachantes) sai em até
-  // 2 horas, então é desta aba também.
-  'crlv-rj-agendado',
   'crlv-agendado-df',
   'crlv-agendado-es',
   'crlv-agendado-pb',
   'crlv-agendado-rn',
   'dc-crlve-rs-v2',
   'crlv-agendado-sc',
-  'crlv-ce',
 ];
 
 function buildExtrasList() {
