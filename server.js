@@ -64,10 +64,32 @@ const MP_ACCESS_TOKEN = (process.env.MP_ACCESS_TOKEN || '')
 const MP_BASE = 'https://api.mercadopago.com';
 const AUTOCRLV_KEY    = process.env.AUTOCRLV_KEY    || '';
 const PORTAL_DESP_KEY = process.env.PORTAL_DESP_KEY || '';
-// CRLV-e do Rio servidos pelo portaldespachantes.online cujo id NÃO começa com
-// "consultar-crlv-" — a regra de envio do PDF por WhatsApp usa esse prefixo, então
-// estes dois precisam ser nomeados (ver PORTAL_PLACA_MAP em processCatalogQuery).
-const CRLV_RJ_PORTAL_SVCS = new Set(['crlv-rj-reemissao-2', 'crlv-rj-agendado']);
+const PORTAL_BASE_URL = 'https://portaldespachantes.online';
+// CRLV-e do portaldespachantes.online que devolvem o PDF na hora e cujo id NÃO
+// começa com "consultar-crlv-" — a regra de envio do PDF por WhatsApp usa esse
+// prefixo, então estes precisam ser nomeados (ver PORTAL_PLACA_MAP).
+const CRLV_PORTAL_PDF_SVCS = new Set([
+  'crlv-rj-reemissao-2', 'crlv-rj-agendado', 'crlv-pe-instantaneo', 'crlv-ce-instantaneo',
+]);
+// CRLV-e Agendado servido pelo portaldespachantes.online em vez do chekaki (doc
+// "Documentação de Integração — 2 endpoints", 24/08/2026). Mesmo contrato dos
+// demais agendados (POST /api/crlv-agendado/solicitar → pedido_id; GET
+// /api/crlv-agendado/:id → status; GET .../:id/pdf), só muda o host e a chave.
+//
+// O pedido_id volta como número simples, igual ao do chekaki, e o serviço "Ver
+// Status" recebe só esse número digitado pelo cliente — sem marca não dá para
+// saber a quem perguntar. Por isso ele é guardado e mostrado com prefixo, mesma
+// convenção já usada no "AUTOCRLV-" (ver checkCrlvAgendadoStatus).
+const PORTAL_AGENDADO_SVCS = new Set(['crlv-ce']);
+const PORTAL_PEDIDO_PREFIX = 'PORTAL-';
+// "Solicitar" do CRLV-e Agendado: os crlv-agendado-<uf> do chekaki mais o CE do
+// portal. O "Ver Status" é outro fluxo e fica de fora.
+const isAgendadoSolicitar = id =>
+  (id.startsWith('crlv-agendado-') && id !== 'crlv-agendado-status') || PORTAL_AGENDADO_SVCS.has(id);
+const agendadoBaseUrl = id => (PORTAL_AGENDADO_SVCS.has(id) ? PORTAL_BASE_URL : BASE_API_URL);
+// Host de um pedido já criado, a partir do id que o cliente tem em mãos.
+const agendadoHostDoPedido = pedidoId =>
+  String(pedidoId).trim().startsWith(PORTAL_PEDIDO_PREFIX) ? PORTAL_BASE_URL : BASE_API_URL;
 const DATACUBE_API_URL = 'https://api.consultasdeveiculos.com';
 const DATACUBE_TOKEN   = process.env.DATACUBE_TOKEN || '';
 const INFOSIMPLES_API_URL = 'https://api.infosimples.com/api/v2/consultas';
@@ -103,10 +125,6 @@ const VISTOCAR_BASE_URL = 'https://vistocarconsulta.com.br/api/v1';
 const VISTOCAR_LOGIN    = process.env.VISTOCAR_LOGIN    || '';
 const VISTOCAR_PASSWORD = process.env.VISTOCAR_PASSWORD || '';
 const VISTOCAR_ENDPOINTS = {
-  'crlv-pe-instantaneo': 'crlv-pe',
-  // Assíncrono: só registra a consulta (movementId) e o PDF chega por webhook —
-  // tratamento de resposta próprio, ver VISTOCAR_ASYNC_SVCS abaixo.
-  'crlv-ce': 'crlv-ce',
   'security-code-vistocar-2': 'security-code',
   'vistocar-debitos-cod-barra': 'debitos-cod-barra',
 };
@@ -116,14 +134,12 @@ const VISTOCAR_ENDPOINTS = {
 // POST /api/webhooks/vistocar. Por isso não passam pelo tratamento de resposta com
 // pdfBase64 dos demais e só são cobrados na entrega (ver finalizePendingQuery).
 //
-// A doc da Vistocar ("Integração API", seção "Consultas Assíncronas e Webhooks")
-// lista DF/ES/PB/RN/RS/SC/CE e ATPV-e como produtos desse fluxo, mas hoje só o CE
-// está liberado na nossa conta — as rotas apiclient/crlv-df, crlv-es, crlv-pb,
-// crlv-rn, crlv-rs, crlv-sc e atpve ainda não existem (respondem o 500 genérico
-// de rota inexistente do Spring, idêntico ao de um caminho inventado). Quando a
-// Vistocar liberar, habilitar cada uma é: rota em VISTOCAR_ENDPOINTS + serviço em
-// SERVICES + id aqui — o resto do fluxo (webhook, entrega, cobrança) já é genérico.
-const VISTOCAR_ASYNC_SVCS = new Set(['crlv-ce']);
+// HOJE A LISTA ESTÁ VAZIA: o CE, único que usava esse fluxo, passou para o CRLV-e
+// Agendado do portaldespachantes.online (ver PORTAL_AGENDADO_SVCS). O webhook e a
+// entrega continuam de pé de propósito — ainda existem pedidos antigos em
+// vistocar_pending para entregar, e habilitar outra UF volta a ser só: rota em
+// VISTOCAR_ENDPOINTS + serviço em SERVICES + id aqui.
+const VISTOCAR_ASYNC_SVCS = new Set();
 
 // Cache do token JWT da Vistocar em memória do processo — o login devolve um token
 // válido por 40 min (doc da Vistocar), então evitamos logar a cada consulta. Renova
@@ -516,25 +532,29 @@ const SERVICES = [
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ba', name:'CRLV-e Bahia (BA)',              group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
-  // API Vistocar (vistocarconsulta.com.br) — hoje a ÚNICA opção de CE no catálogo:
-  // substituiu o antigo "CRLV-e Agendado Ceará (CE)", que foi removido. Diferente
-  // dos outros endpoints Vistocar, este é ASSÍNCRONO: o POST em apiclient/crlv-ce
-  // só registra a consulta (devolve movementId e "CONSULTA PENDENTE") e o
-  // documento chega depois por webhook (ver POST /api/webhooks/vistocar). Por isso
-  // não entra no tratamento de resposta com pdfBase64 dos demais.
+  // Hoje a ÚNICA opção de CE no catálogo. Saiu da Vistocar (apiclient/crlv-ce,
+  // assíncrono por webhook) e passou para o CRLV-e Agendado do portal — mesmo
+  // nome e mesmo preço, ver PORTAL_AGENDADO_SVCS. O POST em
+  // /api/crlv-agendado/solicitar devolve um pedido_id e o documento sai depois:
+  // o cron de sempre (runCrlvAgendadoPendingCheck) acompanha o status, entrega o
+  // PDF por WhatsApp e estorna se não sair em 48h.
   { id:'crlv-ce', name:'CRLV-e Ceará (CE)', group:'CRLV-e Digital', basePrice:32.50, noMarkup:true, inputType:'placa', icon:'📄', uf:'ce',
-    slowNote:'Emissão assíncrona no Detran-CE: o pedido é registrado na hora e o documento chega pelo WhatsApp e no seu histórico assim que for emitido. Você só é cobrado quando o PDF sair.' },
+    slowNote:'Emissão agendada no Detran-CE: o pedido é registrado na hora e o documento chega pelo WhatsApp assim que for emitido. Se não sair em 48 horas, o valor volta automaticamente para o seu saldo.' },
+  // A outra ponta do CE, ao lado do agendado acima e pelo mesmo preço: aqui o
+  // portal devolve o PDF na hora (POST /consultar-crlv-ce com { placa }, doc
+  // "Documentação de Integração — 1 endpoint", 24/08/2026, ver PORTAL_PLACA_MAP).
+  // Quem pode esperar usa o agendado; quem precisa agora usa este.
+  { id:'crlv-ce-instantaneo', name:'CRLV-e Emissão Instantânea Ceará (CE)', group:'CRLV-e Digital', basePrice:32.50, noMarkup:true, inputType:'placa', icon:'⚡', uf:'ce' },
   { id:'consultar-crlv-go', name:'CRLV-e Goiás (GO)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ma', name:'CRLV-e Maranhão (MA)',           group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-mg', name:'CRLV-e Minas Gerais (MG)',       group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ms', name:'CRLV-e Mato Grosso do Sul (MS)',group:'CRLV-e Digital', basePrice:15.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-mt', name:'CRLV-e Mato Grosso (MT)',        group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
-  // API Vistocar (vistocarconsulta.com.br) — hoje a ÚNICA opção de PE no catálogo:
-  // substituiu de vez o antigo "CRLV-e Agendado Pernambuco (PE)", que foi removido.
-  // Mesmo padrão do CRLV 2 Rio Reemissão (auth JWT, POST apiclient/crlv-pe com
-  // { plate }, JSON com PDF pronto em base64, ver VISTOCAR_ENDPOINTS). Só placa —
-  // não pede renavam/CPF como os CRLV-e Digital da Chekaki. Preço fixo (noMarkup)
-  // definido pelo cliente.
+  // Hoje a ÚNICA opção de PE no catálogo: substituiu de vez o antigo "CRLV-e
+  // Agendado Pernambuco (PE)", que foi removido. Saiu da Vistocar e hoje é o
+  // portaldespachantes.online (POST /consultar-crlv-pe com { placa }, PDF pronto
+  // em bytes — ver PORTAL_PLACA_MAP). Só placa: não pede renavam/CPF como os
+  // CRLV-e Digital da Chekaki. Preço fixo (noMarkup) definido pelo cliente.
   { id:'crlv-pe-instantaneo', name:'CRLV-e Emissão Instantânea Pernambuco (PE)', group:'CRLV-e Digital', basePrice:35.00, noMarkup:true, inputType:'placa', icon:'⚡', uf:'pe' },
   { id:'consultar-crlv-pi', name:'CRLV-e Piauí (PI)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-pr', name:'CRLV-e Paraná (PR)',             group:'CRLV-e Digital', basePrice:15.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -6118,10 +6138,18 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     let method = 'POST';
     let body = params || {};
 
-    // CRLV Agendado: solicitar (demais UFs)
-    if (serviceId.startsWith('crlv-agendado-') && serviceId !== 'crlv-agendado-status') {
+    // CRLV Agendado: solicitar (demais UFs). Mesmo contrato nos dois hosts —
+    // só o CE (PORTAL_AGENDADO_SVCS) fala com o portaldespachantes.online.
+    if (isAgendadoSolicitar(serviceId)) {
       const svcDef = SERVICES.find(s => s.id === serviceId);
-      apiUrl = `${BASE_API_URL}/api/crlv-agendado/solicitar`;
+      // Os agendados do chekaki pedem placa OU CPF conforme a UF (ver inputType),
+      // então a validação de placa vale só para os do portal, que são só placa.
+      if (PORTAL_AGENDADO_SVCS.has(serviceId)) {
+        const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+        if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+        params = { ...params, placa };
+      }
+      apiUrl = `${agendadoBaseUrl(serviceId)}/api/crlv-agendado/solicitar`;
       body = { ...params, uf: svcDef?.uf || params.uf };
     }
     // CRLV Agendado: verificar status
@@ -6130,6 +6158,9 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       if (pid.startsWith('AUTOCRLV-')) {
         const code = pid.slice('AUTOCRLV-'.length);
         apiUrl = `https://autocrlv.com.br/cliente/api_integracao_crlv_agendado_status.php?code=${encodeURIComponent(code)}`;
+      } else if (pid.startsWith(PORTAL_PEDIDO_PREFIX)) {
+        // Pedido do portal (hoje o CE): o prefixo é nosso, a API só conhece o número.
+        apiUrl = `${PORTAL_BASE_URL}/api/crlv-agendado/${pid.slice(PORTAL_PEDIDO_PREFIX.length)}`;
       } else {
         apiUrl = `${BASE_API_URL}/api/crlv-agendado/${pid}`;
       }
@@ -6195,11 +6226,17 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       'consultar-crlv-rj':        'consultar-crlv-rj',
       'crlv-rj-reemissao-2':      'consultar-crlv-rj2',
       'crlv-rj-agendado':         'consultar-crlv-rj3',
+      // CRLV-e de Pernambuco (doc "Documentação de Integração — 2 endpoints",
+      // 24/08/2026), que era da Vistocar (apiclient/crlv-pe), e o do Ceará que
+      // sai na hora (doc de 1 endpoint) — o CE agendado é o crlv-ce, que segue
+      // por /api/crlv-agendado/solicitar.
+      'crlv-pe-instantaneo':      'consultar-crlv-pe',
+      'crlv-ce-instantaneo':      'consultar-crlv-ce',
     };
     if (PORTAL_PLACA_MAP[serviceId]) {
       const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
       if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
-      apiUrl = `https://portaldespachantes.online/${PORTAL_PLACA_MAP[serviceId]}`;
+      apiUrl = `${PORTAL_BASE_URL}/${PORTAL_PLACA_MAP[serviceId]}`;
       method = 'POST';
       body   = { placa };
     }
@@ -6510,7 +6547,9 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       fetchHeaders = { 'Content-Type': 'application/x-www-form-urlencoded' };
     } else if (apiUrl.startsWith('https://autocrlv.com.br/cliente/api_integracao_crlv_agendado')) {
       fetchHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AUTOCRLV_KEY}` };
-    } else if (PORTAL_PLACA_MAP[serviceId]) {
+    } else if (apiUrl.startsWith(PORTAL_BASE_URL)) {
+      // Cobre os três casos do portal: consulta com PDF na hora (PORTAL_PLACA_MAP),
+      // o solicitar do agendado e o "Ver Status" de um pedido PORTAL-.
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY };
     } else if (DESPBRASIL_SVCS[serviceId]) {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': DESPBRASIL_KEY };
@@ -6798,8 +6837,8 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       }
     }
 
-    // Serviço Vistocar (CRLV-e PE, Código de Segurança) — resposta em JSON com PDF
-    // pronto em base64 (mesmo padrão dos serviços em PDF_BASE64_SVCS).
+    // Serviço Vistocar (Código de Segurança) — resposta em JSON com PDF pronto
+    // em base64 (mesmo padrão dos serviços em PDF_BASE64_SVCS).
     if (VISTOCAR_ENDPOINTS[serviceId]) {
       let parsed;
       try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
@@ -7021,16 +7060,16 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           const fileName = `${DESPBRASIL_SVCS[serviceId].servico}-${placa || 'doc'}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
         }
-        // Envia PDF via WhatsApp para os CRLV-e do Rio que não começam com
-        // "consultar-crlv-" (o da regra acima) — Reemissão 2 e Agendado, hoje
-        // também no portaldespachantes.online.
-        if (CRLV_RJ_PORTAL_SVCS.has(serviceId) && user.phone) {
+        // Envia PDF via WhatsApp para os CRLV-e do portal cujo id não começa
+        // com "consultar-crlv-" (o da regra acima) — Rio Reemissão 2, Rio
+        // Agendado e Pernambuco.
+        if (CRLV_PORTAL_PDF_SVCS.has(serviceId) && user.phone) {
           const placa = (params?.placa || '').toUpperCase();
           const caption = `✅ *${service.name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
           const fileName = `${serviceId}-${placa || 'doc'}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
         }
-        // Envia PDF via WhatsApp para serviços Vistocar (CRLV-e PE, Código de Segurança)
+        // Envia PDF via WhatsApp para serviços Vistocar (Código de Segurança)
         if (VISTOCAR_ENDPOINTS[serviceId] && user.phone) {
           const placa = (params?.placa || '').toUpperCase();
           const caption = `✅ *${service.name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
@@ -7054,11 +7093,25 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       const data = genericData;
 
       // WhatsApp para CRLV-e Agendado (não é verificação de status)
-      if (serviceId.startsWith('crlv-agendado-') && serviceId !== 'crlv-agendado-status' && user.phone) {
+      if (isAgendadoSolicitar(serviceId) && user.phone) {
         // Tenta múltiplos caminhos pois o endpoint /solicitar pode retornar estrutura variada
         const pedido = data?.pedido || data?.data?.pedido || {};
         const svcData = data?.servico || data?.data?.servico || {};
-        const pedidoId = pedido.id ?? pedido.pedido_id ?? data?.id ?? data?.pedido_id ?? data?.data?.id ?? '-';
+        const pedidoIdCru = pedido.id ?? pedido.pedido_id ?? data?.id ?? data?.pedido_id ?? data?.data?.id ?? '-';
+        // O portal numera os pedidos igual ao chekaki, então o id sozinho não diz
+        // a quem perguntar o status depois. O prefixo resolve isso — e vai também
+        // para a resposta que aparece na tela e fica no histórico, senão o cliente
+        // copiaria dali o número cru e o "Ver Status" perguntaria no host errado.
+        const ehPortal = PORTAL_AGENDADO_SVCS.has(serviceId) && pedidoIdCru !== '-';
+        const pedidoId = ehPortal ? PORTAL_PEDIDO_PREFIX + pedidoIdCru : pedidoIdCru;
+        if (ehPortal && data && typeof data === 'object') {
+          if (data.pedido_id !== undefined) data.pedido_id = pedidoId;
+          if (data.id !== undefined)        data.id        = pedidoId;
+          if (data.pedido && typeof data.pedido === 'object') {
+            if (data.pedido.id !== undefined)        data.pedido.id        = pedidoId;
+            if (data.pedido.pedido_id !== undefined) data.pedido.pedido_id = pedidoId;
+          }
+        }
         const placa = (pedido.placa || data?.placa || params?.placa || '-').toString().toUpperCase();
         const uf = (pedido.uf || data?.uf || service.uf || '-').toString().toUpperCase();
         const status = pedido.status_normalizado || pedido.status || data?.status || 'pendente';
@@ -7104,7 +7157,8 @@ async function processCatalogQuery(userId, serviceId, params, res) {
               'SELECT 1 FROM crlv_agendado_notifications WHERE pedido_id=$1', [pedidoIdNotif]
             );
             if (already.rows.length === 0) {
-              const fullUrl = /^https?:\/\//i.test(pdfPath) ? pdfPath : 'https://chekaki.online' + pdfPath;
+              // pdf_url costuma vir relativo — a base é o host que emitiu o pedido.
+              const fullUrl = /^https?:\/\//i.test(pdfPath) ? pdfPath : agendadoHostDoPedido(pedidoIdNotif) + pdfPath;
               const pdfApiRes = await fetch(fullUrl);
               if (pdfApiRes.ok) {
                 const pdfBuf = Buffer.from(await pdfApiRes.arrayBuffer());
@@ -7185,7 +7239,7 @@ async function runCrlvRj2General(req, res) {
   try {
     let bodyBuffer;
     try {
-      const apiRes = await fetch('https://portaldespachantes.online/consultar-crlv-rj2', {
+      const apiRes = await fetch(`${PORTAL_BASE_URL}/consultar-crlv-rj2`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY },
         body: JSON.stringify({ placa }),
@@ -10767,6 +10821,10 @@ async function checkCrlvAgendadoStatus(pedidoId) {
     const code = pid.slice('AUTOCRLV-'.length);
     apiUrl  = `https://autocrlv.com.br/cliente/api_integracao_crlv_agendado_status.php?code=${encodeURIComponent(code)}`;
     headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${AUTOCRLV_KEY}` };
+  } else if (pid.startsWith(PORTAL_PEDIDO_PREFIX)) {
+    // Pedido do portal (hoje o CE): o prefixo é nosso, a API só conhece o número.
+    apiUrl  = `${PORTAL_BASE_URL}/api/crlv-agendado/${pid.slice(PORTAL_PEDIDO_PREFIX.length)}`;
+    headers = { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY };
   } else {
     apiUrl  = `${BASE_API_URL}/api/crlv-agendado/${pid}`;
     headers = { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO };
@@ -10804,7 +10862,7 @@ async function runCrlvAgendadoPendingCheck() {
 
       const status = await checkCrlvAgendadoStatus(row.pedido_id);
       if (status?.podeBaixar && status.pdfPath && row.phone) {
-        const fullUrl = /^https?:\/\//i.test(status.pdfPath) ? status.pdfPath : 'https://chekaki.online' + status.pdfPath;
+        const fullUrl = /^https?:\/\//i.test(status.pdfPath) ? status.pdfPath : agendadoHostDoPedido(row.pedido_id) + status.pdfPath;
         const pdfApiRes = await fetch(fullUrl);
         if (pdfApiRes.ok) {
           const pdfBuf = Buffer.from(await pdfApiRes.arrayBuffer());

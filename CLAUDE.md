@@ -35,13 +35,29 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 | Infosimples | `https://api.infosimples.com/api/v2/consultas` | `INFOSIMPLES_TOKEN` |
 | Despbrasil (CRLV Rio Reemissão, Código de Segurança CRV) | `https://despbrasil.com.br/functions/apiConsulta` | header `chaveAcesso` (`DESPBRASIL_KEY`), ver `DESPBRASIL_SVCS` |
 | Consultas Fácil (CRLV Rio Reemissão v2) | `https://www.consultasfacil.net` | header `chaveAcesso` (`CONSULTASFACIL_KEY`) |
-| Vistocar (Débitos e Documentação, CRLV-e CE/PE) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
+| Vistocar (Débitos e Documentação, Código de Segurança CRV) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
 | Mercado Pago (PIX) | `https://api.mercadopago.com` | `MP_ACCESS_TOKEN` |
 | Z-API (WhatsApp) | `https://api.z-api.io` | `ZAPI_*` |
 
-### Grupo "CRLV-e Rio de Janeiro"
+### CRLV-e no Portal Despachantes
 
-Os três serviços do grupo saem da mesma API do Portal Despachantes (doc "Documentação de Integração — 3 endpoints", 24/08/2026), com o mesmo contrato: `POST { placa }`, header `chaveAcesso`, PDF pronto em bytes na resposta e JSON `{ error }` no erro. `consultar-crlv-rj` → `/consultar-crlv-rj` (R$ 20,00), `crlv-rj-reemissao-2` → `/consultar-crlv-rj2` (R$ 55,00, era Vistocar `apiclient/crlv-rj`) e `crlv-rj-agendado` → `/consultar-crlv-rj3` (R$ 20,00). Ligar/mudar cada um é uma linha em `PORTAL_PLACA_MAP`; o envio do PDF por WhatsApp usa o prefixo `consultar-crlv-`, então os ids fora desse padrão ficam em `CRLV_RJ_PORTAL_SVCS`. A chave Geral (pós-paga) do `crlv-rj-reemissao-2` usa a mesma rota do portal em `runCrlvRj2General`.
+Quase todo o CRLV-e do catálogo saiu para o `portaldespachantes.online` (docs "Documentação de Integração", 24/08/2026). Dois contratos, os dois com header `chaveAcesso` (`PORTAL_DESP_KEY`):
+
+**PDF na hora** — `POST { placa }` e o PDF pronto em bytes; erro é JSON `{ error }`. Ligar/mudar um é uma linha em `PORTAL_PLACA_MAP`:
+
+| Serviço | Rota | Preço |
+|---|---|---|
+| `consultar-crlv-rj` | `/consultar-crlv-rj` | R$ 20,00 |
+| `crlv-rj-reemissao-2` | `/consultar-crlv-rj2` | R$ 55,00 |
+| `crlv-rj-agendado` | `/consultar-crlv-rj3` | R$ 20,00 |
+| `crlv-pe-instantaneo` | `/consultar-crlv-pe` | R$ 35,00 |
+| `crlv-ce-instantaneo` | `/consultar-crlv-ce` | R$ 32,50 |
+
+O envio do PDF por WhatsApp é decidido pelo prefixo `consultar-crlv-`, então os ids fora desse padrão precisam estar em `CRLV_PORTAL_PDF_SVCS` — esquecer disso não quebra a consulta, só faz o cliente parar de receber o documento no WhatsApp. A chave Geral (pós-paga) do `crlv-rj-reemissao-2` usa a mesma rota em `runCrlvRj2General`.
+
+**CRLV-e Agendado** (`PORTAL_AGENDADO_SVCS`, hoje só `crlv-ce`, R$ 32,50) — mesmo contrato dos agendados da Chekaki (`POST /api/crlv-agendado/solicitar` → `pedido_id`; `GET /api/crlv-agendado/:id` → status; `GET .../:id/pdf`), só muda o host e a chave, então reaproveita `crlv_agendado_pending` e o cron `runCrlvAgendadoPendingCheck` (entrega por WhatsApp, estorno em 48h). O `pedido_id` do portal é numérico igual ao da Chekaki: ele é gravado, exibido e devolvido na resposta com o prefixo `PORTAL-` (`PORTAL_PEDIDO_PREFIX`, mesma convenção do `AUTOCRLV-`) — é isso que faz o "Ver Status" e o cron perguntarem no host certo, inclusive quando o cliente copia o id da tela.
+
+O CE saiu da Vistocar (`apiclient/crlv-ce` + webhook), então `VISTOCAR_ASYNC_SVCS` está vazio hoje — o webhook e a entrega continuam de pé para os pedidos antigos ainda em `vistocar_pending`.
 
 ## Fluxo de /api/query (padrão importante)
 
@@ -68,7 +84,7 @@ Os três serviços do grupo saem da mesma API do Portal Despachantes (doc "Docum
 - Validação de entrada sempre no servidor antes de chamar a upstream (placa 7 chars, renavam 11 dígitos, CPF 11/CNPJ 14, etc.), com mensagem de erro específica em português.
 - Nunca logar CPF/CNPJ completos — use máscara (ver `maskDoc` no payload de comunicação de venda).
 - Crons (Vercel): `/api/cron/broadcast-whatsapp`, `/api/cron/crlv-agendado-status` (roda também `runVistocarPendingCleanup`), `/api/cron/pix-reconcile`.
-- **Consultas assíncronas da Vistocar** (`VISTOCAR_ASYNC_SVCS` — hoje só `crlv-ce`): o POST em `apiclient/crlv-ce` só registra a consulta (devolve `movementId`) e a Vistocar notifica `POST /api/webhooks/vistocar` com `consulta.pendente`/`consulta.atualizada`. A notificação **não traz o PDF** — quando `data.resultAvailable` é true, o documento é buscado em `GET /apiclient/consult/:movementId` com o JWT de sempre (`entregarResultadoVistocar`). A consulta fica `aguardando_pdf` e **só é cobrada na entrega** (`finalizePendingQuery`). O endpoint é cadastrado pela própria API (`registrarWebhookVistocar` → `POST /apiclient/webhook/save`, rotas admin `/api/admin/vistocar-webhook`) e a `chaveSeguranca` fica na tabela `vistocar_webhook_config`, não em variável de ambiente; ela valida o header `X-Webhook-Signature` (HMAC-SHA256 do corpo bruto + timestamp — daí o `verify` no `express.json`). Reenvios são deduplicados por `event_id`. `runVistocarPendingCheck` (no cron do CRLV) rebusca o resultado das pendências, cobrindo notificação perdida, e cancela sem cobrar depois de 48h. A doc da Vistocar lista DF/ES/PB/RN/RS/SC e ATPV-e como produtos desse mesmo fluxo, **mas essas rotas ainda não existem na nossa conta** (21/08/2026: `apiclient/crlv-df`, `crlv-es`, `crlv-pb`, `crlv-rn`, `crlv-rs`, `crlv-sc`, `atpve` respondem o 500 genérico do Spring, idêntico ao de um caminho inventado — só `crlv-ce`/`crlv-pe`/`crlv-rj`/`base-estadual`/`completa`/`dossie-veicular` devolvem o envelope da aplicação). Quando forem liberadas, habilitar cada uma é: rota em `VISTOCAR_ENDPOINTS` + serviço em `SERVICES` + id em `VISTOCAR_ASYNC_SVCS` — não precisa de bloco novo em `processCatalogQuery`.
+- **Consultas assíncronas da Vistocar** (`VISTOCAR_ASYNC_SVCS` — **hoje vazio**, o CE migrou para o Portal Despachantes; o fluxo abaixo segue de pé para os pedidos antigos e para habilitar outra UF): o POST em `apiclient/<uf>` só registra a consulta (devolve `movementId`) e a Vistocar notifica `POST /api/webhooks/vistocar` com `consulta.pendente`/`consulta.atualizada`. A notificação **não traz o PDF** — quando `data.resultAvailable` é true, o documento é buscado em `GET /apiclient/consult/:movementId` com o JWT de sempre (`entregarResultadoVistocar`). A consulta fica `aguardando_pdf` e **só é cobrada na entrega** (`finalizePendingQuery`). O endpoint é cadastrado pela própria API (`registrarWebhookVistocar` → `POST /apiclient/webhook/save`, rotas admin `/api/admin/vistocar-webhook`) e a `chaveSeguranca` fica na tabela `vistocar_webhook_config`, não em variável de ambiente; ela valida o header `X-Webhook-Signature` (HMAC-SHA256 do corpo bruto + timestamp — daí o `verify` no `express.json`). Reenvios são deduplicados por `event_id`. `runVistocarPendingCheck` (no cron do CRLV) rebusca o resultado das pendências, cobrindo notificação perdida, e cancela sem cobrar depois de 48h. A doc da Vistocar lista DF/ES/PB/RN/RS/SC e ATPV-e como produtos desse mesmo fluxo, **mas essas rotas ainda não existem na nossa conta** (21/08/2026: `apiclient/crlv-df`, `crlv-es`, `crlv-pb`, `crlv-rn`, `crlv-rs`, `crlv-sc`, `atpve` respondem o 500 genérico do Spring, idêntico ao de um caminho inventado — só `crlv-ce`/`crlv-pe`/`crlv-rj`/`base-estadual`/`completa`/`dossie-veicular` devolvem o envelope da aplicação). Quando forem liberadas, habilitar cada uma é: rota em `VISTOCAR_ENDPOINTS` + serviço em `SERVICES` + id em `VISTOCAR_ASYNC_SVCS` — não precisa de bloco novo em `processCatalogQuery`.
 
 ### Aba "Visão Geral" (painel-usuario.html)
 
@@ -76,7 +92,7 @@ A Visão Geral é a **vitrine de consultas**, não um menu de atalhos: abaixo do
 
 ### Aba "Consultas Extras" (painel-usuario.html)
 
-Vitrine que reúne num lugar só os CRLV-e que **não saem na hora** (DF, ES, PB, RN, RS, SC, CE) mais o ATPV-e — os produtos que a doc da Vistocar trata como assíncronos. É só front-end: `EXTRAS_SERVICE_IDS` aponta para os serviços que atendem cada UF hoje (Chekaki no `crlv-agendado-*`, Datacube no `dc-crlve-rs-v2`, Vistocar no `crlv-ce`), que continuam também nas abas de origem — nada é duplicado no catálogo. O ATPV-e é um atalho para a aba "Intenção de Venda (ATPVE)", que tem formulário próprio. O formulário/resultado é o mesmo `#query-form-host` das abas "Acesse Aqui..." e "Coisas de Despachantes" (ver `FORM_SLOTS` em `showSection`).
+Vitrine que reúne num lugar só os CRLV-e que **não saem na hora** (DF, ES, PB, RN, RS, SC, CE) mais o ATPV-e — os produtos que a doc da Vistocar trata como assíncronos. É só front-end: `EXTRAS_SERVICE_IDS` aponta para os serviços que atendem cada UF hoje (Chekaki no `crlv-agendado-*`, Datacube no `dc-crlve-rs-v2`, Portal Despachantes no `crlv-ce` e no `crlv-rj-agendado`), que continuam também nas abas de origem — nada é duplicado no catálogo. O ATPV-e é um atalho para a aba "Intenção de Venda (ATPVE)", que tem formulário próprio. O formulário/resultado é o mesmo `#query-form-host` das abas "Acesse Aqui..." e "Coisas de Despachantes" (ver `FORM_SLOTS` em `showSection`).
 
 ## Variáveis de ambiente (.env)
 
