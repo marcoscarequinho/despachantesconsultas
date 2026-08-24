@@ -51,6 +51,7 @@
     .cat-chip .cat-chip-n { font-size:.7rem;opacity:.7;font-weight:700; }
     .svc-card { display:flex;flex-direction:column;gap:.45rem;height:100%;text-align:left;background:#fff;border:1px solid #e5e7eb;border-radius:.75rem;padding:.9rem;cursor:pointer;transition:.15s; }
     .svc-card:hover { border-color:var(--accent);box-shadow:0 6px 16px rgba(0,0,0,.08);transform:translateY(-2px); }
+    .svc-card-destaque { border-color:#fdba74;background:linear-gradient(180deg,#fff7ed,#fff); }
     .svc-card-title { font-weight:700;font-size:.85rem;line-height:1.25;color:#111827; }
     .svc-cta { margin-top:auto;display:block;text-align:center;background:#eff6ff;color:var(--primary);font-weight:700;font-size:.78rem;padding:.45rem;border-radius:.5rem;transition:.15s; }
     .svc-card:hover .svc-cta { background:var(--primary);color:#fff; }
@@ -2485,9 +2486,19 @@ function requery(serviceId, paramsJson) {
 // Histórico, Preços) ficam só no menu lateral, cada um com sua cor.
 let catalogFilter = 'all';
 
+// Consultas que sobem para o bloco "⭐ Destaques", no topo do catálogo. O card
+// sai do bloco do grupo dele e aparece só aqui — nada é duplicado, e os chips
+// continuam contando pelo grupo real do serviço. Destacar outra consulta é
+// acrescentar o id nesta lista.
+const CATALOG_DESTAQUES = [
+  'consultar-Numero-ATPVE',   // Reemissão da ATPVe Com Comunicação de Venda
+];
+const CATALOG_GRUPO_DESTAQUE = 'Destaques';
+
 // Ordem dos blocos. Grupo que exista no catálogo e não esteja aqui vai para o
 // fim, na ordem do servidor — grupo novo no server.js aparece sozinho.
 const CATALOG_GROUP_ORDER = [
+  CATALOG_GRUPO_DESTAQUE,
   'CRLV-e Rio de Janeiro',
   'CRLV-e Digital',
   'CRLV-e Agendado',
@@ -2510,6 +2521,7 @@ const CATALOG_GROUP_ORDER = [
 // badge = selo do card; serve para separar na hora o que sai na hora do que é
 // agendado, que é a dúvida que mais chega no suporte.
 const CATALOG_GROUP_META = {
+  'Destaques':              { icon:'⭐', badge:'⭐ Destaque',   badgeClass:'bg-orange-100 text-orange-700' },
   'CRLV-e Rio de Janeiro':  { icon:'📄', badge:'⚡ Na hora',    badgeClass:'bg-orange-100 text-orange-700' },
   'CRLV-e Digital':         { icon:'📄' },
   'CRLV-e Agendado':        { icon:'⏳', badge:'⏳ Agendado',   badgeClass:'bg-amber-100 text-amber-800' },
@@ -2531,6 +2543,13 @@ const CATALOG_GROUP_META = {
 
 // Busca sem acento e sem caixa: "debito rj" acha "Débitos RJ".
 const catNorm = s => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+// Bloco em que o card é desenhado — igual ao grupo do serviço, menos para os
+// destaques. O filtro por chip continua olhando s.group, então filtrar
+// "Débitos e Documentação" mostra o destaque dele lá em cima, sem furo na conta.
+function catalogGroupOf(s) {
+  return CATALOG_DESTAQUES.includes(s.id) ? CATALOG_GRUPO_DESTAQUE : s.group;
+}
 
 function catalogGroupRank(g) {
   const i = CATALOG_GROUP_ORDER.indexOf(g);
@@ -2608,8 +2627,9 @@ function renderCatalog() {
 
   const porGrupo = new Map();
   svcs.forEach(s => {
-    if (!porGrupo.has(s.group)) porGrupo.set(s.group, []);
-    porGrupo.get(s.group).push(s);
+    const g = catalogGroupOf(s);
+    if (!porGrupo.has(g)) porGrupo.set(g, []);
+    porGrupo.get(g).push(s);
   });
 
   grid.innerHTML = [...porGrupo.keys()]
@@ -2633,13 +2653,14 @@ function renderCatalog() {
 }
 
 function catalogCard(s) {
-  const meta    = CATALOG_GROUP_META[s.group] || {};
-  const entrada = inputTypeLabel(s.inputType).replace(/^Entrada:\s*/, '');
+  const destaque = CATALOG_DESTAQUES.includes(s.id);
+  const meta     = CATALOG_GROUP_META[catalogGroupOf(s)] || {};
+  const entrada  = inputTypeLabel(s.inputType).replace(/^Entrada:\s*/, '');
   const selo = s.unavailable
     ? '<span class="svc-badge bg-gray-200 text-gray-600">Indisponível</span>'
     : (meta.badge ? `<span class="svc-badge ${meta.badgeClass}">${meta.badge}</span>` : '');
   return `
-    <button type="button" class="svc-card" onclick="openCatalogService('${s.id}')">
+    <button type="button" class="svc-card ${destaque ? 'svc-card-destaque' : ''}" onclick="openCatalogService('${s.id}')">
       <div class="flex items-start gap-2">
         <span class="text-lg leading-none flex-shrink-0">${s.icon || '📌'}</span>
         <span class="svc-card-title flex-1">${escapeHtml(s.name)}</span>
