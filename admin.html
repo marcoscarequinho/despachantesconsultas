@@ -44,6 +44,10 @@
     .spin { animation:spin .9s linear infinite; }
     @keyframes spin { 0%{transform:rotate(0deg)} 100%{transform:rotate(360deg)} }
   </style>
+  <!-- Tema claro/escuro: a folha reescreve as cores em html.dark e o script
+       aplica a classe antes da primeira pintura. Ver assets/tema.css. -->
+  <link rel="stylesheet" href="/assets/tema.css">
+  <script src="/assets/tema.js"></script>
 </head>
 <body class="bg-gray-100 min-h-screen">
 

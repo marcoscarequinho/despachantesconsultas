@@ -1,0 +1,224 @@
+/* ── Tema escuro (opcional) ────────────────────────────────────────────────────
+ *
+ * O site é Tailwind via CDN + classes próprias com cor fixa no <style> de cada
+ * página, então NÃO existe a variante `dark:` do Tailwind aqui. Em vez de
+ * espalhar `dark:` por 1900 usos de classe de cor em 8 arquivos, esta folha
+ * reescreve as cores que já estão em uso, escopadas em `html.dark`.
+ *
+ * Especificidade: `html.dark .bg-white` é (0,2,1) contra (0,1,0) da classe do
+ * Tailwind, então vence sem precisar de `!important`. Só onde a regra original
+ * também é composta (hover, `.svc-card:hover .svc-cta`) é que a repetimos.
+ *
+ * REGRA AO EDITAR: cinza 700/800/900 de FUNDO (sidebar, modais escuros) já é
+ * escuro no tema claro e fica como está — remapear isso clareia justamente o
+ * que já estava certo. Só os fundos claros (white, gray-50/100/200) e os TEXTOS
+ * escuros é que invertem.
+ *
+ * Quem liga/desliga é o assets/tema.js.
+ */
+
+html.dark {
+  color-scheme: dark;          /* barra de rolagem, date picker e afins nativos */
+
+  --t-bg:        #0f172a;      /* fundo da página */
+  --t-surface:   #1b2537;      /* card, modal, tabela */
+  --t-surface-2: #24304a;      /* hover / faixa alternada */
+  --t-surface-3: #2d3a56;      /* controle destacado */
+  --t-border:    #334155;
+  --t-border-2:  #3f4c63;
+
+  --t-text:      #e6edf7;      /* título e valor */
+  --t-text-2:    #c3cddd;      /* corpo */
+  --t-text-3:    #a8b4c6;      /* rótulo, legenda */
+  /* Não escurecer mais que isto: text-gray-400 é a classe de cor mais usada do
+   * site (172 vezes) e a #7b8798 que estava aqui dava contraste 4.22 sobre o
+   * card — abaixo dos 4.5 de WCAG AA. */
+  --t-text-4:    #949fb1;      /* ícone apagado, placeholder */
+}
+
+/* ── Base ─────────────────────────────────────────────────────────────────── */
+html.dark body { background-color: var(--t-bg); color: var(--t-text-2); }
+
+html.dark .bg-white,
+html.dark .bg-gray-50,
+html.dark .bg-gray-100,
+html.dark .bg-slate-50,
+html.dark .bg-slate-100   { background-color: var(--t-surface); }
+html.dark .bg-gray-200,
+html.dark .bg-gray-300,
+html.dark .bg-slate-200   { background-color: var(--t-surface-3); }
+
+/* Fundo da página: as três telas grandes usam bg-gray-100 no <body>, que a
+ * regra acima transformaria em cor de card — o body precisa ser mais escuro
+ * que os cards que ele carrega. */
+html.dark body.bg-gray-100,
+html.dark body.bg-gray-50 { background-color: var(--t-bg); }
+
+/* ── Texto ────────────────────────────────────────────────────────────────── */
+html.dark .text-gray-900, html.dark .text-slate-900,
+html.dark .text-gray-800, html.dark .text-slate-800 { color: var(--t-text); }
+html.dark .text-gray-700, html.dark .text-slate-700,
+html.dark .text-gray-600, html.dark .text-slate-600 { color: var(--t-text-2); }
+html.dark .text-gray-500, html.dark .text-slate-500 { color: var(--t-text-3); }
+html.dark .text-gray-400, html.dark .text-slate-400,
+html.dark .text-gray-300                            { color: var(--t-text-4); }
+html.dark .text-black                               { color: var(--t-text); }
+
+/* ── Bordas e divisores ───────────────────────────────────────────────────── */
+html.dark .border-gray-100, html.dark .border-gray-200,
+html.dark .border-gray-300, html.dark .border-slate-100,
+html.dark .border-slate-200                     { border-color: var(--t-border); }
+html.dark .divide-gray-50  > :not([hidden]) ~ :not([hidden]),
+html.dark .divide-gray-100 > :not([hidden]) ~ :not([hidden]),
+html.dark .divide-gray-200 > :not([hidden]) ~ :not([hidden]) { border-color: var(--t-border); }
+
+/* ── Painéis coloridos (aviso, erro, sucesso, dica) ───────────────────────────
+ * O padrão do site é bg-<cor>-50 + border-<cor>-200 + text-<cor>-700/800. No
+ * escuro isso vira um véu translúcido da mesma cor sobre o card, para o painel
+ * continuar se destacando sem virar um bloco chapado e berrante. */
+html.dark .bg-red-50    { background-color: rgba(248,113,113,.13); }
+html.dark .bg-amber-50,
+html.dark .bg-yellow-50 { background-color: rgba(251,191,36,.13); }
+html.dark .bg-green-50,
+html.dark .bg-emerald-50{ background-color: rgba(74,222,128,.13); }
+html.dark .bg-blue-50,
+html.dark .bg-sky-50    { background-color: rgba(96,165,250,.13); }
+html.dark .bg-orange-50 { background-color: rgba(251,146,60,.13); }
+html.dark .bg-purple-50,
+html.dark .bg-violet-50 { background-color: rgba(192,132,252,.13); }
+html.dark .bg-indigo-50 { background-color: rgba(129,140,248,.13); }
+
+html.dark .bg-red-100    { background-color: rgba(248,113,113,.2); }
+html.dark .bg-amber-100,
+html.dark .bg-yellow-100 { background-color: rgba(251,191,36,.2); }
+html.dark .bg-green-100,
+html.dark .bg-emerald-100{ background-color: rgba(74,222,128,.2); }
+html.dark .bg-blue-100   { background-color: rgba(96,165,250,.2); }
+html.dark .bg-orange-100 { background-color: rgba(251,146,60,.2); }
+html.dark .bg-purple-100 { background-color: rgba(192,132,252,.2); }
+
+html.dark .border-red-200,    html.dark .border-red-300    { border-color: rgba(248,113,113,.4); }
+html.dark .border-amber-200,  html.dark .border-yellow-200 { border-color: rgba(251,191,36,.4); }
+html.dark .border-green-200,  html.dark .border-emerald-200{ border-color: rgba(74,222,128,.4); }
+html.dark .border-blue-200,   html.dark .border-sky-200    { border-color: rgba(96,165,250,.4); }
+html.dark .border-orange-200, html.dark .border-orange-300 { border-color: rgba(251,146,60,.4); }
+html.dark .border-purple-200, html.dark .border-indigo-200 { border-color: rgba(192,132,252,.4); }
+
+/* Texto colorido: os tons 600-900 são feitos para fundo branco e somem no
+ * escuro — sobem para a faixa 300/400, que tem contraste sobre o card. */
+html.dark .text-red-500,    html.dark .text-rose-500                                   { color: #fca5a5; }
+html.dark .text-amber-500,  html.dark .text-yellow-500                                 { color: #fcd34d; }
+html.dark .text-green-500,  html.dark .text-emerald-500                                { color: #6ee7a8; }
+html.dark .text-blue-500,   html.dark .text-sky-500                                    { color: #93c5fd; }
+html.dark .text-orange-500                                                             { color: #fdba74; }
+html.dark .text-purple-500                                                             { color: #d8b4fe; }
+
+html.dark .text-red-600,    html.dark .text-red-700,    html.dark .text-red-800    { color: #fca5a5; }
+html.dark .text-amber-600,  html.dark .text-amber-700,  html.dark .text-amber-800,
+html.dark .text-yellow-600, html.dark .text-yellow-700, html.dark .text-yellow-800 { color: #fcd34d; }
+html.dark .text-green-600,  html.dark .text-green-700,  html.dark .text-green-800,
+html.dark .text-emerald-600,html.dark .text-emerald-700                            { color: #6ee7a8; }
+html.dark .text-blue-600,   html.dark .text-blue-700,   html.dark .text-blue-800,
+html.dark .text-blue-900,   html.dark .text-sky-600,    html.dark .text-indigo-600 { color: #93c5fd; }
+html.dark .text-orange-600, html.dark .text-orange-700                             { color: #fdba74; }
+html.dark .text-purple-600, html.dark .text-purple-700,
+html.dark .text-violet-600                                                         { color: #d8b4fe; }
+
+/* ── Gradientes que terminam em branco/cinza claro ────────────────────────── */
+html.dark .to-white     { --tw-gradient-to: var(--t-surface) var(--tw-gradient-to-position); }
+html.dark .from-white   { --tw-gradient-from: var(--t-surface) var(--tw-gradient-from-position); }
+html.dark .to-gray-50,
+html.dark .to-gray-100  { --tw-gradient-to: var(--t-surface-2) var(--tw-gradient-to-position); }
+html.dark .from-gray-50,
+html.dark .from-gray-100{ --tw-gradient-from: var(--t-surface-2) var(--tw-gradient-from-position); }
+
+/* ── Classes próprias das páginas ─────────────────────────────────────────── */
+html.dark .card,
+html.dark .stat-card,
+html.dark .modal-box     { background: var(--t-surface); box-shadow: 0 1px 3px rgba(0,0,0,.5); }
+html.dark .card,
+html.dark .stat-card     { color: var(--t-text-2); }
+
+/* Campo sem a classe .input-field (o login e o cadastro estilizam o input só com
+ * utilitários do Tailwind): o branco vem da folha do navegador, não de uma
+ * classe, então nenhum remapeamento de classe pegaria. */
+html.dark input:not([type=checkbox]):not([type=radio]):not([type=range]),
+html.dark select,
+html.dark textarea       { background-color: #16202f; color: var(--t-text); border-color: var(--t-border-2); }
+html.dark input::placeholder,
+html.dark textarea::placeholder { color: var(--t-text-4); }
+
+html.dark .input-field   { background: #16202f; border-color: var(--t-border-2); color: var(--t-text); }
+html.dark .input-field::placeholder { color: var(--t-text-4); }
+html.dark .input-field:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px rgba(96,165,250,.2); }
+html.dark .label         { color: var(--t-text-2); }
+html.dark select.input-field option { background: #16202f; color: var(--t-text); }
+
+html.dark .btn-ghost         { color: var(--t-text-3); }
+html.dark .btn-ghost:hover   { background: var(--t-surface-2); color: var(--t-text); }
+html.dark .btn-outline       { border-color: var(--t-border-2); color: var(--t-text-2); }
+
+html.dark .badge-green  { background: rgba(74,222,128,.18);  color: #6ee7a8; }
+html.dark .badge-red    { background: rgba(248,113,113,.18); color: #fca5a5; }
+html.dark .badge-blue   { background: rgba(96,165,250,.18);  color: #93c5fd; }
+html.dark .badge-amber  { background: rgba(251,191,36,.18);  color: #fcd34d; }
+html.dark .badge-purple { background: rgba(192,132,252,.18); color: #d8b4fe; }
+
+html.dark .table-row:hover td { background: var(--t-surface-2); }
+html.dark .skeleton { background: linear-gradient(90deg,#232f45 25%,#2d3a56 50%,#232f45 75%); background-size: 200% 100%; }
+html.dark .action-btn.bg-gray-100 { background: var(--t-surface-3); color: var(--t-text-2); }
+html.dark .action-btn.bg-gray-100:hover { background: var(--t-border-2); }
+
+html.dark .service-cat        { border-color: var(--t-border-2); }
+html.dark .service-cat:hover,
+html.dark .service-cat.selected { background: rgba(251,146,60,.12); }
+
+html.dark .result-card  { background: rgba(74,222,128,.1); border-color: rgba(74,222,128,.35); }
+html.dark .result-label { color: var(--t-text-3); }
+html.dark .result-value { color: var(--t-text); }
+
+html.dark .cat-chip       { background: var(--t-surface-2); color: var(--t-text-2); border-color: var(--t-border-2); }
+html.dark .cat-chip:hover { background: var(--t-surface-3); color: var(--t-text); }
+/* .cat-chip.active usa var(--primary), que continua legível no escuro. */
+
+html.dark .svc-card        { background: var(--t-surface); border-color: var(--t-border); }
+html.dark .svc-card:hover  { box-shadow: 0 6px 16px rgba(0,0,0,.5); }
+html.dark .svc-card-title  { color: var(--t-text); }
+html.dark .svc-card-destaque { border-color: rgba(251,146,60,.5);
+  background: linear-gradient(180deg, rgba(251,146,60,.14), var(--t-surface)); }
+html.dark .svc-cta         { background: rgba(96,165,250,.14); color: #93c5fd; }
+html.dark .svc-card:hover .svc-cta { background: #2563eb; color: #fff; }
+
+/* Landing e cadastro/login carregam o styles.css externo, cujas classes têm cor
+ * fixa e não aparecem em nenhum <style> inline — foi o que deixou os cards de
+ * recurso e o FAQ brancos no escuro. */
+html.dark .feature-card,
+html.dark .legal-content     { background: var(--t-surface); color: var(--t-text-2); box-shadow: 0 4px 6px rgba(0,0,0,.45); }
+html.dark .feature-card:hover{ box-shadow: 0 8px 12px rgba(0,0,0,.55); }
+html.dark .legal-section     { background: var(--t-bg); }
+html.dark .faq-item          { border-color: var(--t-border); }
+html.dark .faq-question      { background: var(--t-surface-2); color: var(--t-text); }
+html.dark .faq-question:hover{ background: var(--t-surface-3); }
+html.dark .faq-answer        { background: var(--t-surface); color: var(--t-text-2); }
+html.dark .faq-icon          { color: var(--t-text-3); }
+html.dark #price-frame::-webkit-scrollbar-track { background: var(--t-surface-2); }
+html.dark #price-frame::-webkit-scrollbar-thumb { background: var(--t-border-2); }
+
+html.dark .price-group-header { background: var(--t-surface-2); color: var(--t-text); }
+html.dark .toast              { background: var(--t-surface-3); color: var(--t-text); }
+html.dark .pix-qr             { background: #fff; }  /* QR precisa de fundo branco para ler */
+html.dark .strength-bar       { background: var(--t-surface-3); }
+
+/* ── Botão de alternar tema (criado pelo assets/tema.js) ──────────────────── */
+.tema-toggle {
+  position: fixed; right: 1rem; bottom: 1rem; z-index: 50;
+  width: 2.5rem; height: 2.5rem; border-radius: 9999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 1.05rem; line-height: 1; cursor: pointer;
+  background: #fff; color: #334155;
+  border: 1px solid #e5e7eb; box-shadow: 0 2px 10px rgba(0,0,0,.15);
+  transition: transform .15s, background .15s, border-color .15s;
+}
+.tema-toggle:hover { transform: scale(1.08); }
+html.dark .tema-toggle { background: var(--t-surface-3); color: #fcd34d; border-color: var(--t-border-2); }
+@media print { .tema-toggle { display: none; } }
