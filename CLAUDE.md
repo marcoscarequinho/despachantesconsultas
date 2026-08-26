@@ -35,7 +35,7 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 | Infosimples | `https://api.infosimples.com/api/v2/consultas` | `INFOSIMPLES_TOKEN` |
 | Despbrasil (CRLV Rio Reemissão, Código de Segurança CRV) | `https://despbrasil.com.br/functions/apiConsulta` | header `chaveAcesso` (`DESPBRASIL_KEY`), ver `DESPBRASIL_SVCS` |
 | Consultas Fácil (CRLV Rio Reemissão v2) | `https://www.consultasfacil.net` | header `chaveAcesso` (`CONSULTASFACIL_KEY`) |
-| Vistocar (Débitos e Documentação, Código de Segurança CRV) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
+| Vistocar (Débitos e Documentação, Código de Segurança CRV, CRLV-e BA) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
 | Mercado Pago (PIX) | `https://api.mercadopago.com` | `MP_ACCESS_TOKEN` |
 | Z-API (WhatsApp) | `https://api.z-api.io` | `ZAPI_*` |
 
@@ -57,6 +57,8 @@ O envio do PDF por WhatsApp é decidido pelo prefixo `consultar-crlv-`, então o
 **CRLV-e Agendado** (`PORTAL_AGENDADO_SVCS`, **hoje vazio** — o CE agendado foi removido do catálogo e o caminho segue de pé para os pedidos `PORTAL-` já criados) — mesmo contrato dos agendados da Chekaki (`POST /api/crlv-agendado/solicitar` → `pedido_id`; `GET /api/crlv-agendado/:id` → status; `GET .../:id/pdf`), só muda o host e a chave, então reaproveita `crlv_agendado_pending` e o cron `runCrlvAgendadoPendingCheck` (entrega por WhatsApp, estorno em 48h). O `pedido_id` do portal é numérico igual ao da Chekaki: ele é gravado, exibido e devolvido na resposta com o prefixo `PORTAL-` (`PORTAL_PEDIDO_PREFIX`, mesma convenção do `AUTOCRLV-`) — é isso que faz o "Ver Status" e o cron perguntarem no host certo, inclusive quando o cliente copia o id da tela.
 
 O CE hoje é só `crlv-ce-instantaneo`: passou pela Vistocar (`apiclient/crlv-ce` + webhook) e pelo agendado do portal antes de ficar só na emissão na hora. Por isso `VISTOCAR_ASYNC_SVCS` e `PORTAL_AGENDADO_SVCS` estão vazios — os dois caminhos continuam de pé para entregar pedido antigo (`vistocar_pending`, `crlv_agendado_pending`).
+
+O resto do grupo "CRLV-e Digital" continua na Chekaki (`placa_renavam_cpf`), com **uma exceção**: o `consultar-crlv-ba` foi para a Vistocar (`apiclient/crlv-ba`, entrada em `VISTOCAR_ENDPOINTS`), que é **síncrona** — devolve o envelope `{ status, message, response: { pdfBase64, paid, success } }` já tratado no ramo comum dos serviços Vistocar, não entra em `VISTOCAR_ASYNC_SVCS`. Como todo `apiclient` da Vistocar, o corpo é só `{ plate }`, então a BA virou `inputType:'placa'`: foi essa troca que resolveu o proprietário pessoa jurídica (a rota da Chekaki tinha um campo `cpf` só e recusava CNPJ). O id dela começa com `consultar-crlv-`, então o envio do PDF por WhatsApp cai na primeira regra — a dos serviços Vistocar exclui esse prefixo justamente para o cliente não receber o documento duas vezes.
 
 ## Fluxo de /api/query (padrão importante)
 
