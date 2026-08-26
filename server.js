@@ -132,12 +132,6 @@ const VISTOCAR_PASSWORD = process.env.VISTOCAR_PASSWORD || '';
 const VISTOCAR_ENDPOINTS = {
   'security-code-vistocar-2': 'security-code',
   'vistocar-debitos-cod-barra': 'debitos-cod-barra',
-  // CRLV-e Bahia: saiu da Chekaki (POST /consultar-crlv-ba com placa+renavam+CPF)
-  // para cá. É SÍNCRONO — devolve o envelope de sempre com response.pdfBase64,
-  // então não entra em VISTOCAR_ASYNC_SVCS — e, como todo apiclient da Vistocar,
-  // pede só { plate }: o renavam e o documento do proprietário deixaram de ser
-  // necessários.
-  'consultar-crlv-ba': 'crlv-ba',
 };
 
 // Serviços Vistocar ASSÍNCRONOS: o POST não devolve documento nenhum, só REGISTRA
@@ -538,10 +532,14 @@ const SERVICES = [
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
-  // Único CRLV-e Digital que NÃO fala com a Chekaki: migrou para a Vistocar
-  // (apiclient/crlv-ba, ver VISTOCAR_ENDPOINTS), que pede só a placa. Foi essa
-  // troca que resolveu o proprietário pessoa jurídica — a rota antiga da Chekaki
-  // tinha um campo "cpf" só e recusava CNPJ.
+  // Único CRLV-e Digital que NÃO fala com a Chekaki: hoje é o
+  // portaldespachantes.online (POST /consultar-crlv-ba com { placa }, PDF pronto
+  // em bytes — doc "Documentação de Integração — 1 endpoint", 26/08/2026, ver
+  // PORTAL_PLACA_MAP). Só placa: o renavam e o CPF que a Chekaki exigia saíram, e
+  // com eles o problema do proprietário pessoa jurídica (a rota da Chekaki tinha
+  // um campo "cpf" só e recusava CNPJ). No meio do caminho passou pela Vistocar
+  // (apiclient/crlv-ba), que respondia "Erro interno. Saldo estornado." em toda
+  // chamada — inclusive sem placa nenhuma —, então nunca chegou a emitir.
   { id:'consultar-crlv-ba', name:'CRLV-e Bahia (BA)',              group:'CRLV-e Digital', basePrice:20.00, inputType:'placa', icon:'📄', uf:'ba' },
   // Hoje a ÚNICA opção de CE no catálogo: o agendado foi removido e ficou só a
   // emissão na hora do portal (POST /consultar-crlv-ce com { placa }, PDF pronto
@@ -6233,6 +6231,10 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       // (apiclient/crlv-pe), e o do Ceará (doc de 1 endpoint).
       'crlv-pe-instantaneo':      'consultar-crlv-pe',
       'crlv-ce-instantaneo':      'consultar-crlv-ce',
+      // CRLV-e da Bahia (doc de 1 endpoint, 26/08/2026). Único id daqui que já
+      // começa com "consultar-crlv-", então o PDF sai no WhatsApp pela regra do
+      // prefixo — não pode entrar em CRLV_PORTAL_PDF_SVCS, senão vai duas vezes.
+      'consultar-crlv-ba':        'consultar-crlv-ba',
     };
     if (PORTAL_PLACA_MAP[serviceId]) {
       const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
@@ -7070,11 +7072,8 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           const fileName = `${serviceId}-${placa || 'doc'}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
         }
-        // Envia PDF via WhatsApp para serviços Vistocar (Código de Segurança).
-        // Pula os que começam com "consultar-crlv-" (hoje o CRLV-e Bahia): a
-        // primeira regra já mandou o documento e sem isso o cliente recebia duas
-        // vezes.
-        if (VISTOCAR_ENDPOINTS[serviceId] && !serviceId.startsWith('consultar-crlv-') && user.phone) {
+        // Envia PDF via WhatsApp para serviços Vistocar (Código de Segurança)
+        if (VISTOCAR_ENDPOINTS[serviceId] && user.phone) {
           const placa = (params?.placa || '').toUpperCase();
           const caption = `✅ *${service.name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
           const fileName = `${serviceId}-${placa || 'doc'}.pdf`;

@@ -35,7 +35,7 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 | Infosimples | `https://api.infosimples.com/api/v2/consultas` | `INFOSIMPLES_TOKEN` |
 | Despbrasil (CRLV Rio Reemissão, Código de Segurança CRV) | `https://despbrasil.com.br/functions/apiConsulta` | header `chaveAcesso` (`DESPBRASIL_KEY`), ver `DESPBRASIL_SVCS` |
 | Consultas Fácil (CRLV Rio Reemissão v2) | `https://www.consultasfacil.net` | header `chaveAcesso` (`CONSULTASFACIL_KEY`) |
-| Vistocar (Débitos e Documentação, Código de Segurança CRV, CRLV-e BA) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
+| Vistocar (Débitos e Documentação, Código de Segurança CRV) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
 | Mercado Pago (PIX) | `https://api.mercadopago.com` | `MP_ACCESS_TOKEN` |
 | Z-API (WhatsApp) | `https://api.z-api.io` | `ZAPI_*` |
 
@@ -51,6 +51,7 @@ Quase todo o CRLV-e do catálogo saiu para o `portaldespachantes.online` (docs "
 | `crlv-rj-reemissao-2` | `/consultar-crlv-rj2` | R$ 55,00 |
 | `crlv-pe-instantaneo` | `/consultar-crlv-pe` | R$ 35,00 |
 | `crlv-ce-instantaneo` | `/consultar-crlv-ce` | R$ 32,50 |
+| `consultar-crlv-ba` | `/consultar-crlv-ba` | R$ 20,00 |
 
 O envio do PDF por WhatsApp é decidido pelo prefixo `consultar-crlv-`, então os ids fora desse padrão precisam estar em `CRLV_PORTAL_PDF_SVCS` — esquecer disso não quebra a consulta, só faz o cliente parar de receber o documento no WhatsApp. A chave Geral (pós-paga) do `crlv-rj-reemissao-2` usa a mesma rota em `runCrlvRj2General`.
 
@@ -58,7 +59,7 @@ O envio do PDF por WhatsApp é decidido pelo prefixo `consultar-crlv-`, então o
 
 O CE hoje é só `crlv-ce-instantaneo`: passou pela Vistocar (`apiclient/crlv-ce` + webhook) e pelo agendado do portal antes de ficar só na emissão na hora. Por isso `VISTOCAR_ASYNC_SVCS` e `PORTAL_AGENDADO_SVCS` estão vazios — os dois caminhos continuam de pé para entregar pedido antigo (`vistocar_pending`, `crlv_agendado_pending`).
 
-O resto do grupo "CRLV-e Digital" continua na Chekaki (`placa_renavam_cpf`), com **uma exceção**: o `consultar-crlv-ba` foi para a Vistocar (`apiclient/crlv-ba`, entrada em `VISTOCAR_ENDPOINTS`), que é **síncrona** — devolve o envelope `{ status, message, response: { pdfBase64, paid, success } }` já tratado no ramo comum dos serviços Vistocar, não entra em `VISTOCAR_ASYNC_SVCS`. Como todo `apiclient` da Vistocar, o corpo é só `{ plate }`, então a BA virou `inputType:'placa'`: foi essa troca que resolveu o proprietário pessoa jurídica (a rota da Chekaki tinha um campo `cpf` só e recusava CNPJ). O id dela começa com `consultar-crlv-`, então o envio do PDF por WhatsApp cai na primeira regra — a dos serviços Vistocar exclui esse prefixo justamente para o cliente não receber o documento duas vezes.
+O resto do grupo "CRLV-e Digital" continua na Chekaki (`placa_renavam_cpf`), com **uma exceção**: o `consultar-crlv-ba`, que está no portal (`PORTAL_PLACA_MAP`, doc de 26/08/2026) e por isso é `inputType:'placa'` — a rota da Chekaki pedia placa+renavam+CPF e tinha um campo de documento só, o que recusava proprietário pessoa jurídica. É o único id do `PORTAL_PLACA_MAP` que já começa com `consultar-crlv-`: o PDF sai no WhatsApp pela regra do prefixo, então ele **não** entra em `CRLV_PORTAL_PDF_SVCS` (entraria em duplicidade). No meio do caminho a BA passou pela Vistocar (`apiclient/crlv-ba`): a rota existe na conta, mas responde `500 "Erro interno. Saldo estornado."` em toda chamada — com placa válida, com placa inválida e até sem placa nenhuma —, ou seja, falha antes de olhar a entrada; não vale reativar sem eles confirmarem que arrumaram.
 
 ## Fluxo de /api/query (padrão importante)
 
