@@ -47,7 +47,9 @@
     if (!btn) {
       btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = 'tema-toggle';
+      // Nas telas com barra lateral fixa (os três painéis) o botão desvia dela
+      // no desktop, senão cobre o "Sair da Conta". Ver assets/tema.css.
+      btn.className = 'tema-toggle' + (document.getElementById('sidebar') ? ' tema-toggle-com-sidebar' : '');
       btn.setAttribute('data-tema-toggle', '');
       document.body.appendChild(btn);
     }
