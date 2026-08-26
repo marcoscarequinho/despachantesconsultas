@@ -51,7 +51,7 @@ Quase todo o CRLV-e do catálogo saiu para o `portaldespachantes.online` (docs "
 | `crlv-rj-reemissao-2` | `/consultar-crlv-rj2` | R$ 55,00 |
 | `crlv-pe-instantaneo` | `/consultar-crlv-pe` | R$ 35,00 |
 | `crlv-ce-instantaneo` | `/consultar-crlv-ce` | R$ 32,50 |
-| `consultar-crlv-ba` | `/consultar-crlv-ba` | R$ 20,00 |
+| `consultar-crlv-ba` | `/consultar-crlv-ba` | R$ 30,00 |
 
 O envio do PDF por WhatsApp é decidido pelo prefixo `consultar-crlv-`, então os ids fora desse padrão precisam estar em `CRLV_PORTAL_PDF_SVCS` — esquecer disso não quebra a consulta, só faz o cliente parar de receber o documento no WhatsApp. A chave Geral (pós-paga) do `crlv-rj-reemissao-2` usa a mesma rota em `runCrlvRj2General`.
 

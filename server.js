@@ -540,7 +540,8 @@ const SERVICES = [
   // um campo "cpf" só e recusava CNPJ). No meio do caminho passou pela Vistocar
   // (apiclient/crlv-ba), que respondia "Erro interno. Saldo estornado." em toda
   // chamada — inclusive sem placa nenhuma —, então nunca chegou a emitir.
-  { id:'consultar-crlv-ba', name:'CRLV-e Bahia (BA)',              group:'CRLV-e Digital', basePrice:20.00, inputType:'placa', icon:'📄', uf:'ba' },
+  // Preço fixo (noMarkup) definido pelo cliente, como no PE e no CE do portal.
+  { id:'consultar-crlv-ba', name:'CRLV-e Bahia (BA)',              group:'CRLV-e Digital', basePrice:30.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'ba' },
   // Hoje a ÚNICA opção de CE no catálogo: o agendado foi removido e ficou só a
   // emissão na hora do portal (POST /consultar-crlv-ce com { placa }, PDF pronto
   // em bytes — doc "Documentação de Integração — 1 endpoint", 24/08/2026, ver
