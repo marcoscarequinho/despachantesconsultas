@@ -9991,22 +9991,35 @@ app.post('/api/admin/users', requireAuth, requireSuperAdmin, async (req, res) =>
 
 // ── ADMIN: PUT /api/admin/users/:id ──────────────────────────────────────────
 app.put('/api/admin/users/:id', requireAuth, requireSuperAdmin, async (req, res) => {
-  const { name, email, phone, role, credits } = req.body;
+  const { name, cpf_cnpj, email, phone, role, credits } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Nome é obrigatório.' });
   if (!email || !email.trim()) return res.status(400).json({ error: 'E-mail é obrigatório.' });
   if (!['user','reseller','admin'].includes(role)) return res.status(400).json({ error: 'Role inválido.' });
   const parsedCredits = parseFloat(credits);
   if (isNaN(parsedCredits)) return res.status(400).json({ error: 'Valor de créditos inválido.' });
+  // CPF/CNPJ é opcional no corpo: quando não vem, o documento fica como está —
+  // assim uma tela antiga (ou integração) que não conhece o campo não apaga o
+  // que já estava gravado. Quando vem, passa pela mesma validação do cadastro.
+  if (cpf_cnpj !== undefined && !isValidDoc(cpf_cnpj))
+    return res.status(400).json({ error: 'CPF/CNPJ inválido.' });
+  const doc = cpf_cnpj !== undefined ? cleanDoc(cpf_cnpj) : null;
   try {
     const r = await pool.query(
-      `UPDATE users SET name=$1,email=$2,phone=$3,role=$4,credits=$5 WHERE id=$6
-       RETURNING id,name,email,phone,role,credits,active`,
-      [name.trim(), email.toLowerCase().trim(), phone?.trim()||null, role, parsedCredits, req.params.id]
+      `UPDATE users SET name=$1,email=$2,phone=$3,role=$4,credits=$5,
+              cpf_cnpj=COALESCE($6,cpf_cnpj)
+       WHERE id=$7
+       RETURNING id,name,cpf_cnpj,email,phone,role,credits,active`,
+      [name.trim(), email.toLowerCase().trim(), phone?.trim()||null, role, parsedCredits, doc, req.params.id]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Usuário não encontrado.' });
     res.json({ success: true, user: r.rows[0] });
   } catch (err) {
-    if (err.code === '23505') return res.status(409).json({ error: 'E-mail já está em uso por outro usuário.' });
+    // users tem UNIQUE em email E em cpf_cnpj — a mensagem precisa dizer qual dos
+    // dois colidiu, senão o admin fica procurando duplicidade no campo errado.
+    if (err.code === '23505') {
+      const campo = /cpf/i.test(err.constraint || err.detail || '') ? 'CPF/CNPJ' : 'E-mail';
+      return res.status(409).json({ error: `${campo} já está em uso por outro usuário.` });
+    }
     console.error('Erro ao editar usuário:', err.message);
     res.status(500).json({ error: 'Erro interno: ' + err.message });
   }

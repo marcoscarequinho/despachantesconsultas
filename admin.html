@@ -665,6 +665,11 @@
           <label class="label">E-mail</label>
           <input id="e-email" type="email" class="input-field" required>
         </div>
+        <div class="col-span-2">
+          <label class="label">CPF / CNPJ</label>
+          <input id="e-cpf" type="text" class="input-field" placeholder="000.000.000-00 ou 00.000.000/0001-00" required>
+          <p class="text-xs text-gray-500 mt-1">Também é o login do usuário. 11 dígitos (CPF) ou 14 (CNPJ) — o dígito verificador é conferido no servidor.</p>
+        </div>
         <div>
           <label class="label">Telefone</label>
           <input id="e-phone" type="tel" class="input-field">
@@ -1662,6 +1667,7 @@ function openEdit(u) {
   document.getElementById('edit-id-label').textContent = `#${u.id}`;
   document.getElementById('e-name').value        = u.name;
   document.getElementById('e-email').value       = u.email;
+  document.getElementById('e-cpf').value         = u.cpf_cnpj||'';
   document.getElementById('e-phone').value       = u.phone||'';
   document.getElementById('e-role').value        = u.role;
   document.getElementById('e-credits').value     = parseFloat(u.credits).toFixed(2);
@@ -1673,9 +1679,10 @@ async function submitEditUser(e) {
   e.preventDefault();
   const id = document.getElementById('edit-id').value;
   const body = {
-    name:    document.getElementById('e-name').value.trim(),
-    email:   document.getElementById('e-email').value.trim(),
-    phone:   document.getElementById('e-phone').value.trim(),
+    name:     document.getElementById('e-name').value.trim(),
+    email:    document.getElementById('e-email').value.trim(),
+    cpf_cnpj: document.getElementById('e-cpf').value.trim(),
+    phone:    document.getElementById('e-phone').value.trim(),
     role:    document.getElementById('e-role').value,
     credits: document.getElementById('e-credits').value,
   };
