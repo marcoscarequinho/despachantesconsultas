@@ -7,6 +7,7 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const PDFDocument = require('pdfkit');
 const bwipjs = require('bwip-js');
 const pdfParse = require('pdf-parse');
@@ -3860,15 +3861,111 @@ async function extractAtpveFieldsFromPdf(pdfBuf) {
       .replace(/[^a-z0-9]/g, '');
     fields[key] = m[2].trim();
   }
+  return repairAtpveAccents(fields, pdfBuf);
+}
+
+// ── Acentos perdidos na extração ────────────────────────────────────────────
+// O pdf.js do pdf-parse depende do ToUnicode da fonte do PDF de origem: quando
+// ele não cobre um glifo, a letra volta como "?" (ou U+FFFD) — foi o que fez
+// "RUA SÃO JOSE" virar "RUA S?O JOSE" no endereço do comprador do ATPVe. O
+// texto CRU do content stream (WinAnsi/latin1) costuma ter o byte certo, então
+// tentamos recuperar a letra por lá.
+//
+// A troca só acontece quando o candidato cru tem o MESMO comprimento e é
+// idêntico ao valor extraído fora das posições estragadas, e a letra reposta é
+// latina acentuada. Ou seja: o documento nunca ganha um dado que não estava no
+// PDF de origem — se o "?" já veio assim da despbrasil, nada muda (e o aviso no
+// log diz exatamente isso).
+const CARACTERE_PERDIDO = /[?\uFFFD]/;
+const LETRA_ACENTUADA = /[\u00C0-\u00FF]/;
+
+function repairAtpveAccents(fields, pdfBuf) {
+  const quebrados = Object.keys(fields).filter(k => CARACTERE_PERDIDO.test(fields[k]));
+  if (!quebrados.length) return fields;
+
+  let candidatos = [];
+  try {
+    candidatos = extractRawPdfStrings(pdfBuf);
+  } catch (e) {
+    console.error('[atpve] falha ao ler o texto cru do PDF para recuperar acentos:', e.message);
+    return fields;
+  }
+
+  for (const key of quebrados) {
+    const corrigido = matchAccentedCandidate(fields[key], candidatos);
+    if (corrigido) {
+      fields[key] = corrigido;
+    } else {
+      // Não é o nosso extrator: o caractere já veio perdido no PDF da origem.
+      console.error(`[atpve] campo "${key}" veio sem o acento no PDF da despbrasil (valor: ${fields[key]}).`);
+    }
+  }
   return fields;
+}
+
+// Strings de texto (Tj/TJ) de todos os content streams do PDF, com e sem
+// compressão, lidas como latin1 — que é a codificação das fontes padrão.
+function extractRawPdfStrings(pdfBuf) {
+  const saida = [];
+  let i = 0;
+  while (true) {
+    const s = pdfBuf.indexOf('stream', i);
+    if (s < 0) break;
+    let ini = s + 6;
+    if (pdfBuf[ini] === 13) ini++;
+    if (pdfBuf[ini] === 10) ini++;
+    const fim = pdfBuf.indexOf('endstream', ini);
+    if (fim < 0) break;
+    i = fim + 9;
+
+    const bruto = pdfBuf.slice(ini, fim);
+    let conteudo = null;
+    try { conteudo = zlib.inflateSync(bruto).toString('latin1'); }
+    catch { conteudo = bruto.toString('latin1'); }
+    if (!conteudo.includes('Tj') && !conteudo.includes('TJ')) continue;
+
+    for (const bloco of conteudo.matchAll(/BT([\s\S]*?)ET/g)) {
+      const partes = [];
+      for (const m of bloco[1].matchAll(/\(((?:[^()\\]|\\.)*)\)|<([0-9A-Fa-f\s]+)>/g)) {
+        partes.push(m[1] !== undefined
+          ? m[1].replace(/\\([()\\])/g, '$1')
+          : Buffer.from(m[2].replace(/\s/g, ''), 'hex').toString('latin1'));
+      }
+      const linha = partes.join('').trim();
+      if (!linha) continue;
+      saida.push(linha);
+      // O PDF da despbrasil escreve "Rótulo: valor" numa linha só — o valor
+      // sozinho também entra como candidato.
+      const m = linha.match(/^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ /]*?:\s*(.+)$/);
+      if (m) saida.push(m[1].trim());
+    }
+  }
+  return saida;
+}
+
+// Candidato válido = mesmo comprimento, igual fora das posições estragadas, e
+// letra acentuada em cada posição estragada.
+function matchAccentedCandidate(valor, candidatos) {
+  for (const cand of candidatos) {
+    if (cand.length !== valor.length || cand === valor) continue;
+    let serve = true;
+    for (let i = 0; i < valor.length; i++) {
+      if (valor[i] === cand[i]) continue;
+      if (CARACTERE_PERDIDO.test(valor[i]) && LETRA_ACENTUADA.test(cand[i])) continue;
+      serve = false;
+      break;
+    }
+    if (serve) return cand;
+  }
+  return null;
 }
 
 // ── Extração de campos — "Proprietário Atual (v2)" (Chekaki devolve um PDF
 // pronto, mas em formato "Rótulo:" numa linha e o valor sozinho na linha
 // seguinte, diferente do formato "Rótulo: valor" da despbrasil acima). Usada
-// para completar ano de fabricação/modelo, marca/modelo, cor, categoria (CAT),
-// data do CRV e nome/município/UF do vendedor no layout do ATPVe — ver
-// runNumeroAtpveSupplementaryQueries.
+// para completar ano de fabricação/modelo, marca/modelo, cor, data do CRV e
+// nome/município/UF do vendedor no layout do ATPVe — ver
+// runNumeroAtpveSupplementaryQueries (a CAT é fixa, ver ATPVE_CAT_SEM_CATEGORIA).
 async function extractLinePairFieldsFromPdf(pdfBuf) {
   const { text } = await pdfParse(pdfBuf);
   const lines = String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
@@ -3922,8 +4019,28 @@ const ATPVE_SELO_GOVBR_PATH = path.join(__dirname, 'assets', 'atpve-selo-govbr.p
 // embaixo). Encolhe a fonte (até um mínimo) e trunca com "…" como último
 // recurso pra caber na largura da célula, igual ao padrão dos outros
 // relatórios do sistema.
+// As fontes padrão do pdf-lib (Courier/Helvetica) escrevem em WinAnsi, que
+// cobre todo o português — mas pdf-lib LANÇA erro em qualquer caractere fora
+// dessa tabela, e o texto aqui vem de PDF de terceiro (nome e endereço
+// digitados por quem cadastrou a intenção de venda). Um caractere exótico
+// derrubava a geração inteira com HTTP 500 numa consulta de R$ 99,00: agora ele
+// perde o acento e, se nem assim couber, é descartado — o resto do documento
+// sai normal. Acento de português não passa por aqui (é WinAnsi de verdade).
+const WINANSI_ESPECIAIS = new Set([...'€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ']);
+const cabeNoWinAnsi = ch => {
+  const cp = ch.codePointAt(0);
+  return (cp >= 0x20 && cp <= 0x7E) || (cp >= 0xA0 && cp <= 0xFF) || WINANSI_ESPECIAIS.has(ch);
+};
+function toWinAnsiSafe(texto) {
+  return [...String(texto)].map(ch => {
+    if (cabeNoWinAnsi(ch)) return ch;
+    const semAcento = ch.normalize('NFD').replace(/[̀-ͯ]/g, '');
+    return [...semAcento].every(cabeNoWinAnsi) ? semAcento : '';
+  }).join('');
+}
+
 function pdfOverlayValue(page, pageH, font, text, { x, top, bottom, maxX, size = 10, bg = null, align = 'left', minSize = 6, overlay = false }) {
-  const value = (text ?? '').toString().trim();
+  const value = toWinAnsiSafe((text ?? '').toString().trim());
   // overlay: true — escreve o texto sem apagar nada por baixo. Usado nos selos
   // gov.br, cujas caixas de valor já nascem em branco na própria imagem do selo
   // (assets/atpve-selo-govbr.png); um retângulo branco aqui cobriria o contorno
@@ -3966,7 +4083,7 @@ function pdfOverlayValue(page, pageH, font, text, { x, top, bottom, maxX, size =
 // caixas, das linhas de assinatura e das fontes fiquem idênticos ao
 // documento oficial — só o texto dinâmico é sobrescrito, nas coordenadas
 // exatas medidas no PDF de referência (pdfplumber). Campos que a despbrasil
-// não retorna (ano fabricação/modelo, marca/modelo/versão, cor, CAT, código
+// não retorna (ano fabricação/modelo, marca/modelo/versão, cor, código
 // de segurança do CRV, data de emissão do CRV, nome/UF do vendedor) vêm da
 // consulta complementar Proprietário Atual (v2) / Consulta 3 Código
 // Segurança CRV, já mescladas em "fields" antes de chegar aqui — ver
@@ -3975,6 +4092,8 @@ function pdfOverlayValue(page, pageH, font, text, { x, top, bottom, maxX, size =
 // "AUTENTICAÇÃO DAS ASSINATURAS" (withSelos) só valem pra Consultas Avulsas —
 // ver runPublicAtpveComunicacaoVenda; a consulta logada (serviceId
 // 'consultar-Numero-ATPVE' em /api/query) não os usa.
+const ATPVE_CAT_SEM_CATEGORIA = '***';
+
 async function buildNumeroAtpvePdfBuffer(service, fields, params, { withSelos = false } = {}) {
   const placaRaw = (params?.placa || fields.placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
@@ -3993,7 +4112,10 @@ async function buildNumeroAtpvePdfBuffer(service, fields, params, { withSelos = 
   V(fields.anofabricacao, { x: 14.5, top: 177.7, bottom: 187.7, maxX: 76 });
   V(fields.anomodelo, { x: 86.2, top: 177.7, bottom: 187.7, maxX: 143 });
   V(fields.marcamodeloversao, { x: 14.5, top: 216.7, bottom: 226.7, maxX: 276 });
-  V(fields.categoria, { x: 14.5, top: 251.7, bottom: 261.7, maxX: 276 });
+  // CAT é fixo: o ATPVe não atribui categoria ao veículo, então a célula sai
+  // com "***" em vez da Categoria do CRLV (que vinha como "PARTICULAR" da
+  // consulta Proprietário Atual e não é o que o documento oficial mostra).
+  V(ATPVE_CAT_SEM_CATEGORIA, { x: 14.5, top: 251.7, bottom: 261.7, maxX: 276 });
   V(fields.cor, { x: 14.5, top: 286.7, bottom: 296.7, maxX: 132 });
   V(fields.chassi, { x: 138.5, top: 286.7, bottom: 296.7, maxX: 276 });
   V(fields.numerocrv, { x: 14.5, top: 326.7, bottom: 336.7, maxX: 132 });
@@ -4044,16 +4166,11 @@ async function buildNumeroAtpvePdfBuffer(service, fields, params, { withSelos = 
   pdfOverlayValue(page, pageH, helv, fields.ufemplacamento || fields.ufvendedor || fields.ufintencaovenda,
     { x: 42.5, top: 50.8, bottom: 56.9, maxX: 60, size: 6.1 });
 
-  // Mensagens DENATRAN — o template não tem nada abaixo do título nessa
-  // caixa; aproveitada para os campos da ATPVe que não têm slot no
-  // formulário oficial impresso (status, data/hora do registro).
-  const mensagens = [
-    fields.statusintencaovenda ? `Status da intenção de venda: ${fields.statusintencaovenda}` : null,
-    fields.datahoraregistrointencaovenda ? `Registrada em: ${fields.datahoraregistrointencaovenda}` : null,
-  ].filter(Boolean);
-  mensagens.forEach((line, i) => {
-    page.drawText(line, { x: 32.9, y: pageH - (665 + i * 10), size: 7, font: helv, color: rgb(0.4, 0.4, 0.4) });
-  });
+  // "MENSAGENS SENATRAN" fica EM BRANCO de propósito, como no documento
+  // oficial: nada é impresso nessa caixa. O status e a data/hora do registro da
+  // intenção de venda saíam aqui (e, por um momento, a espécie e o tipo do
+  // veículo) — o cliente pediu a caixa limpa, então nenhum desses dados entra
+  // no PDF. Não é falta de dado: é o layout do documento.
 
   // "AUTENTICAÇÃO DAS ASSINATURAS" — dois selos gov.br, com o mesmo nome/CPF/
   // data usados nas caixas de identificação acima. Só pra Consultas Avulsas
@@ -4121,8 +4238,9 @@ async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam) {
       if (f.anodefabricacao) merged.anofabricacao = f.anodefabricacao;
       if (f.anodomodelo) merged.anomodelo = f.anodomodelo;
       if (f.marcamodelo) merged.marcamodeloversao = f.marcamodelo;
-      if (f.categoria) merged.categoria = f.categoria;
       if (f.cor) merged.cor = f.cor;
+      // Espécie, Tipo e Categoria não são lidos: o formulário do ATPVe não tem
+      // célula para os dois primeiros e a CAT é fixa (ver ATPVE_CAT_SEM_CATEGORIA).
       if (f.datadocrv) merged.datacrv = f.datadocrv;
       if (f.nomedoproprietario) merged.nomevendedor = f.nomedoproprietario;
       // "DADOS DO EMPLACAMENTO" (município/UF de registro do veículo) — usado
@@ -6816,7 +6934,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         }
         const sourcePdfBuf = Buffer.from(await pdfRes.arrayBuffer());
         const fields = await extractAtpveFieldsFromPdf(sourcePdfBuf);
-        // Completa ano fabricação/modelo, marca/modelo, cor, CAT, código de
+        // Completa ano fabricação/modelo, marca/modelo, cor, código de
         // segurança do CRV e dados do vendedor com duas consultas extras
         // (Proprietário Atual v2 + Consulta 3 Código Segurança CRV) — preço já
         // reajustado pra cobrir as 3 consultas encadeadas (ver catálogo).
