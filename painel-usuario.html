@@ -110,7 +110,7 @@
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
           d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
       </svg>
-      <span style="color:#fbbf24;font-weight:bold">Coisas de Despachantes</span>
+      <span style="color:#fbbf24;font-weight:bold">Coisas de Despachantes Assinatura</span>
     </div>
     <div class="nav-item" data-section="extras" onclick="showSection('extras')">
       <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -576,8 +576,8 @@
     <section id="section-despachantes" class="dash-section hidden space-y-5">
 
       <div>
-        <h2 class="text-xl font-bold text-amber-600">Coisas de Despachantes</h2>
-        <p class="text-sm text-gray-500">Documentos que o despachante emite para o cliente — gerados na hora, em PDF</p>
+        <h2 class="text-xl font-bold text-amber-600">Coisas de Despachantes Assinatura</h2>
+        <p class="text-sm text-gray-500">Consultas e documentos exclusivos de quem assina — R$ 30,00 por 30 dias, sem debitar crédito</p>
       </div>
 
       <!-- Saldo disponível -->
@@ -590,7 +590,7 @@
         <div class="ml-auto text-xs text-gray-400">Mesmo saldo da aba Acesse Aqui Para as Principais Consultas</div>
       </div>
 
-      <!-- Situação da Assinatura Consulta placas (ver renderAssinaturaBanner) -->
+      <!-- Situação da Assinatura Coisas de Despachantes (ver renderAssinaturaBanner) -->
       <div id="assinatura-banner" class="hidden"></div>
 
       <div class="card">
@@ -1207,7 +1207,7 @@ let editingComunicacaoVendaQueryId = null;
 const sectionTitles = {
   overview:  'Visão Geral',
   query:    'Acesse Aqui Para as Principais Consultas',
-  despachantes: 'Coisas de Despachantes',
+  despachantes: 'Coisas de Despachantes Assinatura',
   extras:   'Consultas Extras',
   query2:   'Opção 2 Nova Consulta',
   query3:   'Infosimples Nova Consulta',
@@ -2689,7 +2689,9 @@ function catalogCard(s) {
       ${selo ? `<div>${selo}</div>` : ''}
       <div class="price-tag">${fmtPrice(s.price)}</div>
       <div class="text-xs text-gray-500 leading-snug">${escapeHtml(entrada)}</div>
-      <span class="svc-cta">${s.group === 'Para os Despachantes' ? 'Gerar' : 'Consultar'}</span>
+      <span class="svc-cta">${s.group !== 'Para os Despachantes'
+        ? 'Consultar'
+        : (assinaturaLiberada(s.id) ? 'Gerar' : '🔑 Assinar')}</span>
     </button>`;
 }
 
@@ -2742,7 +2744,7 @@ function buildCategoryGrid() {
   }).join('');
 }
 
-// ── Assinatura Consulta placas ────────────────────────────────────────────────
+// ── Assinatura Coisas de Despachantes ─────────────────────────────────────────
 // Os serviços da aba "Coisas de Despachantes" não debitam crédito, mas exigem
 // assinatura ativa (R$ 30,00 / 30 dias). O bloqueio de verdade é do servidor
 // (HTTP 402 em /api/query, ver assinaturaGateDespachantes) — o que está aqui é
@@ -2768,6 +2770,12 @@ async function loadAssinaturaStatus() {
     if (!r.ok) return;
     assinaturaStatus = await r.json();
     renderAssinaturaBanner();
+    // A lista da aba é montada antes do status chegar (ver loadDashboard): sem
+    // este redesenho os cards ficariam abertos até o próximo carregamento.
+    if (allServices.length) {
+      buildDespachantesList();
+      if (document.getElementById('catalog-grid')) renderCatalog();
+    }
   } catch { /* status indisponível: o servidor ainda barra na hora da consulta */ }
 }
 
@@ -2786,6 +2794,19 @@ function assinaturaLiberada(serviceId) {
       assinaturaStatus.consultasCrvRestantes !== null &&
       assinaturaStatus.consultasCrvRestantes <= 0) return false;
   return true;
+}
+
+// Abre o popup da assinatura já com a mensagem certa: com assinatura ativa o
+// único motivo de bloqueio é a cota do próprio serviço — e cada um tem a sua,
+// então o popup precisa dizer qual esgotou.
+function abrirAssinaturaDoServico(svc) {
+  if (typeof svc === 'string') svc = JSON.parse(svc);
+  let motivo = null;
+  if (assinaturaStatus?.ativa) {
+    if (svc.id === ASSINATURA_PLACAS_ID) motivo = 'COTA_ESGOTADA';
+    else if (svc.id === ASSINATURA_CRV_ID) motivo = 'COTA_ESGOTADA_CRV';
+  }
+  abrirModalAssinatura(svc, motivo);
 }
 
 function renderAssinaturaBanner() {
@@ -2807,8 +2828,8 @@ function renderAssinaturaBanner() {
     el.innerHTML = `✅ <strong>Assinatura ativa</strong> ${validade} — ${consultas}${consultasCrv}.`;
   } else {
     el.className = 'bg-amber-50 border border-amber-300 text-amber-800 rounded-lg px-4 py-3 text-sm';
-    el.innerHTML = `🔑 Estes serviços são gratuitos para quem tem a <strong>Assinatura Consulta placas</strong> (R$ 30,00 por 30 dias). ` +
-      `<button onclick="abrirModalAssinatura(null)" class="underline font-semibold">Assinar com PIX</button>`;
+    el.innerHTML = `🔑 Estes serviços são exclusivos de quem assina <strong>Coisas de Despachantes</strong> (R$ 30,00 por 30 dias). ` +
+      `<button onclick="abrirModalAssinatura(null)" class="ml-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold px-3 py-1.5 rounded">🔑 Assinar</button>`;
   }
   el.classList.remove('hidden');
 }
@@ -2825,7 +2846,7 @@ function abrirModalAssinatura(svc, motivo, mensagemServidor) {
   } else if (motivo === 'COTA_ESGOTADA') {
     msg.textContent = `Você já usou todas as consultas de placa deste período da assinatura. Pague um novo período de 30 dias para renovar a cota.`;
   } else {
-    msg.textContent = 'Esta consulta só está liberada como Gratuita, se você tem assinatura: "Assinatura Consulta placas", clique no botão assinar e pague com pix.';
+    msg.textContent = 'Esta consulta só está liberada como Gratuita, se você tem assinatura: "Assinatura Coisas de Despachantes", clique no botão assinar e pague com pix.';
   }
   document.getElementById('assinatura-step-oferta').classList.remove('hidden');
   document.getElementById('assinatura-step-pix').classList.add('hidden');
@@ -2915,17 +2936,36 @@ function copiarPixAssinatura() {
 // Despachantes" e reaproveita selectService()/submitQuery() da Nova Consulta.
 function buildDespachantesList() {
   const svcs = allServices.filter(s => s.group === 'Para os Despachantes');
-  document.getElementById('despachantes-service-list').innerHTML = svcs.map(s => `
+  // Sem assinatura vigente nenhum serviço da aba abre (o bloqueio de verdade é
+  // do servidor, ver assinaturaGateDespachantes). O card então mostra o botão
+  // "Assinar" no lugar do preço — clicar nele ou no card abre o mesmo popup do
+  // PIX. Quem já assina continua vendo os serviços normalmente, com o "Grátis".
+  document.getElementById('despachantes-service-list').innerHTML = svcs.map(s => {
+    const liberado = assinaturaLiberada(s.id);
+    const svcAttr  = JSON.stringify(s).replace(/"/g, "&quot;");
+    // <button> dentro de <button> é HTML inválido: o "Assinar" é um span com
+    // role=button e stopPropagation, para não disparar o clique do card também.
+    const acao = liberado
+      ? `<div class="price-tag text-sm flex-shrink-0">${fmtPrice(s.price)}</div>`
+      : `<span role="button" tabindex="0"
+            onclick="event.stopPropagation(); abrirAssinaturaDoServico(${svcAttr})"
+            class="flex-shrink-0 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold px-3 py-1.5 rounded">
+            ${assinaturaStatus?.ativa ? '🔑 Renovar' : '🔑 Assinar'}
+          </span>`;
+    return `
     <button type="button"
-      onclick="selectService(${JSON.stringify(s).replace(/"/g,"&quot;")})"
-      class="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-amber-300 hover:bg-amber-50 text-left transition-all">
-      <span class="text-xl flex-shrink-0">${s.icon}</span>
+      onclick="selectService(${svcAttr})"
+      class="flex items-center gap-3 p-3 rounded-lg border text-left transition-all ${liberado
+        ? 'border-gray-200 hover:border-amber-300 hover:bg-amber-50'
+        : 'border-amber-200 bg-amber-50/40 hover:border-amber-300'}">
+      <span class="text-xl flex-shrink-0">${liberado ? s.icon : '🔒'}</span>
       <div class="min-w-0 flex-1">
-        <div class="font-medium text-gray-800 text-sm">${s.name}</div>
-        <div class="text-xs text-gray-400 mt-0.5">${inputTypeLabel(s.inputType)}</div>
+        <div class="font-medium text-sm ${liberado ? 'text-gray-800' : 'text-gray-500'}">${s.name}</div>
+        <div class="text-xs text-gray-400 mt-0.5">${liberado ? inputTypeLabel(s.inputType) : 'Exclusivo para assinantes'}</div>
       </div>
-      <div class="price-tag text-sm flex-shrink-0">${fmtPrice(s.price)}</div>
-    </button>`).join('');
+      ${acao}
+    </button>`;
+  }).join('');
 }
 
 // ── Consultas Extras ───────────────────────────────────────────────────────────
@@ -3040,17 +3080,7 @@ function selectService(svc) {
   if (typeof svc === 'string') svc = JSON.parse(svc);
   // Serviços da aba "Coisas de Despachantes": sem assinatura ativa, abre o
   // popup em vez do formulário (ver assinaturaLiberada).
-  if (!assinaturaLiberada(svc.id)) {
-    // Com assinatura ativa, o único motivo de bloqueio é a cota do próprio
-    // serviço — e cada um tem a sua, então o popup precisa dizer qual esgotou.
-    let motivo = null;
-    if (assinaturaStatus?.ativa) {
-      if (svc.id === ASSINATURA_PLACAS_ID) motivo = 'COTA_ESGOTADA';
-      else if (svc.id === ASSINATURA_CRV_ID) motivo = 'COTA_ESGOTADA_CRV';
-    }
-    abrirModalAssinatura(svc, motivo);
-    return;
-  }
+  if (!assinaturaLiberada(svc.id)) { abrirAssinaturaDoServico(svc); return; }
   selectedSvc = svc;
   document.getElementById('form-service-name').textContent = svc.icon + ' ' + svc.name;
   document.getElementById('form-service-price').textContent = fmtPrice(svc.price);
@@ -6108,14 +6138,14 @@ function requeryFromModal() {
   </div>
 </div>
 
-<!-- ── Assinatura Consulta placas ──────────────────────────────────────────────
+<!-- ── Assinatura Coisas de Despachantes ───────────────────────────────────────
      Popup dos serviços da aba "Coisas de Despachantes": explica que a consulta
      só é gratuita para assinantes e faz o PIX de R$ 30,00 na hora (etapa 1 =
      oferta, etapa 2 = QR Code). Ver abrirModalAssinatura() no script. -->
 <div id="assinatura-modal" class="fixed inset-0 z-[9999] hidden items-center justify-center p-4" style="background:rgba(0,0,0,.6);" onclick="if(event.target===this) closeAssinaturaModal()">
   <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[92vh]">
     <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-      <div class="font-bold text-gray-800">🔑 Assinatura Consulta placas</div>
+      <div class="font-bold text-gray-800">🔑 Assinatura Coisas de Despachantes</div>
       <button onclick="closeAssinaturaModal()" class="text-gray-400 hover:text-gray-600 text-2xl leading-none flex-shrink-0 ml-3">&times;</button>
     </div>
 
@@ -6128,7 +6158,7 @@ function requeryFromModal() {
           <div class="text-xs text-amber-700 mt-0.5">por 30 dias — sem renovação automática</div>
         </div>
         <ul class="mt-4 space-y-1.5 text-sm text-gray-600">
-          <li>✅ Consulta de placa (até 50 no período)</li>
+          <li>✅ Veicular Completa — consulta de placa (até 50 no período)</li>
           <li>✅ Consulta 3 Código Segurança CRV em PDF (até 5 no período)</li>
           <li>✅ Declaração de Residência DETRAN RJ</li>
           <li>✅ Nota de Prestação de Serviços Para Despachantes Rio</li>

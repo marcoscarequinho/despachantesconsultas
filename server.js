@@ -32,7 +32,7 @@ const isFreeService = s => FREE_SERVICE_GROUPS.includes(s.group);
 // (ver POST /api/assinatura/pix e o cron /api/cron/assinaturas-expirar).
 const ASSINATURA_PLACAS_PRICE = 30.00;
 const ASSINATURA_PLACAS_DIAS  = 30;
-// Cota de consultas de placa por período. Só a "Assinatura Consulta placas"
+// Cota de consultas de placa por período. Só a "Veicular Completa"
 // consome cota — os três documentos do grupo não custam nada upstream, então
 // são ilimitados para o assinante. A cota existe porque cada consulta de placa
 // custa basePrice na Datacube: 50 consultas é o teto que mantém o plano
@@ -459,10 +459,10 @@ const SERVICES = [
   // antigos ficam registrados nos comentários de cada item caso volte a cobrar.
   //
   // A ORDEM DESTE GRUPO IMPORTA: o painel lista os serviços na ordem do
-  // catálogo (ver buildDespachantesList), e a "Assinatura Consulta placas" vem
+  // catálogo (ver buildDespachantesList), e a "Veicular Completa" vem
   // primeiro de propósito — é ela que libera os três documentos abaixo.
   //
-  // Assinatura Consulta placas — consulta de placa exclusiva da aba, servida
+  // Veicular Completa — consulta de placa exclusiva da aba, servida
   // pelo MESMO endpoint Datacube da "Proprietário Atual" da Opção 2
   // (/veiculos/proprietario-atual) e pelo mesmo builder de PDF. É um serviço
   // separado de propósito: a "dc-proprietario-atual" continua exatamente como
@@ -472,8 +472,11 @@ const SERVICES = [
   // slowNote + modeloUrl: o painel mostra o aviso com um link para o PDF de
   // exemplo (assets/modelo-consulta-placas.pdf), para o despachante ver o que
   // recebe antes de assinar. O mesmo link aparece no popup da assinatura.
-  { id:'assinatura-consulta-placas', name:'Assinatura Consulta placas', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'placa', icon:'🔎',
-    slowNote:'Consulta de proprietário atual pela placa, com retorno em PDF no padrão MC Despachadoria. Incluída na Assinatura Consulta placas.',
+  // O nome exibido é "Veicular Completa" — o id e o nome do plano continuam
+  // "assinatura-consulta-placas" de propósito: mexer no id quebraria o histórico
+  // já gravado em queries/transactions e a coluna subscriptions.plan.
+  { id:'assinatura-consulta-placas', name:'Veicular Completa', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'placa', icon:'🔎',
+    slowNote:'Consulta de proprietário atual pela placa, com retorno em PDF no padrão MC Despachadoria. Incluída na Assinatura Coisas de Despachantes.',
     modeloUrl:'/assets/modelo-consulta-placas.pdf', modeloLabel:'Veja modelo da consulta' },
   // Código de Segurança CRV incluído na assinatura — mesmo desenho do item acima:
   // usa a MESMA API do "Consulta 3 Código Segurança CRV (PDF)" pago (Vistocar
@@ -483,7 +486,7 @@ const SERVICES = [
   // do período é limitado pela cota própria (ver ASSINATURA_CRV_COTA e o bloco
   // deste serviceId em processCatalogQuery).
   { id:'assinatura-codigo-seguranca-crv', name:'Consulta 3 Código Segurança CRV (PDF)', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'placa', icon:'🔐',
-    slowNote:`Código de segurança do CRV em PDF. Incluído na Assinatura Consulta placas, com cota própria de ${ASSINATURA_CRV_COTA} consultas por período.` },
+    slowNote:`Código de segurança do CRV em PDF. Incluído na Assinatura Coisas de Despachantes, com cota própria de ${ASSINATURA_CRV_COTA} consultas por período.` },
   // Gerar Declaração de Residência DETRAN RJ — fluxo em duas etapas, fora do padrão
   // padrão "chama upstream e cobra" dos demais serviços: primeiro o front busca dados
   // via Localização CPF V3 pra pré-preencher um formulário editável (POST
@@ -957,7 +960,7 @@ async function initDB() {
   `);
   // Para que serve o PIX: 'RECARGA' credita saldo (comportamento histórico, por
   // isso é o default de toda linha antiga) e 'ASSINATURA' ativa/estende a
-  // Assinatura Consulta placas sem mexer no saldo. Ver creditPixPaymentIfApproved.
+  // Assinatura Coisas de Despachantes sem mexer no saldo. Ver creditPixPaymentIfApproved.
   await pool.query(`
     ALTER TABLE pix_payments ADD COLUMN IF NOT EXISTS purpose VARCHAR(20) NOT NULL DEFAULT 'RECARGA'
   `);
@@ -5360,7 +5363,7 @@ async function refundQuery(queryId, userId, amount, reason) {
 // externa de chave (ver app.post('/api/v1/:serviceId')), debitando sempre o
 // userId explícito recebido — no painel é req.user.id, na API é o dono da
 // chave (req.apiUser.id).
-// ── Assinatura Consulta placas — vigência e cota ─────────────────────────────
+// ── Assinatura Coisas de Despachantes — vigência e cota ──────────────────────
 // Assinatura vigente = período pago que ainda não venceu. A vigência NUNCA é
 // decidida pelo campo "status" (o cron só o atualiza de tempos em tempos, e
 // entre duas execuções ele fica desatualizado) — a verdade é sempre expires_at.
@@ -5388,7 +5391,7 @@ async function assinaturaGateDespachantes(userId, serviceId) {
     return {
       ok: false,
       code: 'ASSINATURA_NECESSARIA',
-      error: 'Esta consulta só está liberada como Gratuita, se você tem assinatura: "Assinatura Consulta placas", clique no botão assinar e pague com pix.',
+      error: 'Esta consulta só está liberada como Gratuita, se você tem assinatura: "Assinatura Coisas de Despachantes", clique no botão assinar e pague com pix.',
     };
   }
 
@@ -5878,7 +5881,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       return res.send(pdfBuf);
     }
 
-    // ── Assinatura Consulta placas ──
+    // ── Assinatura Coisas de Despachantes ──
     // Mesma fonte da "Proprietário Atual" da Opção 2 (Datacube
     // /veiculos/proprietario-atual) e o mesmo builder de PDF, mas serviço à
     // parte de propósito: a dc-proprietario-atual segue intocada (cobra crédito
@@ -8636,7 +8639,7 @@ app.get('/api/assinatura/status', requireAuth, async (req, res) => {
 });
 
 // ── POST /api/assinatura/pix ──────────────────────────────────────────────────
-// Cria a cobrança PIX de R$ 30,00 da Assinatura Consulta placas. O valor é fixo
+// Cria a cobrança PIX de R$ 30,00 da Assinatura Coisas de Despachantes. O valor é fixo
 // no servidor (nunca vem do corpo da requisição) e a linha nasce com
 // purpose='ASSINATURA', que é o que faz creditPixPaymentIfApproved abrir um
 // período em vez de creditar saldo. A confirmação reaproveita todo o caminho já
@@ -8655,7 +8658,7 @@ app.post('/api/assinatura/pix', requireAuth, async (req, res) => {
 
     const payment = await mpReq('POST', '/v1/payments', {
       transaction_amount: ASSINATURA_PLACAS_PRICE,
-      description: `Assinatura Consulta placas (${ASSINATURA_PLACAS_DIAS} dias) — ${user.name}`,
+      description: `Assinatura Coisas de Despachantes (${ASSINATURA_PLACAS_DIAS} dias) — ${user.name}`,
       payment_method_id: 'pix',
       payer: {
         email: user.email,
@@ -8761,7 +8764,7 @@ async function creditPixPaymentIfApproved(gatewayId) {
     }
     const p = upd.rows[0];
 
-    // Pagamento da Assinatura Consulta placas: não credita saldo — abre um novo
+    // Pagamento da Assinatura Coisas de Despachantes: não credita saldo — abre um novo
     // período de 30 dias. Se o assinante renova antes de vencer, o período novo
     // começa no fim do atual (não perde os dias que faltavam); se já venceu,
     // conta a partir de agora. Cada pagamento é um período próprio, com cota
@@ -8866,7 +8869,7 @@ async function runPixReconcile() {
 }
 
 // ── GET /api/cron/assinaturas-expirar (Vercel Cron) ───────────────────────────
-// Fecha os períodos vencidos da Assinatura Consulta placas. O bloqueio em si
+// Fecha os períodos vencidos da Assinatura Coisas de Despachantes. O bloqueio em si
 // NÃO depende deste cron — o porteiro usa expires_at > NOW(), então uma
 // assinatura vencida já é barrada mesmo que o cron não tenha rodado ainda. Este
 // job só mantém o campo "status" coerente para relatórios e para o admin.
@@ -8930,7 +8933,7 @@ async function avisarVencimentoAssinaturas() {
 
   const n5 = await enviar(faltando5, s =>
     `Olá, ${primeiroNome(s.name)}! 👋\n\n` +
-    `Sua *Assinatura Consulta placas* vence em *5 dias* (${dataBR(s.expires_at)}).\n\n` +
+    `Sua *Assinatura Coisas de Despachantes* vence em *5 dias* (${dataBR(s.expires_at)}).\n\n` +
     `Para não ficar sem acesso à consulta de placa, à Declaração de Residência, à Nota de Prestação de Serviços e à ASD, ` +
     `renove por R$ ${ASSINATURA_PLACAS_PRICE.toFixed(2).replace('.', ',')} direto no painel, em *Coisas de Despachantes*.\n\n` +
     `_MC Despachadoria Consultas_`, 'aviso_5d_em');
@@ -8941,8 +8944,8 @@ async function avisarVencimentoAssinaturas() {
     const venceu = new Date(s.expires_at).getTime() <= Date.now();
     return `Olá, ${primeiroNome(s.name)}!\n\n` +
       (venceu
-        ? `Sua *Assinatura Consulta placas* venceu em ${dataBR(s.expires_at)}. ⏰\n\n`
-        : `Sua *Assinatura Consulta placas* vence hoje (${dataBR(s.expires_at)}). ⏰\n\n`) +
+        ? `Sua *Assinatura Coisas de Despachantes* venceu em ${dataBR(s.expires_at)}. ⏰\n\n`
+        : `Sua *Assinatura Coisas de Despachantes* vence hoje (${dataBR(s.expires_at)}). ⏰\n\n`) +
       `Renove por R$ ${ASSINATURA_PLACAS_PRICE.toFixed(2).replace('.', ',')} no painel, em *Coisas de Despachantes*, ` +
       `para continuar emitindo seus documentos sem interrupção.\n\n` +
       `_MC Despachadoria Consultas_`;
@@ -9877,7 +9880,7 @@ app.get('/api/admin/users', requireAuth, requireSuperAdmin, async (req, res) => 
 });
 
 // ── ADMIN: POST /api/admin/users/:id/assinatura ──────────────────────────────
-// Libera a Assinatura Consulta placas na mão, sem PIX. Dois modos:
+// Libera a Assinatura Coisas de Despachantes na mão, sem PIX. Dois modos:
 //   modo='indefinida' → expires_at NULL, vale até o admin revogar
 //   modo='ate'        → expires_at na data escolhida (fim do dia, horário de BSB)
 // cota vazia/ausente = ilimitada; qualquer número = teto de consultas de placa.

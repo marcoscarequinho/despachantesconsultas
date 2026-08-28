@@ -733,7 +733,7 @@
 <div id="modal-assinatura" class="modal-backdrop hidden">
   <div class="modal-box">
     <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-      <h3 class="font-bold text-gray-800">🔑 Assinatura Consulta placas</h3>
+      <h3 class="font-bold text-gray-800">🔑 Assinatura Coisas de Despachantes</h3>
       <button onclick="closeModal('modal-assinatura')" class="text-gray-400 hover:text-gray-600 text-xl font-bold">✕</button>
     </div>
     <div class="p-6 space-y-4">
@@ -1505,7 +1505,7 @@ function renderUsers(users) {
       <td class="px-4 py-3">
         <div class="flex items-center justify-center gap-1 flex-wrap">
           <button onclick="openDetails(${u.id})" class="action-btn bg-blue-100 text-blue-700 hover:bg-blue-200" title="Detalhes">👁</button>
-          <button onclick="openAssinaturaById(${u.id})" class="action-btn bg-purple-100 text-purple-700 hover:bg-purple-200" title="Assinatura Consulta placas">🔑</button>
+          <button onclick="openAssinaturaById(${u.id})" class="action-btn bg-purple-100 text-purple-700 hover:bg-purple-200" title="Assinatura Coisas de Despachantes">🔑</button>
           <button onclick="openEditById(${u.id})" class="action-btn bg-gray-100 text-gray-700 hover:bg-gray-200" title="Editar">✏️</button>
           <button onclick="openCreditsById(${u.id})" class="action-btn bg-green-100 text-green-700 hover:bg-green-200" title="Ajustar créditos">💰</button>
           <button onclick="openServicePricesById(${u.id})" class="action-btn bg-amber-100 text-amber-700 hover:bg-amber-200" title="Preços Personalizados">💲</button>
@@ -1517,7 +1517,7 @@ function renderUsers(users) {
     </tr>`).join('');
 }
 
-// ── Assinatura Consulta placas ───────────────────────────────────────────────
+// ── Assinatura Coisas de Despachantes ────────────────────────────────────────
 // Selo na coluna de situação: mostra de relance quem tem acesso à aba "Coisas
 // de Despachantes" e se veio de PIX ou de liberação manual.
 function assinaturaBadge(u) {
@@ -1527,7 +1527,7 @@ function assinaturaBadge(u) {
     ? new Date(u.assinatura_expira_em).toLocaleDateString('pt-BR')
     : 'sem prazo';
   const cls = cortesia ? 'badge-purple' : 'badge-green';
-  return `<span class="${cls}" title="Assinatura Consulta placas — ${cortesia ? 'liberada pelo admin' : 'paga via PIX'}, ${validade}">🔑 ${cortesia ? 'Liberada' : 'Assinante'} · ${validade}</span>`;
+  return `<span class="${cls}" title="Assinatura Coisas de Despachantes — ${cortesia ? 'liberada pelo admin' : 'paga via PIX'}, ${validade}">🔑 ${cortesia ? 'Liberada' : 'Assinante'} · ${validade}</span>`;
 }
 
 function openAssinaturaById(id) {
