@@ -3878,29 +3878,99 @@ async function extractAtpveFieldsFromPdf(pdfBuf) {
 // log diz exatamente isso).
 const CARACTERE_PERDIDO = /[?\uFFFD]/;
 const LETRA_ACENTUADA = /[\u00C0-\u00FF]/;
+const semAcento = t => String(t).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
 
-function repairAtpveAccents(fields, pdfBuf) {
+// Recupera as letras perdidas de "valor" usando "modelo" como gabarito: o
+// resultado é o valor ORIGINAL com troca apenas nas posições estragadas. Exige
+// mesmo comprimento e texto idêntico fora dessas posições, comparando sem
+// acento e sem caixa — assim "RUA S?O JOSE" aceita o gabarito "Rua São José" e
+// vira "RUA SÃO JOSE" (só o "?" virou "Ã"; o "JOSE" continua como o Detran
+// mandou). Devolve null quando o gabarito é outro texto.
+function restaurarLetrasPerdidas(valor, modelo) {
+  if (!modelo || modelo.length !== valor.length) return null;
+  const vRaso = semAcento(valor);
+  const mRaso = semAcento(modelo);
+  const saida = [...valor];
+  let trocou = false;
+  for (let i = 0; i < valor.length; i++) {
+    if (CARACTERE_PERDIDO.test(valor[i])) {
+      if (!LETRA_ACENTUADA.test(modelo[i])) return null;
+      // O dado do Detran vem todo em maiúscula; o gabarito do CEP, não.
+      saida[i] = /[a-z]/.test(valor) ? modelo[i] : modelo[i].toUpperCase();
+      trocou = true;
+      continue;
+    }
+    if (vRaso[i] !== mRaso[i]) return null;
+  }
+  return trocou ? saida.join('') : null;
+}
+
+// ── Acentos perdidos na extração ────────────────────────────────────────────
+// O pdf.js do pdf-parse depende do ToUnicode da fonte do PDF de origem: quando
+// ele não cobre um glifo, a letra volta como "?" (ou U+FFFD) — foi o que fez
+// "RUA SÃO JOSE" virar "RUA S?O JOSE" no endereço do comprador do ATPVe.
+//
+// Duas fontes para recuperar a letra, nessa ordem:
+//  1. o texto CRU do content stream (WinAnsi/latin1), que não passa pelo
+//     ToUnicode — de graça, serve para qualquer campo;
+//  2. o CEP do comprador nos Correios (ViaCEP), que é a fonte oficial do nome
+//     do logradouro e do bairro. Na consulta da placa MTX6H99 o texto cru
+//     também já vinha sem a letra, então só o CEP resolve.
+//
+// Nos dois casos a troca acontece SÓ nas posições estragadas e só quando o
+// resto do texto bate letra por letra (ver restaurarLetrasPerdidas): o
+// documento não pode ganhar um logradouro diferente do que o Detran mandou.
+async function repairAtpveAccents(fields, pdfBuf) {
   const quebrados = Object.keys(fields).filter(k => CARACTERE_PERDIDO.test(fields[k]));
   if (!quebrados.length) return fields;
 
   let candidatos = [];
-  try {
-    candidatos = extractRawPdfStrings(pdfBuf);
-  } catch (e) {
-    console.error('[atpve] falha ao ler o texto cru do PDF para recuperar acentos:', e.message);
-    return fields;
-  }
+  try { candidatos = extractRawPdfStrings(pdfBuf); }
+  catch (e) { console.error('[atpve] falha ao ler o texto cru do PDF:', e.message); }
 
+  const pendentes = [];
   for (const key of quebrados) {
-    const corrigido = matchAccentedCandidate(fields[key], candidatos);
-    if (corrigido) {
-      fields[key] = corrigido;
-    } else {
-      // Não é o nosso extrator: o caractere já veio perdido no PDF da origem.
-      console.error(`[atpve] campo "${key}" veio sem o acento no PDF da despbrasil (valor: ${fields[key]}).`);
+    const corrigido = candidatos.map(c => restaurarLetrasPerdidas(fields[key], c)).find(Boolean);
+    if (corrigido) fields[key] = corrigido;
+    else pendentes.push(key);
+  }
+  if (!pendentes.length) return fields;
+
+  // Só logradouro e bairro têm gabarito no CEP; nome de pessoa, não.
+  const porCep = { nomelogradourocomprador: 'logradouro', bairroimovelcomprador: 'bairro' };
+  const alvosCep = pendentes.filter(k => porCep[k]);
+  if (alvosCep.length && fields.cepimovelcomprador) {
+    const end = await consultarCep(fields.cepimovelcomprador);
+    for (const key of alvosCep) {
+      const corrigido = restaurarLetrasPerdidas(fields[key], end?.[porCep[key]]);
+      if (corrigido) {
+        fields[key] = corrigido;
+        pendentes.splice(pendentes.indexOf(key), 1);
+      }
     }
   }
+
+  for (const key of pendentes) {
+    console.error(`[atpve] não consegui recuperar o acento do campo "${key}" (valor: ${fields[key]}).`);
+  }
   return fields;
+}
+
+// Logradouro e bairro oficiais de um CEP (ViaCEP, público e sem chave). Melhor
+// esforço: qualquer falha devolve null e o valor fica como veio, porque isso
+// aqui nunca pode derrubar uma consulta de R$ 99,00 já paga.
+async function consultarCep(cep) {
+  const limpo = String(cep || '').replace(/\D/g, '');
+  if (limpo.length !== 8) return null;
+  try {
+    const r = await fetch(`https://viacep.com.br/ws/${limpo}/json/`, { signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d?.erro ? null : d;
+  } catch (e) {
+    console.error('[atpve] ViaCEP indisponível:', e.message);
+    return null;
+  }
 }
 
 // Strings de texto (Tj/TJ) de todos os content streams do PDF, com e sem
@@ -3941,23 +4011,6 @@ function extractRawPdfStrings(pdfBuf) {
     }
   }
   return saida;
-}
-
-// Candidato válido = mesmo comprimento, igual fora das posições estragadas, e
-// letra acentuada em cada posição estragada.
-function matchAccentedCandidate(valor, candidatos) {
-  for (const cand of candidatos) {
-    if (cand.length !== valor.length || cand === valor) continue;
-    let serve = true;
-    for (let i = 0; i < valor.length; i++) {
-      if (valor[i] === cand[i]) continue;
-      if (CARACTERE_PERDIDO.test(valor[i]) && LETRA_ACENTUADA.test(cand[i])) continue;
-      serve = false;
-      break;
-    }
-    if (serve) return cand;
-  }
-  return null;
 }
 
 // ── Extração de campos — "Proprietário Atual (v2)" (Chekaki devolve um PDF

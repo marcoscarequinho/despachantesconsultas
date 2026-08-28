@@ -36,6 +36,7 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 | Despbrasil (CRLV Rio Reemissão, Código de Segurança CRV) | `https://despbrasil.com.br/functions/apiConsulta` | header `chaveAcesso` (`DESPBRASIL_KEY`), ver `DESPBRASIL_SVCS` |
 | Consultas Fácil (CRLV Rio Reemissão v2) | `https://www.consultasfacil.net` | header `chaveAcesso` (`CONSULTASFACIL_KEY`) |
 | Vistocar (Débitos e Documentação, Código de Segurança CRV) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
+| ViaCEP | `https://viacep.com.br` | público, sem chave (só recupera acento de logradouro/bairro no ATPV-e, ver `repairAtpveAccents`) |
 | Mercado Pago (PIX) | `https://api.mercadopago.com` | `MP_ACCESS_TOKEN` |
 | Z-API (WhatsApp) | `https://api.z-api.io` | `ZAPI_*` |
 
