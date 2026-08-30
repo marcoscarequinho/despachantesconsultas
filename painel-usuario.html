@@ -1437,7 +1437,7 @@ const ATPVE_RJ_FIELDS = [
     { name: 'comprador_documento', label: 'CPF/CNPJ', required: true },
     { name: 'comprador_nome', label: 'Nome', required: true },
     { name: 'comprador_email', label: 'E-mail', required: true },
-    { name: 'comprador_cep', label: 'CEP', required: true },
+    { name: 'comprador_cep', label: 'CEP', required: true, placeholder: '00000000' },
     { name: 'comprador_logradouro', label: 'Logradouro', required: true },
     { name: 'comprador_numero', label: 'Número', required: true },
     { name: 'comprador_complemento', label: 'Complemento', required: false },
@@ -1526,14 +1526,61 @@ function renderIntencaoRjFields(ufPlaceholder = 'RJ') {
            <option value="">Selecione...</option>
            ${f.options.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
          </select>`
-      : `<input id="ir-${f.name}" type="text" class="input-field" placeholder="${escapeHtml(placeholder)}" ${f.required ? 'required' : ''}>`;
-    return `<div><label class="label">${escapeHtml(f.label)}${req}</label>${input}</div>`;
+      : `<input id="ir-${f.name}" type="text" class="input-field" placeholder="${escapeHtml(placeholder)}"${f.name === 'comprador_cep' ? ' inputmode="numeric" maxlength="8"' : ''} ${f.required ? 'required' : ''}>`;
+    // O CEP do comprador ganha uma linha de status logo abaixo do campo, usada
+    // pelo autopreenchimento via ViaCEP (mesmo padrão de f-c_cep e f2-...cep).
+    const status = f.name === 'comprador_cep' ? '<p id="ir-cep-status" class="text-xs mt-1 hidden"></p>' : '';
+    return `<div><label class="label">${escapeHtml(f.label)}${req}</label>${input}${status}</div>`;
   };
   document.getElementById('intencao-form-fields').innerHTML = ATPVE_RJ_FIELDS.map(g => `
     <div class="mb-4">
       <h4 class="text-xs font-semibold text-gray-500 uppercase mb-2">${escapeHtml(g.group)}</h4>
       <div class="grid sm:grid-cols-2 gap-4">${g.fields.map(field).join('')}</div>
     </div>`).join('') + (ufPlaceholder === 'SP' ? renderAtpveAnexosGroup() : '');
+
+  // Máscara do CEP do comprador (só dígitos, 8) — ao completar, busca o endereço
+  // no ViaCEP e preenche logradouro/bairro/cidade/UF. Vale para os 4 estados,
+  // que compartilham este formulário.
+  const cepEl = document.getElementById('ir-comprador_cep');
+  if (cepEl) {
+    cepEl.addEventListener('input', function() {
+      this.value = this.value.replace(/\D/g, '').slice(0, 8);
+      if (this.value.length === 8) autocompletarCepAtpve(this.value);
+      else setAtpveCepStatus('');
+    });
+    cepEl.addEventListener('blur', function() {
+      if (this.value && this.value.length !== 8)
+        setAtpveCepStatus('⚠️ CEP incompleto — informe os 8 dígitos.', 'text-amber-600');
+    });
+  }
+}
+
+function setAtpveCepStatus(msg, cor) {
+  const el = document.getElementById('ir-cep-status');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.className = `text-xs mt-1 ${cor || ''}`;
+  if (!msg) el.classList.add('hidden');
+}
+
+async function autocompletarCepAtpve(cep) {
+  setAtpveCepStatus('⏳ Buscando endereço…', 'text-blue-600');
+  try {
+    const r = await fetch(`/api/cep/${cep}`);
+    const data = await r.json();
+    if (!r.ok) { setAtpveCepStatus('⚠️ ' + (data.error || 'CEP não encontrado.'), 'text-amber-600'); return; }
+
+    // A Chekaki recebe o nome do município (não o código IBGE) em comprador_cidade.
+    const set = (name, val) => { const el = document.getElementById('ir-' + name); if (el && val) el.value = val; };
+    set('comprador_logradouro', data.logradouro);
+    set('comprador_bairro',     data.bairro);
+    set('comprador_cidade',     data.cidade_nome);
+    set('comprador_uf',         data.uf);
+
+    setAtpveCepStatus(`✅ ${data.cidade_nome ? data.cidade_nome + '/' + data.uf : 'Endereço encontrado'} — confira os campos.`, 'text-green-600');
+  } catch {
+    setAtpveCepStatus('⚠️ Erro ao buscar CEP. Preencha manualmente.', 'text-amber-600');
+  }
 }
 
 function buildIntencaoRjParams() {
@@ -1556,14 +1603,19 @@ function validateIntencaoRjParams(p) {
       if (f.required && !p[f.name]) return `Campo obrigatório: ${f.label}`;
     }
   }
+  if (String(p.comprador_cep || '').replace(/\D/g, '').length !== 8)
+    return 'CEP do comprador inválido. Deve ter 8 dígitos.';
   return null;
 }
 
 function preencherIntencaoRjFields(p) {
   ATPVE_RJ_FIELDS.forEach(g => g.fields.forEach(f => {
     const el = document.getElementById('ir-' + f.name);
-    if (el) el.value = p[f.name] ?? '';
+    if (!el) return;
+    const val = p[f.name] ?? '';
+    el.value = f.name === 'comprador_cep' ? String(val).replace(/\D/g, '').slice(0, 8) : val;
   }));
+  setAtpveCepStatus('');
 }
 
 // Botão "Alterar" de "Meus ATPV-e" — reabre o formulário do estado do pedido já

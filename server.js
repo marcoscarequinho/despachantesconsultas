@@ -2072,6 +2072,12 @@ function buildAtpveCadastroBody(uf, params) {
   if (missingFields.length)
     return { error: `Campos obrigatórios ausentes: ${missingFields.join(', ')}` };
 
+  // O DETRAN recusa o pedido com CEP fora do formato e a Chekaki devolve só uma
+  // mensagem genérica — barrar aqui dá o erro certo antes de gastar a chamada.
+  const compradorCep = String(p.comprador_cep).replace(/\D/g, '');
+  if (compradorCep.length !== 8)
+    return { error: 'CEP do comprador inválido. Deve ter 8 dígitos.' };
+
   const anexos = {};
   for (const campo of ATPVE_ANEXO_FIELDS) {
     const b64 = normalizeAtpveAnexo(p[campo]);
@@ -2112,7 +2118,7 @@ function buildAtpveCadastroBody(uf, params) {
       comprador_documento: String(p.comprador_documento).replace(/\D/g, ''),
       comprador_nome: String(p.comprador_nome).trim().toUpperCase(),
       comprador_email: String(p.comprador_email).trim(),
-      comprador_cep: String(p.comprador_cep).replace(/\D/g, ''),
+      comprador_cep: compradorCep,
       comprador_logradouro: String(p.comprador_logradouro).trim().toUpperCase(),
       comprador_numero: String(p.comprador_numero).trim(),
       comprador_complemento: (String(p.comprador_complemento || '').trim() || '-').toUpperCase(),
