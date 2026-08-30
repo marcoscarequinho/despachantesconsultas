@@ -1132,6 +1132,15 @@ async function initDB() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  // Quando cada disparo de cadencia longa saiu pela ultima vez. Cron diario +
+  // esta marca = "de N em N dias" de verdade: o cron da Vercel so sabe dizer
+  // "dia 1, 6, 11..." do mes, que emenda 6 dias na virada.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS broadcast_agenda (
+      canal        VARCHAR(20) PRIMARY KEY,
+      ultimo_envio TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS intencao_venda_files (
       id         SERIAL PRIMARY KEY,
@@ -10775,6 +10784,33 @@ async function fetchZApiDestinations() {
   return [...destinations.values()];
 }
 
+// Envio de texto puro para grupo. Nao da para usar o sendWhatsApp comum: ele
+// passa pelo formatWhatsAppPhone, que so deixa digitos e destruiria o sufixo
+// "-group" do id do grupo.
+async function sendBroadcastText(dest, message) {
+  if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !dest) return;
+  const phone = String(dest);
+  try {
+    const r = await fetch(
+      `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/send-text`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(ZAPI_CLIENT_TOKEN ? { 'Client-Token': ZAPI_CLIENT_TOKEN } : {}),
+        },
+        body: JSON.stringify({ phone, message }),
+      }
+    );
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { console.error(`Broadcast texto erro [${phone}]:`, JSON.stringify(d)); throw new Error('envio recusado'); }
+    console.log(`✅ Broadcast texto → ${phone}`);
+  } catch (err) {
+    console.error(`Broadcast texto falha [${phone}]:`, err.message);
+    throw err;
+  }
+}
+
 // Envio para broadcast — sempre para IDs de grupo ("<id>-group"), imagem + legenda
 async function sendBroadcastImage(dest, base64Png, caption) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !dest) return;
@@ -10874,7 +10910,7 @@ async function contarMembrosGrupo(phone) {
 // incluir = so estes grupos; excluir = todos menos estes; minMembros =
 // [{ nome, minimo }] so dispara para o grupo depois que ele cresceu;
 // excluirAoAtingir = o inverso, tira o grupo assim que ele cresce.
-async function runWhatsAppBroadcast({ canal, incluir, excluir, minMembros, excluirAoAtingir } = {}) {
+async function selecionarDestinosBroadcast({ canal, incluir, excluir, minMembros, excluirAoAtingir } = {}) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN) throw new Error('Z-API não configurada');
   let dests = await fetchZApiDestinations();
   if (incluir?.length) dests = dests.filter(d => nomeGrupoCombina(d.name, incluir));
@@ -10898,6 +10934,13 @@ async function runWhatsAppBroadcast({ canal, incluir, excluir, minMembros, exclu
     }
     dests = manter;
   }
+
+  return dests;
+}
+
+async function runWhatsAppBroadcast(opts = {}) {
+  const { canal } = opts;
+  const dests = await selecionarDestinosBroadcast(opts);
 
   const campanha = await proximaCampanhaBroadcast(canal || 'geral');
   console.log(`📢 Broadcast [${canal || 'geral'}] campanha "${campanha.id}": ${dests.length} grupos`);
@@ -11006,6 +11049,163 @@ app.post('/api/admin/broadcast-whatsapp-portal', requireAuth, requireSuperAdmin,
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('Erro no broadcast portal manual:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Tabela de serviços — disparo de 5 em 5 dias ──────────────────────────────
+// Mensagem de texto puro (sem imagem nem vídeo, diferente das campanhas em
+// rodízio) para os grupos do disparo geral: PORTAL e SERVIÇOS ficam de fora
+// porque já recebem campanha de 3 em 3 horas.
+const BROADCAST_TABELA_DIAS = 5;
+const BROADCAST_TABELA_MENSAGEM = `👉 https://www.despachantesconsultas.com.br
+Olá! 🚗💨 Confira nossa tabela atualizada de serviços e consultas veiculares. Facilidade, rapidez e sem burocracia para você resolver tudo direto pelo WhatsApp:
+
+🛑 📄 DOCUMENTOS E ATPV-e
+
+✅ Reemissão ATPV-e com Com. Venda: R$ 99,00 (Placa)
+
+✅ Reemissão ATPV-e: R$ 18,90 (Placa + Renavam ou Chassi)
+
+✅ Intenção de Venda (RJ, SP, MS, MG): R$ 60,00 a R$ 70,00
+
+✅ Inserir Comunicação de Venda: R$ 32,90
+
+✅ Transmitir / Desbloquear Comunicação: R$ 7,00
+
+✅ Cancelar Comunicação de Venda: R$ 11,20
+
+🚗 EMISSÃO DE CRLV-e (LICENCIAMENTO)
+
+✅ CRLV-e RJ (⚡ Na hora / Reemissão): R$ 20,00 a R$ 65,00
+
+✅ CRLV-e Instantâneo (PE / CE): A partir de R$ 32,50
+
+✅ CRLV-e Agendado (ES, AL, DF, PB, PR, RN, SC): R$ 21,00 a R$ 84,00
+
+✅ CRLV-e Digital por Estado (SP, MG, BA, PR, etc.): R$ 14,00 a R$ 162,00 (Placa + Renavam + CPF)
+
+🔍 CONSULTAS E DÉBITOS
+
+✅ Consulta FIPE: Grátis
+
+✅ Consulta de Débitos: R$ 1,50 (Placa) | Todos os estados: R$ 3,00 (Placa + Renavam)
+
+✅ Licenciamento + BIN: R$ 14,00 (Placa)
+
+✅ Básica Estadual / Nacional / RENAVAM: R$ 3,00 a R$ 9,80
+
+✅ Gravame / RENAJUD / Comunicado: R$ 10,50 a R$ 13,30
+
+✅ Histórico de Proprietários: R$ 13,99 (Placa)
+
+✅ Consulta Cautelar VIP GOLD: R$ 27,99 (Placa)
+
+✅ Histórico de Leilão / Fotos: R$ 14,00 a R$ 30,00
+
+✅ Roubo e Furto: R$ 25,00
+
+✅ Auto KM / Prop. Atual / Chassi: R$ 10,50
+
+🛠️ OUTROS SERVIÇOS E DOCUMENTAÇÕES
+
+✅ Localização / Veículos por CPF ou CNPJ: R$ 5,00 a R$ 14,00
+
+✅ Consultar CNH (Por Estado): R$ 4,00 a R$ 16,00
+
+✅ Número CRV Antigo (Por Estado): R$ 77,00 a R$ 600,00
+
+✅ Dívida Ativa (SP, DF, RJ): R$ 3,00
+
+✅ Consulta SPC / Crédito: R$ 21,00
+
+✅ Gerar Contrato / Procuração Veicular: R$ 16,00 a R$ 22,00
+
+⭐ Ferramentas Exclusivas para Assinantes: Declaração de Residência, Nota de Serviços e ASD são Grátis!`;
+
+// Cadência real de 5 dias: o cron roda todo dia e esta troca atômica decide se
+// já venceu. O UPDATE condicional no ON CONFLICT garante que só um processo
+// leva o disparo, mesmo se a Vercel executar o cron duas vezes.
+async function reservarDisparoTabela() {
+  const r = await pool.query(
+    `INSERT INTO broadcast_agenda (canal, ultimo_envio) VALUES ($1, NOW())
+     ON CONFLICT (canal) DO UPDATE SET ultimo_envio = NOW()
+      WHERE broadcast_agenda.ultimo_envio <= NOW() - make_interval(days => $2)
+     RETURNING ultimo_envio`,
+    ['tabela', BROADCAST_TABELA_DIAS]
+  );
+  return r.rowCount > 0;
+}
+
+// Devolve a marca para trás quando o disparo nem chegou a sair (Z-API fora do
+// ar, por exemplo) — assim o cron do dia seguinte tenta de novo em vez de
+// esperar os 5 dias inteiros.
+async function devolverDisparoTabela() {
+  await pool.query(
+    `UPDATE broadcast_agenda
+        SET ultimo_envio = ultimo_envio - make_interval(days => $1)
+      WHERE canal = 'tabela'`,
+    [BROADCAST_TABELA_DIAS]
+  ).catch(() => {});
+}
+
+async function runBroadcastTabela() {
+  const dests = await selecionarDestinosBroadcast({
+    canal: 'tabela',
+    excluir: [BROADCAST_GROUP_PORTAL, BROADCAST_GROUP_SERVICOS],
+    excluirAoAtingir: BROADCAST_MIN_MEMBROS,
+  });
+  console.log(`📢 Broadcast [tabela]: ${dests.length} grupos`);
+
+  let sent = 0, failed = 0;
+  for (const dest of dests) {
+    try {
+      await sendBroadcastText(dest.phone, BROADCAST_TABELA_MENSAGEM);
+      sent++;
+    } catch {
+      failed++;
+    }
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  console.log(`✅ Broadcast tabela concluído: ${sent} enviados, ${failed} falhas`);
+  return { sent, failed, total: dests.length };
+}
+
+// ── GET /api/cron/broadcast-whatsapp-tabela (Vercel Cron — todo dia às 11h BRT;
+// o envio mesmo sai de 5 em 5 dias, quem decide é reservarDisparoTabela) ──────
+app.get('/api/cron/broadcast-whatsapp-tabela', async (req, res) => {
+  const secret = process.env.CRON_SECRET || '';
+  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    if (!await reservarDisparoTabela())
+      return res.json({ success: true, skipped: 'ainda não completou 5 dias desde o último disparo' });
+    try {
+      const result = await runBroadcastTabela();
+      res.json({ success: true, ...result });
+    } catch (err) {
+      await devolverDisparoTabela();
+      throw err;
+    }
+  } catch (err) {
+    console.error('Erro no cron broadcast tabela:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/admin/broadcast-whatsapp-tabela (disparo manual pelo admin) ─────
+// Sai na hora e reinicia a contagem dos 5 dias a partir de agora.
+app.post('/api/admin/broadcast-whatsapp-tabela', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const result = await runBroadcastTabela();
+    await pool.query(
+      `INSERT INTO broadcast_agenda (canal, ultimo_envio) VALUES ('tabela', NOW())
+       ON CONFLICT (canal) DO UPDATE SET ultimo_envio = NOW()`
+    );
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Erro no broadcast tabela manual:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
