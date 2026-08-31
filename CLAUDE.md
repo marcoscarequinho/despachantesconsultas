@@ -28,9 +28,9 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 
 | Provedor | URL | Auth |
 |---|---|---|
-| Chekaki (base) | `https://chekaki.online` | header `chaveAcesso` (`CHAVE_ACESSO`) |
+| Chekaki (base, inclui `consultar-crlv-rj`) | `https://chekaki.online` | header `chaveAcesso` (`CHAVE_ACESSO`) |
 | Datacube | `https://api.consultasdeveiculos.com` | form-urlencoded `auth_token` (`DATACUBE_TOKEN`) |
-| Portal Despachantes (inclui os 3 CRLV-e do Rio) | `https://portaldespachantes.online` | header `chaveAcesso` (`PORTAL_DESP_KEY`), ver `PORTAL_PLACA_MAP` |
+| Portal Despachantes (inclui o CRLV 2 Rio Reemissão) | `https://portaldespachantes.online` | header `chaveAcesso` (`PORTAL_DESP_KEY`), ver `PORTAL_PLACA_MAP` |
 | AutoCRLV | `https://autocrlv.com.br` | Bearer (`AUTOCRLV_KEY`) |
 | Infosimples | `https://api.infosimples.com/api/v2/consultas` | `INFOSIMPLES_TOKEN` |
 | Despbrasil (CRLV Rio Reemissão, Código de Segurança CRV) | `https://despbrasil.com.br/functions/apiConsulta` | header `chaveAcesso` (`DESPBRASIL_KEY`), ver `DESPBRASIL_SVCS` |
@@ -48,11 +48,12 @@ Quase todo o CRLV-e do catálogo saiu para o `portaldespachantes.online` (docs "
 
 | Serviço | Rota | Preço |
 |---|---|---|
-| `consultar-crlv-rj` | `/consultar-crlv-rj` | R$ 20,00 |
 | `crlv-rj-reemissao-2` | `/consultar-crlv-rj2` | R$ 55,00 |
 | `crlv-pe-instantaneo` | `/consultar-crlv-pe` | R$ 35,00 |
 | `crlv-ce-instantaneo` | `/consultar-crlv-ce` | R$ 32,50 |
 | `consultar-crlv-ba` | `/consultar-crlv-ba` | R$ 30,00 |
+
+O `consultar-crlv-rj` (CRLV-e Rio de Janeiro, R$ 20,00) esteve nessa tabela e **voltou para a Chekaki** em 31/08/2026 (doc "Documentação de Integração — 1 endpoint"): mesmo contrato, `POST https://chekaki.online/consultar-crlv-rj` com `{ placa }`, header `chaveAcesso` (`CHAVE_ACESSO`) e o PDF em bytes. Como o path é o próprio `serviceId`, o `apiUrl` e o header padrão de `/api/query` já servem — o bloco dedicado logo abaixo de `PORTAL_PLACA_MAP` só normaliza e valida a placa. O `crlv-rj-reemissao-2` continua no portal.
 
 O envio do PDF por WhatsApp é decidido pelo prefixo `consultar-crlv-`, então os ids fora desse padrão precisam estar em `CRLV_PORTAL_PDF_SVCS` — esquecer disso não quebra a consulta, só faz o cliente parar de receber o documento no WhatsApp. A chave Geral (pós-paga) do `crlv-rj-reemissao-2` usa a mesma rota em `runCrlvRj2General`.
 
