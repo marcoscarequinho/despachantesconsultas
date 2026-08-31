@@ -4048,18 +4048,23 @@ async function extractLinePairFieldsFromPdf(pdfBuf) {
   return fields;
 }
 
-// ── Extração de campos — "Consulta 3 Código Segurança CRV (PDF)" (Vistocar).
+// ── Extração de campos — cartão do Código de Segurança CRV (Vistocar/despbrasil).
 // O PDF é o cartão oficial da Carteira Digital de Trânsito (SENATRAN): os
 // campos ficam desenhados em posições absolutas (sem "Rótulo: valor" em
 // sequência), então o texto extraído sai com renavam+placa+anos colados numa
-// linha só. Como já sabemos renavam/placa por outras fontes, identificamos o
-// código de segurança (11 dígitos, diferente do renavam) e a marca/modelo
-// (linha com "/") por padrão, em vez de tentar separar a linha colada.
+// linha só (Vistocar) ou com renavam e código em linhas seguidas, as duas com
+// 11 dígitos (despbrasil). Como já sabemos renavam/placa por outras fontes,
+// identificamos o código de segurança (9-12 dígitos, diferente do renavam) e a
+// marca/modelo (linha com "/") por padrão, em vez de tentar separar a linha
+// colada. A comparação com o renavam ignora zeros à esquerda: um desencontro de
+// formatação aqui faria o renavam ser copiado no lugar do código.
 function extractVistocarSecurityFields(text, knownRenavam) {
+  const semZeros = (v) => String(v || '').replace(/\D/g, '').replace(/^0+/, '');
+  const renavam = semZeros(knownRenavam);
   const fields = {};
   for (const rawLine of String(text || '').split('\n')) {
     const line = rawLine.trim();
-    if (!fields.codigosegurancacrv && /^\d{9,12}$/.test(line) && line !== knownRenavam) {
+    if (!fields.codigosegurancacrv && /^\d{9,12}$/.test(line) && semZeros(line) !== renavam) {
       fields.codigosegurancacrv = line;
     } else if (!fields.marcamodeloversao && /^[A-Za-z0-9]+\/[A-Za-z0-9 ]+$/.test(line)) {
       fields.marcamodeloversao = line;
@@ -4284,13 +4289,79 @@ async function buildNumeroAtpvePdfBuffer(service, fields, params, { withSelos = 
   return Buffer.from(bytes);
 }
 
+// ── Código de Segurança CRV para o ATPVe: Vistocar primeiro, despbrasil se o
+// PDF vier rasterizado ────────────────────────────────────────────────────────
+// As duas APIs devolvem o MESMO cartão da CDT, mas a Vistocar passou a alternar
+// entre dois arquivos: o PDF nativo do SENATRAN (Producer "Renavam", ~120 KB,
+// com camada de texto) e uma versão RASTERIZADA (Producer "TCPDF", ~420 KB, uma
+// única imagem de página inteira e nenhum texto extraível). Na versão
+// rasterizada não há o que ler: o código de segurança saía em branco no ATPVe
+// mesmo com a consulta feita e paga na Vistocar — e repetir a chamada não
+// adianta, a mesma placa devolve o raster de novo. Por isso, quando o PDF da
+// Vistocar não rende o código, buscamos o mesmo documento na despbrasil
+// (serviço "codigo_seguranca", o do "Consulta 2 Código Segurança CRV"), que só
+// entrega o formato com texto. A segunda chamada só acontece nesse caso.
+async function fetchCodigoSegurancaPdfVistocar(placa) {
+  const r = await fetch(`${VISTOCAR_BASE_URL}/apiclient/security-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await getVistocarToken()}` },
+    body: JSON.stringify({ plate: placa }),
+  });
+  const parsed = await r.json();
+  const ok = r.ok && parsed?.response?.success === true && parsed?.response?.paid === true && parsed?.response?.pdfBase64;
+  if (!ok) {
+    console.error(`[consultar-Numero-ATPVE] Código Segurança CRV (Vistocar) sem PDF válido: ${parsed?.message || parsed?.response?.msg || 'resposta inesperada'}`);
+    return null;
+  }
+  return Buffer.from(parsed.response.pdfBase64, 'base64');
+}
+
+async function fetchCodigoSegurancaPdfDespbrasil(placa) {
+  const r = await fetch(DESPBRASIL_BASE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', chaveAcesso: DESPBRASIL_KEY },
+    body: JSON.stringify({ servico: DESPBRASIL_SVCS['security-code-vistocar'].servico, placa }),
+  });
+  const parsed = await r.json().catch(() => null);
+  if (!r.ok || !parsed?.sucesso || !parsed?.arquivo_url) {
+    console.error(`[consultar-Numero-ATPVE] Código Segurança CRV (despbrasil) sem PDF válido: ${JSON.stringify(parsed)}`);
+    return null;
+  }
+  const pdfRes = await fetch(parsed.arquivo_url);
+  if (!pdfRes.ok) {
+    console.error(`[consultar-Numero-ATPVE] falha ao baixar o PDF do Código Segurança CRV (despbrasil): HTTP ${pdfRes.status}`);
+    return null;
+  }
+  return Buffer.from(await pdfRes.arrayBuffer());
+}
+
+async function fetchCodigoSegurancaCrvFields(placa, knownRenavam) {
+  const fontes = [
+    ['Vistocar', fetchCodigoSegurancaPdfVistocar],
+    ['despbrasil', fetchCodigoSegurancaPdfDespbrasil],
+  ];
+  for (const [fonte, buscarPdf] of fontes) {
+    try {
+      const buf = await buscarPdf(placa);
+      if (!buf) continue;
+      const { text } = await pdfParse(buf);
+      const f = extractVistocarSecurityFields(text, knownRenavam);
+      if (f.codigosegurancacrv) return f;
+      console.error(`[consultar-Numero-ATPVE] PDF do Código Segurança CRV da ${fonte} sem código legível (provável PDF rasterizado, sem camada de texto).`);
+    } catch (e) {
+      console.error(`[consultar-Numero-ATPVE] erro na consulta de Código Segurança CRV via ${fonte}:`, e.message);
+    }
+  }
+  return {};
+}
+
 // ── Consultas complementares da "Número ATPV-E" — Proprietário Atual (v2) via
-// Chekaki (consultar-placa-v2) e Consulta 3 Código Segurança CRV via Vistocar
-// (security-code-vistocar-2), para completar os campos que a despbrasil não
-// retorna. Melhor esforço: falha em qualquer uma delas não derruba a consulta
-// principal do ATPVe, só deixa os campos correspondentes como "Não informado"
-// (o preço de R$99 já reflete o custo das 3 consultas encadeadas, ver
-// SERVICES/consultar-Numero-ATPVE).
+// Chekaki (consultar-placa-v2) e Código Segurança CRV via Vistocar/despbrasil
+// (ver fetchCodigoSegurancaCrvFields), para completar os campos que a
+// despbrasil não retorna. Melhor esforço: falha em qualquer uma delas não
+// derruba a consulta principal do ATPVe, só deixa os campos correspondentes
+// como "Não informado" (o preço de R$99 já reflete o custo das 3 consultas
+// encadeadas, ver SERVICES/consultar-Numero-ATPVE).
 async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam) {
   const merged = {};
 
@@ -4324,27 +4395,9 @@ async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam) {
     console.error('[consultar-Numero-ATPVE] erro na consulta complementar Proprietário Atual (v2):', e.message);
   }
 
-  try {
-    const token = await getVistocarToken();
-    const r = await fetch(`${VISTOCAR_BASE_URL}/apiclient/security-code`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ plate: placa }),
-    });
-    const parsed = await r.json();
-    const ok = r.ok && parsed?.response?.success === true && parsed?.response?.paid === true && parsed?.response?.pdfBase64;
-    if (ok) {
-      const buf = Buffer.from(parsed.response.pdfBase64, 'base64');
-      const { text } = await pdfParse(buf);
-      const f = extractVistocarSecurityFields(text, knownRenavam);
-      if (f.codigosegurancacrv) merged.codigosegurancacrv = f.codigosegurancacrv;
-      if (f.marcamodeloversao) merged.marcamodeloversao = f.marcamodeloversao;
-    } else {
-      console.error(`[consultar-Numero-ATPVE] Consulta 3 Código Segurança CRV sem PDF válido: ${parsed?.message || parsed?.response?.msg || 'resposta inesperada'}`);
-    }
-  } catch (e) {
-    console.error('[consultar-Numero-ATPVE] erro na consulta complementar Código Segurança CRV:', e.message);
-  }
+  const f = await fetchCodigoSegurancaCrvFields(placa, knownRenavam);
+  if (f.codigosegurancacrv) merged.codigosegurancacrv = f.codigosegurancacrv;
+  if (f.marcamodeloversao) merged.marcamodeloversao = f.marcamodeloversao;
 
   return merged;
 }
