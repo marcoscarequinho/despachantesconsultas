@@ -523,12 +523,10 @@ const SERVICES = [
   // Gratuito (antes R$ 9,50).
   { id:'gerar-asd', name:'Gerar ASD RJ', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'asd', icon:'📑' },
   // ── CRLV-e Rio de Janeiro (destaque no topo da Nova Consulta) ──
-  // Mesmo contrato nos dois fornecedores — POST { placa }, header chaveAcesso e o
-  // PDF pronto em bytes na resposta —, só muda o host: o consultar-crlv-rj voltou
-  // para a Chekaki (BASE_API_URL/consultar-crlv-rj, doc de 31/08/2026) e o -rj2
-  // segue no portaldespachantes.online (ver PORTAL_PLACA_MAP). O -rj3 (Agendado)
-  // chegou a existir aqui e foi removido do catálogo; religá-lo é uma linha em
-  // PORTAL_PLACA_MAP.
+  // Saem da API portaldespachantes.online (consultar-crlv-rj e -rj2, ver
+  // PORTAL_PLACA_MAP): mesmo contrato — POST { placa }, header chaveAcesso e o
+  // PDF pronto em bytes na resposta. O -rj3 (Agendado) chegou a existir aqui e
+  // foi removido do catálogo; religá-lo é uma linha em PORTAL_PLACA_MAP.
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   { id:'crlv-rj-reemissao-2', name:'CRLV 2 Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // Backup da CRLV 2 Rio Reemissão (acima): quando a API estiver fora do ar, o cliente
@@ -6469,8 +6467,8 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       'consultar-placa-obito':    'consultar-placa-obito',
       // CRLV-e do Rio (doc "Documentação de Integração — 3 endpoints",
       // 24/08/2026): o rj2 substituiu a fonte Vistocar (apiclient/crlv-rj). O
-      // rj3 é o Agendado, que saiu do catálogo. O consultar-crlv-rj (R$ 20)
-      // voltou para a Chekaki — ver o bloco logo abaixo.
+      // rj3 é o Agendado, que saiu do catálogo.
+      'consultar-crlv-rj':        'consultar-crlv-rj',
       'crlv-rj-reemissao-2':      'consultar-crlv-rj2',
       // CRLV-e de Pernambuco (doc de 2 endpoints), que era da Vistocar
       // (apiclient/crlv-pe), e o do Ceará (doc de 1 endpoint).
@@ -6485,18 +6483,6 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
       if (placa.length < 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
       apiUrl = `${PORTAL_BASE_URL}/${PORTAL_PLACA_MAP[serviceId]}`;
-      method = 'POST';
-      body   = { placa };
-    }
-    // CRLV-e Rio de Janeiro — voltou do portaldespachantes.online para a Chekaki
-    // (doc "Documentação de Integração — 1 endpoint", 31/08/2026). O contrato é o
-    // mesmo (POST { placa }, header chaveAcesso, PDF pronto em bytes; erro em JSON
-    // { error }) e o path é o próprio serviceId, então o apiUrl padrão
-    // (BASE_API_URL/consultar-crlv-rj) e o chaveAcesso padrão já servem: aqui só
-    // normaliza e valida a placa.
-    if (serviceId === 'consultar-crlv-rj') {
-      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
-      if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
       method = 'POST';
       body   = { placa };
     }
