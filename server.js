@@ -10340,14 +10340,49 @@ app.get('/api/admin/transactions', requireAuth, requireSuperAdmin, async (req, r
 // ── ADMIN: GET /api/admin/queries ─────────────────────────────────────────────
 app.get('/api/admin/queries', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
+    // pdf_disponivel diz se o documento ainda está no pdf_cache (ele expira em
+    // 7 dias) — é o que decide se a linha vira link no admin. LATERAL com
+    // LIMIT 1 porque a mesma consulta pode ter mais de um PDF em cache
+    // (reemissão), e um JOIN direto duplicaria a linha no histórico.
     const r = await pool.query(
       `SELECT q.id,q.service_name,q.amount,q.result_type,q.created_at,
-              u.name AS user_name,u.email AS user_email
-       FROM queries q JOIN users u ON u.id=q.user_id
+              u.name AS user_name,u.email AS user_email,
+              (pc.query_id IS NOT NULL) AS pdf_disponivel
+       FROM queries q
+       JOIN users u ON u.id=q.user_id
+       LEFT JOIN LATERAL (
+         SELECT p.query_id FROM pdf_cache p
+          WHERE p.query_id = q.id AND p.expires_at > NOW()
+          LIMIT 1
+       ) pc ON TRUE
        ORDER BY q.created_at DESC LIMIT 500`
     );
     res.json({ queries: r.rows });
   } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
+});
+
+// ── ADMIN: GET /api/admin/queries/:id/pdf ────────────────────────────────────
+// Abre o PDF de uma consulta de qualquer cliente. Precisa de rota própria: o
+// /api/pdf/:token do painel casa o token com o user_id de quem pede, então o
+// admin nunca conseguiria abrir o documento de outra pessoa por lá.
+app.get('/api/admin/queries/:id/pdf', requireAuth, requireSuperAdmin, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Consulta inválida.' });
+  try {
+    const r = await pool.query(
+      `SELECT pdf_data FROM pdf_cache
+        WHERE query_id=$1 AND expires_at > NOW()
+        ORDER BY created_at DESC LIMIT 1`,
+      [id]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'PDF não encontrado ou expirado.' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="consulta-${id}.pdf"`);
+    return res.send(Buffer.from(r.rows[0].pdf_data, 'base64'));
+  } catch (err) {
+    console.error('Erro ao abrir PDF no admin:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
 });
 
 // ── ADMIN: GET /api/admin/manual-queries (fila de upload manual) ─────────────

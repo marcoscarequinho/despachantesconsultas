@@ -1880,16 +1880,37 @@ function filterQueries() {
   renderQueries(filtered);
 }
 
+// Só as 10 consultas de PDF mais recentes viram link: a lista sobe conforme
+// entram consultas novas e a 11ª volta a ser um selo comum. O corte é sobre a
+// lista exibida (já em ordem decrescente de data), então vale também com a
+// busca aplicada.
+const QR_PDF_LINKS = 10;
+
 function renderQueries(qs) {
   document.getElementById('qr-count').textContent = `${qs.length} consulta(s) exibida(s)`;
   const tbody = document.getElementById('qr-tbody');
   if (!qs.length) { tbody.innerHTML = `<tr><td colspan="5" class="text-center py-10 text-gray-400">Nenhuma consulta.</td></tr>`; return; }
+
+  const comLink = new Set(
+    qs.filter(q => q.result_type === 'pdf' && q.pdf_disponivel)
+      .slice(0, QR_PDF_LINKS)
+      .map(q => q.id)
+  );
+
+  const selo = q => {
+    const txt = q.result_type.toUpperCase();
+    if (!comLink.has(q.id))
+      return `<span class="${q.result_type==='pdf'?'badge-blue':'badge-green'}">${txt}</span>`;
+    return `<a href="/api/admin/queries/${q.id}/pdf" target="_blank" rel="noopener"
+               class="badge-blue underline hover:opacity-80" title="Abrir o PDF em nova aba">${txt} ↗</a>`;
+  };
+
   tbody.innerHTML = qs.map(q => `
     <tr class="table-row">
       <td class="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">${fmtDate(q.created_at)}</td>
       <td class="px-4 py-3"><div class="text-sm font-medium text-gray-800">${q.user_name}</div><div class="text-xs text-gray-400">${q.user_email}</div></td>
       <td class="px-4 py-3 text-sm text-gray-700">${q.service_name}</td>
-      <td class="px-4 py-3 text-center"><span class="${q.result_type==='pdf'?'badge-blue':'badge-green'}">${q.result_type.toUpperCase()}</span></td>
+      <td class="px-4 py-3 text-center">${selo(q)}</td>
       <td class="px-4 py-3 text-right font-semibold text-red-500 text-sm">-${fmt(q.amount)}</td>
     </tr>`).join('');
 }
