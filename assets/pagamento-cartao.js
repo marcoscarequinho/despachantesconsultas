@@ -34,6 +34,7 @@
   let mp = null;
   let cardFormAtual = null;
   let brick3ds = null;
+  let observadorParcelas = null;
   let estiloPosto = false;
 
   // Valor mínimo por parcela que o Mercado Pago aceita, medido na tabela real
@@ -327,6 +328,38 @@
       };
       if (selParcelas) selParcelas.addEventListener('change', atualizarBotaoParcelas);
 
+      // Mostra/esconde o seletor conforme as opções que o Mercado Pago mandou.
+      // Fica numa função só porque é chamada por dois caminhos: o callback do
+      // SDK e o observador abaixo.
+      const aplicarParcelas = () => {
+        limitarParcelas();
+        const opcoes = selParcelas?.options.length || 0;
+        const bloco = document.getElementById('pgc-parcelas');
+        const aviso = document.getElementById('pgc-sem-parcelas');
+        const podeParcelar = ehCredito && opcoes > 1;
+        if (bloco) bloco.classList.toggle('pgc-oculto', !podeParcelar);
+        if (aviso) {
+          // O aviso do mínimo só faz sentido depois que o MP respondeu: antes
+          // disso não há opção nenhuma e ele acusaria falta de parcelamento sem
+          // saber. Por isso "opcoes > 0".
+          aviso.classList.toggle('pgc-oculto', !ehCredito || podeParcelar || opcoes === 0);
+          if (ehCredito && !podeParcelar && opcoes > 0) {
+            aviso.textContent = `Neste valor o Mercado Pago não permite parcelar (ele pede pelo menos ${brl(PARCELA_MINIMA)} por parcela). A partir de ${brl(PARCELA_MINIMA * 2)} dá para dividir em 2x, e em até ${maxParcelas}x a partir de ${brl(PARCELA_MINIMA * maxParcelas)}.`;
+          }
+        }
+        atualizarBotaoParcelas();
+      };
+
+      // O callback onInstallmentsReceived do SDK já se mostrou frágil (o
+      // cliente via só "à vista" mesmo com a tabela cheia), então não dependemos
+      // só dele: este observador reage a QUALQUER preenchimento do <select>,
+      // venha de onde vier. Não entra em laço — depois do corte não sobra opção
+      // acima do limite, logo não há nova mutação.
+      if (selParcelas && window.MutationObserver) {
+        observadorParcelas = new MutationObserver(() => aplicarParcelas());
+        observadorParcelas.observe(selParcelas, { childList: true });
+      }
+
       cardFormAtual = mp.cardForm({
         amount: String(valorCobrado),
         iframe: false,
@@ -359,24 +392,11 @@
             if (!erro && Array.isArray(metodos)) metodosDoBin = metodos;
           },
           onInstallmentsReceived: (erro, parcelas) => {
-            if (erro) return;
-            limitarParcelas();
-            // Só mostra o seletor quando sobrou mais de uma opção. Quando não
-            // sobra, o cliente merece saber por quê: o MP exige um mínimo por
-            // parcela, e em compra pequena só cabe 1x. Sem esse aviso o campo
-            // simplesmente sumia e parecia defeito.
-            const opcoes = selParcelas?.options.length || 0;
-            const bloco = document.getElementById('pgc-parcelas');
-            const aviso = document.getElementById('pgc-sem-parcelas');
-            const podeParcelar = ehCredito && opcoes > 1;
-            if (bloco) bloco.classList.toggle('pgc-oculto', !podeParcelar);
-            if (aviso) {
-              aviso.classList.toggle('pgc-oculto', !ehCredito || podeParcelar);
-              if (ehCredito && !podeParcelar) {
-                aviso.textContent = `Neste valor o Mercado Pago não permite parcelar (ele pede pelo menos ${brl(PARCELA_MINIMA)} por parcela). A partir de ${brl(PARCELA_MINIMA * 2)} dá para dividir em 2x, e em até ${maxParcelas}x a partir de ${brl(PARCELA_MINIMA * maxParcelas)}.`;
-              }
+            if (erro) {
+              console.error('[cartao] parcelas:', erro);
+              return;
             }
-            atualizarBotaoParcelas();
+            aplicarParcelas();
           },
           onIssuersReceived: (erro, emissores) => {
             // O seletor de banco só faz sentido quando há mais de um emissor
@@ -502,6 +522,7 @@
     // tela; sem isso, reabrir o formulário monta um em cima do outro — e os ids
     // (form-checkout__*) são únicos na página.
     async desmontar() {
+      if (observadorParcelas) { try { observadorParcelas.disconnect(); } catch {} observadorParcelas = null; }
       if (cardFormAtual) { try { cardFormAtual.unmount(); } catch {} cardFormAtual = null; }
       if (brick3ds) { try { brick3ds.unmount(); } catch {} brick3ds = null; }
       const form = document.getElementById('form-checkout');
