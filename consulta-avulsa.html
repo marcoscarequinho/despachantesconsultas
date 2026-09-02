@@ -47,7 +47,7 @@
 
     <div class="text-center">
       <h1 class="text-2xl md:text-3xl font-bold text-blue-900">Consulta Avulsa — Reemissão da ATPVe Com Comunicação de Venda</h1>
-      <p class="text-gray-600 mt-2">Sem cadastro e sem mensalidade: preencha, pague <strong>R$ 120,00</strong> no PIX e receba o documento na hora. No cartão de débito há acréscimo de 5%.</p>
+      <p class="text-gray-600 mt-2">Sem cadastro e sem mensalidade: preencha, pague <strong>R$ 120,00</strong> no PIX e receba o documento na hora. No cartão há acréscimo: 5% no débito e 7% no crédito.</p>
       <p id="cliente-badge" class="hidden mt-2 inline-block text-sm font-semibold text-green-700 bg-green-50 border border-green-200 px-3 py-1 rounded-full"></p>
     </div>
 
@@ -91,18 +91,22 @@
            (CARTAO_ACRESCIMO); aqui é só o que o cliente vê para decidir. -->
       <div id="bloco-metodo">
         <label class="label">Como você quer pagar?</label>
-        <div class="grid grid-cols-2 gap-3">
+        <div class="grid grid-cols-3 gap-2">
           <button type="button" class="metodo-btn ativo" data-metodo="pix">
-            <span class="block text-lg">⚡ PIX</span>
+            <span class="block text-base">⚡ PIX</span>
             <span class="block text-xs opacity-80">sem acréscimo</span>
           </button>
-          <button type="button" class="metodo-btn" data-metodo="cartao">
-            <span class="block text-lg">💳 Débito</span>
+          <button type="button" class="metodo-btn" data-metodo="debito">
+            <span class="block text-base">💳 Débito</span>
             <span class="block text-xs opacity-80">+5%</span>
+          </button>
+          <button type="button" class="metodo-btn" data-metodo="credito">
+            <span class="block text-base">💳 Crédito</span>
+            <span class="block text-xs opacity-80">+7%</span>
           </button>
         </div>
         <p id="aviso-acrescimo" class="mt-3 text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-3">
-          No cartão de débito há acréscimo de 5%. No PIX não há acréscimo.
+          No PIX não há acréscimo. No débito há acréscimo de 5% e no crédito, de 7%.
         </p>
       </div>
 
@@ -129,11 +133,11 @@
 
     <!-- PASSO 3B: cartão de débito -->
     <div id="step-cartao" class="hidden bg-white rounded-xl shadow p-6 space-y-4">
-      <h2 class="font-bold text-blue-900 text-lg">Pagar no cartão de débito</h2>
+      <h2 id="cartao-titulo" class="font-bold text-blue-900 text-lg">Pagar no cartão</h2>
 
       <div class="bg-gray-50 border border-gray-200 rounded-lg p-4 text-sm text-gray-700 space-y-1">
         <div class="flex justify-between"><span>Consulta</span><strong id="cartao-liquido">R$ 0,00</strong></div>
-        <div class="flex justify-between"><span>Acréscimo do cartão (5%)</span><strong id="cartao-taxa">R$ 0,00</strong></div>
+        <div class="flex justify-between"><span id="cartao-rotulo-taxa">Acréscimo do cartão</span><strong id="cartao-taxa">R$ 0,00</strong></div>
         <div class="flex justify-between text-base pt-1 border-t border-gray-200 mt-1">
           <span class="font-semibold">Total a pagar</span><strong id="cartao-total" class="text-orange-600">R$ 0,00</strong>
         </div>
@@ -267,11 +271,12 @@ const PRECO_SERVICO = 120;
 
 function atualizarAviso() {
   const el = document.getElementById('aviso-acrescimo');
-  if (window.PagamentoCartao) el.textContent = PagamentoCartao.textoAviso(PRECO_SERVICO);
+  if (window.PagamentoCartao)
+    el.textContent = PagamentoCartao.textoAviso(PRECO_SERVICO, metodo === 'pix' ? null : metodo);
   const btn = document.getElementById('btn-pagar');
   btn.textContent = metodo === 'pix'
     ? 'Gerar PIX de R$ 120,00'
-    : 'Pagar no cartão de débito';
+    : 'Pagar no cartão de ' + PagamentoCartao.rotuloTipo(metodo);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -328,7 +333,7 @@ function voltarDoCartao() {
 }
 
 function submitOrder() {
-  return metodo === 'cartao' ? pagarComCartao() : gerarPixAvulso();
+  return metodo === 'pix' ? gerarPixAvulso() : pagarComCartao();
 }
 
 // Cartão de débito: o pedido só nasce depois que o Mercado Pago aceita o
@@ -338,7 +343,11 @@ async function pagarComCartao() {
   const lido = lerFormulario();
   if (!lido) return;
 
-  const total = PagamentoCartao.comAcrescimo(PRECO_SERVICO);
+  const total = PagamentoCartao.comAcrescimo(PRECO_SERVICO, metodo);
+  const pct = Math.round(PagamentoCartao.percentual(metodo) * 100);
+  document.getElementById('cartao-titulo').textContent =
+    'Pagar no cartão de ' + PagamentoCartao.rotuloTipo(metodo);
+  document.getElementById('cartao-rotulo-taxa').textContent = 'Acréscimo do cartão (' + pct + '%)';
   document.getElementById('cartao-liquido').textContent = PagamentoCartao.brl(PRECO_SERVICO);
   document.getElementById('cartao-taxa').textContent = PagamentoCartao.brl(total - PRECO_SERVICO);
   document.getElementById('cartao-total').textContent = PagamentoCartao.brl(total);
@@ -350,6 +359,7 @@ async function pagarComCartao() {
     containerId: 'cartao-brick',
     container3dsId: 'cartao-3ds',
     valor: PRECO_SERVICO,
+    tipo: metodo,
     email: lido.email,
     doc: lido.params.cpf_vendedor || lido.params.cpf_comprador,
     endpoint: '/api/public/pedido/cartao',

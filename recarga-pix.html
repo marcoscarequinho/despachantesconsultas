@@ -62,7 +62,7 @@
     <div class="text-center">
       <div class="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-2xl text-4xl mb-4">💸</div>
       <h1 class="text-2xl font-bold text-gray-900">Recarregar créditos</h1>
-      <p class="text-gray-500 mt-1">PIX sem acréscimo ou cartão de débito. Créditos liberados automaticamente.</p>
+      <p class="text-gray-500 mt-1">PIX sem acréscimo, ou cartão de débito (+5%) e crédito (+7%). Créditos liberados automaticamente.</p>
     </div>
 
     <!-- STEP 1: Formulário de valor -->
@@ -88,18 +88,22 @@
            (CARTAO_ACRESCIMO); aqui só exibimos para o cliente decidir. -->
       <div id="bloco-metodo">
         <label class="block text-sm font-semibold text-gray-600 mb-2">Como você quer pagar?</label>
-        <div class="grid grid-cols-2 gap-3">
+        <div class="grid grid-cols-3 gap-2">
           <button type="button" class="metodo-btn ativo" data-metodo="pix">
-            <span class="block text-lg">⚡ PIX</span>
+            <span class="block text-base">⚡ PIX</span>
             <span class="block text-xs opacity-80">sem acréscimo</span>
           </button>
-          <button type="button" class="metodo-btn" data-metodo="cartao">
-            <span class="block text-lg">💳 Débito</span>
+          <button type="button" class="metodo-btn" data-metodo="debito">
+            <span class="block text-base">💳 Débito</span>
             <span class="block text-xs opacity-80">+5%</span>
+          </button>
+          <button type="button" class="metodo-btn" data-metodo="credito">
+            <span class="block text-base">💳 Crédito</span>
+            <span class="block text-xs opacity-80">+7%</span>
           </button>
         </div>
         <p id="aviso-acrescimo" class="mt-3 text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-3">
-          No cartão de débito há acréscimo de 5%. No PIX não há acréscimo.
+          No PIX não há acréscimo. No débito há acréscimo de 5% e no crédito, de 7%.
         </p>
       </div>
 
@@ -164,7 +168,7 @@
     <div id="step-cartao" class="hidden">
       <div class="card p-6 sm:p-8 space-y-5">
         <div class="flex items-center justify-between">
-          <h2 class="font-semibold text-gray-700 text-lg">Pagar no cartão de débito</h2>
+          <h2 id="cartao-titulo" class="font-semibold text-gray-700 text-lg">Pagar no cartão</h2>
           <div class="flex items-center gap-2 text-sm">
             <span class="status-dot dot-pending" id="cartao-status-dot"></span>
             <span id="cartao-status-text" class="text-amber-600 font-medium">Aguardando pagamento…</span>
@@ -173,7 +177,7 @@
 
         <div class="bg-gray-50 border border-gray-200 rounded-lg p-4 text-sm text-gray-700 space-y-1">
           <div class="flex justify-between"><span>Créditos que você recebe</span><strong id="cartao-liquido">R$ 0,00</strong></div>
-          <div class="flex justify-between"><span>Acréscimo do cartão (5%)</span><strong id="cartao-taxa">R$ 0,00</strong></div>
+          <div class="flex justify-between"><span id="cartao-rotulo-taxa">Acréscimo do cartão</span><strong id="cartao-taxa">R$ 0,00</strong></div>
           <div class="flex justify-between text-base pt-1 border-t border-gray-200 mt-1">
             <span class="font-semibold">Total a pagar</span><strong id="cartao-total" class="text-orange-600">R$ 0,00</strong>
           </div>
@@ -264,9 +268,12 @@
     function atualizarAviso() {
       const el = document.getElementById('aviso-acrescimo');
       const v = valorAtual();
-      if (window.PagamentoCartao) el.textContent = PagamentoCartao.textoAviso(v >= 5 ? v : 0);
+      if (window.PagamentoCartao)
+        el.textContent = PagamentoCartao.textoAviso(v >= 5 ? v : 0, metodo === 'pix' ? null : metodo);
       const txt = document.getElementById('btn-gerar-text');
-      if (txt) txt.textContent = metodo === 'pix' ? 'Gerar QR Code PIX' : 'Pagar no cartão de débito';
+      if (txt) txt.textContent = metodo === 'pix'
+        ? 'Gerar QR Code PIX'
+        : 'Pagar no cartão de ' + PagamentoCartao.rotuloTipo(metodo);
     }
 
     document.querySelectorAll('.metodo-btn').forEach(btn => {
@@ -290,7 +297,7 @@
     });
 
     function pagar() {
-      return metodo === 'cartao' ? pagarComCartao() : gerarPix();
+      return metodo === 'pix' ? gerarPix() : pagarComCartao();
     }
 
     function erroCartao(msg) {
@@ -311,7 +318,12 @@
       }
       limparErro();
       erroCartao('');
-      const total = PagamentoCartao.comAcrescimo(val);
+      const total = PagamentoCartao.comAcrescimo(val, metodo);
+      const pct = Math.round(PagamentoCartao.percentual(metodo) * 100);
+      document.getElementById('cartao-titulo').textContent =
+        'Pagar no cartão de ' + PagamentoCartao.rotuloTipo(metodo);
+      document.getElementById('cartao-rotulo-taxa').textContent =
+        'Acréscimo do cartão (' + pct + '%)';
       document.getElementById('cartao-liquido').textContent = PagamentoCartao.brl(val);
       document.getElementById('cartao-taxa').textContent = PagamentoCartao.brl(total - val);
       document.getElementById('cartao-total').textContent = PagamentoCartao.brl(total);
@@ -325,6 +337,7 @@
         containerId: 'cartao-brick',
         container3dsId: 'cartao-3ds',
         valor: val,
+        tipo: metodo,
         email: usuario.email,
         doc: usuario.cpf_cnpj,
         endpoint: '/api/cartao/recarga',

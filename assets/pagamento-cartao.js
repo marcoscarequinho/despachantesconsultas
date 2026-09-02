@@ -1,8 +1,10 @@
-/* Pagamento no cartão de débito — Checkout Bricks do Mercado Pago.
+/* Pagamento no cartão — Checkout Bricks do Mercado Pago.
  *
  * Usado pelas três telas que cobram do cliente (recarga de créditos, consulta
  * avulsa e assinatura). O PIX continua sendo o caminho padrão e sem acréscimo;
- * este arquivo cuida só do "outro meio", que sai 5% mais caro.
+ * este arquivo cuida do cartão: débito (+5%) ou crédito (+7%), sempre à vista.
+ * É um brick por tipo — o total no botão já é o daquele acréscimo, então cada
+ * tela monta o formulário do tipo que o cliente escolheu.
  *
  * Por que o formulário é NOSSO e não uma página do Mercado Pago: os campos do
  * brick são iframes do próprio MP (o número do cartão nunca entra no nosso
@@ -42,43 +44,56 @@
   const PagamentoCartao = {
     config: null,
 
-    // Busca a public key e o percentual do acréscimo no servidor. O percentual
-    // vem de lá de propósito: mudar os 5% é mexer numa constante só (server.js),
-    // sem precisar caçar número solto no HTML das páginas.
+    // Busca a public key e os percentuais no servidor. Eles vêm de lá de
+    // propósito: mudar 5%/7% é mexer numa tabela só (CARTAO_ACRESCIMOS no
+    // server.js), sem caçar número solto no HTML das páginas.
     async carregarConfig() {
       if (this.config) return this.config;
       try {
         const r = await fetch('/api/pagamento/config');
         this.config = await r.json();
       } catch {
-        this.config = { publicKey: null, cartaoDisponivel: false, acrescimoCartao: 0.05 };
+        this.config = { publicKey: null, cartaoDisponivel: false };
       }
+      this.config.acrescimos = this.config.acrescimos || { debito: 0.05, credito: 0.07 };
       return this.config;
     },
 
-    percentual() {
-      return (this.config?.acrescimoCartao ?? 0.05);
+    percentual(tipo) {
+      return this.config?.acrescimos?.[tipo === 'credito' ? 'credito' : 'debito'] ?? (tipo === 'credito' ? 0.07 : 0.05);
     },
 
     // Mesma conta do servidor (valorComAcrescimoCartao), para a tela poder
     // mostrar o valor antes de o cliente escolher.
-    comAcrescimo(valor) {
-      return Math.round(Number(valor) * (1 + this.percentual()) * 100) / 100;
+    comAcrescimo(valor, tipo) {
+      return Math.round(Number(valor) * (1 + this.percentual(tipo)) * 100) / 100;
     },
 
     brl,
 
-    textoAviso(valor) {
-      const pct = Math.round(this.percentual() * 100);
+    rotuloTipo(tipo) {
+      return tipo === 'credito' ? 'crédito' : 'débito';
+    },
+
+    // Aviso de uma linha. Com valor, mostra quanto fica em cada opção — é o que
+    // deixa a escolha honesta antes de o cliente digitar o cartão.
+    textoAviso(valor, tipo) {
+      const pct = (t) => Math.round(this.percentual(t) * 100);
+      if (tipo) {
+        const p = pct(tipo);
+        return valor
+          ? `No cartão de ${this.rotuloTipo(tipo)} há acréscimo de ${p}%: ${brl(valor)} passa a ${brl(this.comAcrescimo(valor, tipo))}. No PIX não há acréscimo.`
+          : `No cartão de ${this.rotuloTipo(tipo)} há acréscimo de ${p}%. No PIX não há acréscimo.`;
+      }
       return valor
-        ? `No cartão de débito há acréscimo de ${pct}%: ${brl(valor)} passa a ${brl(this.comAcrescimo(valor))}. No PIX não há acréscimo.`
-        : `No cartão de débito há acréscimo de ${pct}%. No PIX não há acréscimo.`;
+        ? `No PIX não há acréscimo (${brl(valor)}). No débito, +${pct('debito')}% (${brl(this.comAcrescimo(valor, 'debito'))}); no crédito, +${pct('credito')}% (${brl(this.comAcrescimo(valor, 'credito'))}).`
+        : `No PIX não há acréscimo. No débito há acréscimo de ${pct('debito')}% e no crédito, de ${pct('credito')}%.`;
     },
 
     // Monta o formulário do cartão. "valor" é o LÍQUIDO (o que o cliente leva);
     // o brick cobra o valor com acréscimo.
     async montar({
-      containerId, container3dsId, valor, email, doc,
+      containerId, container3dsId, valor, tipo = 'debito', email, doc,
       endpoint, corpoExtra = {}, textoBotao,
       onAprovado, onPendente, onErro, onProcessando,
     }) {
@@ -90,7 +105,8 @@
       await carregarSdk();
       await this.desmontar();
 
-      const valorCobrado = this.comAcrescimo(valor);
+      const ehCredito = tipo === 'credito';
+      const valorCobrado = this.comAcrescimo(valor, tipo);
       mp = mp || new window.MercadoPago(cfg.publicKey, { locale: 'pt-BR' });
       const bricks = mp.bricks();
 
@@ -105,16 +121,22 @@
           },
         },
         customization: {
-          // Só débito. A conferência que vale é a do servidor
-          // (validarCartaoDebito) — esta aqui é para o cliente não perder tempo
-          // digitando um cartão de crédito que seria recusado depois.
-          paymentMethods: { types: { excluded: ['credit_card', 'prepaid_card'] }, maxInstallments: 1 },
+          // Um brick por tipo: o total exibido no botão já é o daquele
+          // acréscimo, então a tela não pode aceitar o outro tipo. A
+          // conferência que vale é a do servidor (validarCartao) — esta aqui é
+          // para o cliente não digitar um cartão que seria recusado depois.
+          // maxInstallments 1: cobramos sempre à vista (ver installments no
+          // criarPagamentoCartao).
+          paymentMethods: {
+            types: { excluded: ehCredito ? ['debit_card', 'prepaid_card'] : ['credit_card', 'prepaid_card'] },
+            maxInstallments: 1,
+          },
           visual: {
             style: { theme: 'default' },
             // O título padrão do brick é "Cartão de crédito ou débito" — como
-            // crédito está excluído, ele prometeria o que a tela não aceita.
+            // um dos dois está excluído, ele prometeria o que a tela não aceita.
             texts: {
-              formTitle: 'Cartão de débito',
+              formTitle: ehCredito ? 'Cartão de crédito' : 'Cartão de débito',
               formSubmit: textoBotao || `Pagar ${brl(valorCobrado)}`,
             },
           },
@@ -126,11 +148,14 @@
             onErro?.(erro?.message || 'Não consegui carregar o formulário do cartão. Tente o PIX.');
           },
           onSubmit: async (cardData, additionalData) => {
-            // O brick já exclui crédito, mas a bandeira só é conhecida depois
-            // do BIN — se ainda assim vier outro tipo, avisa aqui em vez de
-            // deixar o servidor recusar com um erro mais seco.
-            if (additionalData?.paymentTypeId && additionalData.paymentTypeId !== 'debit_card') {
-              onErro?.('Aceitamos apenas cartão de DÉBITO. Para outras formas, use o PIX.');
+            // O brick já exclui o outro tipo, mas a bandeira só é conhecida
+            // depois do BIN — se ainda assim vier trocado, avisa aqui, com o
+            // total certo, em vez de deixar o servidor recusar mais seco.
+            const esperado = ehCredito ? 'credit_card' : 'debit_card';
+            if (additionalData?.paymentTypeId && additionalData.paymentTypeId !== esperado) {
+              onErro?.(ehCredito
+                ? 'Esse cartão é de débito. Volte e escolha a opção "Débito".'
+                : 'Esse cartão é de crédito. Volte e escolha a opção "Crédito".');
               return;
             }
             onProcessando?.(true);
@@ -141,6 +166,10 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   ...corpoExtra,
+                  // O servidor confere o tipo na lista do MP e recusa se não
+                  // bater com esta aba — quem paga não pode ver 5% na tela e
+                  // ser cobrado 7%.
+                  tipo_cartao: tipo,
                   token: cardData.token,
                   payment_method_id: cardData.payment_method_id,
                   issuer_id: cardData.issuer_id,

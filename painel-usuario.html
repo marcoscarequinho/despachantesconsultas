@@ -2939,11 +2939,15 @@ let metodoAssinatura = 'pix';
 const ASSINATURA_PRECO = 30;
 
 const rotuloBotaoAssinatura = () =>
-  metodoAssinatura === 'pix' ? '💳 Assinar e pagar com PIX' : '💳 Assinar e pagar no débito';
+  metodoAssinatura === 'pix'
+    ? '💳 Assinar e pagar com PIX'
+    : '💳 Assinar e pagar no ' + PagamentoCartao.rotuloTipo(metodoAssinatura);
 
 function atualizarAvisoAssinatura() {
   const el = document.getElementById('assinatura-aviso-acrescimo');
-  if (el && window.PagamentoCartao) el.textContent = PagamentoCartao.textoAviso(ASSINATURA_PRECO);
+  if (el && window.PagamentoCartao)
+    el.textContent = PagamentoCartao.textoAviso(
+      ASSINATURA_PRECO, metodoAssinatura === 'pix' ? null : metodoAssinatura);
   const btn = document.getElementById('assinatura-assinar-btn');
   if (btn && !btn.disabled) btn.textContent = rotuloBotaoAssinatura();
 }
@@ -2970,7 +2974,7 @@ window.addEventListener('load', async () => {
 });
 
 function pagarAssinatura() {
-  return metodoAssinatura === 'cartao' ? pagarAssinaturaCartao() : gerarPixAssinatura();
+  return metodoAssinatura === 'pix' ? gerarPixAssinatura() : pagarAssinaturaCartao();
 }
 
 function erroCartaoAssinatura(msg) {
@@ -2986,7 +2990,9 @@ function erroCartaoAssinatura(msg) {
 // saldo, inclusive quando o banco pede o desafio do 3DS.
 async function pagarAssinaturaCartao() {
   const btn = document.getElementById('assinatura-assinar-btn');
-  const total = PagamentoCartao.comAcrescimo(ASSINATURA_PRECO);
+  const total = PagamentoCartao.comAcrescimo(ASSINATURA_PRECO, metodoAssinatura);
+  document.getElementById('assinatura-cartao-rotulo-taxa').textContent =
+    'Acréscimo do cartão (' + Math.round(PagamentoCartao.percentual(metodoAssinatura) * 100) + '%)';
   document.getElementById('assinatura-cartao-liquido').textContent = PagamentoCartao.brl(ASSINATURA_PRECO);
   document.getElementById('assinatura-cartao-taxa').textContent = PagamentoCartao.brl(total - ASSINATURA_PRECO);
   document.getElementById('assinatura-cartao-total').textContent = PagamentoCartao.brl(total);
@@ -3002,6 +3008,7 @@ async function pagarAssinaturaCartao() {
     containerId: 'assinatura-cartao-brick',
     container3dsId: 'assinatura-cartao-3ds',
     valor: ASSINATURA_PRECO,
+    tipo: metodoAssinatura,
     email: usuario.email,
     doc: usuario.cpf_cnpj,
     endpoint: '/api/cartao/assinatura',
@@ -6337,18 +6344,22 @@ function requeryFromModal() {
              (CARTAO_ACRESCIMO); aqui é só o que o assinante vê para decidir. -->
         <div id="assinatura-bloco-metodo" class="mt-4">
           <div class="text-xs font-semibold text-gray-600 mb-1.5">Como você quer pagar?</div>
-          <div class="grid grid-cols-2 gap-2">
+          <div class="grid grid-cols-3 gap-2">
             <button type="button" class="metodo-btn ativo" data-metodo-assinatura="pix">
               <span class="block text-sm">⚡ PIX</span>
               <span class="block text-[11px] opacity-80">sem acréscimo</span>
             </button>
-            <button type="button" class="metodo-btn" data-metodo-assinatura="cartao">
+            <button type="button" class="metodo-btn" data-metodo-assinatura="debito">
               <span class="block text-sm">💳 Débito</span>
               <span class="block text-[11px] opacity-80">+5%</span>
             </button>
+            <button type="button" class="metodo-btn" data-metodo-assinatura="credito">
+              <span class="block text-sm">💳 Crédito</span>
+              <span class="block text-[11px] opacity-80">+7%</span>
+            </button>
           </div>
           <p id="assinatura-aviso-acrescimo" class="mt-2 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2">
-            No cartão de débito há acréscimo de 5%. No PIX não há acréscimo.
+            No PIX não há acréscimo. No débito há acréscimo de 5% e no crédito, de 7%.
           </p>
         </div>
         <div id="assinatura-erro" class="hidden mt-3 bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-sm"></div>
@@ -6371,7 +6382,7 @@ function requeryFromModal() {
       <div id="assinatura-step-cartao" class="hidden">
         <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm text-gray-700 space-y-1">
           <div class="flex justify-between"><span>Assinatura (30 dias)</span><strong id="assinatura-cartao-liquido">R$ 30,00</strong></div>
-          <div class="flex justify-between"><span>Acréscimo do cartão (5%)</span><strong id="assinatura-cartao-taxa">R$ 1,50</strong></div>
+          <div class="flex justify-between"><span id="assinatura-cartao-rotulo-taxa">Acréscimo do cartão</span><strong id="assinatura-cartao-taxa">R$ 1,50</strong></div>
           <div class="flex justify-between text-base pt-1 border-t border-gray-200 mt-1">
             <span class="font-semibold">Total</span><strong id="assinatura-cartao-total" class="text-amber-700">R$ 31,50</strong>
           </div>

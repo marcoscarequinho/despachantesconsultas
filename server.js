@@ -8818,10 +8818,10 @@ app.post('/api/public/pedido/cartao', async (req, res) => {
   if (ped.erro) return res.status(ped.erro.status).json({ error: ped.erro.msg });
 
   try {
-    const cartao = await validarCartaoDebito(req.body);
-    const valorCobrado = valorComAcrescimoCartao(ped.valor);
+    const cartao = await validarCartao(req.body);
+    const valorCobrado = valorComAcrescimoCartao(ped.valor, cartao.tipo);
 
-    const pagamento = await criarPagamentoCartaoDebito({
+    const pagamento = await criarPagamentoCartao({
       valorCobrado,
       descricao: ped.description,
       cartao,
@@ -8839,7 +8839,7 @@ app.post('/api/public/pedido/cartao', async (req, res) => {
       return res.status(402).json({ error: cartaoRecusaMsg(pagamento), statusDetail: pagamento.status_detail });
 
     const token = await registrarPedidoAvulso({
-      ped, gatewayId: pagamento.id, method: 'CARTAO', chargedAmount: valorCobrado,
+      ped, gatewayId: pagamento.id, method: metodoDaTabela(cartao.tipo), chargedAmount: valorCobrado,
     });
 
     res.json({ token, valor: ped.valor, chargedValue: valorCobrado, ...respostaPagamentoCartao(pagamento) });
@@ -8969,8 +8969,14 @@ app.get('/api/chave/diagnostico', requireAuth, async (req, res) => {
 // celular consegue oferecer o escaneamento do cartão pela câmera (o campo do
 // número do brick é marcado com autocomplete="cc-number"): a leitura vai da
 // câmera do sistema direto para o campo do MP, sem passar pelo nosso código.
-const CARTAO_ACRESCIMO = 0.05;
-const valorComAcrescimoCartao = (valor) => Math.round(Number(valor) * (1 + CARTAO_ACRESCIMO) * 100) / 100;
+// Acréscimo por tipo de cartão, indexado pelo payment_type_id do Mercado Pago.
+// Crédito custa mais que débito na taxa do gateway, por isso os 7% contra 5%.
+// Quem manda é a chave desta tabela: o que não estiver aqui não é cobrado no
+// cartão (pré-pago, voucher, saldo em conta etc. ficam de fora).
+const CARTAO_ACRESCIMOS = { debit_card: 0.05, credit_card: 0.07 };
+const CARTAO_TIPOS = { debito: 'debit_card', credito: 'credit_card' };
+const valorComAcrescimoCartao = (valor, tipo) =>
+  Math.round(Number(valor) * (1 + (CARTAO_ACRESCIMOS[tipo] ?? 0)) * 100) / 100;
 
 // A public key é pública por definição (vai no HTML do brick) — o que não pode
 // vazar é o MP_ACCESS_TOKEN, que fica só aqui. Sem a chave configurada o front
@@ -8979,15 +8985,14 @@ app.get('/api/pagamento/config', (req, res) => {
   res.json({
     publicKey: MP_PUBLIC_KEY || null,
     cartaoDisponivel: Boolean(MP_PUBLIC_KEY && MP_ACCESS_TOKEN),
-    acrescimoCartao: CARTAO_ACRESCIMO,
+    acrescimos: { debito: CARTAO_ACRESCIMOS.debit_card, credito: CARTAO_ACRESCIMOS.credit_card },
   });
 });
 
-// Lista de meios de pagamento do Mercado Pago, em cache de 1 hora. Serve para
-// uma coisa só: conferir que o payment_method_id que chegou é mesmo de DÉBITO.
-// O brick já é configurado para excluir crédito e pré-pago, mas a rota é
-// pública o bastante para alguém montar a requisição na mão — e crédito tem
-// taxa maior que os 5% do acréscimo, então a recusa é no servidor.
+// Lista de meios de pagamento do Mercado Pago, em cache de 1 hora. É ela que
+// diz se o cartão é de crédito ou de débito — e é esse tipo, não o que o
+// navegador afirma, que define o acréscimo cobrado. Sem isso bastaria montar a
+// requisição na mão dizendo "débito" para pagar no crédito com 5%.
 let mpMetodosCache = { emCache: null, quando: 0 };
 async function mpMetodosPagamento() {
   if (mpMetodosCache.emCache && Date.now() - mpMetodosCache.quando < 3600000) return mpMetodosCache.emCache;
@@ -8997,46 +9002,65 @@ async function mpMetodosPagamento() {
   return lista;
 }
 
-// Valida o que veio do brick e devolve os campos do pagamento já limpos.
+// Valida o que veio do brick e devolve os campos do pagamento já limpos, com o
+// TIPO real do cartão (debit_card/credit_card) lido da lista do Mercado Pago.
 // Erros aqui são de entrada (HTTP 400), não falha de gateway.
-async function validarCartaoDebito(corpo) {
+//
+// O corpo traz "tipo_cartao" com a aba que o cliente escolheu na tela (o que
+// define o total que ele viu). Se a bandeira disser outra coisa, o pedido é
+// recusado em vez de cobrado: cobrar 7% em quem leu 5% na tela seria pior que
+// pedir para escolher a aba certa.
+async function validarCartao(corpo) {
+  const recusa = (msg) => {
+    const e = new Error(msg);
+    e.entradaInvalida = true;
+    return e;
+  };
   const token = String(corpo?.token || '').trim();
   const metodo = String(corpo?.payment_method_id || '').trim();
-  if (!token || !metodo) {
-    const e = new Error('Dados do cartão incompletos. Recarregue a página e tente de novo.');
-    e.entradaInvalida = true;
-    throw e;
-  }
+  if (!token || !metodo) throw recusa('Dados do cartão incompletos. Recarregue a página e tente de novo.');
+
   const metodos = await mpMetodosPagamento();
   const achado = metodos.find(m => m.id === metodo);
-  if (!achado || achado.payment_type_id !== 'debit_card') {
-    const e = new Error('Aceitamos apenas cartão de DÉBITO. Para outras formas, use o PIX.');
-    e.entradaInvalida = true;
-    throw e;
+  const tipo = achado?.payment_type_id;
+  if (!tipo || !CARTAO_ACRESCIMOS[tipo])
+    throw recusa('Aceitamos cartão de crédito ou de débito. Para outras formas, use o PIX.');
+
+  const escolhido = CARTAO_TIPOS[String(corpo?.tipo_cartao || '').toLowerCase()];
+  if (escolhido && escolhido !== tipo) {
+    throw recusa(tipo === 'credit_card'
+      ? 'Esse cartão é de CRÉDITO. Volte e escolha a opção "Crédito" (acréscimo de 7%).'
+      : 'Esse cartão é de DÉBITO. Volte e escolha a opção "Débito" (acréscimo de 5%).');
   }
+
   return {
     token,
     payment_method_id: metodo,
     issuer_id: corpo?.issuer_id ? String(corpo.issuer_id) : undefined,
+    tipo,
   };
 }
 
 // Cria o pagamento no Mercado Pago com o token do brick.
 //
-// three_d_secure_mode 'optional' liga o 3DS 2.0: no débito o emissor costuma
-// exigir o desafio (aquela tela do banco), e sem isso a compra seria recusada.
+// three_d_secure_mode 'optional' liga o 3DS 2.0: no débito o emissor quase
+// sempre exige o desafio (aquela tela do banco), e sem isso a compra seria
+// recusada; no crédito ele só aparece quando o emissor acha necessário.
 // Quando o desafio é necessário a resposta volta status 'pending' com
 // status_detail 'pending_challenge' e um three_ds_info { external_resource_url,
 // creq } — que o front entrega ao Status Screen Brick. Por isso binary_mode
 // fica false: com ele ligado o MP recusaria o pagamento em vez de deixá-lo
 // pendente esperando o cliente terminar o desafio.
-async function criarPagamentoCartaoDebito({ valorCobrado, descricao, payer, cartao }) {
+async function criarPagamentoCartao({ valorCobrado, descricao, payer, cartao }) {
   return mpReq('POST', '/v1/payments', {
     transaction_amount: valorCobrado,
     description: descricao,
     token: cartao.token,
     payment_method_id: cartao.payment_method_id,
     ...(cartao.issuer_id ? { issuer_id: cartao.issuer_id } : {}),
+    // À vista sempre: no parcelado a taxa do Mercado Pago cresce a cada
+    // parcela e passaria dos 7% do acréscimo — parcelamento exigiria uma
+    // tabela de acréscimo por número de parcelas.
     installments: 1,
     capture: true,
     binary_mode: false,
@@ -9044,6 +9068,11 @@ async function criarPagamentoCartaoDebito({ valorCobrado, descricao, payer, cart
     payer,
   }, { 'X-Idempotency-Key': crypto.randomUUID() });
 }
+
+// Rótulo gravado em pix_payments.method / public_orders.method. Fica curto de
+// propósito: a coluna é VARCHAR(10) e o histórico já tem 'PIX' e 'CARTAO'
+// (débito, do primeiro dia do cartão) gravados.
+const metodoDaTabela = (tipo) => (tipo === 'credit_card' ? 'CREDITO' : 'CARTAO');
 
 // Mensagem em português para a recusa do emissor. O status_detail do Mercado
 // Pago é em inglês e técnico demais para mostrar a quem está pagando.
@@ -9107,12 +9136,12 @@ app.post('/api/cartao/recarga', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'Valor inválido. Mínimo R$ 5,00, máximo R$ 10.000,00.' });
 
   try {
-    const cartao = await validarCartaoDebito(req.body);
+    const cartao = await validarCartao(req.body);
     const ur = await pool.query('SELECT id, name, email, cpf_cnpj FROM users WHERE id=$1', [req.user.id]);
     const user = ur.rows[0];
-    const valorCobrado = valorComAcrescimoCartao(value);
+    const valorCobrado = valorComAcrescimoCartao(value, cartao.tipo);
 
-    const pagamento = await criarPagamentoCartaoDebito({
+    const pagamento = await criarPagamentoCartao({
       valorCobrado,
       descricao: `Recarga de créditos — ${user.name}`,
       cartao,
@@ -9129,8 +9158,8 @@ app.post('/api/cartao/recarga', requireAuth, async (req, res) => {
 
     await pool.query(
       `INSERT INTO pix_payments (user_id, gateway_id, value, status, method, charged_value)
-       VALUES ($1,$2,$3,'PENDING','CARTAO',$4) ON CONFLICT (gateway_id) DO NOTHING`,
-      [req.user.id, String(pagamento.id), value, valorCobrado]
+       VALUES ($1,$2,$3,'PENDING',$4,$5) ON CONFLICT (gateway_id) DO NOTHING`,
+      [req.user.id, String(pagamento.id), value, metodoDaTabela(cartao.tipo), valorCobrado]
     );
 
     const out = respostaPagamentoCartao(pagamento);
@@ -9154,13 +9183,13 @@ app.post('/api/cartao/recarga', requireAuth, async (req, res) => {
 // é aberto por creditPixPaymentIfApproved graças ao purpose='ASSINATURA'.
 app.post('/api/cartao/assinatura', requireAuth, async (req, res) => {
   try {
-    const cartao = await validarCartaoDebito(req.body);
+    const cartao = await validarCartao(req.body);
     const ur = await pool.query('SELECT id, name, email, cpf_cnpj, active FROM users WHERE id=$1', [req.user.id]);
     const user = ur.rows[0];
     if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
 
-    const valorCobrado = valorComAcrescimoCartao(ASSINATURA_PLACAS_PRICE);
-    const pagamento = await criarPagamentoCartaoDebito({
+    const valorCobrado = valorComAcrescimoCartao(ASSINATURA_PLACAS_PRICE, cartao.tipo);
+    const pagamento = await criarPagamentoCartao({
       valorCobrado,
       descricao: `Assinatura Coisas de Despachantes (${ASSINATURA_PLACAS_DIAS} dias) — ${user.name}`,
       cartao,
@@ -9177,8 +9206,8 @@ app.post('/api/cartao/assinatura', requireAuth, async (req, res) => {
 
     await pool.query(
       `INSERT INTO pix_payments (user_id, gateway_id, value, status, purpose, method, charged_value)
-       VALUES ($1,$2,$3,'PENDING','ASSINATURA','CARTAO',$4) ON CONFLICT (gateway_id) DO NOTHING`,
-      [req.user.id, String(pagamento.id), ASSINATURA_PLACAS_PRICE, valorCobrado]
+       VALUES ($1,$2,$3,'PENDING','ASSINATURA',$4,$5) ON CONFLICT (gateway_id) DO NOTHING`,
+      [req.user.id, String(pagamento.id), ASSINATURA_PLACAS_PRICE, metodoDaTabela(cartao.tipo), valorCobrado]
     );
 
     const out = respostaPagamentoCartao(pagamento);
@@ -9443,7 +9472,7 @@ async function creditPixPaymentIfApproved(gatewayId) {
     await client.query('UPDATE users SET credits = credits + $1 WHERE id=$2', [p.value, p.user_id]);
     await client.query(
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'deposit',$2,$3)`,
-      [p.user_id, p.value, `Recarga ${p.method === 'CARTAO' ? 'cartão de débito' : 'PIX'} — R$ ${parseFloat(p.value).toFixed(2).replace('.', ',')}`]
+      [p.user_id, p.value, `Recarga ${{ CARTAO: 'cartão de débito', CREDITO: 'cartão de crédito' }[p.method] || 'PIX'} — R$ ${parseFloat(p.value).toFixed(2).replace('.', ',')}`]
     );
     await client.query('COMMIT');
     return { credited: true, status: 'approved', value: parseFloat(p.value) };
