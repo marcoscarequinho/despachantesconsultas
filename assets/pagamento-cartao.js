@@ -36,6 +36,12 @@
   let brick3ds = null;
   let estiloPosto = false;
 
+  // Valor mínimo por parcela que o Mercado Pago aceita, medido na tabela real
+  // da conta (R$ 21,40 dá 4x, R$ 53,50 dá 10x, R$ 107,00 dá 18x — sempre
+  // valor/5,35). Serve SÓ para explicar ao cliente por que o parcelamento não
+  // apareceu; quem decide as opções continua sendo a resposta do MP.
+  const PARCELA_MINIMA = 5.35;
+
   const brl = (v) =>
     'R$ ' + Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -151,6 +157,7 @@
           <select id="form-checkout__installments" name="installments"></select>
           <p class="pgc-dica">Acima de 1x o Mercado Pago cobra juros do portador — o total de cada opção já aparece na lista.</p>
         </div>
+        <p class="pgc-dica pgc-oculto" id="pgc-sem-parcelas"></p>
         <button type="submit" id="form-checkout__submit" class="pgc-btn">${textoBotao}</button>
         <p class="pgc-dica">🔒 Os dados do cartão vão direto para o Mercado Pago. No celular, toque no campo do número para usar a câmera e escanear o cartão.</p>
       </form>
@@ -354,10 +361,21 @@
           onInstallmentsReceived: (erro, parcelas) => {
             if (erro) return;
             limitarParcelas();
-            // Só mostra o seletor quando sobrou mais de uma opção (no débito, e
-            // em valor baixo, o MP devolve só 1x).
+            // Só mostra o seletor quando sobrou mais de uma opção. Quando não
+            // sobra, o cliente merece saber por quê: o MP exige um mínimo por
+            // parcela, e em compra pequena só cabe 1x. Sem esse aviso o campo
+            // simplesmente sumia e parecia defeito.
+            const opcoes = selParcelas?.options.length || 0;
             const bloco = document.getElementById('pgc-parcelas');
-            if (bloco) bloco.classList.toggle('pgc-oculto', !ehCredito || (selParcelas?.options.length || 0) < 2);
+            const aviso = document.getElementById('pgc-sem-parcelas');
+            const podeParcelar = ehCredito && opcoes > 1;
+            if (bloco) bloco.classList.toggle('pgc-oculto', !podeParcelar);
+            if (aviso) {
+              aviso.classList.toggle('pgc-oculto', !ehCredito || podeParcelar);
+              if (ehCredito && !podeParcelar) {
+                aviso.textContent = `Neste valor o Mercado Pago não permite parcelar (ele pede pelo menos ${brl(PARCELA_MINIMA)} por parcela). A partir de ${brl(PARCELA_MINIMA * 2)} dá para dividir em 2x, e em até ${maxParcelas}x a partir de ${brl(PARCELA_MINIMA * maxParcelas)}.`;
+              }
+            }
             atualizarBotaoParcelas();
           },
           onIssuersReceived: (erro, emissores) => {

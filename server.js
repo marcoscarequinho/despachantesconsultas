@@ -9027,9 +9027,9 @@ const CARTAO_TIPOS_HABILITADOS = { debito: false, credito: true };
 // por cima, na fatura do cliente, e nós continuamos recebendo o mesmo
 // transaction_amount (o valor à vista com os 7%). Por isso o número de parcelas
 // não muda nada do nosso lado — nem o acréscimo, nem o crédito liberado. A
-// tabela de juros é do MP e varia por bandeira/emissor; quem a exibe é o
+// tabela de juros é do MP, vai até 18x e varia por bandeira/emissor; quem a exibe é o
 // próprio formulário, com os textos que a API devolve. Débito é sempre 1x.
-const CARTAO_MAX_PARCELAS = 12;
+const CARTAO_MAX_PARCELAS = 18;
 const CARTAO_TIPOS = { debito: 'debit_card', credito: 'credit_card' };
 const valorComAcrescimoCartao = (valor, tipo) =>
   Math.round(Number(valor) * (1 + (CARTAO_ACRESCIMOS[tipo] ?? 0)) * 100) / 100;
