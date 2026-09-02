@@ -73,6 +73,7 @@
       .pgc-campo input::placeholder { color: #9ca3af; }
       .pgc-doc { display: grid; grid-template-columns: 7rem 1fr; gap: .5rem; }
       .pgc-oculto { display: none !important; }
+      .metodo-btn.pgc-oculto { display: none !important; }
       .pgc-btn {
         width: 100%; padding: .8rem 1rem; border: 0; border-radius: .5rem; cursor: pointer;
         background: #f97316; color: #fff; font-weight: 700; font-size: 1rem;
@@ -189,6 +190,10 @@
         this.config = { publicKey: null, cartaoDisponivel: false };
       }
       this.config.acrescimos = this.config.acrescimos || { debito: 0.05, credito: 0.07 };
+      // Tipos que a conta do Mercado Pago processa de verdade (ver
+      // mpTiposCartaoDisponiveis no server.js). Sem essa informação, assume o
+      // conservador: só crédito.
+      this.config.tipos = this.config.tipos || { debito: false, credito: true };
       return this.config;
     },
 
@@ -208,19 +213,45 @@
       return tipo === 'credito' ? 'crédito' : 'débito';
     },
 
+    aceita(tipo) {
+      return Boolean(this.config?.tipos?.[tipo === 'credito' ? 'credito' : 'debito']);
+    },
+
+    // Esconde o botão de um tipo que não está sendo oferecido e devolve os que
+    // ficaram. Chamado por cada tela depois de carregarConfig(). Esconde por
+    // style inline de propósito: o CSS do módulo só é injetado quando o
+    // formulário monta, e aqui o menu aparece antes disso.
+    aplicarTiposDisponiveis(seletor) {
+      const restantes = [];
+      document.querySelectorAll(seletor).forEach(btn => {
+        const tipo = btn.dataset.metodo || btn.dataset.metodoAssinatura;
+        const some = tipo !== 'pix' && !this.aceita(tipo);
+        btn.style.display = some ? 'none' : '';
+        if (!some) restantes.push(tipo);
+      });
+      return restantes;
+    },
+
     // Aviso de uma linha. Com valor, mostra quanto fica em cada opção — é o que
     // deixa a escolha honesta antes de o cliente digitar o cartão.
     textoAviso(valor, tipo) {
       const pct = (t) => Math.round(this.percentual(t) * 100);
+      // Sem tipo: descreve só o que a conta aceita hoje, para o aviso não
+      // prometer um meio que a tela não vai mostrar.
+      if (!tipo) {
+        const partes = [];
+        if (this.aceita('debito')) partes.push(`no débito, +${pct('debito')}%${valor ? ` (${brl(this.comAcrescimo(valor, 'debito'))})` : ''}`);
+        if (this.aceita('credito')) partes.push(`no crédito, +${pct('credito')}%${valor ? ` (${brl(this.comAcrescimo(valor, 'credito'))})` : ''}`);
+        const base = valor ? `No PIX não há acréscimo (${brl(valor)}).` : 'No PIX não há acréscimo.';
+        return partes.length ? `${base} No cartão há acréscimo: ${partes.join('; ')}.` : base;
+      }
       if (tipo) {
         const p = pct(tipo);
         return valor
           ? `No cartão de ${this.rotuloTipo(tipo)} há acréscimo de ${p}%: ${brl(valor)} passa a ${brl(this.comAcrescimo(valor, tipo))}. No PIX não há acréscimo.`
           : `No cartão de ${this.rotuloTipo(tipo)} há acréscimo de ${p}%. No PIX não há acréscimo.`;
       }
-      return valor
-        ? `No PIX não há acréscimo (${brl(valor)}). No débito, +${pct('debito')}% (${brl(this.comAcrescimo(valor, 'debito'))}); no crédito, +${pct('credito')}% (${brl(this.comAcrescimo(valor, 'credito'))}).`
-        : `No PIX não há acréscimo. No débito há acréscimo de ${pct('debito')}% e no crédito, de ${pct('credito')}%.`;
+      return '';
     },
 
     // Monta o formulário do cartão. "valor" é o LÍQUIDO (o que o cliente leva);

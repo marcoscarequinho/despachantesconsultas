@@ -9015,17 +9015,69 @@ app.get('/api/chave/diagnostico', requireAuth, async (req, res) => {
 // Quem manda é a chave desta tabela: o que não estiver aqui não é cobrado no
 // cartão (pré-pago, voucher, saldo em conta etc. ficam de fora).
 const CARTAO_ACRESCIMOS = { debit_card: 0.05, credit_card: 0.07 };
+// Interruptor do que a casa QUER oferecer, independente do que a conta do
+// Mercado Pago suportaria. Hoje o débito está desligado por decisão: a conta
+// não tem débito habilitado e, sem isso, todo cartão de débito volta do MP com
+// a bandeira de crédito e o cliente levava uma recusa dizendo que o cartão dele
+// é de crédito. Quando o MP habilitar, ligar aqui é trocar false por true — o
+// que a conta suporta continua sendo conferido por mpTiposCartaoDisponiveis, e
+// vale o E das duas coisas.
+const CARTAO_TIPOS_HABILITADOS = { debito: false, credito: true };
 const CARTAO_TIPOS = { debito: 'debit_card', credito: 'credit_card' };
 const valorComAcrescimoCartao = (valor, tipo) =>
   Math.round(Number(valor) * (1 + (CARTAO_ACRESCIMOS[tipo] ?? 0)) * 100) / 100;
 
-// A public key é pública por definição (vai no HTML do brick) — o que não pode
-// vazar é o MP_ACCESS_TOKEN, que fica só aqui. Sem a chave configurada o front
-// esconde a opção de cartão e segue só com PIX.
-app.get('/api/pagamento/config', (req, res) => {
+// Tipos de cartão que a conta do Mercado Pago realmente processa, lidos da
+// MESMA fonte que o formulário usa: a busca de meios de pagamento pela public
+// key. É diferente da lista do access token — o `debelo` aparece lá como ativo
+// e mesmo assim não sai aqui, ou seja, o formulário nunca conseguiria oferecer
+// débito com ele.
+//
+// Isso existe porque oferecer na tela um meio que a conta não processa é pior
+// que não oferecer: o cliente digitava um cartão de débito, a bandeira voltava
+// como crédito (é o que a conta expõe) e ele levava um "esse cartão é de
+// crédito" na cara. Com o menu montado a partir daqui, o botão de débito some
+// enquanto a conta não tiver débito habilitado e volta sozinho no dia em que
+// tiver — sem mexer em código.
+let mpTiposCartaoCache = { emCache: null, quando: 0 };
+async function mpTiposCartaoDisponiveis() {
+  if (mpTiposCartaoCache.emCache && Date.now() - mpTiposCartaoCache.quando < 3600000)
+    return mpTiposCartaoCache.emCache;
+  const tipos = { debito: false, credito: false };
+  try {
+    const r = await fetch(`${MP_BASE}/v1/payment_methods/search?public_key=${encodeURIComponent(MP_PUBLIC_KEY)}&marketplace=NONE`);
+    const d = await r.json();
+    const lista = Array.isArray(d?.results) ? d.results : (Array.isArray(d) ? d : []);
+    for (const m of lista) {
+      if (m.payment_type_id === 'debit_card') tipos.debito = true;
+      if (m.payment_type_id === 'credit_card') tipos.credito = true;
+    }
+    if (!lista.length) throw new Error('lista vazia');
+    mpTiposCartaoCache = { emCache: tipos, quando: Date.now() };
+  } catch (e) {
+    // Sem resposta do MP não dá para saber: mantém o crédito (que sempre
+    // funcionou) e esconde o débito, em vez de oferecer o que pode falhar.
+    console.error('[pagamento] não consegui listar os meios do checkout:', e.message);
+    return { debito: false, credito: true };
+  }
+  return tipos;
+}
+
+// A public key é pública por definição (vai no HTML do formulário) — o que não
+// pode vazar é o MP_ACCESS_TOKEN, que fica só aqui. Sem a chave configurada o
+// front esconde a opção de cartão e segue só com PIX.
+app.get('/api/pagamento/config', async (req, res) => {
+  const temChaves = Boolean(MP_PUBLIC_KEY && MP_ACCESS_TOKEN);
+  const suportados = temChaves ? await mpTiposCartaoDisponiveis() : { debito: false, credito: false };
+  // Oferece só o que a casa quer E a conta processa.
+  const tipos = {
+    debito: suportados.debito && CARTAO_TIPOS_HABILITADOS.debito,
+    credito: suportados.credito && CARTAO_TIPOS_HABILITADOS.credito,
+  };
   res.json({
     publicKey: MP_PUBLIC_KEY || null,
-    cartaoDisponivel: Boolean(MP_PUBLIC_KEY && MP_ACCESS_TOKEN),
+    cartaoDisponivel: temChaves && (tipos.debito || tipos.credito),
+    tipos,
     acrescimos: { debito: CARTAO_ACRESCIMOS.debit_card, credito: CARTAO_ACRESCIMOS.credit_card },
   });
 });
@@ -9061,6 +9113,11 @@ async function validarCartao(corpo) {
   const metodo = String(corpo?.payment_method_id || '').trim();
   if (!token || !metodo) throw recusa('Dados do cartão incompletos. Recarregue a página e tente de novo.');
 
+  // Tipo desligado no interruptor: recusa antes de qualquer chamada ao MP.
+  const pedido = String(corpo?.tipo_cartao || '').toLowerCase();
+  if (pedido && CARTAO_TIPOS_HABILITADOS[pedido] === false)
+    throw recusa(`No momento não estamos aceitando cartão de ${pedido === 'credito' ? 'crédito' : 'débito'}. Pague com PIX (sem acréscimo)${pedido === 'debito' && CARTAO_TIPOS_HABILITADOS.credito ? ' ou no crédito' : ''}.`);
+
   const metodos = await mpMetodosPagamento();
   const achado = metodos.find(m => m.id === metodo);
   const tipo = achado?.payment_type_id;
@@ -9069,6 +9126,13 @@ async function validarCartao(corpo) {
 
   const escolhido = CARTAO_TIPOS[String(corpo?.tipo_cartao || '').toLowerCase()];
   if (escolhido && escolhido !== tipo) {
+    // Quando o cliente pediu débito e veio crédito, pode não ser o cartão dele:
+    // se a conta não tem débito habilitado, TODO cartão de débito chega aqui
+    // como crédito. Nesse caso a mensagem manda usar o PIX, em vez de acusar o
+    // cartão de ser o que não é.
+    const disp = await mpTiposCartaoDisponiveis();
+    if (escolhido === 'debit_card' && !(disp.debito && CARTAO_TIPOS_HABILITADOS.debito))
+      throw recusa('No momento não estamos aceitando cartão de débito. Pague com PIX (sem acréscimo) ou no crédito.');
     throw recusa(tipo === 'credit_card'
       ? 'Esse cartão é de CRÉDITO. Volte e escolha a opção "Crédito" (acréscimo de 7%).'
       : 'Esse cartão é de DÉBITO. Volte e escolha a opção "Débito" (acréscimo de 5%).');

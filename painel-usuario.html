@@ -2966,7 +2966,8 @@ document.addEventListener('DOMContentLoaded', () => {
 window.addEventListener('load', async () => {
   if (!window.PagamentoCartao) return;
   const cfg = await PagamentoCartao.carregarConfig();
-  if (!cfg.cartaoDisponivel) {
+  const disponiveis = PagamentoCartao.aplicarTiposDisponiveis('#assinatura-bloco-metodo .metodo-btn');
+  if (!cfg.cartaoDisponivel || disponiveis.length < 2) {
     document.getElementById('assinatura-bloco-metodo')?.classList.add('hidden');
     metodoAssinatura = 'pix';
   }
