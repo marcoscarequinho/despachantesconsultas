@@ -1,18 +1,26 @@
-/* Pagamento no cartão — Checkout Bricks do Mercado Pago.
+/* Pagamento no cartão — mp.cardForm() do Mercado Pago (SDK JS v2).
  *
  * Usado pelas três telas que cobram do cliente (recarga de créditos, consulta
  * avulsa e assinatura). O PIX continua sendo o caminho padrão e sem acréscimo;
  * este arquivo cuida do cartão: débito (+5%) ou crédito (+7%), sempre à vista.
- * É um brick por tipo — o total no botão já é o daquele acréscimo, então cada
- * tela monta o formulário do tipo que o cliente escolheu.
  *
- * Por que o formulário é NOSSO e não uma página do Mercado Pago: os campos do
- * brick são iframes do próprio MP (o número do cartão nunca entra no nosso
- * JavaScript nem chega ao nosso servidor — recebemos só um token de uso único),
- * e o campo do número vem marcado como cartão de crédito para o navegador. É
- * isso que faz o iPhone e o Android oferecerem "Escanear cartão" com a câmera:
- * a leitura vai do sistema direto para o campo do MP. Um leitor ótico nosso
- * colocaria o número do cartão dentro do nosso código — é o que não queremos.
+ * POR QUE cardForm E NÃO O CARD PAYMENT BRICK
+ * Os campos do brick são iframes de secure-fields.mercadopago.com e vêm com
+ * autocomplete="off" — com isso o celular não oferece nem o "Escanear cartão"
+ * pela câmera nem o preenchimento do cartão salvo, e não há como mudar isso de
+ * fora do iframe. O cardForm com iframe:false usa <input> NOSSOS, que marcamos
+ * com autocomplete="cc-number"/"cc-exp-month"/"cc-exp-year"/"cc-csc" — é o que
+ * faz o iPhone e o Android oferecerem o escaneamento e o autofill. A validade
+ * é dividida em mês e ano de propósito: o iOS só preenche a data quando ela
+ * está em dois campos.
+ *
+ * O PREÇO DISSO, decidido pelo dono do negócio com a informação na mão: o
+ * número do cartão passa a existir dentro do JavaScript desta página (o SDK lê
+ * o input e tokeniza direto com o Mercado Pago). Ele continua NÃO chegando ao
+ * nosso servidor — o backend só recebe o token de uso único —, mas a
+ * classificação PCI do site sai de SAQ A para SAQ A-EP. Consequência prática
+ * para quem mexer aqui: nada de logar, guardar, copiar ou mandar para lugar
+ * nenhum o valor de #form-checkout__cardNumber; ele só existe para o SDK ler.
  *
  * O valor com acréscimo é sempre RECALCULADO no servidor; o que este arquivo
  * mostra é só a informação para o cliente decidir.
@@ -21,9 +29,10 @@
   const SDK_URL = 'https://sdk.mercadopago.com/js/v2';
 
   let sdkCarregando = null;
-  let brickCartao = null;
-  let brick3ds = null;
   let mp = null;
+  let cardFormAtual = null;
+  let brick3ds = null;
+  let estiloPosto = false;
 
   const brl = (v) =>
     'R$ ' + Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -39,6 +48,130 @@
       document.head.appendChild(s);
     });
     return sdkCarregando;
+  }
+
+  // Estilo do formulário. Fica aqui (e não no CSS de cada página) porque as três
+  // telas têm visuais diferentes e o formulário precisa ser o mesmo nas três.
+  // As cores saem de variáveis com fallback, então o tema escuro
+  // (assets/tema.css) continua valendo.
+  function porEstilo() {
+    if (estiloPosto || document.getElementById('pgc-estilo')) { estiloPosto = true; return; }
+    const st = document.createElement('style');
+    st.id = 'pgc-estilo';
+    st.textContent = `
+      .pgc-form { display: grid; gap: .75rem; }
+      .pgc-linha { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: .5rem; }
+      .pgc-campo { display: flex; flex-direction: column; gap: .25rem; }
+      .pgc-campo label { font-size: .75rem; font-weight: 600; color: #4b5563; }
+      .pgc-campo input, .pgc-campo select {
+        width: 100%; padding: .65rem .75rem; border: 1.5px solid #d1d5db; border-radius: .5rem;
+        font-size: 1rem; background: #fff; color: #111827; box-sizing: border-box;
+      }
+      .pgc-campo input:focus, .pgc-campo select:focus {
+        outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.15);
+      }
+      .pgc-campo input::placeholder { color: #9ca3af; }
+      .pgc-doc { display: grid; grid-template-columns: 7rem 1fr; gap: .5rem; }
+      .pgc-oculto { display: none !important; }
+      .pgc-btn {
+        width: 100%; padding: .8rem 1rem; border: 0; border-radius: .5rem; cursor: pointer;
+        background: #f97316; color: #fff; font-weight: 700; font-size: 1rem;
+      }
+      .pgc-btn:disabled { opacity: .6; cursor: default; }
+      .pgc-dica { font-size: .7rem; color: #6b7280; }
+      html.dark .pgc-campo label { color: #cbd5e1; }
+      html.dark .pgc-campo input, html.dark .pgc-campo select { background: #1e293b; border-color: #475569; color: #e2e8f0; }
+      html.dark .pgc-dica { color: #94a3b8; }
+    `;
+    document.head.appendChild(st);
+    estiloPosto = true;
+  }
+
+  // O HTML do formulário. Os ids são os que o cardForm espera; os autocomplete
+  // são o motivo de o formulário ser nosso (ver o comentário do topo).
+  function formHtml({ textoBotao, email, doc }) {
+    const emailAttr = email ? ` value="${String(email).replace(/"/g, '&quot;')}"` : '';
+    const docAttr = doc ? ` value="${String(doc).replace(/[^0-9]/g, '')}"` : '';
+    return `
+      <form id="form-checkout" class="pgc-form" autocomplete="on">
+        <div class="pgc-campo">
+          <label for="form-checkout__cardNumber">Número do cartão</label>
+          <input type="text" id="form-checkout__cardNumber" name="cardNumber"
+                 autocomplete="cc-number" inputmode="numeric" maxlength="23"
+                 placeholder="1234 1234 1234 1234">
+        </div>
+        <div class="pgc-linha">
+          <div class="pgc-campo">
+            <label for="form-checkout__expirationMonth">Mês</label>
+            <input type="text" id="form-checkout__expirationMonth" name="expirationMonth"
+                   autocomplete="cc-exp-month" inputmode="numeric" maxlength="2" placeholder="MM">
+          </div>
+          <div class="pgc-campo">
+            <label for="form-checkout__expirationYear">Ano</label>
+            <input type="text" id="form-checkout__expirationYear" name="expirationYear"
+                   autocomplete="cc-exp-year" inputmode="numeric" maxlength="4" placeholder="AAAA">
+          </div>
+          <div class="pgc-campo">
+            <label for="form-checkout__securityCode">CVV</label>
+            <input type="text" id="form-checkout__securityCode" name="securityCode"
+                   autocomplete="cc-csc" inputmode="numeric" maxlength="4" placeholder="123">
+          </div>
+        </div>
+        <div class="pgc-campo">
+          <label for="form-checkout__cardholderName">Nome do titular como está no cartão</label>
+          <input type="text" id="form-checkout__cardholderName" name="cardholderName"
+                 autocomplete="cc-name" placeholder="NOME COMPLETO">
+        </div>
+        <div class="pgc-campo">
+          <label for="form-checkout__identificationNumber">Documento do titular</label>
+          <div class="pgc-doc">
+            <select id="form-checkout__identificationType" name="identificationType"></select>
+            <input type="text" id="form-checkout__identificationNumber" name="identificationNumber"
+                   inputmode="numeric" placeholder="Somente números"${docAttr}>
+          </div>
+        </div>
+        <div class="pgc-campo">
+          <label for="form-checkout__cardholderEmail">E-mail</label>
+          <input type="email" id="form-checkout__cardholderEmail" name="cardholderEmail"
+                 autocomplete="email" placeholder="voce@exemplo.com"${emailAttr}>
+        </div>
+        <div class="pgc-campo pgc-oculto" id="pgc-emissor">
+          <label for="form-checkout__issuer">Banco emissor</label>
+          <select id="form-checkout__issuer" name="issuer"></select>
+        </div>
+        <!-- Parcelas fica escondido: cobramos sempre à vista (o servidor manda
+             installments: 1 de qualquer jeito). O elemento precisa existir
+             porque o cardForm o preenche e lê. -->
+        <div class="pgc-campo pgc-oculto">
+          <label for="form-checkout__installments">Parcelas</label>
+          <select id="form-checkout__installments" name="installments"></select>
+        </div>
+        <button type="submit" id="form-checkout__submit" class="pgc-btn">${textoBotao}</button>
+        <p class="pgc-dica">🔒 Os dados do cartão vão direto para o Mercado Pago. No celular, toque no campo do número para usar a câmera e escanear o cartão.</p>
+      </form>
+    `;
+  }
+
+  // O SDK do Mercado Pago SOBRESCREVE o autocomplete dos campos sensíveis para
+  // "off" quando monta o cardForm (conferido no navegador: o cc-number que
+  // escrevemos no HTML vira off; só o cc-name do titular sobrevive). Sem o
+  // atributo certo o celular não oferece o "Escanear cartão" nem o cartão
+  // salvo — que é a razão inteira de termos trocado o brick por este
+  // formulário. Então o valor é reposto depois da montagem e a cada foco (o
+  // momento em que o teclado/scanner do sistema aparece). Reposto, ele fica:
+  // o SDK não volta a mexer enquanto se digita.
+  const AUTOCOMPLETE_CAMPOS = {
+    'form-checkout__cardNumber': 'cc-number',
+    'form-checkout__expirationMonth': 'cc-exp-month',
+    'form-checkout__expirationYear': 'cc-exp-year',
+    'form-checkout__securityCode': 'cc-csc',
+    'form-checkout__cardholderName': 'cc-name',
+  };
+  function reforcarAutocomplete() {
+    for (const [id, valor] of Object.entries(AUTOCOMPLETE_CAMPOS)) {
+      const el = document.getElementById(id);
+      if (el && el.getAttribute('autocomplete') !== valor) el.setAttribute('autocomplete', valor);
+    }
   }
 
   const PagamentoCartao = {
@@ -91,7 +224,7 @@
     },
 
     // Monta o formulário do cartão. "valor" é o LÍQUIDO (o que o cliente leva);
-    // o brick cobra o valor com acréscimo.
+    // o formulário cobra o valor com acréscimo do tipo escolhido.
     async montar({
       containerId, container3dsId, valor, tipo = 'debito', email, doc,
       endpoint, corpoExtra = {}, textoBotao,
@@ -104,63 +237,97 @@
       }
       await carregarSdk();
       await this.desmontar();
+      porEstilo();
 
       const ehCredito = tipo === 'credito';
+      const tipoMp = ehCredito ? 'credit_card' : 'debit_card';
       const valorCobrado = this.comAcrescimo(valor, tipo);
+
+      const alvo = document.getElementById(containerId);
+      if (!alvo) { onErro?.('Não consegui montar o formulário do cartão.'); return false; }
+      alvo.innerHTML = formHtml({ textoBotao: textoBotao || `Pagar ${brl(valorCobrado)}`, email, doc });
+
       mp = mp || new window.MercadoPago(cfg.publicKey, { locale: 'pt-BR' });
-      const bricks = mp.bricks();
 
-      const docLimpo = String(doc || '').replace(/\D/g, '');
+      // Meios que o Mercado Pago devolve para o BIN digitado. Guardamos porque
+      // cartão de função dupla ("múltiplo") aparece nos dois tipos e o cardForm
+      // escolhe um sozinho: na hora de pagar trocamos pelo que casa com a aba
+      // que o cliente escolheu, senão ele veria "débito" na tela e seria
+      // cobrado como crédito.
+      let metodosDoBin = [];
+      const botao = document.getElementById('form-checkout__submit');
 
-      brickCartao = await bricks.create('cardPayment', containerId, {
-        initialization: {
-          amount: valorCobrado,
-          payer: {
-            ...(email ? { email } : {}),
-            ...(docLimpo ? { identification: { type: docLimpo.length > 11 ? 'CNPJ' : 'CPF', number: docLimpo } } : {}),
-          },
-        },
-        customization: {
-          // Um brick por tipo: o total exibido no botão já é o daquele
-          // acréscimo, então a tela não pode aceitar o outro tipo. A
-          // conferência que vale é a do servidor (validarCartao) — esta aqui é
-          // para o cliente não digitar um cartão que seria recusado depois.
-          // maxInstallments 1: cobramos sempre à vista (ver installments no
-          // criarPagamentoCartao).
-          paymentMethods: {
-            types: { excluded: ehCredito ? ['debit_card', 'prepaid_card'] : ['credit_card', 'prepaid_card'] },
-            maxInstallments: 1,
-          },
-          visual: {
-            style: { theme: 'default' },
-            // O título padrão do brick é "Cartão de crédito ou débito" — como
-            // um dos dois está excluído, ele prometeria o que a tela não aceita.
-            texts: {
-              formTitle: ehCredito ? 'Cartão de crédito' : 'Cartão de débito',
-              formSubmit: textoBotao || `Pagar ${brl(valorCobrado)}`,
-            },
-          },
+      cardFormAtual = mp.cardForm({
+        amount: String(valorCobrado),
+        iframe: false,
+        form: {
+          id: 'form-checkout',
+          cardNumber: { id: 'form-checkout__cardNumber' },
+          expirationMonth: { id: 'form-checkout__expirationMonth' },
+          expirationYear: { id: 'form-checkout__expirationYear' },
+          securityCode: { id: 'form-checkout__securityCode' },
+          cardholderName: { id: 'form-checkout__cardholderName' },
+          issuer: { id: 'form-checkout__issuer' },
+          installments: { id: 'form-checkout__installments' },
+          identificationType: { id: 'form-checkout__identificationType' },
+          identificationNumber: { id: 'form-checkout__identificationNumber' },
+          cardholderEmail: { id: 'form-checkout__cardholderEmail' },
         },
         callbacks: {
-          onReady: () => {},
-          onError: (erro) => {
-            console.error('[cartao] brick:', erro);
-            onErro?.(erro?.message || 'Não consegui carregar o formulário do cartão. Tente o PIX.');
-          },
-          onSubmit: async (cardData, additionalData) => {
-            // O brick já exclui o outro tipo, mas a bandeira só é conhecida
-            // depois do BIN — se ainda assim vier trocado, avisa aqui, com o
-            // total certo, em vez de deixar o servidor recusar mais seco.
-            const esperado = ehCredito ? 'credit_card' : 'debit_card';
-            if (additionalData?.paymentTypeId && additionalData.paymentTypeId !== esperado) {
-              onErro?.(ehCredito
-                ? 'Esse cartão é de débito. Volte e escolha a opção "Débito".'
-                : 'Esse cartão é de crédito. Volte e escolha a opção "Crédito".');
+          onFormMounted: (erro) => {
+            if (erro) {
+              console.error('[cartao] onFormMounted:', erro);
+              onErro?.('Não consegui carregar o formulário do cartão. Tente o PIX.');
               return;
             }
-            onProcessando?.(true);
+            reforcarAutocomplete();
+            for (const id of Object.keys(AUTOCOMPLETE_CAMPOS)) {
+              document.getElementById(id)?.addEventListener('focus', reforcarAutocomplete);
+            }
+          },
+          onPaymentMethodsReceived: (erro, metodos) => {
+            if (!erro && Array.isArray(metodos)) metodosDoBin = metodos;
+          },
+          onIssuersReceived: (erro, emissores) => {
+            // O seletor de banco só faz sentido quando há mais de um emissor
+            // para a bandeira; com um só, o cardForm já preenche sozinho.
+            const bloco = document.getElementById('pgc-emissor');
+            if (bloco) bloco.classList.toggle('pgc-oculto', !!erro || !Array.isArray(emissores) || emissores.length < 2);
+          },
+          onError: (erros) => {
+            const lista = Array.isArray(erros) ? erros : [erros];
+            const msg = lista.map(e => e?.message).filter(Boolean).join(' ');
+            console.error('[cartao] cardForm:', erros);
+            onErro?.(msg || 'Confira os dados do cartão e tente de novo.');
+            if (botao) botao.disabled = false;
+            onProcessando?.(false);
+          },
+          onSubmit: async (evento) => {
+            evento.preventDefault();
             onErro?.('');
+            onProcessando?.(true);
+            if (botao) botao.disabled = true;
             try {
+              const d = cardFormAtual.getCardFormData();
+              if (!d?.token) {
+                onErro?.('Confira os dados do cartão e tente de novo.');
+                onProcessando?.(false);
+                if (botao) botao.disabled = false;
+                return;
+              }
+
+              // Cartão de função dupla: escolhe o meio do tipo pedido.
+              const doTipo = metodosDoBin.find(m => m.payment_type_id === tipoMp);
+              const metodoAtual = metodosDoBin.find(m => m.id === d.paymentMethodId);
+              if (metodoAtual && metodoAtual.payment_type_id !== tipoMp && !doTipo) {
+                onErro?.(ehCredito
+                  ? 'Esse cartão é de débito. Volte e escolha a opção "Débito".'
+                  : 'Esse cartão é de crédito. Volte e escolha a opção "Crédito".');
+                onProcessando?.(false);
+                if (botao) botao.disabled = false;
+                return;
+              }
+
               const r = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -170,15 +337,19 @@
                   // bater com esta aba — quem paga não pode ver 5% na tela e
                   // ser cobrado 7%.
                   tipo_cartao: tipo,
-                  token: cardData.token,
-                  payment_method_id: cardData.payment_method_id,
-                  issuer_id: cardData.issuer_id,
-                  payer: cardData.payer,
+                  token: d.token,
+                  payment_method_id: (doTipo && doTipo.id) || d.paymentMethodId,
+                  issuer_id: d.issuerId,
+                  payer: {
+                    email: d.cardholderEmail,
+                    identification: { type: d.identificationType, number: d.identificationNumber },
+                  },
                 }),
               });
               const data = await r.json().catch(() => ({}));
               if (!r.ok) {
                 onProcessando?.(false);
+                if (botao) botao.disabled = false;
                 onErro?.(data.error || 'Não foi possível concluir o pagamento. Tente o PIX.');
                 return;
               }
@@ -200,7 +371,9 @@
               }
               onPendente?.(data);
             } catch (e) {
+              console.error('[cartao] envio:', e);
               onProcessando?.(false);
+              if (botao) botao.disabled = false;
               onErro?.('Erro de conexão ao enviar o pagamento. Tente de novo.');
             }
           },
@@ -214,7 +387,9 @@
     // externalResourceURL/creq que veio no three_ds_info do pagamento.
     async montarDesafio3ds({ containerId, paymentId, threeDs, onErro }) {
       await carregarSdk();
-      if (brickCartao) { try { brickCartao.unmount(); } catch {} brickCartao = null; }
+      if (cardFormAtual) { try { cardFormAtual.unmount(); } catch {} cardFormAtual = null; }
+      const alvoForm = document.getElementById('form-checkout');
+      if (alvoForm) alvoForm.remove();
       const bricks = mp.bricks();
       brick3ds = await bricks.create('statusScreen', containerId, {
         initialization: {
@@ -232,10 +407,13 @@
     },
 
     // O SDK do Mercado Pago pede que a instância seja destruída ao sair da
-    // tela; sem isso, reabrir o formulário monta um brick em cima do outro.
+    // tela; sem isso, reabrir o formulário monta um em cima do outro — e os ids
+    // (form-checkout__*) são únicos na página.
     async desmontar() {
-      if (brickCartao) { try { brickCartao.unmount(); } catch {} brickCartao = null; }
+      if (cardFormAtual) { try { cardFormAtual.unmount(); } catch {} cardFormAtual = null; }
       if (brick3ds) { try { brick3ds.unmount(); } catch {} brick3ds = null; }
+      const form = document.getElementById('form-checkout');
+      if (form) form.remove();
     },
   };
 
