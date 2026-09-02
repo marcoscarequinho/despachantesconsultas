@@ -5163,13 +5163,19 @@ function buildComunicacaoVendaPdfBuffer(service, data, params) {
 // dois caminhos concorrentes (cron e clique do usuário, webhook duplicado) não
 // fecham nem cobram o mesmo pedido duas vezes. Quem já tem transaction_id foi
 // cobrado antes (é o caso do ATPV-e, cobrado no cadastro) e só muda de status.
+// Devolve true quando a consulta foi fechada NESTA chamada (estava
+// 'aguardando_pdf' e virou 'success') e false quando já estava fechada antes —
+// é o que deixa o chamador distinguir "concluiu agora" de "pedido antigo sendo
+// mexido de novo na tela" (ver finalizeAtpveQuery).
 async function finalizePendingQuery(queryId, userId, descricao) {
   const claimed = await pool.query(
     `UPDATE queries SET status='success' WHERE id=$1 AND status='aguardando_pdf'
      RETURNING amount, transaction_id`,
     [queryId]
   );
-  if (!claimed.rows.length || claimed.rows[0].transaction_id) return;
+  if (!claimed.rows.length) return false;
+  // Já cobrada no cadastro (ATPV-e): fechou agora, mas não há débito a fazer.
+  if (claimed.rows[0].transaction_id) return true;
   const amount = parseFloat(claimed.rows[0].amount);
   await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [amount, userId]);
   const txRow = await pool.query(
@@ -5177,16 +5183,20 @@ async function finalizePendingQuery(queryId, userId, descricao) {
     [userId, amount, descricao]
   );
   await pool.query('UPDATE queries SET transaction_id=$1 WHERE id=$2', [txRow.rows[0].id, queryId]);
+  return true;
 }
 
 // ATPV-e: hoje a cobrança acontece no cadastro (ver processCatalogQuery), então
 // aqui só passam pelo débito os pedidos do modelo antigo, que ficaram
 // 'aguardando_pdf' sem transaction_id.
 async function finalizeAtpveQuery(uf, queryId, userId) {
-  await finalizePendingQuery(queryId, userId, `Consulta: Intenção de Venda ${uf.toUpperCase()}`);
-  // Pedido concluído entra na fila da conferência da intenção de venda
-  // (ver agendarVerificacaoIntencaoVenda).
-  await agendarVerificacaoIntencaoVenda(uf, queryId);
+  const fechouAgora = await finalizePendingQuery(queryId, userId, `Consulta: Intenção de Venda ${uf.toUpperCase()}`);
+  // Só entra na fila da conferência o pedido concluído AGORA. Sem esse guarda,
+  // abrir um ATPV-e antigo em "Meus ATPV-e" e clicar numa ação que devolve o
+  // PDF (esta função roda de novo) enfileiraria um pedido de meses atrás — que
+  // seria conferido e, no limite, estornado. A conferência vale só daqui para
+  // frente: o histórico não é reprocessado.
+  if (fechouAgora) await agendarVerificacaoIntencaoVenda(uf, queryId);
 }
 
 // Garante um PDF em cache válido (7 dias) pro pedido sempre que a Chekaki sinalizar

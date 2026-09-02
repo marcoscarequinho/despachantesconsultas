@@ -102,7 +102,7 @@ O rastreio é sempre **depois**, nunca antes: o cron do ATPV-e (`/api/cron/atpve
 - **Não achou** → `refundQuery` devolve o valor (idempotente, marca a consulta como `estornado`) e avisa cliente e admin no WhatsApp.
 - **Indeterminado** (API fora do ar) → conta a tentativa e volta na próxima passada; em `ATPVE_VERIFICACAO_TENTATIVAS` (5) sem resposta, avisa o admin e para — nada é estornado no escuro.
 
-Cada conferência custa uma consulta Datacube, paga pela casa. Só entra pedido **concluído e cobrado** (`status='success'` com `transaction_id`): o histórico anterior à criação da tabela não é reprocessado. Na API externa, pedido que volta JSON (em análise) fica de fora — quem o conclui é o parceiro pelo `/registrar`, caminho que não passa pelo agendamento.
+Cada conferência custa uma consulta Datacube, paga pela casa. **Só vale daqui para frente**: entra na fila apenas o pedido concluído *naquela chamada* — `finalizePendingQuery` devolve `true` só quando ele estava `aguardando_pdf` e virou `success`. É esse guarda que impede um ATPV-e antigo de ser enfileirado (e, no limite, estornado) quando o usuário abre "Meus ATPV-e" e clica numa ação que devolve o PDF de novo, já que `finalizeAtpveQuery` roda outra vez. O histórico não é reprocessado. Na API externa, pedido que volta JSON (em análise) fica de fora — quem o conclui é o parceiro pelo `/registrar`, caminho que não passa pelo agendamento.
 
 ## Convenções
 
