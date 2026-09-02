@@ -308,8 +308,12 @@
       // servidor.
       const limitarParcelas = () => {
         if (!selParcelas) return;
+        const vistos = new Set();
         for (const op of [...selParcelas.options]) {
-          if ((parseInt(op.value, 10) || 1) > maxParcelas) op.remove();
+          const n = parseInt(op.value, 10) || 1;
+          // Repetida: a lista pode ser preenchida por nós e pelo SDK.
+          if (n > maxParcelas || vistos.has(n)) { op.remove(); continue; }
+          vistos.add(n);
         }
         if (selParcelas.selectedIndex < 0 && selParcelas.options.length) selParcelas.selectedIndex = 0;
       };
@@ -328,6 +332,43 @@
       };
       if (selParcelas) selParcelas.addEventListener('change', atualizarBotaoParcelas);
 
+      // Busca a tabela de parcelas direto na API do Mercado Pago, pelo BIN do
+      // cartão. Por que não deixar isso com o cardForm: o preenchimento
+      // automático do <select> depende de uma cadeia interna dele (meios de
+      // pagamento → emissores → parcelas) que, nesta conta, não chegou a rodar
+      // — o cliente via só "à vista" mesmo com a tabela existindo. Aqui é uma
+      // chamada só, com a mesma public key e o mesmo endpoint que o SDK usaria,
+      // então o resultado é idêntico ao que ele mostraria.
+      let ultimoBin = '';
+      const buscarParcelas = async (bin) => {
+        const limpo = String(bin || '').replace(/\D/g, '');
+        if (!ehCredito || !selParcelas || limpo.length < 8 || limpo === ultimoBin) return;
+        ultimoBin = limpo;
+        try {
+          const url = 'https://api.mercadopago.com/v1/payment_methods/installments'
+            + `?public_key=${encodeURIComponent(cfg.publicKey)}`
+            + `&amount=${encodeURIComponent(valorCobrado)}&bin=${encodeURIComponent(limpo)}`;
+          const r = await fetch(url);
+          const d = await r.json();
+          const lista = Array.isArray(d) ? d : [];
+          const alvo = lista.find(x => x.payment_type_id === 'credit_card') || lista[0];
+          const custos = alvo?.payer_costs || [];
+          if (!custos.length) return;
+          // Substitui a lista inteira: se o SDK também preencher, o corte tira
+          // as repetidas.
+          selParcelas.innerHTML = '';
+          for (const pc of custos) {
+            const op = document.createElement('option');
+            op.value = pc.installments;
+            op.textContent = pc.recommended_message || `${pc.installments}x`;
+            selParcelas.appendChild(op);
+          }
+          aplicarParcelas();
+        } catch (e) {
+          console.error('[cartao] não consegui buscar as parcelas:', e.message);
+        }
+      };
+
       // Mostra/esconde o seletor conforme as opções que o Mercado Pago mandou.
       // Fica numa função só porque é chamada por dois caminhos: o callback do
       // SDK e o observador abaixo.
@@ -344,7 +385,12 @@
           // saber. Por isso "opcoes > 0".
           aviso.classList.toggle('pgc-oculto', !ehCredito || podeParcelar || opcoes === 0);
           if (ehCredito && !podeParcelar && opcoes > 0) {
-            aviso.textContent = `Neste valor o Mercado Pago não permite parcelar (ele pede pelo menos ${brl(PARCELA_MINIMA)} por parcela). A partir de ${brl(PARCELA_MINIMA * 2)} dá para dividir em 2x, e em até ${maxParcelas}x a partir de ${brl(PARCELA_MINIMA * maxParcelas)}.`;
+            // Duas causas possíveis, e daqui não dá para distinguir: valor baixo
+            // (o MP exige um mínimo por parcela, medido em ~R$ 5,35) ou o
+            // emissor do cartão não liberar parcelamento — a consulta por BIN
+            // devolve tabelas diferentes da consulta por bandeira. O texto
+            // assume as duas em vez de afirmar a errada.
+            aviso.textContent = `O Mercado Pago não ofereceu parcelamento para este cartão neste valor — pode ser porque ele pede pelo menos ${brl(PARCELA_MINIMA)} por parcela, ou porque o emissor do cartão não permite parcelar aqui. Dá para pagar à vista, ou no PIX sem acréscimo.`;
           }
         }
         atualizarBotaoParcelas();
@@ -391,6 +437,9 @@
           onPaymentMethodsReceived: (erro, metodos) => {
             if (!erro && Array.isArray(metodos)) metodosDoBin = metodos;
           },
+          // O SDK avisa o BIN a cada digitação; a partir de 8 dígitos ele já
+          // identifica a bandeira, e é aí que buscamos a tabela.
+          onBinChange: (bin) => { buscarParcelas(bin); },
           onInstallmentsReceived: (erro, parcelas) => {
             if (erro) {
               console.error('[cartao] parcelas:', erro);
