@@ -1162,6 +1162,25 @@ async function initDB() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  // Conferência da intenção de venda depois que o ATPV-e fica pronto: o
+  // documento pode sair e mesmo assim o DETRAN não registrar a restrição no
+  // veículo, e aí o cliente pagou por algo que não valeu. Uma linha por pedido
+  // concluído (query_id UNIQUE), conferida pelo cron ATPVE_VERIFICACAO_HORAS
+  // depois — ver runAtpveIntencaoVendaCheck.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS atpve_verificacoes (
+      id            SERIAL PRIMARY KEY,
+      query_id      INTEGER UNIQUE NOT NULL REFERENCES queries(id) ON DELETE CASCADE,
+      uf            VARCHAR(2) NOT NULL,
+      placa         VARCHAR(10) NOT NULL,
+      concluida_em  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      verificada_em TIMESTAMPTZ,
+      tentativas    INTEGER NOT NULL DEFAULT 0,
+      resultado     VARCHAR(20),
+      estornado     BOOLEAN NOT NULL DEFAULT false,
+      detalhe       TEXT
+    );
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS query_messages (
       id         SERIAL PRIMARY KEY,
@@ -5163,8 +5182,11 @@ async function finalizePendingQuery(queryId, userId, descricao) {
 // ATPV-e: hoje a cobrança acontece no cadastro (ver processCatalogQuery), então
 // aqui só passam pelo débito os pedidos do modelo antigo, que ficaram
 // 'aguardando_pdf' sem transaction_id.
-function finalizeAtpveQuery(uf, queryId, userId) {
-  return finalizePendingQuery(queryId, userId, `Consulta: Intenção de Venda ${uf.toUpperCase()}`);
+async function finalizeAtpveQuery(uf, queryId, userId) {
+  await finalizePendingQuery(queryId, userId, `Consulta: Intenção de Venda ${uf.toUpperCase()}`);
+  // Pedido concluído entra na fila da conferência da intenção de venda
+  // (ver agendarVerificacaoIntencaoVenda).
+  await agendarVerificacaoIntencaoVenda(uf, queryId);
 }
 
 // Garante um PDF em cache válido (7 dias) pro pedido sempre que a Chekaki sinalizar
@@ -8283,6 +8305,12 @@ async function proxyAtpveExternal(req, res, uf, upstreamPath, { charge = false }
            JSON.stringify(params), price, txRow.rows[0].id,
            isPdf ? 'pdf' : 'json', isPdf ? '{}' : buf.toString()]
         );
+        // Documento já emitido (a upstream devolveu o PDF): entra na fila da
+        // conferência da intenção de venda, igual ao pedido feito pelo painel.
+        // Pedido que volta JSON ainda está em análise e é o parceiro quem o
+        // conclui depois pelo /registrar — esse caminho não passa por aqui e
+        // fica de fora da conferência.
+        if (isPdf) await agendarVerificacaoIntencaoVenda(uf, qRow.rows[0].id);
         if (isPdf) {
           // Mesmo cache de 7 dias do painel: o dono da chave rebaixa o PDF pelo
           // histórico sem nova cobrança.
@@ -12003,6 +12031,160 @@ async function runAtpvePendingCheck() {
   return { checked, notified, cancelled, alerted, total: rows.length };
 }
 
+// ── Conferência da intenção de venda no BIN Nacional ─────────────────────────
+// O ATPV-e sair não garante que o DETRAN atribuiu a intenção de venda ao
+// veículo — e é a restrição, não o papel, que o cliente comprou. Por isso todo
+// pedido concluído é reconferido no BIN Nacional (o mesmo /veiculos/bin-nacional
+// da aba "Opção 2 Nova Consulta", ver SERVICES_V2/dc-bin-nacional) e, se a
+// restrição não estiver lá, o valor é estornado sozinho.
+//
+// A espera de 2 horas é de propósito: a base nacional não reflete o registro na
+// mesma hora, e conferir cedo demais estornaria pedido bom. A conferência custa
+// uma consulta Datacube por pedido, paga pela casa — daí o limite de tentativas
+// quando a resposta vem indeterminada (API fora do ar, placa sem retorno), em
+// vez de repetir para sempre.
+const ATPVE_VERIFICACAO_HORAS = 2;
+const ATPVE_VERIFICACAO_TENTATIVAS = 5;
+// A Datacube devolve a restrição sem acento ("INTENCAO VENDA"), mas a regex
+// aceita as duas grafias para não depender disso.
+const INTENCAO_VENDA_RE = /INTEN[ÇC][ÃA]O\s+(DE\s+)?VENDA/i;
+
+// true = restrição encontrada, false = ausente, null = não deu para saber
+// (nesse caso o cron tenta de novo na próxima passada).
+async function temIntencaoVendaNoBinNacional(placa) {
+  const r = await fetch(`${DATACUBE_API_URL}/veiculos/bin-nacional`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ auth_token: DATACUBE_TOKEN, placa }).toString(),
+  });
+  const d = await r.json().catch(() => null);
+  if (!r.ok || d?.status !== true || !d?.result) {
+    console.error(`[atpve-verificacao] BIN Nacional sem resposta útil para ${placa}: HTTP ${r.status} ${JSON.stringify(d).slice(0, 200)}`);
+    return null;
+  }
+  const rest = d.result.restricoes_e_impedimentos || {};
+  const candidatos = [...(Array.isArray(rest.restricoes_list) ? rest.restricoes_list : []), rest.restricoes || ''];
+  return candidatos.some(x => INTENCAO_VENDA_RE.test(String(x)));
+}
+
+// Põe o pedido na fila da conferência. Só entra pedido concluído E cobrado —
+// sem transaction_id não há o que estornar, e sem placa não há o que consultar.
+async function agendarVerificacaoIntencaoVenda(uf, queryId) {
+  try {
+    const r = await pool.query(
+      'SELECT status, transaction_id, params, result_data FROM queries WHERE id=$1', [queryId]
+    );
+    const q = r.rows[0];
+    if (!q || q.status !== 'success' || !q.transaction_id) return;
+
+    let placa = '';
+    for (const campo of [q.result_data, q.params]) {
+      if (placa) break;
+      try { placa = (JSON.parse(campo || '{}').placa || '').toString(); } catch {}
+    }
+    placa = placa.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (placa.length !== 7) return;
+
+    await pool.query(
+      `INSERT INTO atpve_verificacoes (query_id, uf, placa) VALUES ($1,$2,$3)
+       ON CONFLICT (query_id) DO NOTHING`,
+      [queryId, uf.toUpperCase(), placa]
+    );
+  } catch (e) {
+    console.error(`[atpve-verificacao] falha ao agendar a conferência da consulta ${queryId}:`, e.message);
+  }
+}
+
+// Roda junto do cron do ATPV-e (a cada 5 min): pega o que já passou das 2 horas
+// e ainda não foi conferido. Estorno usa refundQuery, que é idempotente.
+async function runAtpveIntencaoVendaCheck() {
+  const { rows } = await pool.query(
+    `SELECT v.id, v.query_id, v.uf, v.placa, v.tentativas,
+            q.user_id, q.amount, u.phone, u.name AS user_name
+       FROM atpve_verificacoes v
+       JOIN queries q ON q.id = v.query_id
+       JOIN users u ON u.id = q.user_id
+      WHERE v.verificada_em IS NULL
+        AND v.tentativas < $1
+        AND v.concluida_em < NOW() - ($2 || ' hours')::interval
+      ORDER BY v.concluida_em ASC LIMIT 50`,
+    [ATPVE_VERIFICACAO_TENTATIVAS, String(ATPVE_VERIFICACAO_HORAS)]
+  );
+
+  let conferidos = 0, comIntencao = 0, estornados = 0, indefinidos = 0;
+  for (const row of rows) {
+    conferidos++;
+    let tem = null;
+    try {
+      tem = await temIntencaoVendaNoBinNacional(row.placa);
+    } catch (e) {
+      console.error(`[atpve-verificacao] erro no BIN Nacional da placa ${row.placa}:`, e.message);
+    }
+
+    // Indeterminado: só marca a tentativa e volta na próxima passada. Esgotadas
+    // as tentativas, o admin é avisado — nada é estornado no escuro.
+    if (tem === null) {
+      indefinidos++;
+      const upd = await pool.query(
+        'UPDATE atpve_verificacoes SET tentativas = tentativas + 1 WHERE id=$1 RETURNING tentativas',
+        [row.id]
+      );
+      if (upd.rows[0]?.tentativas >= ATPVE_VERIFICACAO_TENTATIVAS) {
+        await pool.query(
+          `UPDATE atpve_verificacoes SET verificada_em=NOW(), resultado='INDETERMINADO',
+                  detalhe='BIN Nacional não respondeu em ' || tentativas || ' tentativas' WHERE id=$1`,
+          [row.id]
+        );
+        if (ADMIN_PHONE) {
+          await sendWhatsApp(ADMIN_PHONE,
+            `⚠️ *ATPV-e ${row.uf} — conferência sem resposta*\n\n🔤 Placa: ${row.placa}\n👤 Cliente: ${row.user_name || '-'}\n🧾 Consulta: ${row.query_id}\n\nO BIN Nacional não respondeu em ${ATPVE_VERIFICACAO_TENTATIVAS} tentativas. Confira a intenção de venda na mão e devolva o valor se ela não constar.`
+          ).catch(() => {});
+        }
+      }
+      continue;
+    }
+
+    if (tem) {
+      comIntencao++;
+      await pool.query(
+        `UPDATE atpve_verificacoes SET verificada_em=NOW(), tentativas = tentativas + 1,
+                resultado='COM_INTENCAO' WHERE id=$1`,
+        [row.id]
+      );
+      continue;
+    }
+
+    // Sem a restrição no veículo: o cliente pagou por um registro que não
+    // aconteceu, então devolve.
+    const valor = parseFloat(row.amount || 0);
+    const ok = await refundQuery(row.query_id, row.user_id, valor,
+      `ATPV-e ${row.uf} sem intenção de venda registrada (placa ${row.placa})`);
+    await pool.query(
+      `UPDATE atpve_verificacoes SET verificada_em=NOW(), tentativas = tentativas + 1,
+              resultado='SEM_INTENCAO', estornado=$2,
+              detalhe=$3 WHERE id=$1`,
+      [row.id, ok, ok ? null : 'Consulta já estava estornada ou sem valor a devolver']
+    );
+    if (!ok) continue;
+
+    estornados++;
+    if (row.phone) {
+      await sendWhatsApp(row.phone,
+        `💰 *Devolvemos o valor do seu ATPV-e ${row.uf}*\n\n🔤 Placa: ${row.placa}\n💵 Estornado: ${fmtMoneyBRL(valor)}\n\nConferimos na base nacional ${ATPVE_VERIFICACAO_HORAS}h depois da emissão e a *intenção de venda não consta* no veículo. O crédito já voltou para o seu saldo. Se precisar do documento de novo, é só refazer — qualquer dúvida, fale com o suporte.`
+      ).catch(() => {});
+    }
+    if (ADMIN_PHONE) {
+      await sendWhatsApp(ADMIN_PHONE,
+        `↩️ *Estorno automático de ATPV-e ${row.uf}*\n\n🔤 Placa: ${row.placa}\n👤 Cliente: ${row.user_name || '-'}\n💵 Devolvido: ${fmtMoneyBRL(valor)}\n🧾 Consulta: ${row.query_id}\n\nO BIN Nacional não mostrou a intenção de venda ${ATPVE_VERIFICACAO_HORAS}h depois da emissão.`
+      ).catch(() => {});
+    }
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  console.log(`✅ Conferência de intenção de venda: ${conferidos} conferidos, ${comIntencao} com restrição, ${estornados} estornados, ${indefinidos} sem resposta`);
+  return { conferidos, comIntencao, estornados, indefinidos, total: rows.length };
+}
+
 // ── GET /api/cron/atpve-rj-status (Vercel Cron) — nome histórico, hoje varre
 // RJ+SP+MS+MG numa passada só; ver runAtpvePendingCheck. ──────────────────────
 app.get('/api/cron/atpve-rj-status', async (req, res) => {
@@ -12012,7 +12194,8 @@ app.get('/api/cron/atpve-rj-status', async (req, res) => {
   }
   try {
     const result = await runAtpvePendingCheck();
-    res.json({ success: true, ...result });
+    const verificacao = await runAtpveIntencaoVendaCheck();
+    res.json({ success: true, ...result, verificacao });
   } catch (err) {
     console.error('Erro no cron atpve-rj-status:', err.message);
     res.status(500).json({ error: err.message });
@@ -12023,7 +12206,8 @@ app.get('/api/cron/atpve-rj-status', async (req, res) => {
 app.post('/api/admin/atpve-rj-status-check', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     const result = await runAtpvePendingCheck();
-    res.json({ success: true, ...result });
+    const verificacao = await runAtpveIntencaoVendaCheck();
+    res.json({ success: true, ...result, verificacao });
   } catch (err) {
     console.error('Erro na checagem manual ATPV-e:', err.message);
     res.status(500).json({ error: err.message });

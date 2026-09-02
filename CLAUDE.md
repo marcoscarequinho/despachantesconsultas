@@ -92,6 +92,18 @@ Toda cobrança do cliente aceita PIX sem acréscimo ou cartão com acréscimo �
 - **3DS**: `three_d_secure_mode: 'optional'` com `binary_mode: false`. No débito o emissor quase sempre pede o desafio: a resposta volta `pending`/`pending_challenge` com `three_ds_info`, que o front entrega ao Status Screen Brick. Por isso o pagamento no cartão **não é confirmado na resposta da rota** — quem confirma é o mesmo polling do PIX (`/api/pix/status/:id` ou `/api/public/pedido/:token`), mais o webhook e o cron `runPixReconcile`.
 - **Colunas**: `pix_payments.value` e `public_orders.amount` continuam sendo o valor LÍQUIDO (o crédito que o cliente recebe / o preço do serviço) — é o que credita. O cobrado com acréscimo fica em `charged_value`/`charged_amount`, e `method` diz `PIX`, `CARTAO` (débito, nome herdado do primeiro dia do cartão) ou `CREDITO`.
 
+## ATPV-e: conferência da intenção de venda e estorno automático
+
+O ATPV-e sair não garante que o DETRAN atribuiu a **intenção de venda** ao veículo — e é a restrição, não o papel, que o cliente comprou. Por isso todo pedido concluído entra na tabela `atpve_verificacoes` (`agendarVerificacaoIntencaoVenda`, chamada em `finalizeAtpveQuery` e, na API externa, quando o `cadastrar` já devolve o PDF).
+
+O rastreio é sempre **depois**, nunca antes: o cron do ATPV-e (`/api/cron/atpve-rj-status`, a cada 5 min) roda `runAtpveIntencaoVendaCheck`, que só pega o que passou de `ATPVE_VERIFICACAO_HORAS` (2h) **contadas da conclusão do pedido** (`concluida_em`), não do cadastro — a base nacional não reflete o registro na mesma hora, e conferir cedo estornaria pedido bom. A consulta é o `/veiculos/bin-nacional` da Datacube (o mesmo `dc-bin-nacional` da aba "Opção 2 Nova Consulta"), e a restrição é procurada em `restricoes_e_impedimentos.restricoes_list` / `.restricoes` (a Datacube devolve sem acento: `INTENCAO VENDA`).
+
+- **Achou** → marca `COM_INTENCAO` e encerra.
+- **Não achou** → `refundQuery` devolve o valor (idempotente, marca a consulta como `estornado`) e avisa cliente e admin no WhatsApp.
+- **Indeterminado** (API fora do ar) → conta a tentativa e volta na próxima passada; em `ATPVE_VERIFICACAO_TENTATIVAS` (5) sem resposta, avisa o admin e para — nada é estornado no escuro.
+
+Cada conferência custa uma consulta Datacube, paga pela casa. Só entra pedido **concluído e cobrado** (`status='success'` com `transaction_id`): o histórico anterior à criação da tabela não é reprocessado. Na API externa, pedido que volta JSON (em análise) fica de fora — quem o conclui é o parceiro pelo `/registrar`, caminho que não passa pelo agendamento.
+
 ## Convenções
 
 - Idioma do código, comentários, mensagens de erro e UI: **português (pt-BR)**. Valores em BRL (`fmtMoneyBRL`).
