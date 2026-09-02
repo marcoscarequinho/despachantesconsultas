@@ -61,6 +61,13 @@
        aplica a classe antes da primeira pintura. Ver assets/tema.css. -->
   <link rel="stylesheet" href="/assets/tema.css">
   <script src="/assets/tema.js"></script>
+  <!-- Cartão de débito (Checkout Bricks do Mercado Pago) — ver assets/pagamento-cartao.js -->
+  <script src="/assets/pagamento-cartao.js" defer></script>
+  <style>
+    .metodo-btn { border: 2px solid #d1d5db; color: #374151; border-radius: .5rem; padding: .45rem .4rem; font-weight: 700; transition: .15s; background: white; }
+    .metodo-btn:hover { border-color: #d97706; }
+    .metodo-btn.ativo { border-color: #d97706; background: #fffbeb; color: #b45309; }
+  </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
 
@@ -2902,11 +2909,17 @@ function abrirModalAssinatura(svc, motivo, mensagemServidor) {
   }
   document.getElementById('assinatura-step-oferta').classList.remove('hidden');
   document.getElementById('assinatura-step-pix').classList.add('hidden');
+  document.getElementById('assinatura-step-cartao').classList.add('hidden');
   document.getElementById('assinatura-erro').classList.add('hidden');
+  document.getElementById('assinatura-cartao-erro').classList.add('hidden');
+  metodoAssinatura = 'pix';
+  document.querySelectorAll('[data-metodo-assinatura]').forEach(b =>
+    b.classList.toggle('ativo', b.dataset.metodoAssinatura === 'pix'));
+  atualizarAvisoAssinatura();
   const btn = document.getElementById('assinatura-assinar-btn');
   btn.classList.remove('hidden');
   btn.disabled = false;
-  btn.textContent = '💳 Assinar e pagar com PIX';
+  btn.textContent = rotuloBotaoAssinatura();
   const modal = document.getElementById('assinatura-modal');
   modal.classList.remove('hidden');
   modal.classList.add('flex');
@@ -2917,6 +2930,99 @@ function closeAssinaturaModal() {
   modal.classList.add('hidden');
   modal.classList.remove('flex');
   if (assinaturaPollTimer) { clearInterval(assinaturaPollTimer); assinaturaPollTimer = null; }
+  // O SDK do Mercado Pago pede que o brick seja destruído ao sair da tela.
+  if (window.PagamentoCartao) PagamentoCartao.desmontar();
+}
+
+// ── Meio de pagamento da assinatura: PIX (sem acréscimo) ou débito (+5%) ────
+let metodoAssinatura = 'pix';
+const ASSINATURA_PRECO = 30;
+
+const rotuloBotaoAssinatura = () =>
+  metodoAssinatura === 'pix' ? '💳 Assinar e pagar com PIX' : '💳 Assinar e pagar no débito';
+
+function atualizarAvisoAssinatura() {
+  const el = document.getElementById('assinatura-aviso-acrescimo');
+  if (el && window.PagamentoCartao) el.textContent = PagamentoCartao.textoAviso(ASSINATURA_PRECO);
+  const btn = document.getElementById('assinatura-assinar-btn');
+  if (btn && !btn.disabled) btn.textContent = rotuloBotaoAssinatura();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('[data-metodo-assinatura]').forEach(b => {
+    b.addEventListener('click', () => {
+      metodoAssinatura = b.dataset.metodoAssinatura;
+      document.querySelectorAll('[data-metodo-assinatura]').forEach(x => x.classList.toggle('ativo', x === b));
+      atualizarAvisoAssinatura();
+    });
+  });
+});
+
+// Sem a public key do Mercado Pago configurada, some a opção de cartão.
+window.addEventListener('load', async () => {
+  if (!window.PagamentoCartao) return;
+  const cfg = await PagamentoCartao.carregarConfig();
+  if (!cfg.cartaoDisponivel) {
+    document.getElementById('assinatura-bloco-metodo')?.classList.add('hidden');
+    metodoAssinatura = 'pix';
+  }
+  atualizarAvisoAssinatura();
+});
+
+function pagarAssinatura() {
+  return metodoAssinatura === 'cartao' ? pagarAssinaturaCartao() : gerarPixAssinatura();
+}
+
+function erroCartaoAssinatura(msg) {
+  const box = document.getElementById('assinatura-cartao-erro');
+  if (!msg) { box.classList.add('hidden'); box.textContent = ''; return; }
+  box.textContent = msg;
+  box.classList.remove('hidden');
+}
+
+// Cartão de débito: mesma cobrança de R$ 30,00 com o acréscimo de 5%. A
+// confirmação é o mesmo polling do PIX (/api/pix/status/:id) — a linha nasce
+// com purpose='ASSINATURA', então o servidor abre o período em vez de creditar
+// saldo, inclusive quando o banco pede o desafio do 3DS.
+async function pagarAssinaturaCartao() {
+  const btn = document.getElementById('assinatura-assinar-btn');
+  const total = PagamentoCartao.comAcrescimo(ASSINATURA_PRECO);
+  document.getElementById('assinatura-cartao-liquido').textContent = PagamentoCartao.brl(ASSINATURA_PRECO);
+  document.getElementById('assinatura-cartao-taxa').textContent = PagamentoCartao.brl(total - ASSINATURA_PRECO);
+  document.getElementById('assinatura-cartao-total').textContent = PagamentoCartao.brl(total);
+  document.getElementById('assinatura-step-oferta').classList.add('hidden');
+  document.getElementById('assinatura-step-cartao').classList.remove('hidden');
+  btn.classList.add('hidden');
+  erroCartaoAssinatura('');
+
+  let usuario = {};
+  try { usuario = await (await fetch('/api/auth/me')).json(); } catch {}
+
+  const ok = await PagamentoCartao.montar({
+    containerId: 'assinatura-cartao-brick',
+    container3dsId: 'assinatura-cartao-3ds',
+    valor: ASSINATURA_PRECO,
+    email: usuario.email,
+    doc: usuario.cpf_cnpj,
+    endpoint: '/api/cartao/assinatura',
+    textoBotao: 'Pagar ' + PagamentoCartao.brl(total),
+    onErro: erroCartaoAssinatura,
+    onProcessando: (ligado) =>
+      document.getElementById('assinatura-cartao-status').classList.toggle('hidden', !ligado),
+    onAprovado: (d) => {
+      document.getElementById('assinatura-status').innerHTML = '✅ <span class="text-green-600">Assinatura ativada!</span>';
+      iniciarPollingAssinatura(d.paymentId);
+    },
+    onPendente: (d) => {
+      document.getElementById('assinatura-cartao-status').classList.remove('hidden');
+      iniciarPollingAssinatura(d.paymentId);
+    },
+  });
+  if (!ok) {
+    document.getElementById('assinatura-step-cartao').classList.add('hidden');
+    document.getElementById('assinatura-step-oferta').classList.remove('hidden');
+    btn.classList.remove('hidden');
+  }
 }
 
 async function gerarPixAssinatura() {
@@ -2932,7 +3038,7 @@ async function gerarPixAssinatura() {
       erro.textContent = d.error || 'Erro ao gerar a cobrança PIX.';
       erro.classList.remove('hidden');
       btn.disabled = false;
-      btn.textContent = '💳 Assinar e pagar com PIX';
+      btn.textContent = rotuloBotaoAssinatura();
       return;
     }
     document.getElementById('assinatura-qr').src = 'data:image/png;base64,' + d.qrCode;
@@ -2945,7 +3051,7 @@ async function gerarPixAssinatura() {
     erro.textContent = 'Erro de conexão. Tente novamente.';
     erro.classList.remove('hidden');
     btn.disabled = false;
-    btn.textContent = '💳 Assinar e pagar com PIX';
+    btn.textContent = rotuloBotaoAssinatura();
   }
 }
 
@@ -2963,6 +3069,8 @@ function iniciarPollingAssinatura(paymentId) {
         clearInterval(assinaturaPollTimer);
         assinaturaPollTimer = null;
         document.getElementById('assinatura-status').innerHTML = '✅ <span class="text-green-600">Assinatura ativada!</span>';
+        document.getElementById('assinatura-cartao-status').innerHTML = '✅ <span class="text-green-600">Assinatura ativada!</span>';
+        document.getElementById('assinatura-cartao-status').classList.remove('hidden');
         await loadAssinaturaStatus();
         const svc = assinaturaSvcPendente;
         setTimeout(() => {
@@ -6225,6 +6333,24 @@ function requeryFromModal() {
           A assinatura vale por 30 dias e não renova sozinha: para continuar, é só
           pagar outro PIX de R$ 30,00 quando o período acabar.
         </p>
+        <!-- Meio de pagamento. O acréscimo do cartão é calculado no servidor
+             (CARTAO_ACRESCIMO); aqui é só o que o assinante vê para decidir. -->
+        <div id="assinatura-bloco-metodo" class="mt-4">
+          <div class="text-xs font-semibold text-gray-600 mb-1.5">Como você quer pagar?</div>
+          <div class="grid grid-cols-2 gap-2">
+            <button type="button" class="metodo-btn ativo" data-metodo-assinatura="pix">
+              <span class="block text-sm">⚡ PIX</span>
+              <span class="block text-[11px] opacity-80">sem acréscimo</span>
+            </button>
+            <button type="button" class="metodo-btn" data-metodo-assinatura="cartao">
+              <span class="block text-sm">💳 Débito</span>
+              <span class="block text-[11px] opacity-80">+5%</span>
+            </button>
+          </div>
+          <p id="assinatura-aviso-acrescimo" class="mt-2 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2">
+            No cartão de débito há acréscimo de 5%. No PIX não há acréscimo.
+          </p>
+        </div>
         <div id="assinatura-erro" class="hidden mt-3 bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-sm"></div>
       </div>
 
@@ -6238,11 +6364,29 @@ function requeryFromModal() {
         <button onclick="copiarPixAssinatura()" class="mt-2 text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded font-medium">📋 Copiar código</button>
         <div id="assinatura-status" class="mt-3 text-sm text-amber-600 font-medium">⏳ Aguardando o pagamento...</div>
       </div>
+
+      <!-- Etapa 2B: cartão de débito. Os campos são iframes do Mercado Pago —
+           o número do cartão não passa por este site — e no celular o campo do
+           número aceita o "Escanear cartão" com a câmera do aparelho. -->
+      <div id="assinatura-step-cartao" class="hidden">
+        <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm text-gray-700 space-y-1">
+          <div class="flex justify-between"><span>Assinatura (30 dias)</span><strong id="assinatura-cartao-liquido">R$ 30,00</strong></div>
+          <div class="flex justify-between"><span>Acréscimo do cartão (5%)</span><strong id="assinatura-cartao-taxa">R$ 1,50</strong></div>
+          <div class="flex justify-between text-base pt-1 border-t border-gray-200 mt-1">
+            <span class="font-semibold">Total</span><strong id="assinatura-cartao-total" class="text-amber-700">R$ 31,50</strong>
+          </div>
+          <p class="text-xs text-gray-500 pt-1">Pagando com PIX você não paga o acréscimo.</p>
+        </div>
+        <div id="assinatura-cartao-erro" class="hidden mt-3 bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-sm"></div>
+        <div id="assinatura-cartao-brick" class="mt-3"></div>
+        <div id="assinatura-cartao-3ds"></div>
+        <div id="assinatura-cartao-status" class="hidden mt-3 text-sm text-amber-600 font-medium">⏳ Confirmando o pagamento...</div>
+      </div>
     </div>
 
     <div class="px-5 py-3 border-t border-gray-100 flex justify-end gap-2">
       <button onclick="closeAssinaturaModal()" class="text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded font-medium">Fechar</button>
-      <button id="assinatura-assinar-btn" onclick="gerarPixAssinatura()"
+      <button id="assinatura-assinar-btn" onclick="pagarAssinatura()"
         class="text-xs bg-amber-600 hover:bg-amber-700 text-white px-4 py-1.5 rounded font-semibold">💳 Assinar e pagar com PIX</button>
     </div>
   </div>

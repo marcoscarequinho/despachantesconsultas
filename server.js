@@ -62,6 +62,12 @@ const catalogPrice = s =>
   isFreeService(s) ? 0 : parseFloat((s.basePrice * (s.noMarkup ? 1 : MARKUP)).toFixed(2));
 const MP_ACCESS_TOKEN = (process.env.MP_ACCESS_TOKEN || '')
   .split('').filter(c => c.charCodeAt(0) <= 127).join('').trim();
+// Chave PÚBLICA do Mercado Pago: vai para o navegador (é ela que o Checkout
+// Bricks usa para tokenizar o cartão). Sem ela o site fica só com PIX — ver
+// GET /api/pagamento/config. O mesmo filtro de caracteres do access token
+// evita que um espaço invisível colado do painel do MP quebre o header.
+const MP_PUBLIC_KEY = (process.env.MP_PUBLIC_KEY || '')
+  .split('').filter(c => c.charCodeAt(0) <= 127).join('').trim();
 const MP_BASE = 'https://api.mercadopago.com';
 const AUTOCRLV_KEY    = process.env.AUTOCRLV_KEY    || '';
 const PORTAL_DESP_KEY = process.env.PORTAL_DESP_KEY || '';
@@ -965,6 +971,13 @@ async function initDB() {
   await pool.query(`
     ALTER TABLE pix_payments ADD COLUMN IF NOT EXISTS purpose VARCHAR(20) NOT NULL DEFAULT 'RECARGA'
   `);
+  // Meio de pagamento e valor efetivamente cobrado. "value" continua sendo o
+  // valor LÍQUIDO (o que o cliente recebe em crédito, ou o preço da assinatura)
+  // — é ele que creditPixPaymentIfApproved soma no saldo. No cartão de débito o
+  // cobrado é 5% maior (ver CARTAO_ACRESCIMO) e fica em charged_value, para
+  // conferência e conciliação com o extrato do Mercado Pago.
+  await pool.query(`ALTER TABLE pix_payments ADD COLUMN IF NOT EXISTS method VARCHAR(10) NOT NULL DEFAULT 'PIX'`);
+  await pool.query(`ALTER TABLE pix_payments ADD COLUMN IF NOT EXISTS charged_value NUMERIC(10,2)`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS subscriptions (
       id           SERIAL PRIMARY KEY,
@@ -1186,6 +1199,10 @@ async function initDB() {
   `);
   await pool.query(`ALTER TABLE public_orders ADD COLUMN IF NOT EXISTS access_code VARCHAR(20);`);
   await pool.query(`ALTER TABLE public_orders ADD COLUMN IF NOT EXISTS refund_status VARCHAR(20);`);
+  // "amount" segue sendo o preço do serviço; no cartão de débito o cobrado é 5%
+  // maior e fica em charged_amount (ver CARTAO_ACRESCIMO).
+  await pool.query(`ALTER TABLE public_orders ADD COLUMN IF NOT EXISTS method VARCHAR(10) NOT NULL DEFAULT 'PIX';`);
+  await pool.query(`ALTER TABLE public_orders ADD COLUMN IF NOT EXISTS charged_amount NUMERIC(10,2);`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public_access_codes (
       id           SERIAL PRIMARY KEY,
@@ -1658,7 +1675,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
 app.get('/api/auth/me', requireAuth, async (req, res) => {
   try {
     const r = await pool.query(
-      'SELECT id, name, email, phone, role, credits, affiliate_code FROM users WHERE id=$1',
+      'SELECT id, name, email, phone, role, credits, affiliate_code, cpf_cnpj FROM users WHERE id=$1',
       [req.user.id]
     );
     if (r.rows.length === 0) return res.status(404).json({ error: 'Usuário não encontrado.' });
@@ -8684,8 +8701,12 @@ app.post('/api/public/validar-codigo', async (req, res) => {
   }
 });
 
-app.post('/api/public/pedido', async (req, res) => {
-  const { servico, email, params, codigo } = req.body || {};
+// Validação do pedido avulso — igual para PIX e para cartão de débito, por isso
+// vive fora das rotas. Devolve { erro: { status, msg } } ou os dados já limpos.
+// Nada é cobrado antes disso passar: serviço do catálogo público, código de
+// acesso ativo, e-mail válido e campos obrigatórios do serviço.
+async function validarPedidoAvulso(corpo) {
+  const { servico, email, params, codigo } = corpo || {};
   const isAtpveComunicacaoVenda = servico === PUBLIC_ATPVE_COMUNICACAO_VENDA_ID;
 
   let serviceId, service, valor, description;
@@ -8695,45 +8716,74 @@ app.post('/api/public/pedido', async (req, res) => {
     description = 'Consulta avulsa — Reemissão da ATPVe Com Comunicação de Venda';
   } else {
     serviceId = PUBLIC_PAY_SERVICES[servico];
-    if (!serviceId) return res.status(400).json({ error: 'Serviço inválido.' });
+    if (!serviceId) return { erro: { status: 400, msg: 'Serviço inválido.' } };
     service = SERVICES_V3.find(s => s.id === serviceId);
-    if (!service) return res.status(500).json({ error: 'Serviço não configurado.' });
+    if (!service) return { erro: { status: 500, msg: 'Serviço não configurado.' } };
     valor = EXTERNAL_API_PRICE;
     description = `Consulta avulsa — ${service.name}`;
   }
 
-  // Página restrita por código de acesso por cliente — sem código ativo não gera PIX.
+  // Página restrita por código de acesso por cliente — sem código ativo não cobra.
   const accessCode = (codigo || '').trim().toUpperCase();
-  if (!accessCode) return res.status(401).json({ error: 'Informe o código de acesso.' });
+  if (!accessCode) return { erro: { status: 401, msg: 'Informe o código de acesso.' } };
   const ac = await pool.query(
     'SELECT id FROM public_access_codes WHERE code=$1 AND active=true', [accessCode]
   ).catch(() => ({ rows: [] }));
-  if (!ac.rows.length) return res.status(401).json({ error: 'Código de acesso inválido ou desativado.' });
+  if (!ac.rows.length) return { erro: { status: 401, msg: 'Código de acesso inválido ou desativado.' } };
 
   const mail = (email || '').trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail))
-    return res.status(400).json({ error: 'Informe um e-mail válido para o pagamento.' });
+    return { erro: { status: 400, msg: 'Informe um e-mail válido para o pagamento.' } };
 
   if (isAtpveComunicacaoVenda) {
     const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
     if (placa.length !== 7)
-      return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      return { erro: { status: 400, msg: 'Placa inválida. Informe no formato ABC1D23.' } };
   } else {
     const faltando = service.params
       .filter(p => p.required && !(params?.[p.name] ?? '').toString().trim())
       .map(p => p.label || p.name);
     if (faltando.length)
-      return res.status(400).json({ error: `Campos obrigatórios ausentes: ${faltando.join(', ')}` });
+      return { erro: { status: 400, msg: `Campos obrigatórios ausentes: ${faltando.join(', ')}` } };
   }
 
+  return { serviceId, valor, description, params: params || {}, mail, accessCode, accessCodeId: ac.rows[0].id };
+}
+
+// CPF do vendedor/comprador digitado no formulário — o Mercado Pago pede um
+// documento no pagador e o cliente avulso não tem cadastro aqui.
+const docPedidoAvulso = (params) =>
+  (params?.cpf_vendedor || params?.cpf_comprador || '').replace(/\D/g, '');
+
+// Grava o pedido e marca o uso do código de acesso. O "amount" é sempre o preço
+// do serviço; no cartão o cobrado (5% maior) vai em charged_amount.
+async function registrarPedidoAvulso({ ped, gatewayId, method, chargedAmount }) {
+  const token = crypto.randomBytes(32).toString('hex');
+  await pool.query(
+    `INSERT INTO public_orders (token, service_id, params, amount, gateway_id, contact, access_code, method, charged_amount)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    [token, ped.serviceId, JSON.stringify(ped.params), ped.valor, String(gatewayId), ped.mail,
+     ped.accessCode, method, chargedAmount]
+  );
+  await pool.query(
+    'UPDATE public_access_codes SET uses = uses + 1, last_used_at = NOW() WHERE id=$1',
+    [ped.accessCodeId]
+  ).catch(() => {});
+  return token;
+}
+
+app.post('/api/public/pedido', async (req, res) => {
+  const ped = await validarPedidoAvulso(req.body);
+  if (ped.erro) return res.status(ped.erro.status).json({ error: ped.erro.msg });
+
   try {
-    const payer = { email: mail, first_name: 'Cliente', last_name: 'Consulta Avulsa' };
-    const doc = (params?.cpf_vendedor || params?.cpf_comprador || '').replace(/\D/g, '');
+    const payer = { email: ped.mail, first_name: 'Cliente', last_name: 'Consulta Avulsa' };
+    const doc = docPedidoAvulso(ped.params);
     if (doc.length === 11) payer.identification = { type: 'CPF', number: doc };
 
     const payment = await mpReq('POST', '/v1/payments', {
-      transaction_amount: valor,
-      description,
+      transaction_amount: ped.valor,
+      description: ped.description,
       payment_method_id: 'pix',
       payer,
     }, { 'X-Idempotency-Key': crypto.randomUUID() });
@@ -8741,20 +8791,11 @@ app.post('/api/public/pedido', async (req, res) => {
     const txData = payment.point_of_interaction?.transaction_data || {};
     if (!txData.qr_code) throw new Error('Mercado Pago não retornou o QR Code PIX.');
 
-    const token = crypto.randomBytes(32).toString('hex');
-    await pool.query(
-      `INSERT INTO public_orders (token, service_id, params, amount, gateway_id, contact, access_code)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [token, serviceId, JSON.stringify(params || {}), valor, String(payment.id), mail, accessCode]
-    );
-    await pool.query(
-      'UPDATE public_access_codes SET uses = uses + 1, last_used_at = NOW() WHERE id=$1',
-      [ac.rows[0].id]
-    ).catch(() => {});
+    const token = await registrarPedidoAvulso({ ped, gatewayId: payment.id, method: 'PIX', chargedAmount: ped.valor });
 
     res.json({
       token,
-      valor,
+      valor: ped.valor,
       qrCode: txData.qr_code_base64,
       pixCopiaECola: txData.qr_code,
       expirationDate: payment.date_of_expiration,
@@ -8763,6 +8804,50 @@ app.post('/api/public/pedido', async (req, res) => {
     console.error('Erro ao criar pedido avulso:', err.message);
     await alertAdminPixFalha(err, 'Consulta avulsa (/api/public/pedido)');
     res.status(500).json({ error: mpErroAmigavel(err, 'Erro ao gerar o PIX. Tente novamente.') });
+  }
+});
+
+// ── POST /api/public/pedido/cartao ───────────────────────────────────────────
+// Mesmo pedido avulso, pago no cartão de débito com o acréscimo de 5% (ver
+// CARTAO_ACRESCIMO). O acompanhamento é o mesmo GET /api/public/pedido/:token
+// do PIX: ele pergunta o status do pagamento ao Mercado Pago e só executa a
+// consulta depois de aprovado — o que também cobre o intervalo em que o
+// pagamento fica pendente esperando o cliente terminar o desafio do 3DS.
+app.post('/api/public/pedido/cartao', async (req, res) => {
+  const ped = await validarPedidoAvulso(req.body);
+  if (ped.erro) return res.status(ped.erro.status).json({ error: ped.erro.msg });
+
+  try {
+    const cartao = await validarCartaoDebito(req.body);
+    const valorCobrado = valorComAcrescimoCartao(ped.valor);
+
+    const pagamento = await criarPagamentoCartaoDebito({
+      valorCobrado,
+      descricao: ped.description,
+      cartao,
+      payer: payerCartao({
+        email: ped.mail,
+        nome: 'Cliente Consulta Avulsa',
+        docCadastro: docPedidoAvulso(ped.params),
+        identificationBrick: req.body?.payer?.identification,
+      }),
+    });
+
+    // Recusa do emissor não vira pedido: nada foi cobrado e o cliente pode
+    // tentar outro cartão ou o PIX sem ficar com um pedido órfão no banco.
+    if (pagamento.status === 'rejected')
+      return res.status(402).json({ error: cartaoRecusaMsg(pagamento), statusDetail: pagamento.status_detail });
+
+    const token = await registrarPedidoAvulso({
+      ped, gatewayId: pagamento.id, method: 'CARTAO', chargedAmount: valorCobrado,
+    });
+
+    res.json({ token, valor: ped.valor, chargedValue: valorCobrado, ...respostaPagamentoCartao(pagamento) });
+  } catch (err) {
+    if (err.entradaInvalida) return res.status(400).json({ error: err.message });
+    console.error('Erro ao criar pedido avulso no cartão:', err.message);
+    await alertAdminPixFalha(err, 'Consulta avulsa no cartão (/api/public/pedido/cartao)');
+    res.status(500).json({ error: mpErroAmigavel(err, 'Erro ao processar o pagamento no cartão.') });
   }
 });
 
@@ -8871,6 +8956,246 @@ app.get('/api/chave/diagnostico', requireAuth, async (req, res) => {
     temMaisOuBarra: raw.includes('+') || raw.includes('/'),
     charsInvalidos: raw.split('').filter(c => c.charCodeAt(0) > 127).length,
   });
+});
+
+// ── Cartão de débito (Checkout Bricks do Mercado Pago) ───────────────────────
+// O PIX não tem taxa para nós; o cartão tem. Por isso todo pagamento que NÃO é
+// PIX sai 5% mais caro, e esse acréscimo é calculado SEMPRE aqui no servidor —
+// o front só exibe o valor, nunca o define.
+//
+// O número do cartão não passa por este servidor em momento algum: quem coleta
+// é o Card Payment Brick, cujos campos são iframes do próprio Mercado Pago. O
+// que chega aqui é o "token" de uso único que o SDK devolve. Por isso também o
+// celular consegue oferecer o escaneamento do cartão pela câmera (o campo do
+// número do brick é marcado com autocomplete="cc-number"): a leitura vai da
+// câmera do sistema direto para o campo do MP, sem passar pelo nosso código.
+const CARTAO_ACRESCIMO = 0.05;
+const valorComAcrescimoCartao = (valor) => Math.round(Number(valor) * (1 + CARTAO_ACRESCIMO) * 100) / 100;
+
+// A public key é pública por definição (vai no HTML do brick) — o que não pode
+// vazar é o MP_ACCESS_TOKEN, que fica só aqui. Sem a chave configurada o front
+// esconde a opção de cartão e segue só com PIX.
+app.get('/api/pagamento/config', (req, res) => {
+  res.json({
+    publicKey: MP_PUBLIC_KEY || null,
+    cartaoDisponivel: Boolean(MP_PUBLIC_KEY && MP_ACCESS_TOKEN),
+    acrescimoCartao: CARTAO_ACRESCIMO,
+  });
+});
+
+// Lista de meios de pagamento do Mercado Pago, em cache de 1 hora. Serve para
+// uma coisa só: conferir que o payment_method_id que chegou é mesmo de DÉBITO.
+// O brick já é configurado para excluir crédito e pré-pago, mas a rota é
+// pública o bastante para alguém montar a requisição na mão — e crédito tem
+// taxa maior que os 5% do acréscimo, então a recusa é no servidor.
+let mpMetodosCache = { emCache: null, quando: 0 };
+async function mpMetodosPagamento() {
+  if (mpMetodosCache.emCache && Date.now() - mpMetodosCache.quando < 3600000) return mpMetodosCache.emCache;
+  const lista = await mpReq('GET', '/v1/payment_methods');
+  if (!Array.isArray(lista)) throw new Error('Mercado Pago não devolveu a lista de meios de pagamento.');
+  mpMetodosCache = { emCache: lista, quando: Date.now() };
+  return lista;
+}
+
+// Valida o que veio do brick e devolve os campos do pagamento já limpos.
+// Erros aqui são de entrada (HTTP 400), não falha de gateway.
+async function validarCartaoDebito(corpo) {
+  const token = String(corpo?.token || '').trim();
+  const metodo = String(corpo?.payment_method_id || '').trim();
+  if (!token || !metodo) {
+    const e = new Error('Dados do cartão incompletos. Recarregue a página e tente de novo.');
+    e.entradaInvalida = true;
+    throw e;
+  }
+  const metodos = await mpMetodosPagamento();
+  const achado = metodos.find(m => m.id === metodo);
+  if (!achado || achado.payment_type_id !== 'debit_card') {
+    const e = new Error('Aceitamos apenas cartão de DÉBITO. Para outras formas, use o PIX.');
+    e.entradaInvalida = true;
+    throw e;
+  }
+  return {
+    token,
+    payment_method_id: metodo,
+    issuer_id: corpo?.issuer_id ? String(corpo.issuer_id) : undefined,
+  };
+}
+
+// Cria o pagamento no Mercado Pago com o token do brick.
+//
+// three_d_secure_mode 'optional' liga o 3DS 2.0: no débito o emissor costuma
+// exigir o desafio (aquela tela do banco), e sem isso a compra seria recusada.
+// Quando o desafio é necessário a resposta volta status 'pending' com
+// status_detail 'pending_challenge' e um three_ds_info { external_resource_url,
+// creq } — que o front entrega ao Status Screen Brick. Por isso binary_mode
+// fica false: com ele ligado o MP recusaria o pagamento em vez de deixá-lo
+// pendente esperando o cliente terminar o desafio.
+async function criarPagamentoCartaoDebito({ valorCobrado, descricao, payer, cartao }) {
+  return mpReq('POST', '/v1/payments', {
+    transaction_amount: valorCobrado,
+    description: descricao,
+    token: cartao.token,
+    payment_method_id: cartao.payment_method_id,
+    ...(cartao.issuer_id ? { issuer_id: cartao.issuer_id } : {}),
+    installments: 1,
+    capture: true,
+    binary_mode: false,
+    three_d_secure_mode: 'optional',
+    payer,
+  }, { 'X-Idempotency-Key': crypto.randomUUID() });
+}
+
+// Mensagem em português para a recusa do emissor. O status_detail do Mercado
+// Pago é em inglês e técnico demais para mostrar a quem está pagando.
+const CARTAO_RECUSA_MSGS = {
+  cc_rejected_bad_filled_card_number: 'Confira o número do cartão.',
+  cc_rejected_bad_filled_date: 'Confira a data de validade do cartão.',
+  cc_rejected_bad_filled_security_code: 'Confira o código de segurança (CVV).',
+  cc_rejected_bad_filled_other: 'Confira os dados do cartão e tente de novo.',
+  cc_rejected_insufficient_amount: 'Saldo insuficiente na conta do cartão.',
+  cc_rejected_call_for_authorize: 'O banco pediu que você autorize esse valor. Ligue para o banco e tente de novo.',
+  cc_rejected_card_disabled: 'Cartão desativado. Fale com o banco ou use outro cartão.',
+  cc_rejected_duplicated_payment: 'Você já fez um pagamento igual a esse. Se precisa pagar de novo, use outro cartão ou o PIX.',
+  cc_rejected_high_risk: 'Pagamento recusado por segurança. Use o PIX ou outro cartão.',
+  cc_rejected_max_attempts: 'Você atingiu o limite de tentativas com esse cartão. Use outro cartão ou o PIX.',
+  cc_rejected_card_error: 'Não foi possível processar esse cartão. Tente de novo ou use o PIX.',
+  cc_rejected_blacklist: 'Pagamento recusado por segurança. Use o PIX ou outro cartão.',
+};
+const cartaoRecusaMsg = (pagamento) =>
+  CARTAO_RECUSA_MSGS[pagamento?.status_detail] ||
+  'Pagamento recusado pelo emissor do cartão. Tente outro cartão ou pague com PIX.';
+
+// Resposta padrão das rotas de cartão. Três desfechos possíveis:
+//  - approved: pago na hora (sem desafio);
+//  - pending/in_process: o front monta o desafio 3DS com three_ds_info e depois
+//    confirma pelo mesmo polling do PIX;
+//  - rejected: recusa do emissor, com mensagem em português.
+function respostaPagamentoCartao(pagamento) {
+  return {
+    paymentId: String(pagamento.id),
+    status: pagamento.status,
+    statusDetail: pagamento.status_detail,
+    threeDs: pagamento.three_ds_info
+      ? { externalResourceURL: pagamento.three_ds_info.external_resource_url, creq: pagamento.three_ds_info.creq }
+      : null,
+  };
+}
+
+// Dados do pagador exigidos pelo Mercado Pago no Brasil (e-mail + CPF/CNPJ).
+// O documento vem do brick (é o do titular do cartão); o cadastro serve de
+// reserva quando o brick não coleta.
+function payerCartao({ email, nome, docCadastro, identificationBrick }) {
+  const doc = String(identificationBrick?.number || docCadastro || '').replace(/\D/g, '');
+  const partes = String(nome || 'Cliente').trim().split(/\s+/);
+  return {
+    email,
+    first_name: partes[0],
+    last_name: partes.slice(1).join(' ') || partes[0],
+    ...(doc ? { identification: { type: doc.length > 11 ? 'CNPJ' : 'CPF', number: doc } } : {}),
+  };
+}
+
+// ── POST /api/cartao/recarga ─────────────────────────────────────────────────
+// Recarga de créditos no débito. O usuário escolhe quanto quer RECEBER de
+// crédito; o cobrado é esse valor + 5%. A linha em pix_payments nasce com
+// value = crédito e charged_value = cobrado, então todo o resto do sistema
+// (polling, webhook, cron de reconciliação) credita o valor certo sem saber que
+// o meio mudou.
+app.post('/api/cartao/recarga', requireAuth, async (req, res) => {
+  const value = parseFloat(req.body?.value);
+  if (!value || value < 5 || value > 10000)
+    return res.status(400).json({ error: 'Valor inválido. Mínimo R$ 5,00, máximo R$ 10.000,00.' });
+
+  try {
+    const cartao = await validarCartaoDebito(req.body);
+    const ur = await pool.query('SELECT id, name, email, cpf_cnpj FROM users WHERE id=$1', [req.user.id]);
+    const user = ur.rows[0];
+    const valorCobrado = valorComAcrescimoCartao(value);
+
+    const pagamento = await criarPagamentoCartaoDebito({
+      valorCobrado,
+      descricao: `Recarga de créditos — ${user.name}`,
+      cartao,
+      payer: payerCartao({
+        email: user.email,
+        nome: user.name,
+        docCadastro: user.cpf_cnpj,
+        identificationBrick: req.body?.payer?.identification,
+      }),
+    });
+
+    if (pagamento.status === 'rejected')
+      return res.status(402).json({ error: cartaoRecusaMsg(pagamento), statusDetail: pagamento.status_detail });
+
+    await pool.query(
+      `INSERT INTO pix_payments (user_id, gateway_id, value, status, method, charged_value)
+       VALUES ($1,$2,$3,'PENDING','CARTAO',$4) ON CONFLICT (gateway_id) DO NOTHING`,
+      [req.user.id, String(pagamento.id), value, valorCobrado]
+    );
+
+    const out = respostaPagamentoCartao(pagamento);
+    out.value = value;
+    out.chargedValue = valorCobrado;
+    if (pagamento.status === 'approved') {
+      const r = await creditPixPaymentIfApproved(String(pagamento.id));
+      out.credited = r.credited;
+    }
+    res.json(out);
+  } catch (err) {
+    if (err.entradaInvalida) return res.status(400).json({ error: err.message });
+    console.error('Erro cartão recarga:', err.message);
+    await alertAdminPixFalha(err, 'Recarga no cartão de débito (/api/cartao/recarga)');
+    res.status(500).json({ error: mpErroAmigavel(err, 'Erro ao processar o pagamento no cartão.') });
+  }
+});
+
+// ── POST /api/cartao/assinatura ──────────────────────────────────────────────
+// Mesma assinatura de R$ 30,00 do PIX, cobrada com o acréscimo de 5%. O período
+// é aberto por creditPixPaymentIfApproved graças ao purpose='ASSINATURA'.
+app.post('/api/cartao/assinatura', requireAuth, async (req, res) => {
+  try {
+    const cartao = await validarCartaoDebito(req.body);
+    const ur = await pool.query('SELECT id, name, email, cpf_cnpj, active FROM users WHERE id=$1', [req.user.id]);
+    const user = ur.rows[0];
+    if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+
+    const valorCobrado = valorComAcrescimoCartao(ASSINATURA_PLACAS_PRICE);
+    const pagamento = await criarPagamentoCartaoDebito({
+      valorCobrado,
+      descricao: `Assinatura Coisas de Despachantes (${ASSINATURA_PLACAS_DIAS} dias) — ${user.name}`,
+      cartao,
+      payer: payerCartao({
+        email: user.email,
+        nome: user.name,
+        docCadastro: user.cpf_cnpj,
+        identificationBrick: req.body?.payer?.identification,
+      }),
+    });
+
+    if (pagamento.status === 'rejected')
+      return res.status(402).json({ error: cartaoRecusaMsg(pagamento), statusDetail: pagamento.status_detail });
+
+    await pool.query(
+      `INSERT INTO pix_payments (user_id, gateway_id, value, status, purpose, method, charged_value)
+       VALUES ($1,$2,$3,'PENDING','ASSINATURA','CARTAO',$4) ON CONFLICT (gateway_id) DO NOTHING`,
+      [req.user.id, String(pagamento.id), ASSINATURA_PLACAS_PRICE, valorCobrado]
+    );
+
+    const out = respostaPagamentoCartao(pagamento);
+    out.value = ASSINATURA_PLACAS_PRICE;
+    out.chargedValue = valorCobrado;
+    out.dias = ASSINATURA_PLACAS_DIAS;
+    if (pagamento.status === 'approved') {
+      const r = await creditPixPaymentIfApproved(String(pagamento.id));
+      out.credited = r.credited;
+    }
+    res.json(out);
+  } catch (err) {
+    if (err.entradaInvalida) return res.status(400).json({ error: err.message });
+    console.error('Erro cartão assinatura:', err.message);
+    await alertAdminPixFalha(err, 'Assinatura no cartão de débito (/api/cartao/assinatura)');
+    res.status(500).json({ error: mpErroAmigavel(err, 'Erro ao processar o pagamento no cartão.') });
+  }
 });
 
 // ── POST /api/pix/criar ───────────────────────────────────────────────────────
@@ -9081,7 +9406,7 @@ async function creditPixPaymentIfApproved(gatewayId) {
     await client.query('BEGIN');
     const upd = await client.query(
       `UPDATE pix_payments SET status='approved', credited=true
-       WHERE gateway_id=$1 AND credited=false RETURNING id, user_id, value, purpose`,
+       WHERE gateway_id=$1 AND credited=false RETURNING id, user_id, value, purpose, method`,
       [gatewayId]
     );
     if (upd.rows.length === 0) {
@@ -9118,7 +9443,7 @@ async function creditPixPaymentIfApproved(gatewayId) {
     await client.query('UPDATE users SET credits = credits + $1 WHERE id=$2', [p.value, p.user_id]);
     await client.query(
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'deposit',$2,$3)`,
-      [p.user_id, p.value, `Recarga PIX — R$ ${parseFloat(p.value).toFixed(2).replace('.', ',')}`]
+      [p.user_id, p.value, `Recarga ${p.method === 'CARTAO' ? 'cartão de débito' : 'PIX'} — R$ ${parseFloat(p.value).toFixed(2).replace('.', ',')}`]
     );
     await client.query('COMMIT');
     return { credited: true, status: 'approved', value: parseFloat(p.value) };

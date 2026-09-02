@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Recarregar via PIX — DESPACHANTES CONSULTAS</title>
+  <title>Recarregar créditos — DESPACHANTES CONSULTAS</title>
   <link rel="icon" href="/favicon.ico" sizes="any">
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -25,6 +25,9 @@
     .pix-qr { image-rendering: pixelated; }
     .spin { animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
+    .metodo-btn { border: 2px solid #d1d5db; color: #374151; border-radius: .6rem; padding: .6rem .5rem; font-weight: 700; transition: .15s; background: white; }
+    .metodo-btn:hover { border-color: var(--accent); }
+    .metodo-btn.ativo { border-color: var(--accent); background: #fff7ed; color: #c2410c; }
     .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
     .dot-pending { background: #f59e0b; animation: pulse 1.5s infinite; }
     .dot-ok { background: #22c55e; }
@@ -34,6 +37,8 @@
        aplica a classe antes da primeira pintura. Ver assets/tema.css. -->
   <link rel="stylesheet" href="/assets/tema.css">
   <script src="/assets/tema.js"></script>
+  <!-- Cartão de débito (Checkout Bricks do Mercado Pago) — ver assets/pagamento-cartao.js -->
+  <script src="/assets/pagamento-cartao.js" defer></script>
 </head>
 <body class="bg-gray-50 min-h-screen">
 
@@ -56,8 +61,8 @@
     <!-- Título -->
     <div class="text-center">
       <div class="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-2xl text-4xl mb-4">💸</div>
-      <h1 class="text-2xl font-bold text-gray-900">Recarregar via PIX</h1>
-      <p class="text-gray-500 mt-1">Compensação instantânea. Créditos liberados automaticamente.</p>
+      <h1 class="text-2xl font-bold text-gray-900">Recarregar créditos</h1>
+      <p class="text-gray-500 mt-1">PIX sem acréscimo ou cartão de débito. Créditos liberados automaticamente.</p>
     </div>
 
     <!-- STEP 1: Formulário de valor -->
@@ -79,10 +84,29 @@
         <p class="text-xs text-gray-400 mt-1">Mínimo R$ 5,00 · Máximo R$ 10.000,00</p>
       </div>
 
+      <!-- Meio de pagamento. O acréscimo do cartão é calculado no servidor
+           (CARTAO_ACRESCIMO); aqui só exibimos para o cliente decidir. -->
+      <div id="bloco-metodo">
+        <label class="block text-sm font-semibold text-gray-600 mb-2">Como você quer pagar?</label>
+        <div class="grid grid-cols-2 gap-3">
+          <button type="button" class="metodo-btn ativo" data-metodo="pix">
+            <span class="block text-lg">⚡ PIX</span>
+            <span class="block text-xs opacity-80">sem acréscimo</span>
+          </button>
+          <button type="button" class="metodo-btn" data-metodo="cartao">
+            <span class="block text-lg">💳 Débito</span>
+            <span class="block text-xs opacity-80">+5%</span>
+          </button>
+        </div>
+        <p id="aviso-acrescimo" class="mt-3 text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-3">
+          No cartão de débito há acréscimo de 5%. No PIX não há acréscimo.
+        </p>
+      </div>
+
       <!-- Erro persistente -->
       <div id="erro-box" class="hidden bg-red-50 border border-red-300 rounded-lg p-4 text-sm text-red-800 break-words"></div>
 
-      <button id="btn-gerar" onclick="gerarPix()"
+      <button id="btn-gerar" onclick="pagar()"
         class="btn-primary w-full flex items-center justify-center gap-2">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -136,6 +160,38 @@
       </div>
     </div>
 
+    <!-- STEP 2B: Cartão de débito -->
+    <div id="step-cartao" class="hidden">
+      <div class="card p-6 sm:p-8 space-y-5">
+        <div class="flex items-center justify-between">
+          <h2 class="font-semibold text-gray-700 text-lg">Pagar no cartão de débito</h2>
+          <div class="flex items-center gap-2 text-sm">
+            <span class="status-dot dot-pending" id="cartao-status-dot"></span>
+            <span id="cartao-status-text" class="text-amber-600 font-medium">Aguardando pagamento…</span>
+          </div>
+        </div>
+
+        <div class="bg-gray-50 border border-gray-200 rounded-lg p-4 text-sm text-gray-700 space-y-1">
+          <div class="flex justify-between"><span>Créditos que você recebe</span><strong id="cartao-liquido">R$ 0,00</strong></div>
+          <div class="flex justify-between"><span>Acréscimo do cartão (5%)</span><strong id="cartao-taxa">R$ 0,00</strong></div>
+          <div class="flex justify-between text-base pt-1 border-t border-gray-200 mt-1">
+            <span class="font-semibold">Total a pagar</span><strong id="cartao-total" class="text-orange-600">R$ 0,00</strong>
+          </div>
+          <p class="text-xs text-gray-500 pt-1">Pagando com PIX você não paga o acréscimo.</p>
+        </div>
+
+        <div id="cartao-erro" class="hidden bg-red-50 border border-red-300 rounded-lg p-4 text-sm text-red-800 break-words"></div>
+
+        <!-- Formulário do Mercado Pago (iframes do MP: o número do cartão não
+             passa por este site). No celular, o campo do número aceita o
+             "Escanear cartão" com a câmera do próprio aparelho. -->
+        <div id="cartao-brick"></div>
+        <div id="cartao-3ds"></div>
+
+        <button onclick="voltarForm()" class="btn-outline w-full text-sm">← Escolher outra forma</button>
+      </div>
+    </div>
+
     <!-- STEP 3: Sucesso -->
     <div id="step-ok" class="hidden">
       <div class="card p-10 text-center space-y-4">
@@ -175,6 +231,7 @@
   <script>
     let currentPaymentId = null;
     let pollInterval = null;
+    let metodo = 'pix';
 
     function mostrarErro(msg) {
       const box = document.getElementById('erro-box');
@@ -198,12 +255,106 @@
       } catch { window.location.href = '/entrar'; return; }
     })();
 
+    // Meio de pagamento: PIX (padrão, sem acréscimo) ou cartão de débito.
+    // O texto do aviso vem do módulo do cartão, que sabe o percentual atual.
+    function valorAtual() {
+      return parseFloat(document.getElementById('valor-input').value) || 0;
+    }
+
+    function atualizarAviso() {
+      const el = document.getElementById('aviso-acrescimo');
+      const v = valorAtual();
+      if (window.PagamentoCartao) el.textContent = PagamentoCartao.textoAviso(v >= 5 ? v : 0);
+      const txt = document.getElementById('btn-gerar-text');
+      if (txt) txt.textContent = metodo === 'pix' ? 'Gerar QR Code PIX' : 'Pagar no cartão de débito';
+    }
+
+    document.querySelectorAll('.metodo-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        metodo = btn.dataset.metodo;
+        document.querySelectorAll('.metodo-btn').forEach(b => b.classList.toggle('ativo', b === btn));
+        atualizarAviso();
+      });
+    });
+    document.getElementById('valor-input').addEventListener('input', atualizarAviso);
+
+    // Sem a public key do Mercado Pago configurada não dá para cobrar no
+    // cartão — nesse caso a opção some e a tela segue só com PIX.
+    window.addEventListener('load', async () => {
+      const cfg = await PagamentoCartao.carregarConfig();
+      if (!cfg.cartaoDisponivel) {
+        document.getElementById('bloco-metodo').classList.add('hidden');
+        metodo = 'pix';
+      }
+      atualizarAviso();
+    });
+
+    function pagar() {
+      return metodo === 'cartao' ? pagarComCartao() : gerarPix();
+    }
+
+    function erroCartao(msg) {
+      const box = document.getElementById('cartao-erro');
+      if (!msg) { box.classList.add('hidden'); box.textContent = ''; return; }
+      box.textContent = '⚠️ ' + msg;
+      box.classList.remove('hidden');
+    }
+
+    // Monta o formulário do cartão. O servidor recalcula o total (nunca confia
+    // no valor que o navegador manda) e a confirmação usa o mesmo
+    // /api/pix/status/:id do PIX — inclusive quando o banco pede o 3DS.
+    async function pagarComCartao() {
+      const val = valorAtual();
+      if (!val || val < 5 || val > 10000) {
+        showToast('Informe um valor entre R$ 5,00 e R$ 10.000,00', 'error');
+        return;
+      }
+      limparErro();
+      erroCartao('');
+      const total = PagamentoCartao.comAcrescimo(val);
+      document.getElementById('cartao-liquido').textContent = PagamentoCartao.brl(val);
+      document.getElementById('cartao-taxa').textContent = PagamentoCartao.brl(total - val);
+      document.getElementById('cartao-total').textContent = PagamentoCartao.brl(total);
+      document.getElementById('step-form').classList.add('hidden');
+      document.getElementById('step-cartao').classList.remove('hidden');
+
+      let usuario = {};
+      try { usuario = await (await fetch('/api/auth/me')).json(); } catch {}
+
+      const ok = await PagamentoCartao.montar({
+        containerId: 'cartao-brick',
+        container3dsId: 'cartao-3ds',
+        valor: val,
+        email: usuario.email,
+        doc: usuario.cpf_cnpj,
+        endpoint: '/api/cartao/recarga',
+        corpoExtra: { value: val },
+        textoBotao: 'Pagar ' + PagamentoCartao.brl(total),
+        onErro: erroCartao,
+        onProcessando: (ligado) => {
+          document.getElementById('cartao-status-text').textContent =
+            ligado ? 'Processando pagamento…' : 'Aguardando pagamento…';
+        },
+        onAprovado: (data) => mostrarSucesso(data.value ?? val),
+        onPendente: (data) => {
+          currentPaymentId = data.paymentId;
+          document.getElementById('cartao-status-text').textContent = 'Confirmando com o seu banco…';
+          iniciarPolling();
+        },
+      });
+      if (!ok) {
+        document.getElementById('step-cartao').classList.add('hidden');
+        document.getElementById('step-form').classList.remove('hidden');
+      }
+    }
+
     // Botões de valor rápido
     document.querySelectorAll('.quick-val').forEach(btn => {
       btn.addEventListener('click', () => {
         document.getElementById('valor-input').value = btn.dataset.val;
         document.querySelectorAll('.quick-val').forEach(b => b.classList.remove('bg-orange-50', 'border-orange-400', 'text-orange-600'));
         btn.classList.add('bg-orange-50', 'border-orange-400', 'text-orange-600');
+        atualizarAviso();
       });
     });
 
@@ -277,6 +428,9 @@
     }
 
     function mostrarSucesso(valor) {
+      if (pollInterval) clearInterval(pollInterval);
+      PagamentoCartao.desmontar();
+      document.getElementById('step-cartao').classList.add('hidden');
       document.getElementById('step-qr').classList.add('hidden');
       document.getElementById('step-ok').classList.remove('hidden');
       document.getElementById('ok-valor').textContent =
@@ -291,6 +445,9 @@
     function voltarForm() {
       if (pollInterval) clearInterval(pollInterval);
       currentPaymentId = null;
+      PagamentoCartao.desmontar();
+      document.getElementById('cartao-erro').classList.add('hidden');
+      document.getElementById('step-cartao').classList.add('hidden');
       document.getElementById('step-qr').classList.add('hidden');
       document.getElementById('step-form').classList.remove('hidden');
       const btn = document.getElementById('btn-gerar');
@@ -298,7 +455,8 @@
       btn.innerHTML = `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
           d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/>
-      </svg> Gerar QR Code PIX`;
+      </svg> <span id="btn-gerar-text">Gerar QR Code PIX</span>`;
+      atualizarAviso();
     }
 
     function novaRecarga() {

@@ -37,7 +37,7 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 | Consultas Fácil (CRLV Rio Reemissão v2) | `https://www.consultasfacil.net` | header `chaveAcesso` (`CONSULTASFACIL_KEY`) |
 | Vistocar (Débitos e Documentação, Código de Segurança CRV) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
 | ViaCEP | `https://viacep.com.br` | público, sem chave (só recupera acento de logradouro/bairro no ATPV-e, ver `repairAtpveAccents`) |
-| Mercado Pago (PIX) | `https://api.mercadopago.com` | `MP_ACCESS_TOKEN` |
+| Mercado Pago (PIX e cartão de débito) | `https://api.mercadopago.com` | `MP_ACCESS_TOKEN` (servidor) + `MP_PUBLIC_KEY` (navegador) |
 | Z-API (WhatsApp) | `https://api.z-api.io` | `ZAPI_*` |
 
 ### CRLV-e no Portal Despachantes
@@ -80,6 +80,15 @@ O resto do grupo "CRLV-e Digital" continua na Chekaki (`placa_renavam_cpf`), com
 - **Consulta avulsa** (`/consulta-avulsa` + [consulta-avulsa.html](consulta-avulsa.html)): fluxo público sem cadastro — `POST /api/public/pedido` valida os campos e cria PIX no Mercado Pago (tabela `public_orders`); `GET /api/public/pedido/:token` faz polling, confirma o pagamento e só então executa a consulta na Infosimples (claim atômico `UPDATE ... WHERE status='PENDING'` impede execução dupla). Serviços em `PUBLIC_PAY_SERVICES`, mesmo preço de R$ 5,00. A página exige **código de acesso por cliente** (tabela `public_access_codes`, gerado no admin em Consultas Avulsas; link `?codigo=XXXXXX` validado no servidor antes de servir o HTML — sem código volta para a home). O código usado fica gravado em cada pedido (`public_orders.access_code`). Página com `noindex` (meta + X-Robots-Tag + robots.txt) — divulgada só por link direto.
 - **Chave de API geral (pós-paga)**: `api_keys.user_id` NULL (`POST /api/admin/api-keys` com `general:true`). Consultas com chave geral não debitam ninguém — ficam em `api_general_queries` e aparecem no admin em **Cobranças API**, onde o admin digita o WhatsApp do cliente final e envia o PIX de R$ 5,00 daquela placa (QR como imagem via `sendWhatsAppImage` + copia-e-cola como texto; rotas `/api/admin/api-cobrancas`, `/:id/cobrar`, `/:id/verificar` — `charge_status`: `NONE|PENDING|PAID`).
 
+## Pagamento: PIX ou cartão de débito (+5%)
+
+Toda cobrança do cliente aceita PIX (sem acréscimo) **ou cartão de débito, 5% mais caro** — `CARTAO_ACRESCIMO`/`valorComAcrescimoCartao` no server.js, calculado **sempre no servidor** (o front só exibe). São três telas: recarga de créditos (`POST /api/cartao/recarga`), assinatura (`POST /api/cartao/assinatura`) e consulta avulsa (`POST /api/public/pedido/cartao`); a Cobrança API do admin continua só em PIX, porque ela vai por WhatsApp e precisaria de página de pagamento própria.
+
+- **Só débito**: `validarCartaoDebito` confere na lista `/v1/payment_methods` do MP que o `payment_method_id` é `debit_card` antes de cobrar — crédito tem taxa maior que os 5% e é recusado no servidor, não só na tela.
+- **O número do cartão não passa por aqui**: os campos são iframes do Card Payment Brick do Mercado Pago ([assets/pagamento-cartao.js](assets/pagamento-cartao.js)) e o servidor recebe só o token de uso único. É isso que mantém o site fora do escopo PCI e o que permite ao celular oferecer o "Escanear cartão" pela câmera do próprio sistema — um leitor ótico nosso colocaria o PAN dentro do nosso JavaScript.
+- **3DS**: `three_d_secure_mode: 'optional'` com `binary_mode: false`. No débito o emissor quase sempre pede o desafio: a resposta volta `pending`/`pending_challenge` com `three_ds_info`, que o front entrega ao Status Screen Brick. Por isso o pagamento no cartão **não é confirmado na resposta da rota** — quem confirma é o mesmo polling do PIX (`/api/pix/status/:id` ou `/api/public/pedido/:token`), mais o webhook e o cron `runPixReconcile`.
+- **Colunas**: `pix_payments.value` e `public_orders.amount` continuam sendo o valor LÍQUIDO (o crédito que o cliente recebe / o preço do serviço) — é o que credita. O cobrado com acréscimo fica em `charged_value`/`charged_amount`, e `method` diz `PIX` ou `CARTAO`.
+
 ## Convenções
 
 - Idioma do código, comentários, mensagens de erro e UI: **português (pt-BR)**. Valores em BRL (`fmtMoneyBRL`).
@@ -99,4 +108,4 @@ Vitrine que reúne num lugar só os CRLV-e que **não saem na hora** (DF, ES, PB
 
 ## Variáveis de ambiente (.env)
 
-`DATABASE_URL`, `JWT_SECRET`, `CHAVE_ACESSO`, `MP_ACCESS_TOKEN`, `AUTOCRLV_KEY`, `PORTAL_DESP_KEY`, `DATACUBE_TOKEN`, `INFOSIMPLES_TOKEN`, `DESPBRASIL_KEY`, `CONSULTASFACIL_KEY`, `VISTOCAR_LOGIN`, `VISTOCAR_PASSWORD`, `ZAPI_INSTANCE_ID`, `ZAPI_TOKEN`, `ZAPI_CLIENT_TOKEN`, `WEBHOOK_BASE_URL`, `ADMIN_PHONE`. O `.env` existe localmente e não é commitado.
+`DATABASE_URL`, `JWT_SECRET`, `CHAVE_ACESSO`, `MP_ACCESS_TOKEN`, `MP_PUBLIC_KEY`, `AUTOCRLV_KEY`, `PORTAL_DESP_KEY`, `DATACUBE_TOKEN`, `INFOSIMPLES_TOKEN`, `DESPBRASIL_KEY`, `CONSULTASFACIL_KEY`, `VISTOCAR_LOGIN`, `VISTOCAR_PASSWORD`, `ZAPI_INSTANCE_ID`, `ZAPI_TOKEN`, `ZAPI_CLIENT_TOKEN`, `WEBHOOK_BASE_URL`, `ADMIN_PHONE`. O `.env` existe localmente e não é commitado.
