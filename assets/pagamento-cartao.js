@@ -2,7 +2,9 @@
  *
  * Usado pelas três telas que cobram do cliente (recarga de créditos, consulta
  * avulsa e assinatura). O PIX continua sendo o caminho padrão e sem acréscimo;
- * este arquivo cuida do cartão: débito (+5%) ou crédito (+7%), sempre à vista.
+ * este arquivo cuida do cartão: débito (+5%, à vista) ou crédito (+7%, em até
+ * 12x com JUROS DO COMPRADOR — o Mercado Pago soma o juro na fatura do cliente
+ * e nós recebemos o mesmo valor à vista).
  *
  * POR QUE cardForm E NÃO O CARD PAYMENT BRICK
  * Os campos do brick são iframes de secure-fields.mercadopago.com e vêm com
@@ -140,12 +142,14 @@
           <label for="form-checkout__issuer">Banco emissor</label>
           <select id="form-checkout__issuer" name="issuer"></select>
         </div>
-        <!-- Parcelas fica escondido: cobramos sempre à vista (o servidor manda
-             installments: 1 de qualquer jeito). O elemento precisa existir
-             porque o cardForm o preenche e lê. -->
-        <div class="pgc-campo pgc-oculto">
+        <!-- Parcelas: o cardForm preenche com a tabela do Mercado Pago, já com
+             o texto "12 parcelas de R$ 10,89 (R$ 130,66)". Fica escondido no
+             débito (sempre 1x) e aparece no crédito quando há mais de uma
+             opção — ver onInstallmentsReceived. -->
+        <div class="pgc-campo pgc-oculto" id="pgc-parcelas">
           <label for="form-checkout__installments">Parcelas</label>
           <select id="form-checkout__installments" name="installments"></select>
+          <p class="pgc-dica">Acima de 1x o Mercado Pago cobra juros do portador — o total de cada opção já aparece na lista.</p>
         </div>
         <button type="submit" id="form-checkout__submit" class="pgc-btn">${textoBotao}</button>
         <p class="pgc-dica">🔒 Os dados do cartão vão direto para o Mercado Pago. No celular, toque no campo do número para usar a câmera e escanear o cartão.</p>
@@ -287,6 +291,34 @@
       // cobrado como crédito.
       let metodosDoBin = [];
       const botao = document.getElementById('form-checkout__submit');
+      const selParcelas = document.getElementById('form-checkout__installments');
+      const maxParcelas = ehCredito ? (cfg.maxParcelas || 12) : 1;
+
+      // O cardForm não tem opção de limite de parcelas (isso era do brick): ele
+      // preenche o seletor com a tabela inteira, que hoje vai até 18x. O corte
+      // em CARTAO_MAX_PARCELAS é feito aqui, na lista, e conferido de novo no
+      // servidor.
+      const limitarParcelas = () => {
+        if (!selParcelas) return;
+        for (const op of [...selParcelas.options]) {
+          if ((parseInt(op.value, 10) || 1) > maxParcelas) op.remove();
+        }
+        if (selParcelas.selectedIndex < 0 && selParcelas.options.length) selParcelas.selectedIndex = 0;
+      };
+
+      // O botão passa a dizer o que o cliente vai realmente pagar: à vista, o
+      // valor com acréscimo; parcelado, o texto da própria tabela do MP
+      // ("12x de R$ 10,89 — total R$ 130,66").
+      const atualizarBotaoParcelas = () => {
+        if (!botao) return;
+        const n = parseInt(selParcelas?.value, 10) || 1;
+        const rotulo = selParcelas?.selectedOptions?.[0]?.textContent || '';
+        const m = rotulo.match(/de (R\$ ?[\d.,]+)[^(]*\((R\$ ?[\d.,]+)\)/);
+        botao.textContent = (n > 1 && m)
+          ? `Pagar ${n}x de ${m[1]} — total ${m[2]}`
+          : (textoBotao || `Pagar ${brl(valorCobrado)}`);
+      };
+      if (selParcelas) selParcelas.addEventListener('change', atualizarBotaoParcelas);
 
       cardFormAtual = mp.cardForm({
         amount: String(valorCobrado),
@@ -318,6 +350,15 @@
           },
           onPaymentMethodsReceived: (erro, metodos) => {
             if (!erro && Array.isArray(metodos)) metodosDoBin = metodos;
+          },
+          onInstallmentsReceived: (erro, parcelas) => {
+            if (erro) return;
+            limitarParcelas();
+            // Só mostra o seletor quando sobrou mais de uma opção (no débito, e
+            // em valor baixo, o MP devolve só 1x).
+            const bloco = document.getElementById('pgc-parcelas');
+            if (bloco) bloco.classList.toggle('pgc-oculto', !ehCredito || (selParcelas?.options.length || 0) < 2);
+            atualizarBotaoParcelas();
           },
           onIssuersReceived: (erro, emissores) => {
             // O seletor de banco só faz sentido quando há mais de um emissor
@@ -371,6 +412,8 @@
                   token: d.token,
                   payment_method_id: (doTipo && doTipo.id) || d.paymentMethodId,
                   issuer_id: d.issuerId,
+                  // O servidor confere de novo (só crédito parcela, no máximo 12x).
+                  installments: ehCredito ? (parseInt(d.installments, 10) || 1) : 1,
                   payer: {
                     email: d.cardholderEmail,
                     identification: { type: d.identificationType, number: d.identificationNumber },

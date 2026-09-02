@@ -9023,6 +9023,13 @@ const CARTAO_ACRESCIMOS = { debit_card: 0.05, credit_card: 0.07 };
 // que a conta suporta continua sendo conferido por mpTiposCartaoDisponiveis, e
 // vale o E das duas coisas.
 const CARTAO_TIPOS_HABILITADOS = { debito: false, credito: true };
+// Parcelamento no crédito, com JUROS DO COMPRADOR: o Mercado Pago soma o juro
+// por cima, na fatura do cliente, e nós continuamos recebendo o mesmo
+// transaction_amount (o valor à vista com os 7%). Por isso o número de parcelas
+// não muda nada do nosso lado — nem o acréscimo, nem o crédito liberado. A
+// tabela de juros é do MP e varia por bandeira/emissor; quem a exibe é o
+// próprio formulário, com os textos que a API devolve. Débito é sempre 1x.
+const CARTAO_MAX_PARCELAS = 12;
 const CARTAO_TIPOS = { debito: 'debit_card', credito: 'credit_card' };
 const valorComAcrescimoCartao = (valor, tipo) =>
   Math.round(Number(valor) * (1 + (CARTAO_ACRESCIMOS[tipo] ?? 0)) * 100) / 100;
@@ -9079,6 +9086,7 @@ app.get('/api/pagamento/config', async (req, res) => {
     cartaoDisponivel: temChaves && (tipos.debito || tipos.credito),
     tipos,
     acrescimos: { debito: CARTAO_ACRESCIMOS.debit_card, credito: CARTAO_ACRESCIMOS.credit_card },
+    maxParcelas: CARTAO_MAX_PARCELAS,
   });
 });
 
@@ -9138,11 +9146,21 @@ async function validarCartao(corpo) {
       : 'Esse cartão é de DÉBITO. Volte e escolha a opção "Débito" (acréscimo de 5%).');
   }
 
+  // Parcelas: só no crédito e no máximo CARTAO_MAX_PARCELAS. O que chega do
+  // navegador é conferido aqui — 24x mandado na mão viraria juro que o cliente
+  // não escolheu.
+  let installments = parseInt(corpo?.installments, 10);
+  if (!Number.isInteger(installments) || installments < 1) installments = 1;
+  if (tipo !== 'credit_card') installments = 1;
+  if (installments > CARTAO_MAX_PARCELAS)
+    throw recusa(`Parcelamento em até ${CARTAO_MAX_PARCELAS}x.`);
+
   return {
     token,
     payment_method_id: metodo,
     issuer_id: corpo?.issuer_id ? String(corpo.issuer_id) : undefined,
     tipo,
+    installments,
   };
 }
 
@@ -9163,10 +9181,7 @@ async function criarPagamentoCartao({ valorCobrado, descricao, payer, cartao }) 
     token: cartao.token,
     payment_method_id: cartao.payment_method_id,
     ...(cartao.issuer_id ? { issuer_id: cartao.issuer_id } : {}),
-    // À vista sempre: no parcelado a taxa do Mercado Pago cresce a cada
-    // parcela e passaria dos 7% do acréscimo — parcelamento exigiria uma
-    // tabela de acréscimo por número de parcelas.
-    installments: 1,
+    installments: cartao.installments,
     capture: true,
     binary_mode: false,
     three_d_secure_mode: 'optional',
@@ -9207,6 +9222,7 @@ const cartaoRecusaMsg = (pagamento) =>
 function respostaPagamentoCartao(pagamento) {
   return {
     paymentId: String(pagamento.id),
+    parcelas: pagamento.installments || 1,
     status: pagamento.status,
     statusDetail: pagamento.status_detail,
     threeDs: pagamento.three_ds_info
