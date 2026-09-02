@@ -8212,8 +8212,11 @@ function externalApiPriceFor(serviceId) {
 // da casa (aceitável no modelo contratual, chaves só para parceiros de confiança).
 //
 // UFs expostas na API externa (subconjunto de ATPVE_UFS: só os estados com
-// documentação de integração publicada para parceiros).
-const ATPVE_EXTERNAL_UFS = ['mg', 'sp'];
+// documentação de integração publicada para parceiros). MS entrou em
+// 02/09/2026 com a doc de 9 endpoints — mesmo contrato de MG e SP, então
+// bastou a UF aqui; conferido antes com GET /api/atpve-ms na Chekaki, que já
+// responde o mesmo envelope { success, total, pedidos } dos outros dois.
+const ATPVE_EXTERNAL_UFS = ['mg', 'sp', 'ms'];
 
 async function proxyAtpveExternal(req, res, uf, upstreamPath, { charge = false } = {}) {
   const serviceId = `atpve-${uf}`;
@@ -8316,7 +8319,7 @@ function atpveExternalIdParam(req, res) {
   return id;
 }
 
-// Os 9 endpoints de cada UF exposta (MG, SP). A rota /protocolo/:protocolo é
+// Os 9 endpoints de cada UF exposta (MG, SP, MS). A rota /protocolo/:protocolo é
 // registrada antes de /:id para não ser capturada pelo parâmetro numérico.
 for (const uf of ATPVE_EXTERNAL_UFS) {
   const ext = `/api/v1/atpve-${uf}`;   // nossa rota
