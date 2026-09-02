@@ -4358,48 +4358,116 @@ async function fetchCodigoSegurancaCrvFields(placa, knownRenavam) {
 // ── Consultas complementares da "Número ATPV-E" — Proprietário Atual (v2) via
 // Chekaki (consultar-placa-v2) e Código Segurança CRV via Vistocar/despbrasil
 // (ver fetchCodigoSegurancaCrvFields), para completar os campos que a
-// despbrasil não retorna. Melhor esforço: falha em qualquer uma delas não
-// derruba a consulta principal do ATPVe, só deixa os campos correspondentes
-// como "Não informado" (o preço de R$99 já reflete o custo das 3 consultas
+// despbrasil não retorna (o preço de R$99 já reflete o custo das 3 consultas
 // encadeadas, ver SERVICES/consultar-Numero-ATPVE).
+//
+// A Proprietário Atual (v2) é tentada DUAS vezes e a falha passou a registrar o
+// corpo devolvido pela Chekaki: antes o log tinha só o status HTTP, e quando
+// ela falhava o ATPVe saía assim mesmo, com sete células em branco (nome/
+// município/UF do vendedor, ano de fabricação, ano do modelo, cor e data do
+// CRV) — documento inútil pro despachante, mas cobrado. Quem decide entregar ou
+// recusar é a conferência de atpveCamposFaltando, nos dois chamadores.
+async function fetchProprietarioAtualV2Fields(placa) {
+  const r = await fetch(`${BASE_API_URL}/consultar-placa-v2`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', chaveAcesso: CHAVE_ACESSO },
+    body: JSON.stringify({ placa }),
+  });
+  const buf = Buffer.from(await r.arrayBuffer());
+  if (!r.ok || buf.slice(0, 4).toString('latin1') !== '%PDF') {
+    throw new Error(`HTTP ${r.status} — resposta: ${buf.toString('utf8').slice(0, 300)}`);
+  }
+  return extractLinePairFieldsFromPdf(buf);
+}
+
 async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam) {
   const merged = {};
 
-  try {
-    const r = await fetch(`${BASE_API_URL}/consultar-placa-v2`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', chaveAcesso: CHAVE_ACESSO },
-      body: JSON.stringify({ placa }),
-    });
-    const buf = Buffer.from(await r.arrayBuffer());
-    if (r.ok && buf.slice(0, 4).toString('latin1') === '%PDF') {
-      const f = await extractLinePairFieldsFromPdf(buf);
-      if (f.anodefabricacao) merged.anofabricacao = f.anodefabricacao;
-      if (f.anodomodelo) merged.anomodelo = f.anodomodelo;
-      if (f.marcamodelo) merged.marcamodeloversao = f.marcamodelo;
-      if (f.cor) merged.cor = f.cor;
-      // Espécie, Tipo e Categoria não são lidos: o formulário do ATPVe não tem
-      // célula para os dois primeiros e a CAT é fixa (ver ATPVE_CAT_SEM_CATEGORIA).
-      if (f.datadocrv) merged.datacrv = f.datadocrv;
-      if (f.nomedoproprietario) merged.nomevendedor = f.nomedoproprietario;
-      // "DADOS DO EMPLACAMENTO" (município/UF de registro do veículo) — usado
-      // tanto pro domicílio exibido do vendedor quanto pro "DETRAN - UF" do
-      // cabeçalho, que deve refletir a origem de onde o veículo foi
-      // emplacado, não a UF da intenção de venda.
-      if (f.municipio) { merged.municipiovendedor = f.municipio; merged.municipioemplacamento = f.municipio; }
-      if (f.ufjurisdicao) { merged.ufvendedor = f.ufjurisdicao; merged.ufemplacamento = f.ufjurisdicao; }
-    } else {
-      console.error(`[consultar-Numero-ATPVE] Proprietário Atual (v2) sem PDF válido (HTTP ${r.status}).`);
+  let prop = null;
+  for (let tentativa = 1; tentativa <= 2 && !prop; tentativa++) {
+    try {
+      prop = await fetchProprietarioAtualV2Fields(placa);
+    } catch (e) {
+      console.error(`[consultar-Numero-ATPVE] Proprietário Atual (v2) falhou na tentativa ${tentativa}/2 (placa ${placa}):`, e.message);
     }
-  } catch (e) {
-    console.error('[consultar-Numero-ATPVE] erro na consulta complementar Proprietário Atual (v2):', e.message);
+  }
+  if (prop) {
+    if (prop.anodefabricacao) merged.anofabricacao = prop.anodefabricacao;
+    if (prop.anodomodelo) merged.anomodelo = prop.anodomodelo;
+    if (prop.marcamodelo) merged.marcamodeloversao = prop.marcamodelo;
+    if (prop.cor) merged.cor = prop.cor;
+    // Espécie, Tipo e Categoria não são lidos: o formulário do ATPVe não tem
+    // célula para os dois primeiros e a CAT é fixa (ver ATPVE_CAT_SEM_CATEGORIA).
+    if (prop.datadocrv) merged.datacrv = prop.datadocrv;
+    if (prop.nomedoproprietario) merged.nomevendedor = prop.nomedoproprietario;
+    // "DADOS DO EMPLACAMENTO" (município/UF de registro do veículo) — usado
+    // tanto pro domicílio exibido do vendedor quanto pro "DETRAN - UF" do
+    // cabeçalho, que deve refletir a origem de onde o veículo foi
+    // emplacado, não a UF da intenção de venda.
+    if (prop.municipio) { merged.municipiovendedor = prop.municipio; merged.municipioemplacamento = prop.municipio; }
+    if (prop.ufjurisdicao) { merged.ufvendedor = prop.ufjurisdicao; merged.ufemplacamento = prop.ufjurisdicao; }
   }
 
   const f = await fetchCodigoSegurancaCrvFields(placa, knownRenavam);
   if (f.codigosegurancacrv) merged.codigosegurancacrv = f.codigosegurancacrv;
-  if (f.marcamodeloversao) merged.marcamodeloversao = f.marcamodeloversao;
+  if (f.marcamodeloversao && !merged.marcamodeloversao) merged.marcamodeloversao = f.marcamodeloversao;
 
   return merged;
+}
+
+// Células do ATPVe que não podem sair em branco: sem qualquer uma delas o
+// documento não serve pro despachante. A montagem do PDF sempre tolerou campo
+// vazio (célula em branco) porque as consultas complementares eram "melhor
+// esforço" — o resultado prático era o cliente pagar e receber um ATPVe com o
+// vendedor e os dados do veículo em branco quando uma das upstreams falhava.
+// Agora a falta é conferida antes do débito: o pedido é recusado com a lista do
+// que faltou (e o admin avisado), em vez de entregar meio documento. Hodômetro
+// e e-mails ficam de fora de propósito — saem em branco no oficial também.
+// Todas as chaves da lista são as MESMAS usadas em buildNumeroAtpvePdfBuffer.
+const ATPVE_CAMPOS_OBRIGATORIOS = [
+  ['renavam',                       'Código Renavam'],
+  ['chassi',                        'Chassi'],
+  ['marcamodeloversao',             'Marca/Modelo/Versão'],
+  ['anofabricacao',                 'Ano de fabricação'],
+  ['anomodelo',                     'Ano do modelo'],
+  ['cor',                           'Cor predominante'],
+  ['numerocrv',                     'Número do CRV'],
+  ['codigosegurancacrv',            'Código de segurança do CRV'],
+  ['datacrv',                       'Data de emissão do CRV'],
+  ['numeroatpve',                   'Número ATPVe'],
+  ['nomevendedor',                  'Nome do vendedor'],
+  ['documentovendedor',             'CPF/CNPJ do vendedor'],
+  ['municipiovendedor',             'Município do vendedor'],
+  ['ufvendedor',                    'UF do vendedor'],
+  ['nomecomprador',                 'Nome do comprador'],
+  ['documentocomprador',            'CPF/CNPJ do comprador'],
+  ['municipiocomprador',            'Município do comprador'],
+  ['ufcomprador',                   'UF do comprador'],
+  ['valorvenda',                    'Valor declarado na venda'],
+  ['datahoraregistrointencaovenda', 'Data declarada da venda'],
+];
+
+function atpveCamposFaltando(fields) {
+  return ATPVE_CAMPOS_OBRIGATORIOS
+    .filter(([chave]) => !String(fields?.[chave] ?? '').trim())
+    .map(([, rotulo]) => rotulo);
+}
+
+// Aviso ao admin quando o ATPVe é recusado por falta de dado: a causa é sempre
+// uma upstream fora do ar (Chekaki, Vistocar ou despbrasil), e sem esse aviso a
+// única forma de descobrir era o cliente reclamar do documento em branco.
+async function avisarAdminAtpveIncompleto(placa, faltando, origem) {
+  if (!ADMIN_PHONE) return;
+  const msg = [
+    `⚠️ *ATPVe não emitido — dados incompletos*`,
+    ``,
+    `🔤 *Placa:* ${placa}`,
+    `🧾 *Origem:* ${origem}`,
+    `❌ *Campos em branco:* ${faltando.join(', ')}`,
+    ``,
+    `O pedido foi recusado sem cobrar. Confira o saldo e o status das APIs (Chekaki consultar-placa-v2, Vistocar/despbrasil código de segurança).`,
+  ].join('\n');
+  await sendWhatsApp(ADMIN_PHONE, msg).catch(() => {});
 }
 
 // Busca o PDF da despbrasil e extrai os campos — separado em função própria pra
@@ -4452,6 +4520,16 @@ async function runPublicAtpveComunicacaoVenda(params) {
   }
 
   Object.assign(fields, await runNumeroAtpveSupplementaryQueries(placa, fields.renavam));
+
+  // Mesma regra do painel: documento com célula obrigatória em branco não é
+  // entregue (aqui o erro vira estorno automático do PIX, ver
+  // failPublicOrderAndRefund no chamador).
+  const faltando = atpveCamposFaltando(fields);
+  if (faltando.length) {
+    console.error(`[atpve-comunicacao-venda avulsa] ${placa}: campos obrigatórios em branco (${faltando.join(', ')}).`);
+    await avisarAdminAtpveIncompleto(placa, faltando, 'Consulta avulsa (ATPVe com Comunicação de Venda)');
+    throw new Error(`Não foi possível reunir todos os dados do veículo para essa placa (faltou: ${faltando.join(', ')}). Tente novamente em alguns minutos ou fale com o suporte.`);
+  }
 
   const service = SERVICES.find(s => s.id === 'consultar-Numero-ATPVE');
   return buildNumeroAtpvePdfBuffer(service, fields, { placa }, { withSelos: true });
@@ -7061,6 +7139,17 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         // reajustado pra cobrir as 3 consultas encadeadas (ver catálogo).
         const placaUpper = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
         Object.assign(fields, await runNumeroAtpveSupplementaryQueries(placaUpper, fields.renavam));
+        // Nenhuma célula obrigatória pode sair em branco — ver ATPVE_CAMPOS_OBRIGATORIOS.
+        // A recusa aqui acontece antes do débito (o desconto de créditos só vem
+        // depois deste bloco), então ninguém paga por documento incompleto.
+        const faltando = atpveCamposFaltando(fields);
+        if (faltando.length) {
+          console.error(`[${serviceId}] ${placaUpper}: campos obrigatórios em branco (${faltando.join(', ')}) — consulta recusada sem débito.`);
+          await avisarAdminAtpveIncompleto(placaUpper, faltando, 'Painel (Número ATPV-E)');
+          return res.status(422).json({
+            error: `Não foi possível reunir todos os dados do veículo para essa placa (faltou: ${faltando.join(', ')}). Nenhum crédito foi debitado — tente novamente em alguns minutos ou fale com o suporte.`,
+          });
+        }
         despbrasilJsonPdfBuf = await buildNumeroAtpvePdfBuffer(service, fields, params);
       } catch (e) {
         console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
