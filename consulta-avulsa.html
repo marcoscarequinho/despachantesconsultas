@@ -139,7 +139,7 @@
         <div class="flex justify-between"><span>Consulta</span><strong id="cartao-liquido">R$ 0,00</strong></div>
         <div class="flex justify-between"><span id="cartao-rotulo-taxa">Acréscimo do cartão</span><strong id="cartao-taxa">R$ 0,00</strong></div>
         <div class="flex justify-between text-base pt-1 border-t border-gray-200 mt-1">
-          <span class="font-semibold">Total à vista</span><strong id="cartao-total" class="text-orange-600">R$ 0,00</strong>
+          <span class="font-semibold" id="cartao-rotulo-total">Total à vista</span><strong id="cartao-total" class="text-orange-600">R$ 0,00</strong>
         </div>
         <p class="text-xs text-gray-500 pt-1">Pagando com PIX você não paga o acréscimo.</p>
       </div>
@@ -366,6 +366,15 @@ async function pagarComCartao() {
     endpoint: '/api/public/pedido/cartao',
     corpoExtra: { servico: currentService, email: lido.email, params: lido.params, codigo: accessCode },
     textoBotao: 'Pagar ' + PagamentoCartao.brl(total),
+    // O resumo acompanha a parcela escolhida em vez de ficar preso no "à
+    // vista": parcelado, o total é o do Mercado Pago (com o juro do portador),
+    // que é maior que o nosso acréscimo — daí o rótulo dizer de onde vem a
+    // diferença.
+    onParcelas: ({ parcelas, total: totalParcelado }) => {
+      document.getElementById('cartao-rotulo-total').textContent =
+        parcelas > 1 ? `Total em ${parcelas}x (com juros do cartão)` : 'Total à vista';
+      document.getElementById('cartao-total').textContent = totalParcelado;
+    },
     onErro: erroCartao,
     onProcessando: (ligado) => {
       const st = document.getElementById('cartao-status');

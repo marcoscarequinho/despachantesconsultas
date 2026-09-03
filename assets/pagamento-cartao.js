@@ -3,7 +3,7 @@
  * Usado pelas três telas que cobram do cliente (recarga de créditos, consulta
  * avulsa e assinatura). O PIX continua sendo o caminho padrão e sem acréscimo;
  * este arquivo cuida do cartão: débito (+5%, à vista) ou crédito (+7%, em até
- * 12x com JUROS DO COMPRADOR — o Mercado Pago soma o juro na fatura do cliente
+ * 18x com JUROS DO COMPRADOR — o Mercado Pago soma o juro na fatura do cliente
  * e nós recebemos o mesmo valor à vista).
  *
  * POR QUE cardForm E NÃO O CARD PAYMENT BRICK
@@ -149,13 +149,15 @@
           <label for="form-checkout__issuer">Banco emissor</label>
           <select id="form-checkout__issuer" name="issuer"></select>
         </div>
-        <!-- Parcelas: o cardForm preenche com a tabela do Mercado Pago, já com
-             o texto "12 parcelas de R$ 10,89 (R$ 130,66)". Fica escondido no
-             débito (sempre 1x) e aparece no crédito quando há mais de uma
-             opção — ver onInstallmentsReceived. -->
+        <!-- Parcelas: a lista traz o texto do próprio Mercado Pago ("12
+             parcelas de R$ 10,89 (R$ 130,66)"). Já aparece com a tabela padrão
+             da conta assim que a tela abre, ANTES de o cliente digitar o
+             cartão — ver previaParcelas —, e é trocada pela tabela do cartão
+             quando o BIN chega. Fica escondida no débito (sempre 1x). -->
         <div class="pgc-campo pgc-oculto" id="pgc-parcelas">
           <label for="form-checkout__installments">Parcelas</label>
           <select id="form-checkout__installments" name="installments"></select>
+          <p class="pgc-dica pgc-oculto" id="pgc-previa">Simulação com a tabela padrão. Ao digitar o número do cartão, mostramos as opções exatas do seu banco.</p>
           <p class="pgc-dica">Acima de 1x o Mercado Pago cobra juros do portador — o total de cada opção já aparece na lista.</p>
         </div>
         <p class="pgc-dica pgc-oculto" id="pgc-sem-parcelas"></p>
@@ -271,7 +273,7 @@
     async montar({
       containerId, container3dsId, valor, tipo = 'debito', email, doc,
       endpoint, corpoExtra = {}, textoBotao,
-      onAprovado, onPendente, onErro, onProcessando,
+      onAprovado, onPendente, onErro, onProcessando, onParcelas,
     }) {
       const cfg = await this.carregarConfig();
       if (!cfg.cartaoDisponivel || !cfg.publicKey) {
@@ -320,58 +322,130 @@
 
       // O botão passa a dizer o que o cliente vai realmente pagar: à vista, o
       // valor com acréscimo; parcelado, o texto da própria tabela do MP
-      // ("12x de R$ 10,89 — total R$ 130,66").
+      // ("12x de R$ 10,89 — total R$ 130,66"). A mesma informação vai para a
+      // tela pelo onParcelas, que é quem atualiza o resumo ("Total à vista" /
+      // "Total em 12x").
       const atualizarBotaoParcelas = () => {
-        if (!botao) return;
         const n = parseInt(selParcelas?.value, 10) || 1;
         const rotulo = selParcelas?.selectedOptions?.[0]?.textContent || '';
         const m = rotulo.match(/de (R\$ ?[\d.,]+)[^(]*\((R\$ ?[\d.,]+)\)/);
-        botao.textContent = (n > 1 && m)
-          ? `Pagar ${n}x de ${m[1]} — total ${m[2]}`
-          : (textoBotao || `Pagar ${brl(valorCobrado)}`);
+        const parcelado = n > 1 && !!m;
+        if (botao) {
+          botao.textContent = parcelado
+            ? `Pagar ${n}x de ${m[1]} — total ${m[2]}`
+            : (textoBotao || `Pagar ${brl(valorCobrado)}`);
+        }
+        onParcelas?.({
+          parcelas: parcelado ? n : 1,
+          previa: !temTabelaDoCartao,
+          rotulo,
+          valorParcela: parcelado ? m[1] : brl(valorCobrado),
+          total: parcelado ? m[2] : brl(valorCobrado),
+        });
       };
       if (selParcelas) selParcelas.addEventListener('change', atualizarBotaoParcelas);
 
-      // Busca a tabela de parcelas direto na API do Mercado Pago, pelo BIN do
-      // cartão. Por que não deixar isso com o cardForm: o preenchimento
-      // automático do <select> depende de uma cadeia interna dele (meios de
-      // pagamento → emissores → parcelas) que, nesta conta, não chegou a rodar
-      // — o cliente via só "à vista" mesmo com a tabela existindo. Aqui é uma
-      // chamada só, com a mesma public key e o mesmo endpoint que o SDK usaria,
-      // então o resultado é idêntico ao que ele mostraria.
+      // Busca a tabela de parcelas direto na API do Mercado Pago. Por que não
+      // deixar isso com o cardForm: o preenchimento automático do <select>
+      // depende de uma cadeia interna dele (meios de pagamento → emissores →
+      // parcelas) que, nesta conta, não chegou a rodar — o cliente via só "à
+      // vista" mesmo com a tabela existindo. Aqui é uma chamada só, com a mesma
+      // public key e o mesmo endpoint que o SDK usaria, então o resultado é
+      // idêntico ao que ele mostraria.
+      const pedirParcelas = async (extra) => {
+        const qs = new URLSearchParams({
+          public_key: cfg.publicKey,
+          amount: String(valorCobrado),
+          ...extra,
+        });
+        const r = await fetch(`https://api.mercadopago.com/v1/payment_methods/installments?${qs}`);
+        const d = await r.json();
+        // BIN desconhecido volta como objeto de erro ("payment method not
+        // found"), não como lista.
+        return Array.isArray(d) ? d : [];
+      };
+
+      // A consulta por bandeira devolve uma linha por emissor (Itaú, Nubank,
+      // Santander…) e a por BIN devolve uma só. Em qualquer um dos casos o que
+      // interessa é a maior tabela de crédito: consultando por bandeira ela é a
+      // regra padrão da conta, e consultando por BIN é a do cartão. Cartão de
+      // função dupla traz também a linha de débito/pré-pago, que fica de fora
+      // porque aqui só se parcela crédito.
+      const melhorTabela = (lista) => {
+        const credito = lista.filter(x => x.payment_type_id === 'credit_card');
+        let melhor = [];
+        for (const it of (credito.length ? credito : lista)) {
+          const custos = it.payer_costs || [];
+          if (custos.length > melhor.length) melhor = custos;
+        }
+        return melhor;
+      };
+
+      const preencherParcelas = (custos, ehPrevia) => {
+        if (!selParcelas) return;
+        // Substitui a lista inteira: se o SDK também preencher, o corte tira
+        // as repetidas.
+        selParcelas.innerHTML = '';
+        for (const pc of custos) {
+          const op = document.createElement('option');
+          op.value = pc.installments;
+          op.textContent = pc.recommended_message || `${pc.installments}x`;
+          selParcelas.appendChild(op);
+        }
+        const previa = document.getElementById('pgc-previa');
+        if (previa) previa.classList.toggle('pgc-oculto', !ehPrevia);
+        aplicarParcelas();
+      };
+
+      // Enquanto o cartão não foi digitado o Mercado Pago não sabe o emissor —
+      // mas a tabela padrão da conta já dá para mostrar, e é o que o checkout
+      // do próprio MP faz. Sem isso a tela abre sem sinal nenhum de
+      // parcelamento e o cliente conclui que só vendemos à vista (foi
+      // exatamente essa a reclamação). A lista é trocada pela do cartão de
+      // verdade assim que o BIN chega.
+      let temTabelaDoCartao = false;   // já respondeu para o BIN digitado
+      let previaRespondeu = false;     // a tabela padrão já foi consultada
+      const PREVIA_BANDEIRAS = ['master', 'visa'];
+      const previaParcelas = async () => {
+        if (!ehCredito || !selParcelas) return;
+        for (const bandeira of PREVIA_BANDEIRAS) {
+          try {
+            const custos = melhorTabela(await pedirParcelas({ payment_method_id: bandeira }));
+            if (temTabelaDoCartao) return; // o cartão chegou primeiro: manda ele
+            if (!custos.length) continue;  // bandeira sem tabela: tenta a próxima
+            previaRespondeu = true;
+            preencherParcelas(custos, true);
+            return;
+          } catch (e) {
+            console.error('[cartao] prévia de parcelas:', e.message);
+          }
+        }
+        // Nenhuma bandeira respondeu com mais de uma opção: o valor é baixo
+        // demais para parcelar, e o aviso abaixo explica isso.
+        previaRespondeu = true;
+        aplicarParcelas();
+      };
+
       let ultimoBin = '';
       const buscarParcelas = async (bin) => {
         const limpo = String(bin || '').replace(/\D/g, '');
-        if (!ehCredito || !selParcelas || limpo.length < 8 || limpo === ultimoBin) return;
+        if (!ehCredito || !selParcelas || limpo.length < 6 || limpo === ultimoBin) return;
         ultimoBin = limpo;
         try {
-          const url = 'https://api.mercadopago.com/v1/payment_methods/installments'
-            + `?public_key=${encodeURIComponent(cfg.publicKey)}`
-            + `&amount=${encodeURIComponent(valorCobrado)}&bin=${encodeURIComponent(limpo)}`;
-          const r = await fetch(url);
-          const d = await r.json();
-          const lista = Array.isArray(d) ? d : [];
-          const alvo = lista.find(x => x.payment_type_id === 'credit_card') || lista[0];
-          const custos = alvo?.payer_costs || [];
-          if (!custos.length) return;
-          // Substitui a lista inteira: se o SDK também preencher, o corte tira
-          // as repetidas.
-          selParcelas.innerHTML = '';
-          for (const pc of custos) {
-            const op = document.createElement('option');
-            op.value = pc.installments;
-            op.textContent = pc.recommended_message || `${pc.installments}x`;
-            selParcelas.appendChild(op);
-          }
-          aplicarParcelas();
+          const lista = await pedirParcelas({ bin: limpo });
+          // BIN ainda não reconhecido: mantém a prévia em vez de esvaziar a
+          // lista no meio da digitação.
+          if (!lista.length) return;
+          temTabelaDoCartao = true;
+          preencherParcelas(melhorTabela(lista), false);
         } catch (e) {
           console.error('[cartao] não consegui buscar as parcelas:', e.message);
         }
       };
 
       // Mostra/esconde o seletor conforme as opções que o Mercado Pago mandou.
-      // Fica numa função só porque é chamada por dois caminhos: o callback do
-      // SDK e o observador abaixo.
+      // Fica numa função só porque é chamada por vários caminhos: a prévia, a
+      // busca por BIN, o callback do SDK e o observador abaixo.
       const aplicarParcelas = () => {
         limitarParcelas();
         const opcoes = selParcelas?.options.length || 0;
@@ -380,17 +454,22 @@
         const podeParcelar = ehCredito && opcoes > 1;
         if (bloco) bloco.classList.toggle('pgc-oculto', !podeParcelar);
         if (aviso) {
-          // O aviso do mínimo só faz sentido depois que o MP respondeu: antes
-          // disso não há opção nenhuma e ele acusaria falta de parcelamento sem
-          // saber. Por isso "opcoes > 0".
-          aviso.classList.toggle('pgc-oculto', !ehCredito || podeParcelar || opcoes === 0);
-          if (ehCredito && !podeParcelar && opcoes > 0) {
-            // Duas causas possíveis, e daqui não dá para distinguir: valor baixo
-            // (o MP exige um mínimo por parcela, medido em ~R$ 5,35) ou o
-            // emissor do cartão não liberar parcelamento — a consulta por BIN
-            // devolve tabelas diferentes da consulta por bandeira. O texto
-            // assume as duas em vez de afirmar a errada.
-            aviso.textContent = `O Mercado Pago não ofereceu parcelamento para este cartão neste valor — pode ser porque ele pede pelo menos ${brl(PARCELA_MINIMA)} por parcela, ou porque o emissor do cartão não permite parcelar aqui. Dá para pagar à vista, ou no PIX sem acréscimo.`;
+          // O aviso só faz sentido depois que o MP respondeu alguma coisa:
+          // antes disso não há opção nenhuma e ele acusaria falta de
+          // parcelamento sem saber.
+          const mostrar = ehCredito && !podeParcelar && (temTabelaDoCartao || previaRespondeu);
+          aviso.classList.toggle('pgc-oculto', !mostrar);
+          if (mostrar) {
+            aviso.textContent = temTabelaDoCartao
+              // Com a tabela do cartão na mão sobram duas causas possíveis, e
+              // daqui não dá para distinguir: valor baixo (o MP exige um mínimo
+              // por parcela) ou o emissor não liberar parcelamento — a consulta
+              // por BIN devolve tabelas diferentes da consulta por bandeira. O
+              // texto assume as duas em vez de afirmar a errada.
+              ? `O Mercado Pago não ofereceu parcelamento para este cartão neste valor — pode ser porque ele pede pelo menos ${brl(PARCELA_MINIMA)} por parcela, ou porque o emissor do cartão não permite parcelar aqui. Dá para pagar à vista, ou no PIX sem acréscimo.`
+              // Só a tabela padrão respondeu, e nem ela parcela: aí a causa é o
+              // valor, e dá para dizer isso sem rodeio.
+              : `Neste valor o Mercado Pago não parcela — ele pede pelo menos ${brl(PARCELA_MINIMA)} por parcela. Dá para pagar à vista, ou no PIX sem acréscimo.`;
           }
         }
         atualizarBotaoParcelas();
@@ -405,6 +484,12 @@
         observadorParcelas = new MutationObserver(() => aplicarParcelas());
         observadorParcelas.observe(selParcelas, { childList: true });
       }
+
+      // Deixa o resumo da tela coerente já na abertura ("Total à vista") e
+      // dispara a tabela padrão, que é o que faz o seletor aparecer antes de o
+      // cliente digitar o cartão.
+      atualizarBotaoParcelas();
+      previaParcelas();
 
       cardFormAtual = mp.cardForm({
         amount: String(valorCobrado),
