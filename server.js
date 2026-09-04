@@ -3901,6 +3901,18 @@ function buildConsultaRenavamPdfBuffer(service, data, params) {
 // trava com "DOMMatrix is not defined" ao ser importado no runtime Node da
 // Vercel (sem @napi-rs/canvas disponível) — derrubando o servidor inteiro. A
 // v1.1.1 usa um pdf.js antigo, só de texto, sem essa dependência.
+// ── Campo sem dado nos relatórios de terceiro ────────────────────────────────
+// A Chekaki (e às vezes a despbrasil) escreve um TRAVESSÃO onde não tem o dado:
+// a PUG6I42, por exemplo, volta do consultar-placa-v2 com "DATA DO CRV: —".
+// Sem tratar, esse "—" é um valor como outro qualquer — ele passava na
+// conferência de ATPVE_CAMPOS_OBRIGATORIOS, ia impresso na célula "DATA EMISSÃO
+// DO CRV" do ATPVe e, pior, sobrescrevia a data boa que a outra fonte já tinha
+// trazido. Placeholder é ausência de dado, então ele some já na extração: assim
+// a outra fonte preenche, e se nenhuma tiver o campo o pedido é recusado sem
+// cobrar em vez de sair com um traço no documento.
+const PLACEHOLDER_SEM_DADO = /^(?:[-–—.\s]*|n\/?a|nao informado|não informado|sem informacao|sem informação)$/i;
+const semDadoUtil = v => PLACEHOLDER_SEM_DADO.test(String(v ?? '').trim());
+
 async function extractAtpveFieldsFromPdf(pdfBuf) {
   const { text } = await pdfParse(pdfBuf);
   const fields = {};
@@ -3911,6 +3923,7 @@ async function extractAtpveFieldsFromPdf(pdfBuf) {
     const key = m[1].trim().toLowerCase()
       .normalize('NFD').replace(/[̀-ͯ]/g, '')
       .replace(/[^a-z0-9]/g, '');
+    if (semDadoUtil(m[2])) continue;
     fields[key] = m[2].trim();
   }
   return repairAtpveAccents(fields, pdfBuf);
@@ -4080,7 +4093,8 @@ async function extractLinePairFieldsFromPdf(pdfBuf) {
     const key = lines[i].slice(0, -1).trim().toLowerCase()
       .normalize('NFD').replace(/[̀-ͯ]/g, '')
       .replace(/[^a-z0-9]/g, '');
-    if (key) fields[key] = lines[i + 1];
+    // Travessão é campo em branco, não valor — ver semDadoUtil.
+    if (key && !semDadoUtil(lines[i + 1])) fields[key] = lines[i + 1];
   }
   return fields;
 }
