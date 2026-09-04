@@ -397,12 +397,13 @@ const SERVICES = [
   { id:'renajud',                         name:'RENAJUD',                      group:'Débitos e Documentação', basePrice:9.50,  inputType:'placa',        icon:'⚖️' },
   { id:'consultar-atpve',                 name:'Reemissão ATPV-e (Chassi)',    group:'Débitos e Documentação', basePrice:13.50, inputType:'chassi',        icon:'📄' },
   { id:'consultar-atpve-v1',             name:'Reemissão ATPV-e (Placa)',     group:'Débitos e Documentação', basePrice:13.50, inputType:'placa_renavam', icon:'📄' },
-  // Preço reajustado (era R$25,00 base / R$35,00 final): a consulta agora
-  // encadeia mais duas consultas pagas (Proprietário Atual v2 via Chekaki e
-  // Consulta 3 Código Segurança CRV via Vistocar) pra completar os campos que
-  // a despbrasil não retorna — ver runNumeroAtpveSupplementaryQueries. Preço
-  // fixo (noMarkup) cobrindo o custo das 3 consultas + margem.
-  { id:'consultar-Numero-ATPVE',          name:'Reemissão da ATPVe Com Comunicação de Venda', group:'Débitos e Documentação', basePrice:99.00, noMarkup:true, inputType:'placa', icon:'🔢',
+  // Preço reajustado (era R$25,00 base / R$35,00 final, depois R$99,00): a
+  // consulta encadeia mais TRÊS consultas pagas (Proprietário Atual v2 via
+  // Chekaki, Consulta 3 Código Segurança CRV via Vistocar e Consulta Comunicado
+  // via Chekaki) pra completar os campos que a despbrasil não retorna ou
+  // retorna errado — ver runNumeroAtpveSupplementaryQueries. Preço fixo
+  // (noMarkup) cobrindo o custo das 4 consultas + margem.
+  { id:'consultar-Numero-ATPVE',          name:'Reemissão da ATPVe Com Comunicação de Venda', group:'Débitos e Documentação', basePrice:120.00, noMarkup:true, inputType:'placa', icon:'🔢',
     // noteStyle:'danger' — o aviso vira termo de aceite (fundo/texto vermelho no
     // painel), porque a limitação do QR Code precisa ser lida antes de consultar.
     slowNote:'ATENÇÃO, ao inserir a placa você concorda com os termos: "Devido ao formato como esta ATPVe é gerada, o QR Code não faz leitura — todas as demais informações deste documento são reais. Fica a seu critério."',
@@ -4009,7 +4010,7 @@ async function repairAtpveAccents(fields, pdfBuf) {
 
 // Logradouro e bairro oficiais de um CEP (ViaCEP, público e sem chave). Melhor
 // esforço: qualquer falha devolve null e o valor fica como veio, porque isso
-// aqui nunca pode derrubar uma consulta de R$ 99,00 já paga.
+// aqui nunca pode derrubar uma consulta de R$ 120,00 já paga.
 async function consultarCep(cep) {
   const limpo = String(cep || '').replace(/\D/g, '');
   if (limpo.length !== 8) return null;
@@ -4132,7 +4133,7 @@ const ATPVE_SELO_GOVBR_PATH = path.join(__dirname, 'assets', 'atpve-selo-govbr.p
 // cobre todo o português — mas pdf-lib LANÇA erro em qualquer caractere fora
 // dessa tabela, e o texto aqui vem de PDF de terceiro (nome e endereço
 // digitados por quem cadastrou a intenção de venda). Um caractere exótico
-// derrubava a geração inteira com HTTP 500 numa consulta de R$ 99,00: agora ele
+// derrubava a geração inteira com HTTP 500 numa consulta de R$ 120,00: agora ele
 // perde o acento e, se nem assim couber, é descartado — o resto do documento
 // sai normal. Acento de português não passa por aqui (é WinAnsi de verdade).
 const WINANSI_ESPECIAIS = new Set([...'€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ']);
@@ -4266,7 +4267,15 @@ async function buildNumeroAtpvePdfBuffer(service, fields, params, { withSelos = 
   page.drawLine({ start: { x: 337.096, y: pageH - 281.255 }, end: { x: 573.364, y: pageH - 281.255 }, thickness: 0.71, color: rgb(0, 0, 0) });
   // Layout 2.1: a linha de "DATA DECLARADA DA VENDA" ficou rente ao rótulo
   // (sem o respiro que tinha no layout 2.0) — mesma lógica, coordenadas novas.
-  const dataVenda = fields.datahoraregistrointencaovenda ? fields.datahoraregistrointencaovenda.split(' ')[0] : null;
+  // A data impressa é a que o VENDEDOR COMUNICOU AO DETRAN (Consulta
+  // Comunicado, ver fetchComunicadoDataVenda). O que a despbrasil chama de
+  // "data declarada da venda" é o dia em que a ATPVe foi GERADA — as duas só
+  // coincidem quando o documento saiu no mesmo dia da comunicação, e foi por
+  // isso que placa com comunicação antiga (ex.: venda em 27/01/2022, ATPVe
+  // gerada em 19/03/2022) saía com a data errada. A da ATPVe fica de reserva
+  // para a placa sem comunicação registrada, onde ela é a única que existe.
+  const dataVenda = fields.datavendacomunicada
+    || (fields.datahoraregistrointencaovenda ? fields.datahoraregistrointencaovenda.split(' ')[0] : null);
   V(dataVenda, { x: 403.9, top: 298.8, bottom: 308.8, maxX: 573 });
   page.drawLine({ start: { x: 390.189, y: pageH - 308.184 }, end: { x: 573.194, y: pageH - 308.184 }, thickness: 1.02, color: rgb(0, 0, 0) });
 
@@ -4392,10 +4401,11 @@ async function fetchCodigoSegurancaCrvFields(placa, knownRenavam) {
 }
 
 // ── Consultas complementares da "Número ATPV-E" — Proprietário Atual (v2) via
-// Chekaki (consultar-placa-v2) e Código Segurança CRV via Vistocar/despbrasil
-// (ver fetchCodigoSegurancaCrvFields), para completar os campos que a
-// despbrasil não retorna (o preço de R$99 já reflete o custo das 3 consultas
-// encadeadas, ver SERVICES/consultar-Numero-ATPVE).
+// Chekaki (consultar-placa-v2), Código Segurança CRV via Vistocar/despbrasil
+// (ver fetchCodigoSegurancaCrvFields) e Consulta Comunicado via Chekaki (ver
+// fetchComunicadoDataVenda), para completar os campos que a despbrasil não
+// retorna ou retorna errado (o preço de R$120 já reflete o custo das 4
+// consultas encadeadas, ver SERVICES/consultar-Numero-ATPVE).
 //
 // A Proprietário Atual (v2) é tentada DUAS vezes e a falha passou a registrar o
 // corpo devolvido pela Chekaki: antes o log tinha só o status HTTP, e quando
@@ -4414,6 +4424,62 @@ async function fetchProprietarioAtualV2Fields(placa) {
     throw new Error(`HTTP ${r.status} — resposta: ${buf.toString('utf8').slice(0, 300)}`);
   }
   return extractLinePairFieldsFromPdf(buf);
+}
+
+// ── Data real da venda — "Consulta Comunicado" (Chekaki) ─────────────────────
+// A despbrasil devolve, em "Data declarada da venda", a data de GERAÇÃO da
+// ATPVe; quem guarda a data que o vendedor comunicou ao Detran é a Consulta
+// Comunicado (POST /consultar-comunicado, placa + renavam), o mesmo serviço
+// avulso do catálogo. Ela responde um PDF pronto no formato "Rótulo:" numa
+// linha e o valor na seguinte — igual ao Proprietário Atual, por isso reusa o
+// extractLinePairFieldsFromPdf.
+//
+// Devolve { consultado, dataVenda }, e a diferença entre os dois casos de
+// dataVenda nula importa:
+//   • consultado:true  → a API respondeu e a placa não tem comunicação de venda
+//                        registrada; aí a data da ATPVe é a única que existe e
+//                        vira a impressa (ver buildNumeroAtpvePdfBuffer).
+//   • consultado:false → a API não respondeu. Como não dá para saber se a data
+//                        da ATPVe é a comunicada, o pedido é recusado sem cobrar
+//                        (ver atpveCamposFaltando), em vez de repetir o defeito
+//                        que esta consulta veio corrigir.
+const COMUNICADO_DATA_VENDA_KEYS = ['datadavenda', 'datavenda'];
+const DATA_BR_RE = /\b(\d{2}\/\d{2}\/\d{4})\b/;
+
+async function fetchComunicadoDataVendaUmaVez(placa, renavam) {
+  const r = await fetch(`${BASE_API_URL}/consultar-comunicado`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', chaveAcesso: CHAVE_ACESSO },
+    body: JSON.stringify({ placa, renavam }),
+  });
+  const buf = Buffer.from(await r.arrayBuffer());
+  if (!r.ok) throw new Error(`HTTP ${r.status} — resposta: ${buf.toString('utf8').slice(0, 300)}`);
+  // Sucesso vem sempre como PDF. Corpo em JSON aqui é erro de negócio (placa
+  // sem comunicação, dado divergente): a consulta foi feita, só não há data.
+  if (buf.slice(0, 4).toString('latin1') !== '%PDF') {
+    console.error(`[consultar-Numero-ATPVE] Consulta Comunicado sem PDF (placa ${placa}): ${buf.toString('utf8').slice(0, 300)}`);
+    return { consultado: true, dataVenda: null };
+  }
+  const f = await extractLinePairFieldsFromPdf(buf);
+  for (const chave of COMUNICADO_DATA_VENDA_KEYS) {
+    const m = DATA_BR_RE.exec(String(f[chave] || ''));
+    if (m) return { consultado: true, dataVenda: m[1] };
+  }
+  // PDF legível e sem data da venda: é o relatório de comunicação não localizada.
+  return { consultado: true, dataVenda: null };
+}
+
+// Duas tentativas, mesma régua da Proprietário Atual (v2): falha isolada da
+// Chekaki é comum e custa só uma segunda chamada.
+async function fetchComunicadoDataVenda(placa, renavam) {
+  for (let tentativa = 1; tentativa <= 2; tentativa++) {
+    try {
+      return await fetchComunicadoDataVendaUmaVez(placa, renavam);
+    } catch (e) {
+      console.error(`[consultar-Numero-ATPVE] Consulta Comunicado falhou na tentativa ${tentativa}/2 (placa ${placa}):`, e.message);
+    }
+  }
+  return { consultado: false, dataVenda: null };
 }
 
 async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam) {
@@ -4447,6 +4513,15 @@ async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam) {
   const f = await fetchCodigoSegurancaCrvFields(placa, knownRenavam);
   if (f.codigosegurancacrv) merged.codigosegurancacrv = f.codigosegurancacrv;
   if (f.marcamodeloversao && !merged.marcamodeloversao) merged.marcamodeloversao = f.marcamodeloversao;
+
+  // Data que o vendedor comunicou ao Detran. Sem renavam não há o que
+  // consultar — e renavam em branco já derruba o pedido na conferência de
+  // ATPVE_CAMPOS_OBRIGATORIOS, antes de qualquer débito.
+  if (knownRenavam) {
+    const comunicado = await fetchComunicadoDataVenda(placa, knownRenavam);
+    if (comunicado.dataVenda) merged.datavendacomunicada = comunicado.dataVenda;
+    else if (!comunicado.consultado) merged._comunicadoIndisponivel = true;
+  }
 
   return merged;
 }
@@ -4484,9 +4559,15 @@ const ATPVE_CAMPOS_OBRIGATORIOS = [
 ];
 
 function atpveCamposFaltando(fields) {
-  return ATPVE_CAMPOS_OBRIGATORIOS
+  const faltando = ATPVE_CAMPOS_OBRIGATORIOS
     .filter(([chave]) => !String(fields?.[chave] ?? '').trim())
     .map(([, rotulo]) => rotulo);
+  // A Consulta Comunicado fora do ar não deixa campo em branco — deixa a célula
+  // com a data de geração da ATPVe, que pode não ser a data da venda. Entregar
+  // assim é vender o defeito, então entra na lista e o pedido é recusado sem
+  // cobrar (ver fetchComunicadoDataVenda).
+  if (fields?._comunicadoIndisponivel) faltando.push('Data da venda comunicada ao Detran');
+  return faltando;
 }
 
 // Aviso ao admin quando o ATPVe é recusado por falta de dado: a causa é sempre
@@ -8705,11 +8786,11 @@ const PUBLIC_PAY_SERVICES = {
 
 // "Reemissão da ATPVe Com Comunicação de Venda" avulsa — não usa Infosimples
 // (ver runPublicAtpveComunicacaoVenda), por isso fica fora do PUBLIC_PAY_SERVICES
-// acima (mapa Infosimples-only). Preço fixo, sem markup — cobre despbrasil + 2
-// consultas complementares, igual à versão logada (R$99), com margem maior pela
+// acima (mapa Infosimples-only). Preço fixo, sem markup — cobre despbrasil + 3
+// consultas complementares, igual à versão logada (R$120), com margem maior pela
 // customização de comprador/vendedor/data.
 const PUBLIC_ATPVE_COMUNICACAO_VENDA_ID    = 'atpve-comunicacao-venda';
-const PUBLIC_ATPVE_COMUNICACAO_VENDA_PRICE = 120.00;
+const PUBLIC_ATPVE_COMUNICACAO_VENDA_PRICE = 140.00;
 
 async function callInfosimples(service, params) {
   const qs = new URLSearchParams({ token: INFOSIMPLES_TOKEN });
@@ -11715,7 +11796,7 @@ Olá! 🚗💨 Confira nossa tabela atualizada de serviços e consultas veicular
 
 🛑 📄 DOCUMENTOS E ATPV-e
 
-✅ Reemissão ATPV-e com Com. Venda: R$ 99,00 (Placa)
+✅ Reemissão ATPV-e com Com. Venda: R$ 120,00 (Placa)
 
 ✅ Reemissão ATPV-e: R$ 18,90 (Placa + Renavam ou Chassi)
 
