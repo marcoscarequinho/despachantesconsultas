@@ -7262,12 +7262,32 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           return res.status(422).json({ error: 'Falha ao obter o PDF gerado pela API.' });
         }
         const sourcePdfBuf = Buffer.from(await pdfRes.arrayBuffer());
-        const fields = await extractAtpveFieldsFromPdf(sourcePdfBuf);
-        // Completa ano fabricação/modelo, marca/modelo, cor, código de
-        // segurança do CRV e dados do vendedor com duas consultas extras
-        // (Proprietário Atual v2 + Consulta 3 Código Segurança CRV) — preço já
-        // reajustado pra cobrir as 3 consultas encadeadas (ver catálogo).
         const placaUpper = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+        // A despbrasil gera o PDF na hora a cada chamada e às vezes devolve um
+        // arquivo malformado, que trava o pdf.js ("bad XRef entry", "Invalid
+        // number") e derrubava a consulta inteira com HTTP 500. Uma nova
+        // geração costuma vir íntegra, então pedimos outra — a mesma reação
+        // que a avulsa já tinha (ver runPublicAtpveComunicacaoVenda). Duas
+        // leituras ilegíveis viram recusa explicada, sempre antes do débito.
+        let fields;
+        try {
+          fields = await extractAtpveFieldsFromPdf(sourcePdfBuf);
+        } catch (e) {
+          console.error(`[${serviceId}] PDF da despbrasil ilegível (${e.message}) — pedindo outra geração.`);
+          try {
+            fields = await fetchAndExtractAtpveFromDespbrasil(placaUpper);
+          } catch (e2) {
+            console.error(`[${serviceId}] 2ª geração da despbrasil também veio ilegível:`, e2.message);
+            return res.status(422).json({
+              error: 'A base devolveu um documento ilegível para essa placa agora. Nenhum crédito foi debitado — tente novamente em alguns minutos ou fale com o suporte.',
+            });
+          }
+        }
+        // Completa ano fabricação/modelo, marca/modelo, cor, código de
+        // segurança do CRV, dados do vendedor e a data da venda comunicada com
+        // três consultas extras (Proprietário Atual v2 + Consulta 3 Código
+        // Segurança CRV + Consulta Comunicado) — preço já reajustado pra cobrir
+        // as 4 consultas encadeadas (ver catálogo).
         Object.assign(fields, await runNumeroAtpveSupplementaryQueries(placaUpper, fields.renavam));
         // Nenhuma célula obrigatória pode sair em branco — ver ATPVE_CAMPOS_OBRIGATORIOS.
         // A recusa aqui acontece antes do débito (o desconto de créditos só vem
