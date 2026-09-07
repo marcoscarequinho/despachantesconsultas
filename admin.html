@@ -2070,10 +2070,11 @@ function renderManualQueries() {
     const estornado = q.status === 'estornado';
     let whatsappStatus = '';
     if (q.status === 'concluido') {
-      if (q.whatsapp_sent_at) {
-        whatsappStatus = `<div class="text-xs text-green-600 mt-1">✅ WhatsApp enviado</div>`;
-      } else if (!q.user_phone) {
+      if (!q.user_phone) {
         whatsappStatus = `<div class="text-xs text-gray-400 mt-1">— sem telefone</div>`;
+      } else if (q.whatsapp_sent_at) {
+        whatsappStatus = `<div class="text-xs text-green-600 mt-1">✅ WhatsApp enviado</div>
+          <button onclick="resendWhatsapp(${q.id}, this)" class="text-xs text-blue-600 hover:underline mt-0.5">🔁 Reenviar</button>`;
       } else {
         whatsappStatus = `<div class="text-xs text-red-500 mt-1">⚠️ Não enviado</div>
           <button onclick="resendWhatsapp(${q.id}, this)" class="text-xs text-blue-600 hover:underline mt-0.5">🔁 Reenviar</button>`;
