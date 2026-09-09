@@ -741,7 +741,13 @@ const SERVICES = [
   // fluxo único da Chekaki — por isso não existe mais um serviço "Emitir
   // ATPV-e MG" à parte: cadastrar já entrega o documento pronto, como em
   // RJ/SP/MS ──
-  { id:'intencao-venda-rj', name:'Intenção de Venda RJ', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'atpve_rj_cadastro', icon:'📝', uf:'rj' },
+  // RJ está em manutenção (unavailable): processCatalogQuery recusa antes de
+  // debitar ou chamar a Chekaki, e o painel mostra o slowNote no lugar do botão
+  // de emitir. As ações de pedidos já emitidos (Atualizar/Registrar/Alterar/
+  // Excluir em "Meus ATPV-e") não passam por aqui e continuam valendo.
+  { id:'intencao-venda-rj', name:'Intenção de Venda RJ', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'atpve_rj_cadastro', icon:'📝', uf:'rj',
+    unavailable:true,
+    slowNote:'Intenção de Venda RJ em manutenção: novas emissões estão temporariamente suspensas. Os ATPV-e já emitidos continuam em "Meus ATPV-e".' },
   { id:'intencao-venda-sp', name:'Intenção de Venda SP', group:'Intenção de Venda (ATPVE)', basePrice:60.00, noMarkup:true, inputType:'atpve_sp_cadastro', icon:'📝', uf:'sp' },
   { id:'intencao-venda-ms', name:'Intenção de Venda MS', group:'Intenção de Venda (ATPVE)', basePrice:60.00, noMarkup:true, inputType:'atpve_ms_cadastro', icon:'📝', uf:'ms' },
   { id:'intencao-venda-mg', name:'Intenção de Venda MG', group:'Intenção de Venda (ATPVE)', basePrice:60.00, noMarkup:true, inputType:'atpve_mg_cadastro', icon:'📝', uf:'mg' },

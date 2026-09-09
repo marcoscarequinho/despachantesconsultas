@@ -914,6 +914,12 @@
           <button onclick="resetIntencaoForm()" class="text-xs text-gray-500 hover:text-gray-700">✕ Cancelar</button>
         </div>
 
+        <div id="intencao-manutencao"
+          class="hidden bg-amber-50 border border-amber-300 rounded-lg px-4 py-3 text-sm text-amber-800 flex gap-2 mb-4">
+          <span class="flex-shrink-0">🛠️</span>
+          <span id="intencao-manutencao-msg"></span>
+        </div>
+
         <div class="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-800 flex gap-2 mb-4">
           <span class="flex-shrink-0">⚠️</span>
           <div>
@@ -1378,6 +1384,7 @@ function buildIntencaoCategoryGrid() {
     <div class="service-cat" data-svc="${s.id}" onclick="selectIntencaoCategory(${JSON.stringify(s).replace(/"/g,"&quot;")}, this)">
       <div class="text-2xl mb-1">${INTENCAO_ICONS[s.id] || s.icon}</div>
       <div class="font-semibold text-gray-800 text-sm leading-tight">${s.name}</div>
+      ${s.unavailable ? '<div class="mt-1"><span class="svc-badge bg-amber-100 text-amber-800">Em manutenção</span></div>' : ''}
       <div class="text-xs text-gray-400 mt-0.5">${fmt(s.price)}</div>
     </div>`).join('');
 }
@@ -1394,10 +1401,29 @@ function selectIntencaoCategory(svc, cardEl) {
 
   document.getElementById('intencao-form-name').textContent  = svc.name;
   document.getElementById('intencao-form-price').textContent = fmt(svc.price);
+  // Estado em manutenção (unavailable no catálogo): o formulário continua visível
+  // para o usuário ver do que se trata, mas o envio fica travado — o servidor
+  // recusa esse serviço em /api/query de qualquer forma.
+  setIntencaoManutencao(svc);
   renderIntencaoRjFields(svc.uf ? svc.uf.toUpperCase() : 'RJ');
   document.getElementById('intencao-form-wrap').classList.remove('hidden');
   document.getElementById('intencao-result-wrap').classList.add('hidden');
   scrollToIntencaoForm('intencao-form-wrap');
+}
+
+// Liga/desliga o modo manutenção do formulário de ATPV-e. Passar null (ou um
+// serviço liberado) volta ao normal — é o que "Alterar" faz, já que corrigir um
+// pedido antigo não passa pela emissão suspensa.
+function setIntencaoManutencao(svc) {
+  const emManutencao = !!(svc && svc.unavailable);
+  const aviso = document.getElementById('intencao-manutencao');
+  aviso.classList.toggle('hidden', !emManutencao);
+  if (emManutencao)
+    document.getElementById('intencao-manutencao-msg').textContent =
+      svc.slowNote || 'Consulta temporariamente em manutenção.';
+  document.getElementById('intencao-submit-btn').disabled = emManutencao;
+  document.getElementById('intencao-submit-text').textContent =
+    emManutencao ? 'Em manutenção' : 'Emitir ATPV-e';
 }
 
 function scrollToIntencaoForm(id) {
@@ -1642,6 +1668,7 @@ function alterarAtpve(uf, queryId) {
   selectedIntencaoSvc = svc;
   document.getElementById('intencao-form-name').textContent  = `✏️ Alterar ${svc.name}`;
   document.getElementById('intencao-form-price').textContent = 'Grátis';
+  setIntencaoManutencao(null);
   renderIntencaoRjFields(uf.toUpperCase());
   preencherIntencaoRjFields(p);
   document.getElementById('intencao-submit-text').textContent = 'Salvar Alterações';
@@ -1655,7 +1682,7 @@ function alterarAtpve(uf, queryId) {
 function resetIntencaoForm(showCats = true) {
   selectedIntencaoSvc = null;
   editingAtpve = null;
-  document.getElementById('intencao-submit-text').textContent = 'Emitir ATPV-e';
+  setIntencaoManutencao(null);
   document.getElementById('intencao-form').reset();
   document.getElementById('intencao-form-error').classList.add('hidden');
   document.getElementById('intencao-form-wrap').classList.add('hidden');
@@ -1784,6 +1811,14 @@ async function submitIntencao(e) {
   const errMsgEl = document.getElementById('intencao-form-error-msg');
   errEl.classList.add('hidden');
 
+  // Emissão suspensa: só barra a emissão nova — corrigir um pedido já pago
+  // (editingAtpve) continua liberado, porque não passa pelo serviço em manutenção.
+  if (!editingAtpve && selectedIntencaoSvc?.unavailable) {
+    errMsgEl.textContent = selectedIntencaoSvc.slowNote || 'Consulta temporariamente em manutenção.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+
   const params = buildIntencaoRjParams();
   const validationError = validateIntencaoRjParams(params);
   if (validationError) {
@@ -1857,8 +1892,14 @@ async function submitIntencao(e) {
     errMsgEl.textContent = 'Erro de conexão. Tente novamente.';
     errEl.classList.remove('hidden');
   } finally {
-    btn.disabled = false;
-    btnText.textContent = editingAtpve ? 'Salvar Alterações' : 'Emitir ATPV-e';
+    if (editingAtpve) {
+      btn.disabled = false;
+      btnText.textContent = 'Salvar Alterações';
+    } else {
+      // Devolve o botão ao estado do serviço — se ele estiver em manutenção,
+      // continua travado em vez de voltar a oferecer "Emitir ATPV-e".
+      setIntencaoManutencao(selectedIntencaoSvc);
+    }
     spinner.classList.add('hidden');
   }
 }
@@ -2735,7 +2776,7 @@ function catalogCard(s) {
   const meta     = CATALOG_GROUP_META[catalogGroupOf(s)] || {};
   const entrada  = inputTypeLabel(s.inputType).replace(/^Entrada:\s*/, '');
   const selo = s.unavailable
-    ? '<span class="svc-badge bg-gray-200 text-gray-600">Indisponível</span>'
+    ? '<span class="svc-badge bg-amber-100 text-amber-800">Em manutenção</span>'
     : (CATALOG_BADGE_SERVICO[s.id] || meta.badge
         ? `<span class="svc-badge ${(CATALOG_BADGE_SERVICO[s.id] || meta).badgeClass}">${(CATALOG_BADGE_SERVICO[s.id] || meta).badge}</span>`
         : '');
