@@ -110,10 +110,9 @@ const CONSULTASFACIL_KEY      = process.env.CONSULTASFACIL_KEY || '';
 const DESPBRASIL_BASE_URL = 'https://despbrasil.com.br/functions/apiConsulta';
 const DESPBRASIL_KEY      = process.env.DESPBRASIL_KEY || '';
 const DESPBRASIL_SVCS = {
-  // versao:'v1' — o "Consulta 2 Código Segurança CRV (PDF)" usa a versão 1 do
-  // serviço na despbrasil. Vai no corpo junto de servico/placa (ver o spread
-  // de `extra` em processCatalogQuery). Chegou a ficar em 'v2' por algumas
-  // horas em 10/09/2026 e voltou para 'v1'.
+  // SEM serviço no catálogo desde 10/09/2026 (a rota deles vive fora do ar).
+  // A entrada fica porque fetchCodigoSegurancaPdfDespbrasil ainda a lê para
+  // montar o fallback do consultar-Numero-ATPVE, quando a Vistocar falha.
   'security-code-vistocar':     { servico: 'codigo_seguranca', extra: { versao: 'v1' } },
   // "consulta_generica": o serviço em si vem em nome_servico, dentro do corpo.
   // `arquivo` só existe para o PDF do WhatsApp não sair como
@@ -586,10 +585,15 @@ const SERVICES = [
   { id:'crlv-agendado-status', name:'CRLV Agendado — Ver Status',          group:'CRLV-e Agendado', basePrice:0.00,   inputType:'pedido_id_get',       icon:'🔄' },
   // ── CRV ──
   { id:'valida-crv',         name:'Valida CRV',                 group:'CRV', basePrice:0.00,  inputType:'valida_crv', icon:'✅' },
-  // API despbrasil.com.br (serviço "codigo_seguranca") — segunda fonte para Código de
-  // Segurança CRV (ver DESPBRASIL_SVCS).
-  { id:'security-code-vistocar', name:'Consulta 2 Código Segurança CRV (PDF)', group:'CRV', basePrice:7.99, noMarkup:true, inputType:'placa', icon:'🔐' },
-  // API Vistocar (vistocarconsulta.com.br) — terceira fonte para Código de Segurança
+  // O "Consulta 2 Código Segurança CRV (PDF)" (security-code-vistocar, pela
+  // despbrasil) saiu do catálogo em 10/09/2026: o serviço "codigo_seguranca"
+  // deles responde "Não foi possível consultar o código de segurança no
+  // momento" para qualquer placa, em v1 e v2 — conferido com duas placas, e com
+  // outro serviço da MESMA chave funcionando, o que descarta chave e placa.
+  // A despbrasil continua como fonte de fallback do consultar-Numero-ATPVE
+  // (ver fetchCodigoSegurancaCrvFields), por isso a entrada segue em
+  // DESPBRASIL_SVCS mesmo sem serviço no catálogo.
+  // API Vistocar (vistocarconsulta.com.br) — segunda fonte para Código de Segurança
   // CRV, resposta em JSON com PDF pronto em base64 (ver VISTOCAR_ENDPOINTS).
   { id:'security-code-vistocar-2', name:'Consulta 3 Código Segurança CRV (PDF)', group:'CRV', basePrice:8.10, noMarkup:true, inputType:'placa', icon:'🔐' },
   // API despbrasil.com.br pelo serviço "consulta_generica" — o nome do produto
@@ -4044,8 +4048,10 @@ async function buildNumeroAtpvePdfBuffer(service, fields, params, { withSelos = 
 // mesmo com a consulta feita e paga na Vistocar — e repetir a chamada não
 // adianta, a mesma placa devolve o raster de novo. Por isso, quando o PDF da
 // Vistocar não rende o código, buscamos o mesmo documento na despbrasil
-// (serviço "codigo_seguranca", o do "Consulta 2 Código Segurança CRV"), que só
-// entrega o formato com texto. A segunda chamada só acontece nesse caso.
+// (serviço "codigo_seguranca"), que só entrega o formato com texto. A segunda
+// chamada só acontece nesse caso. Atenção: essa rota da despbrasil está fora
+// do ar desde 10/09/2026, então hoje o fallback não salva nada — quando o PDF
+// da Vistocar vier rasterizado, o campo sai vazio.
 async function fetchCodigoSegurancaPdfVistocar(placa) {
   const r = await fetch(`${VISTOCAR_BASE_URL}/apiclient/security-code`, {
     method: 'POST',
