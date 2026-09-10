@@ -378,7 +378,7 @@
     <section id="section-api-keys" class="admin-section hidden space-y-4">
       <div>
         <h2 class="text-xl font-bold text-gray-800">Chaves de API</h2>
-        <p class="text-sm text-gray-500">Gere chaves para clientes externos consumirem a API (/api/v1). Chave vinculada a um cliente debita do saldo dele: R$ 5,00 fixo nos 2 endpoints DETRAN/MG (Intenção de Venda e ATPV-e), R$ 28,00 fixo em CRLV 2 Rio Reemissão, ou o preço normal do catálogo em cada serviço do "Nova Consulta" (ver Integração API no painel do cliente). Chave Geral só funciona nesses 3 endpoints fixos (DETRAN/MG e CRLV 2 Rio Reemissão).</p>
+        <p class="text-sm text-gray-500">Gere chaves para clientes externos consumirem a API (/api/v1). Chave vinculada a um cliente debita do saldo dele: R$ 28,00 fixo em CRLV 2 Rio Reemissão, ou o preço normal do catálogo em cada serviço do "Nova Consulta" (ver Integração API no painel do cliente). Chave Geral só funciona nesse endpoint fixos (DETRAN/MG e CRLV 2 Rio Reemissão).</p>
       </div>
 
       <div class="card space-y-4">
@@ -1147,11 +1147,9 @@ async function verificarApiCharge(id) {
 
 // ── Consultas Avulsas ───────────────────────────────────────────────────────
 const AVULSA_SERVICE_NAMES = {
+  // 'is-detran-mg-atpve' não é mais vendido, mas o rótulo fica: há pedidos
+  // antigos em public_orders e sem ele o admin mostraria o id cru na tela.
   'is-detran-mg-atpve':              'ATPV-e MG',
-  'is-detran-mg-reg-intencao-venda': 'Intenção de Venda MG',
-  'atpve-mg':                        'ATPV-e MG — Cadastrar (API)',
-  'atpve-sp':                        'ATPV-e SP — Cadastrar (API)',
-  'atpve-ms':                        'ATPV-e MS — Cadastrar (API)',
   'crlv-rj-reemissao-2':             'CRLV 2 Rio Reemissão',
 };
 const AVULSA_STATUS_BADGES = {

@@ -740,19 +740,6 @@ const SERVICES = [
   { id:'crv-antigo-se', name:'Consulta CRV antigo SE', group:'Número CRV (Apenas antigos)', basePrice:448.00, inputType:'placa', icon:'📁', uf:'se', noMarkup:true, slowNote:'Atenção: esta consulta pode levar de 3 a 5 dias para a entrega do documento.' },
   { id:'crv-antigo-to', name:'Consulta CRV antigo TO', group:'Número CRV (Apenas antigos)', basePrice:350.00, inputType:'placa', icon:'📁', uf:'to', noMarkup:true, slowNote:'Atenção: esta consulta pode levar de 3 a 5 dias para a entrega do documento.' },
   { id:'crv-antigo-sc', name:'Consulta CRV antigo SC', group:'Número CRV (Apenas antigos)', basePrice:600.00, inputType:'placa', icon:'📁', uf:'sc', noMarkup:true, slowNote:'Atenção: esta consulta pode levar de 3 a 5 dias para a entrega do documento.' },
-  // ── Intenção de Venda (ATPVE) — REMOVIDA POR COMPLETO ─────────────────────
-  // Os 4 serviços (intencao-venda-rj/sp/ms/mg) e TODO o fluxo que os atendia
-  // saíram do código na migração para o portaldespachantes.online: o ATPV-e era
-  // exclusivo da API anterior (api/atpve-<uf>/...) e o portal não expõe rota
-  // equivalente. Foram removidos junto: as rotas de ação de "Meus ATPV-e"
-  // (Atualizar/Registrar/Alterar/Excluir), o cron de pendências, a conferência
-  // da intenção de venda com estorno e as rotas /api/v1/atpve-<uf>/* da API
-  // externa.
-  //
-  // As tabelas (atpve_verificacoes, intencao_venda_files) e as consultas já
-  // gravadas continuam no banco — são histórico, ninguém as lê mais.
-  // Reativar exige um fornecedor com API de ATPV-e; não é só devolver linhas
-  // ao catálogo.
 ];
 
 // Serviços desta categoria não retornam resultado na hora: o pedido fica
@@ -1168,33 +1155,6 @@ async function initDB() {
     );
   `);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS intencao_venda_files (
-      id         SERIAL PRIMARY KEY,
-      query_id   INTEGER UNIQUE REFERENCES queries(id) ON DELETE CASCADE,
-      files      JSONB NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-  // HISTÓRICO: conferia se o DETRAN registrou a intenção de venda depois que o
-  // ATPV-e saía, estornando quem pagou e não teve a restrição aplicada. O fluxo
-  // de ATPV-e foi removido na migração para o portaldespachantes.online e nada
-  // mais escreve nem lê esta tabela; ela permanece só para não perder o
-  // histórico das conferências já feitas.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS atpve_verificacoes (
-      id            SERIAL PRIMARY KEY,
-      query_id      INTEGER UNIQUE NOT NULL REFERENCES queries(id) ON DELETE CASCADE,
-      uf            VARCHAR(2) NOT NULL,
-      placa         VARCHAR(10) NOT NULL,
-      concluida_em  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      verificada_em TIMESTAMPTZ,
-      tentativas    INTEGER NOT NULL DEFAULT 0,
-      resultado     VARCHAR(20),
-      estornado     BOOLEAN NOT NULL DEFAULT false,
-      detalhe       TEXT
-    );
-  `);
-  await pool.query(`
     CREATE TABLE IF NOT EXISTS query_messages (
       id         SERIAL PRIMARY KEY,
       query_id   INTEGER REFERENCES queries(id) ON DELETE CASCADE,
@@ -1290,11 +1250,11 @@ function ensureDbReady() {
 }
 
 // ── Middlewares ──────────────────────────────────────────────────────────────
-// Limite elevado para acomodar o envio de Intenção de Venda (4 documentos em base64
-// numa única requisição — fotos de RG/CNH tiradas do celular somam bem mais que 1 PDF).
+// Limite elevado para acomodar requisições com documentos em base64 (fotos de
+// RG/CNH tiradas do celular somam bem mais que 1 PDF).
 // verify: a assinatura do webhook da Vistocar é calculada sobre o corpo BRUTO
 // (bytes recebidos, antes do parse), então guardamos o buffer só nessa rota —
-// manter a cópia em todas encareceria os envios de 50 MB da Intenção de Venda.
+// manter a cópia em todas encareceria as requisições grandes.
 app.use(express.json({
   limit: '50mb',
   verify: (req, res, buf) => {
@@ -1974,11 +1934,9 @@ app.get('/api/queries', requireAuth, async (req, res) => {
     const r = await pool.query(
       `SELECT q.id, q.service_id, q.service_name, q.params, q.status, q.amount,
               q.result_type, q.created_at,
-              -- ATPV-e é cobrado no cadastro e só depois sai do 'aguardando_pdf':
-              -- o status não diz mais se houve débito, o transaction_id sim.
+              -- Há consulta que fica 'aguardando_pdf' já cobrada: o status não
+              -- diz se houve débito, o transaction_id sim.
               (q.transaction_id IS NOT NULL) AS cobrada,
-              CASE WHEN q.service_id IN ('intencao-venda-rj','intencao-venda-sp','intencao-venda-ms','intencao-venda-mg')
-                   THEN q.result_data ELSE NULL END AS atpve_meta,
               CASE WHEN q.service_id = 'inserir-comunicacao-venda'
                    THEN q.result_data ELSE NULL END AS comunicacao_venda_meta,
               pc.token      AS pdf_token,
@@ -5379,8 +5337,8 @@ async function getUserServicePrice(userId, service) {
 }
 
 // Estorna os créditos de uma consulta que foi cobrada mas nunca entregou o
-// resultado (ex.: PDF assíncrono — CRLV-e Agendado / Intenção de Venda com
-// verificação extra — que nunca ficou pronto dentro do prazo). Idempotente:
+// resultado (ex.: PDF assíncrono do CRLV-e Agendado que nunca ficou pronto
+// dentro do prazo). Idempotente:
 // o guard "status <> 'estornado'" no UPDATE garante que só credita de volta
 // uma vez mesmo se o cron rodar em cima da mesma query mais de uma vez.
 async function refundQuery(queryId, userId, amount, reason) {
@@ -7224,8 +7182,7 @@ app.post('/api/query', requireAuth, (req, res) =>
 // Grupos/serviços do catálogo "Nova Consulta" fora do alcance da API de chave
 // (/api/v1): os serviços "manuais" (upload de PDF pelo super admin) não
 // respondem na hora — não há hoje uma rota de API para o cliente buscar esse
-// resultado depois. "Intenção de Venda (ATPVE)" já é 100% automatizado (RJ/SP/MS
-// via portal, MG via Infosimples) e por isso está liberado pela API.
+// resultado depois.
 const V1_EXCLUDED_GROUPS = [];
 function isV1Eligible(serviceId) {
   const svc = SERVICES.find(s => s.id === serviceId);
@@ -10797,7 +10754,6 @@ const BROADCAST_CAMPANHAS = [
 ✅ Faça Recarga via PIX no valor que quiser.
 🔎 Nossos Serviços:
 🛑Agora temos consulta ATPVe com comunicação de venda, Saindo na hora
-🛑Agora temos Intenção de venda para os seguintes Estados, RJ, SP, MG e MS
 🛑Numero do CRV Antigo, dos Estados: RJ, SP, MG, CE, ES, BA, RN, PE, PB, e outros, total de 21 Estados veja em seu painel🛑
 ✅ Sem mensalidade. Pague só pelo que usar.
 👉 https://www.despachantesconsultas.com.br`,
@@ -11165,8 +11121,6 @@ Olá! 🚗💨 Confira nossa tabela atualizada de serviços e consultas veicular
 
 ✅ Reemissão ATPV-e: R$ 18,90 (Placa + Renavam ou Chassi)
 
-✅ Intenção de Venda (RJ, SP, MS, MG): R$ 60,00 a R$ 70,00
-
 ✅ Inserir Comunicação de Venda: R$ 32,90
 
 ✅ Transmitir / Desbloquear Comunicação: R$ 7,00
@@ -11458,8 +11412,8 @@ async function checkCrlvAgendadoStatus(pedidoId) {
   return { podeBaixar, pdfPath, placa, uf };
 }
 
-// Prazo máximo que um pedido assíncrono (CRLV-e Agendado, Intenção de Venda em
-// verificação extra) fica pendente antes do cron desistir e estornar
+// Prazo máximo que um pedido assíncrono (CRLV-e Agendado) fica pendente antes
+// do cron desistir e estornar
 // automaticamente os créditos — nunca fica cobrado para sempre sem o documento.
 const ASYNC_PDF_REFUND_HOURS = 48;
 
