@@ -409,6 +409,12 @@ const SERVICES = [
   // Localização CPF V3 — também movida da Opção 2 (grupo Cadastros), mesmo relatório
   // em PDF da Localização CPF acima (buildLocalizacaoCpfPdfBuffer), valor fixo R$8,00.
   { id:'dc-cadastro-localizacao-v3',      name:'Localização CPF V3',           group:'Débitos e Documentação', basePrice:8.00, noMarkup:true, inputType:'dc_cpf', icon:'📍', dcPath:'/pessoas/localizacao_v3' },
+  // CNH Consulta Nacional - Completa V3 — API Datacube (POST form-urlencoded
+  // com auth_token + cpf, doc de 10/09/2026). Diferente das dc-cnh-<uf>, que
+  // pedem dados extras por estado, esta resolve só com o CPF — por isso usa o
+  // inputType 'dc_cpf' e o case de mesmo nome no switch da CNH. Resposta JSON
+  // (status + result), sem PDF. Valor fixo de R$ 12,00 (noMarkup).
+  { id:'dc-cnh-nacional-v3',              name:'CNH Consulta Nacional - Completa V3', group:'Débitos e Documentação', basePrice:12.00, noMarkup:true, inputType:'dc_cpf', icon:'🪪', dcPath:'/cnh/nacional_completa_v3' },
   // API Vistocar (vistocarconsulta.com.br) — auth JWT (ver VISTOCAR_ENDPOINTS);
   // devolve um relatório JSON com a
   // lista de débitos (multas, IPVA etc.) já com código de barras/linha digitável do
@@ -6467,6 +6473,15 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           if (!data_nascimento) return res.status(400).json({ error: 'Data de nascimento é obrigatória.' });
           form.set('cpf', cpf);
           form.set('data_nascimento', data_nascimento);
+          break;
+        }
+        // Só CPF (Consulta Nacional - Completa V3). Reaproveita o inputType
+        // 'dc_cpf' que o painel já sabe desenhar e ler, em vez de criar um
+        // tipo novo só para isto.
+        case 'dc_cpf': {
+          const cpf = (params?.cpf || '').replace(/\D/g, '');
+          if (cpf.length !== 11) return res.status(400).json({ error: 'CPF inválido. Deve ter 11 dígitos.' });
+          form.set('cpf', cpf);
           break;
         }
         default:
