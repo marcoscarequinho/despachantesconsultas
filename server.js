@@ -115,6 +115,10 @@ const DESPBRASIL_SVCS = {
   // (ver o spread de `extra` em processCatalogQuery); sem ele a API responde
   // pela versão antiga.
   'security-code-vistocar':     { servico: 'codigo_seguranca', extra: { versao: 'v2' } },
+  // "consulta_generica": o serviço em si vem em nome_servico, dentro do corpo.
+  // `arquivo` só existe para o PDF do WhatsApp não sair como
+  // "consulta_generica-ABC1D23.pdf" na mão do cliente.
+  'numero-crv-digital': { servico: 'consulta_generica', extra: { nome_servico: 'Número do CRV Digital' }, arquivo: 'numero-crv-digital' },
   'verificar-crlv':    { servico: 'verificar_crlv' },
   'consulta-renavam':  { servico: 'consulta_renavam' },
   'consultar-Numero-ATPVE': { servico: 'numero_atpve' },
@@ -588,6 +592,11 @@ const SERVICES = [
   // API Vistocar (vistocarconsulta.com.br) — terceira fonte para Código de Segurança
   // CRV, resposta em JSON com PDF pronto em base64 (ver VISTOCAR_ENDPOINTS).
   { id:'security-code-vistocar-2', name:'Consulta 3 Código Segurança CRV (PDF)', group:'CRV', basePrice:8.10, noMarkup:true, inputType:'placa', icon:'🔐' },
+  // API despbrasil.com.br pelo serviço "consulta_generica" — o nome do produto
+  // vai no corpo em "nome_servico" (ver DESPBRASIL_SVCS). basePrice = o custo
+  // cobrado por eles (R$ 10,00) e SEM noMarkup, então o cliente paga os 40% de
+  // markup padrão: R$ 14,00.
+  { id:'numero-crv-digital', name:'Número do CRV Digital', group:'CRV', basePrice:10.00, inputType:'placa', icon:'🔢' },
   // ── Análise de Crédito ──
   { id:'consultar-spc', name:'Consulta SPC/Crédito', group:'Análise de Crédito', basePrice:15.00, inputType:'cpfcnpj', icon:'📊' },
   // ── Óbito ──
@@ -7042,7 +7051,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         if (DESPBRASIL_SVCS[serviceId] && user.phone) {
           const placa = (params?.placa || '').toUpperCase();
           const caption = `✅ *${service.name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
-          const fileName = `${DESPBRASIL_SVCS[serviceId].servico}-${placa || 'doc'}.pdf`;
+          const fileName = `${DESPBRASIL_SVCS[serviceId].arquivo || DESPBRASIL_SVCS[serviceId].servico}-${placa || 'doc'}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
         }
         // Envia PDF via WhatsApp para os CRLV-e do portal cujo id não começa
