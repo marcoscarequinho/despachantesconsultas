@@ -16,8 +16,6 @@ const { PDFDocument: PDFLibDocument, StandardFonts: PDFLibStandardFonts, rgb } =
 const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-inseguro';
-const CHAVE_ACESSO = process.env.CHAVE_ACESSO || '';
-const BASE_API_URL = 'https://chekaki.online';
 const MARKUP = 1.40;
 // Grupos do catálogo que são gratuitos para o usuário: preço sempre R$ 0,00,
 // independentemente do basePrice e de qualquer preço fixo cadastrado em
@@ -78,30 +76,19 @@ const PORTAL_BASE_URL = 'https://portaldespachantes.online';
 const CRLV_PORTAL_PDF_SVCS = new Set([
   'crlv-rj-reemissao-2', 'crlv-pe-instantaneo', 'crlv-ce-instantaneo',
 ]);
-// CRLV-e Agendado servido pelo portaldespachantes.online em vez do chekaki (doc
-// "Documentação de Integração — 2 endpoints", 24/08/2026). Mesmo contrato dos
-// demais agendados (POST /api/crlv-agendado/solicitar → pedido_id; GET
-// /api/crlv-agendado/:id → status; GET .../:id/pdf), só muda o host e a chave.
+// CRLV-e Agendado: POST /api/crlv-agendado/solicitar → pedido_id; GET
+// /api/crlv-agendado/:id → status; GET .../:id/pdf. Todos no portal.
 //
-// O pedido_id volta como número simples, igual ao do chekaki, e o serviço "Ver
-// Status" recebe só esse número digitado pelo cliente — sem marca não dá para
-// saber a quem perguntar. Por isso ele é guardado e mostrado com prefixo, mesma
-// convenção já usada no "AUTOCRLV-" (ver checkCrlvAgendadoStatus).
-//
-// HOJE A LISTA ESTÁ VAZIA: o CE, único que usava esse fluxo, foi removido do
-// catálogo e ficou só a emissão na hora (crlv-ce-instantaneo). O caminho segue de
-// pé porque ainda pode haver pedido PORTAL- em crlv_agendado_pending esperando o
-// documento — e religar uma UF volta a ser só acrescentar o id aqui.
-const PORTAL_AGENDADO_SVCS = new Set();
+// O prefixo PORTAL- é histórico: quando o agendado existia em dois hosts, o
+// pedido_id vinha como número simples nos dois e o "Ver Status" recebe só esse
+// número digitado pelo cliente — sem marca não dava para saber a quem
+// perguntar. Continua sendo aceito e removido antes de consultar, porque há
+// pedidos gravados com ele (mesma convenção do "AUTOCRLV-", ver
+// checkCrlvAgendadoStatus).
 const PORTAL_PEDIDO_PREFIX = 'PORTAL-';
-// "Solicitar" do CRLV-e Agendado: os crlv-agendado-<uf> do chekaki mais o CE do
-// portal. O "Ver Status" é outro fluxo e fica de fora.
+// "Solicitar" do CRLV-e Agendado. O "Ver Status" é outro fluxo e fica de fora.
 const isAgendadoSolicitar = id =>
-  (id.startsWith('crlv-agendado-') && id !== 'crlv-agendado-status') || PORTAL_AGENDADO_SVCS.has(id);
-const agendadoBaseUrl = id => (PORTAL_AGENDADO_SVCS.has(id) ? PORTAL_BASE_URL : BASE_API_URL);
-// Host de um pedido já criado, a partir do id que o cliente tem em mãos.
-const agendadoHostDoPedido = pedidoId =>
-  String(pedidoId).trim().startsWith(PORTAL_PEDIDO_PREFIX) ? PORTAL_BASE_URL : BASE_API_URL;
+  id.startsWith('crlv-agendado-') && id !== 'crlv-agendado-status';
 const DATACUBE_API_URL = 'https://api.consultasdeveiculos.com';
 const DATACUBE_TOKEN   = process.env.DATACUBE_TOKEN || '';
 const INFOSIMPLES_API_URL = 'https://api.infosimples.com/api/v2/consultas';
@@ -147,7 +134,7 @@ const VISTOCAR_ENDPOINTS = {
 // pdfBase64 dos demais e só são cobrados na entrega (ver finalizePendingQuery).
 //
 // HOJE A LISTA ESTÁ VAZIA: o CE, único que usava esse fluxo, passou para o CRLV-e
-// Agendado do portaldespachantes.online (ver PORTAL_AGENDADO_SVCS). O webhook e a
+// Agendado do portaldespachantes.online. O webhook e a
 // entrega continuam de pé de propósito — ainda existem pedidos antigos em
 // vistocar_pending para entregar, e habilitar outra UF volta a ser só: rota em
 // VISTOCAR_ENDPOINTS + serviço em SERVICES + id aqui.
@@ -378,11 +365,9 @@ const SERVICES = [
   { id:'consulta-cautelar',      name:'Consulta Cautelar VIP GOLD', group:'Consultas Básicas', basePrice:19.99,  inputType:'placa',       icon:'🔍' },
   { id:'consultar-autovistoria', name:'Auto Quilometragem',         group:'Consultas Básicas', basePrice:7.50,   inputType:'placa',       icon:'⚡' },
   { id:'consultar-placa-v2',     name:'Proprietário Atual (v2)',    group:'Consultas Básicas', basePrice:7.50,   inputType:'placa',       icon:'🔍' },
-  { id:'consultar-placa-v3',     name:'Consulta Placa v3',          group:'Consultas Básicas', basePrice:7.50,   inputType:'placa_uf',    icon:'🔍' },
   { id:'consultar-placa-fipe',   name:'Consulta FIPE',              group:'Consultas Básicas', basePrice:0.00,   inputType:'placa',       icon:'💰' },
   { id:'consultar-foto-leilao',  name:'Foto Leilão',                group:'Consultas Básicas', basePrice:10.00,  inputType:'placa',       icon:'📸' },
   { id:'consultar-chassi-v2',    name:'Consulta Chassi',            group:'Consultas Básicas', basePrice:7.50,   inputType:'chassi',      icon:'🔑' },
-  { id:'consultar-cnh',          name:'Consultar CNH',              group:'Consultas Básicas', basePrice:11.43,  inputType:'cpfcnpj',     icon:'🪪' },
   // API Datacube (form-urlencoded) — valor fixo de R$3,00, ver bloco dc-decodificar-motor em /api/query.
   { id:'dc-decodificar-motor',   name:'Decodificação de Motor',     group:'Consultas Básicas', basePrice:3.00,   noMarkup:true, inputType:'motor', icon:'🔧', dcPath:'/veiculos/decodificar-motor' },
   // API despbrasil.com.br (serviço "verificar_crlv") — ver DESPBRASIL_SVCS.
@@ -399,8 +384,8 @@ const SERVICES = [
   { id:'consultar-atpve-v1',             name:'Reemissão ATPV-e (Placa)',     group:'Débitos e Documentação', basePrice:13.50, inputType:'placa_renavam', icon:'📄' },
   // Preço reajustado (era R$25,00 base / R$35,00 final, depois R$99,00): a
   // consulta encadeia mais TRÊS consultas pagas (Proprietário Atual v2 via
-  // Chekaki, Consulta 3 Código Segurança CRV via Vistocar e Consulta Comunicado
-  // via Chekaki) pra completar os campos que a despbrasil não retorna ou
+  // portal, Consulta 3 Código Segurança CRV via Vistocar e Consulta Comunicado
+  // via portal) pra completar os campos que a despbrasil não retorna ou
   // retorna errado — ver runNumeroAtpveSupplementaryQueries. Preço fixo
   // (noMarkup) cobrindo o custo das 4 consultas + margem.
   { id:'consultar-Numero-ATPVE',          name:'Reemissão da ATPVe Com Comunicação de Venda', group:'Débitos e Documentação', basePrice:120.00, noMarkup:true, inputType:'placa', icon:'🔢',
@@ -543,12 +528,12 @@ const SERVICES = [
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
-  // Único CRLV-e Digital que NÃO fala com a Chekaki: hoje é o
-  // portaldespachantes.online (POST /consultar-crlv-ba com { placa }, PDF pronto
-  // em bytes — doc "Documentação de Integração — 1 endpoint", 26/08/2026, ver
-  // PORTAL_PLACA_MAP). Só placa: o renavam e o CPF que a Chekaki exigia saíram, e
-  // com eles o problema do proprietário pessoa jurídica (a rota da Chekaki tinha
-  // um campo "cpf" só e recusava CNPJ). No meio do caminho passou pela Vistocar
+  // Único CRLV-e Digital com rota mapeada à mão em PORTAL_PLACA_MAP em vez do
+  // caminho padrão (POST /consultar-crlv-ba com { placa }, PDF pronto em bytes
+  // — doc "Documentação de Integração — 1 endpoint", 26/08/2026). Só placa: o
+  // renavam e o CPF que o fornecedor anterior exigia saíram, e com eles o
+  // problema do proprietário pessoa jurídica (aquela rota tinha um campo "cpf"
+  // só e recusava CNPJ). No meio do caminho passou pela Vistocar
   // (apiclient/crlv-ba), que respondia "Erro interno. Saldo estornado." em toda
   // chamada — inclusive sem placa nenhuma —, então nunca chegou a emitir.
   // Preço fixo (noMarkup) definido pelo cliente, como no PE e no CE do portal.
@@ -568,12 +553,11 @@ const SERVICES = [
   // Agendado Pernambuco (PE)", que foi removido. Saiu da Vistocar e hoje é o
   // portaldespachantes.online (POST /consultar-crlv-pe com { placa }, PDF pronto
   // em bytes — ver PORTAL_PLACA_MAP). Só placa: não pede renavam/CPF como os
-  // CRLV-e Digital da Chekaki. Preço fixo (noMarkup) definido pelo cliente.
+  // demais CRLV-e Digital. Preço fixo (noMarkup) definido pelo cliente.
   { id:'crlv-pe-instantaneo', name:'CRLV-e Emissão Instantânea Pernambuco (PE)', group:'CRLV-e Digital', basePrice:35.00, noMarkup:true, inputType:'placa', icon:'⚡', uf:'pe' },
   { id:'consultar-crlv-pi', name:'CRLV-e Piauí (PI)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-pr', name:'CRLV-e Paraná (PR)',             group:'CRLV-e Digital', basePrice:15.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ro', name:'CRLV-e Rondônia (RO)',           group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
-  { id:'consultar-crlv-rr', name:'CRLV-e Roraima (RR)',            group:'CRLV-e Digital', basePrice:30.00, inputType:'placa_renavam_cpf', icon:'📄' },
   // API Datacube (assíncrona, ver bloco dc-crlve-rs-v2 em /api/query) — só placa.
   { id:'dc-crlve-rs-v2',    name:'CRLV-e Rio Grande do Sul V2 (RS)', group:'CRLV-e Digital', basePrice:162.00, noMarkup:true, inputType:'placa', icon:'📄', dcPath:'/veiculos/documentos-crlve-rs-v2',
     slowNote:'Emissão assíncrona no Detran-RS: a consulta pode levar alguns minutos — mantenha a página aberta até o download do PDF.' },
@@ -593,7 +577,6 @@ const SERVICES = [
   { id:'crlv-agendado-sc', name:'CRLV-e Agendado Santa Catarina (SC)',     group:'CRLV-e Agendado', basePrice:60.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'sc' },
   { id:'crlv-agendado-status', name:'CRLV Agendado — Ver Status',          group:'CRLV-e Agendado', basePrice:0.00,   inputType:'pedido_id_get',       icon:'🔄' },
   // ── CRV ──
-  { id:'consultar-placa-crv',name:'Placa + CRV (JSON+PDF)',     group:'CRV', basePrice:10.50, inputType:'placa',      icon:'🔐' },
   { id:'valida-crv',         name:'Valida CRV',                 group:'CRV', basePrice:0.00,  inputType:'valida_crv', icon:'✅' },
   // API despbrasil.com.br (serviço "codigo_seguranca") — segunda fonte para Código de
   // Segurança CRV (ver DESPBRASIL_SVCS).
@@ -734,31 +717,32 @@ const SERVICES = [
   { id:'crv-antigo-se', name:'Consulta CRV antigo SE', group:'Número CRV (Apenas antigos)', basePrice:448.00, inputType:'placa', icon:'📁', uf:'se', noMarkup:true, slowNote:'Atenção: esta consulta pode levar de 3 a 5 dias para a entrega do documento.' },
   { id:'crv-antigo-to', name:'Consulta CRV antigo TO', group:'Número CRV (Apenas antigos)', basePrice:350.00, inputType:'placa', icon:'📁', uf:'to', noMarkup:true, slowNote:'Atenção: esta consulta pode levar de 3 a 5 dias para a entrega do documento.' },
   { id:'crv-antigo-sc', name:'Consulta CRV antigo SC', group:'Número CRV (Apenas antigos)', basePrice:600.00, inputType:'placa', icon:'📁', uf:'sc', noMarkup:true, slowNote:'Atenção: esta consulta pode levar de 3 a 5 dias para a entrega do documento.' },
-  // ── Intenção de Venda (ATPVE) — RETIRADA DO CATÁLOGO ──────────────────────
-  // Os 4 serviços (intencao-venda-rj/sp/ms/mg) saíram daqui: sem entrada no
-  // SERVICES, processCatalogQuery devolve "serviço não encontrado" e nenhuma
-  // emissão nova acontece, nem pelo painel (/api/query) nem por chave de API
-  // (/api/v1/:serviceId). Cadastravam e emitiam o ATPV-e num passo só na
-  // Chekaki (api/atpve-<uf>/cadastrar).
+  // ── Intenção de Venda (ATPVE) — REMOVIDA POR COMPLETO ─────────────────────
+  // Os 4 serviços (intencao-venda-rj/sp/ms/mg) e TODO o fluxo que os atendia
+  // saíram do código na migração para o portaldespachantes.online: o ATPV-e era
+  // exclusivo da API anterior (api/atpve-<uf>/...) e o portal não expõe rota
+  // equivalente. Foram removidos junto: as rotas de ação de "Meus ATPV-e"
+  // (Atualizar/Registrar/Alterar/Excluir), o cron de pendências, a conferência
+  // da intenção de venda com estorno e as rotas /api/v1/atpve-<uf>/* da API
+  // externa.
   //
-  // O que fica de pé de propósito, porque atende pedido JÁ PAGO:
-  //   - ATPVE_UFS e as rotas /api/queries/:id/atpve-<uf>-* (Atualizar,
-  //     Registrar, Alterar, Excluir) da aba "Meus ATPV-e";
-  //   - runAtpvePendingCheck, que busca por service_id literal e entrega os
-  //     pedidos em aguardando_pdf;
-  //   - runAtpveIntencaoVendaCheck/atpve_verificacoes, que confere a restrição
-  //     no Detran e estorna quem não recebeu.
-  // Nada disso consulta o catálogo, então sobrevive à retirada. Para reativar,
-  // basta devolver as 4 linhas abaixo (preços: RJ 70,00 e SP/MS/MG 60,00).
+  // As tabelas (atpve_verificacoes, intencao_venda_files) e as consultas já
+  // gravadas continuam no banco — são histórico, ninguém as lê mais.
+  // Reativar exige um fornecedor com API de ATPV-e; não é só devolver linhas
+  // ao catálogo.
 ];
 
 // Serviços desta categoria não retornam resultado na hora: o pedido fica
 // pendente até o super admin subir o PDF manualmente (ver /api/admin/manual-queries).
 const MANUAL_UPLOAD_GROUP = 'Número CRV (Apenas antigos)';
+// Os serviços deste grupo não falam com fornecedor nenhum: processCatalogQuery
+// debita, grava o pedido como 'pendente' e retorna — o documento é entregue
+// depois, por upload do admin (ver /api/admin/manual-queries). Por isso a troca
+// de fornecedor não os afeta.
 const MANUAL_SERVICE_IDS  = SERVICES.filter(s => s.group === MANUAL_UPLOAD_GROUP).map(s => s.id);
 
 // ── SERVICES_V2 — API Datacube (api.consultasdeveiculos.com) ──────────────────
-// Catálogo completamente separado do SERVICES/autocrlv/chekaki acima. Preços em
+// Catálogo completamente separado do SERVICES/autocrlv/portal acima. Preços em
 // basePrice são o custo cobrado pela Datacube na faixa "De 0 - 10.000" da tabela
 // de valores; o preço final ao cliente aplica o mesmo MARKUP (40%) do restante
 // do sistema, exceto quando noMarkup:true. Exposto no painel na aba "Opção 2 Nova
@@ -849,7 +833,7 @@ const SERVICES_V2 = [
 // cliente aplica INFOSIMPLES_MARKUP (70%). Exposto no painel na aba
 // "Infosimples Nova Consulta" (rota /api/query-v3). Catálogo isolado de
 // SERVICES/SERVICES_V2 — nunca toca em MANUAL_SERVICE_IDS nem nas integrações
-// chekaki/autocrlv/Datacube.
+// portal/autocrlv/Datacube.
 const SERVICES_V3 = require('./data/infosimples-services.json');
 
 // Conexão com o banco Neon
@@ -1168,11 +1152,11 @@ async function initDB() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
-  // Conferência da intenção de venda depois que o ATPV-e fica pronto: o
-  // documento pode sair e mesmo assim o DETRAN não registrar a restrição no
-  // veículo, e aí o cliente pagou por algo que não valeu. Uma linha por pedido
-  // concluído (query_id UNIQUE), conferida pelo cron ATPVE_VERIFICACAO_HORAS
-  // depois — ver runAtpveIntencaoVendaCheck.
+  // HISTÓRICO: conferia se o DETRAN registrou a intenção de venda depois que o
+  // ATPV-e saía, estornando quem pagou e não teve a restrição aplicada. O fluxo
+  // de ATPV-e foi removido na migração para o portaldespachantes.online e nada
+  // mais escreve nem lê esta tabela; ela permanece só para não perder o
+  // histórico das conferências já feitas.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atpve_verificacoes (
       id            SERIAL PRIMARY KEY,
@@ -1987,8 +1971,8 @@ app.get('/api/queries', requireAuth, async (req, res) => {
     );
 
     // Sincroniza silenciosamente comunicações de venda que já têm um
-    // "comunicacao_id" vinculado com o status atual na Chekaki — cobre dois
-    // casos de ação feita direto no site da Chekaki (fora dos botões deste
+    // "comunicacao_id" vinculado com o status atual no portal — cobre dois
+    // casos de ação feita direto no site do portal (fora dos botões deste
     // painel), que sem isso ficariam com o status errado para sempre:
     // 1) transmitida direto lá ("Importado" preso mesmo já "comunicado");
     // 2) cancelada direto lá pelo Portal deles ("Comunicado" preso mesmo já
@@ -2056,322 +2040,6 @@ app.get('/api/queries/:id/result', requireAuth, async (req, res) => {
   }
 });
 
-// Estados suportados pelo fluxo automático de Intenção de Venda (ATPVE) via
-// Chekaki — cada um mapeia para /api/atpve-<uf>/... e service_id 'intencao-venda-<uf>'.
-const ATPVE_UFS = ['rj', 'sp', 'ms', 'mg'];
-
-// Monta e normaliza o payload de um pedido ATPV-e no formato que a Chekaki
-// espera (campos planos em snake_case; a Chekaki converte para a estrutura
-// aninhada do LAUDOCAR internamente). Compartilhado pelo cadastro
-// (processCatalogQuery → POST /api/atpve-<uf>/cadastrar) e pelo botão "Alterar"
-// (POST /api/atpve-<uf>/:id/alterar) — os dois mandam o pedido inteiro, então
-// manter um único builder evita que os fluxos divirjam na normalização.
-const ATPVE_CADASTRO_REQUIRED = [
-  'placa', 'renavam', 'ano_fabricacao', 'ano_modelo', 'chassi', 'kilometragem',
-  'crv_numero', 'crv_numero_via', 'crv_uf_emissao', 'crv_data_emissao',
-  'vendedor_tipo_pessoa', 'vendedor_documento', 'vendedor_nome', 'vendedor_email',
-  'venda_cidade', 'venda_valor', 'venda_data',
-  'comprador_tipo_pessoa', 'comprador_documento', 'comprador_nome', 'comprador_email',
-  'comprador_cep', 'comprador_logradouro', 'comprador_numero',
-  'comprador_bairro', 'comprador_cidade', 'comprador_uf',
-];
-
-// Anexos em Base64 do /cadastrar (documentação de integração ATPV-e SP de
-// 18/08/2026): o pedido pode carregar os documentos digitalizados junto do
-// cadastro. Opcionais aqui — quem exige (e quando) é o DETRAN via Chekaki, que
-// responde 400 com a mensagem pedindo o anexo faltante; enviar sempre o que o
-// usuário tiver evita esse retrabalho. Pessoa jurídica troca a CNH pela CNH do
-// representante (…_cnh_representante_pdf_base64), conforme a documentação.
-const ATPVE_ANEXO_FIELDS = [
-  'crlve_pdf_base64',
-  'vendedor_cnh_pdf_base64',
-  'vendedor_cnh_representante_pdf_base64',
-  'vendedor_comprovante_base64',
-  'comprador_cnh_pdf_base64',
-  'comprador_cnh_representante_pdf_base64',
-  'comprador_comprovante_base64',
-];
-
-// Teto por anexo (~7 MB de arquivo). A Chekaki não documenta limite, mas um
-// pedido com 5 anexos precisa caber no limite de 50 MB do express.json.
-const ATPVE_ANEXO_MAX_B64 = 10 * 1024 * 1024;
-
-// Normaliza um anexo: aceita tanto o Base64 puro quanto o data URL que o
-// FileReader do navegador devolve (data:application/pdf;base64,JVBER...).
-function normalizeAtpveAnexo(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  const semPrefixo = raw.startsWith('data:') ? (raw.split(',')[1] || '') : raw;
-  return semPrefixo.replace(/\s/g, '');
-}
-
-// Remove os anexos antes de gravar/repassar os params do pedido: são vários MB
-// de Base64 que não têm serventia no histórico (o PDF final é o que importa) e
-// só inchariam a coluna params. Guarda a lista do que foi enviado para o
-// suporte conseguir conferir depois.
-function stripAtpveAnexos(params) {
-  const p = { ...(params || {}) };
-  const enviados = ATPVE_ANEXO_FIELDS.filter(k => normalizeAtpveAnexo(p[k]));
-  ATPVE_ANEXO_FIELDS.forEach(k => { delete p[k]; });
-  if (enviados.length) p.anexos_enviados = enviados;
-  return p;
-}
-
-function buildAtpveCadastroBody(uf, params) {
-  const p = params || {};
-  const missingFields = ATPVE_CADASTRO_REQUIRED.filter(k => !String(p[k] ?? '').trim());
-  if (missingFields.length)
-    return { error: `Campos obrigatórios ausentes: ${missingFields.join(', ')}` };
-
-  // O DETRAN recusa o pedido com CEP fora do formato e a Chekaki devolve só uma
-  // mensagem genérica — barrar aqui dá o erro certo antes de gastar a chamada.
-  const compradorCep = String(p.comprador_cep).replace(/\D/g, '');
-  if (compradorCep.length !== 8)
-    return { error: 'CEP do comprador inválido. Deve ter 8 dígitos.' };
-
-  const anexos = {};
-  for (const campo of ATPVE_ANEXO_FIELDS) {
-    const b64 = normalizeAtpveAnexo(p[campo]);
-    if (!b64) continue;
-    if (b64.length > ATPVE_ANEXO_MAX_B64)
-      return { error: `Anexo muito grande: ${campo}. Envie um arquivo de até 7 MB.` };
-    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(b64))
-      return { error: `Anexo inválido: ${campo}. Envie o arquivo em Base64.` };
-    anexos[campo] = b64;
-  }
-
-  return {
-    body: {
-      ...anexos,
-      placa: String(p.placa).toUpperCase().replace(/[\s-]/g, ''),
-      renavam: String(p.renavam).replace(/\D/g, ''),
-      ano_fabricacao: String(p.ano_fabricacao).trim(),
-      ano_modelo: String(p.ano_modelo).trim(),
-      chassi: String(p.chassi).toUpperCase().replace(/\s/g, ''),
-      kilometragem: String(p.kilometragem).replace(/\D/g, ''),
-      crv_numero: String(p.crv_numero).replace(/\D/g, ''),
-      crv_numero_via: String(p.crv_numero_via).trim(),
-      crv_uf_emissao: String(p.crv_uf_emissao).toUpperCase().trim(),
-      crv_data_emissao: String(p.crv_data_emissao).trim(),
-      crv_codigo_seguranca: String(p.crv_codigo_seguranca || '').replace(/\D/g, ''),
-      vendedor_tipo_pessoa: String(p.vendedor_tipo_pessoa).toUpperCase().trim(),
-      vendedor_documento: String(p.vendedor_documento).replace(/\D/g, ''),
-      vendedor_nome: String(p.vendedor_nome).trim().toUpperCase(),
-      vendedor_email: String(p.vendedor_email).trim(),
-      venda_cidade: String(p.venda_cidade).trim().toUpperCase(),
-      // venda_uf: documentado no /cadastrar da Chekaki mas ausente do nosso payload
-      // até agora — sempre igual ao UF do próprio endpoint (a venda é registrada
-      // nesse ATPV-e), sem precisar de campo novo no formulário.
-      venda_uf: uf.toUpperCase(),
-      venda_valor: String(p.venda_valor).trim(),
-      venda_data: String(p.venda_data).trim(),
-      comprador_tipo_pessoa: String(p.comprador_tipo_pessoa).toUpperCase().trim(),
-      comprador_documento: String(p.comprador_documento).replace(/\D/g, ''),
-      comprador_nome: String(p.comprador_nome).trim().toUpperCase(),
-      comprador_email: String(p.comprador_email).trim(),
-      comprador_cep: compradorCep,
-      comprador_logradouro: String(p.comprador_logradouro).trim().toUpperCase(),
-      comprador_numero: String(p.comprador_numero).trim(),
-      comprador_complemento: (String(p.comprador_complemento || '').trim() || '-').toUpperCase(),
-      comprador_bairro: String(p.comprador_bairro).trim().toUpperCase(),
-      comprador_cidade: String(p.comprador_cidade).trim().toUpperCase(),
-      comprador_uf: String(p.comprador_uf).toUpperCase().trim(),
-    },
-  };
-}
-
-// Busca o estado canônico de um pedido ATPV-e direto na Chekaki (GET
-// /api/atpve-<uf>/:id — "Consultar por ID"). É a fonte confiável de situação: a
-// resposta da ação (atualizar/registrar/excluir) nem sempre traz o campo
-// situacao_codigo/situacao_descricao atualizado, então toda ação re-consulta este
-// endpoint depois de rodar, em vez de confiar no corpo que a própria ação devolveu.
-async function fetchAtpveById(uf, atpveId) {
-  const cr = await fetch(`${BASE_API_URL}/api/atpve-${uf}/${atpveId}`, {
-    headers: { 'chaveAcesso': CHAVE_ACESSO },
-  });
-  const cdata = await cr.json().catch(() => null);
-  return cdata?.pedido || null;
-}
-
-// ── Ações de ciclo de vida do ATPV-e já cadastrado (Atualizar / Registrar no
-// DETRAN / Alterar / Excluir) — botões de "Meus ATPV-e", espelhando o próprio painel
-// da Chekaki (atpve-<uf>). Todas seguem o mesmo padrão: chamam POST /api/atpve-<uf>/:id/
-// <ação> usando o id que guardamos em result_data (ver correlateAtpveRecord).
-// Sem custo adicional para o usuário — nenhuma delas debita créditos.
-// Opções: postProcess (ajusta o meta salvo), upstreamBody (corpo enviado à Chekaki,
-// default `{}`), guard (recusa a ação conforme a situação atual do pedido) e
-// onSuccess (efeito local extra depois do sucesso, ex.: salvar os params novos).
-async function callAtpveAction(req, res, uf, action, { postProcess, upstreamBody, guard, onSuccess } = {}) {
-  try {
-    const qr = await pool.query(
-      `SELECT id, service_id, result_data FROM queries WHERE id=$1 AND user_id=$2`,
-      [req.params.id, req.user.id]
-    );
-    if (!qr.rows.length || qr.rows[0].service_id !== `intencao-venda-${uf}`)
-      return res.status(404).json({ error: 'Pedido não encontrado.' });
-
-    let meta = {};
-    try { meta = JSON.parse(qr.rows[0].result_data || '{}'); } catch {}
-    const atpveId = meta.id;
-    if (!atpveId)
-      return res.status(400).json({ error: 'Este pedido ainda não tem um identificador da Chekaki vinculado. Tente novamente em alguns instantes.' });
-
-    if (guard) {
-      const guardError = guard(meta);
-      if (guardError) return res.status(400).json({ error: guardError });
-    }
-
-    // "Registrar" e "Atualizar" podem ser quem efetivamente finaliza o pedido no
-    // DETRAN — se o clique em "Registrar" falhar (ex.: pedido ainda PROCESSANDO na
-    // Chekaki) e o usuário só conseguir avançar depois clicando em "Atualizar", é o
-    // Atualizar quem vai detectar o PDF final disponível pela primeira vez. Por isso
-    // ambos buscam o telefone; quem decide se notifica de fato é ensureAtpvePdfCached,
-    // que só envia na primeira vez que cacheia o PDF daquele pedido (nunca duplica).
-    // "Excluir" não notifica.
-    let notifyPhone = null;
-    if (action === 'registrar' || action === 'atualizar') {
-      const ur = await pool.query('SELECT phone FROM users WHERE id=$1', [req.user.id]);
-      notifyPhone = ur.rows[0]?.phone || null;
-    }
-
-    const upRes = await fetch(`${BASE_API_URL}/api/atpve-${uf}/${atpveId}/${action}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO },
-      body: JSON.stringify(upstreamBody || {}),
-    });
-    const ct = upRes.headers.get('content-type') || '';
-
-    if (!upRes.ok) {
-      let errMsg = `Erro HTTP ${upRes.status}.`;
-      if (ct.includes('application/json')) {
-        const errData = await upRes.json().catch(() => null);
-        errMsg = errData?.error || errData?.erro || errMsg;
-      }
-      // A situação local pode estar desatualizada (ex.: pedido já foi registrado
-      // direto no painel da Chekaki) e por isso a ação falhou aqui — resincroniza
-      // antes de responder, para o botão certo aparecer na próxima renderização.
-      try {
-        const fresh = await fetchAtpveById(uf, atpveId);
-        if (fresh) {
-          const resynced = postProcess ? postProcess({ ...meta, ...fresh }) : { ...meta, ...fresh };
-          await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(resynced), qr.rows[0].id]);
-          await ensureAtpvePdfCached(uf, qr.rows[0].id, req.user.id, resynced, notifyPhone);
-        }
-      } catch (e) {
-        console.error(`Erro ao resincronizar ATPV-e ${uf.toUpperCase()} [id ${atpveId}] após falha:`, e.message);
-      }
-      return res.status(upRes.status).json({ error: errMsg });
-    }
-
-    let pdfBuf = null;
-    if (ct.includes('application/pdf')) pdfBuf = Buffer.from(await upRes.arrayBuffer());
-
-    // Independentemente do que a ação devolveu, busca o estado canônico do pedido
-    // pra manter result_data sempre fiel à Chekaki.
-    let merged = meta;
-    try {
-      const fresh = await fetchAtpveById(uf, atpveId);
-      if (fresh) merged = { ...meta, ...fresh };
-    } catch (e) {
-      console.error(`Erro ao consultar situação atual do ATPV-e ${uf.toUpperCase()} [id ${atpveId}]:`, e.message);
-    }
-    if (postProcess) merged = postProcess(merged);
-    await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), qr.rows[0].id]);
-
-    if (onSuccess) await onSuccess(qr.rows[0].id, merged);
-
-    if (pdfBuf) {
-      // O documento saiu por aqui: fecha a consulta (sem isso ela ficaria presa
-      // em 'aguardando_pdf' e o cron trataria um pedido já entregue como atrasado).
-      await finalizeAtpveQuery(uf, qr.rows[0].id, req.user.id);
-      const token = crypto.randomBytes(32).toString('hex');
-      const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
-      await pool.query(
-        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
-        [qr.rows[0].id, req.user.id, token, pdfBuf.toString('base64'), expiresAt]
-      );
-      // Diferente do fluxo via ensureAtpvePdfCached, aqui o PDF já veio pronto na
-      // resposta da própria ação — envia direto por WhatsApp (só quando é o botão
-      // "Registrar", que é quem tem notifyPhone preenchido).
-      if (notifyPhone) {
-        const ufUpper = uf.toUpperCase();
-        const placa = (merged.placa || '').toUpperCase();
-        const caption = `✅ *ATPV-e ${ufUpper} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
-        const fileName = `ATPVE-${ufUpper}-${placa || 'doc'}.pdf`;
-        await sendWhatsAppPdf(notifyPhone, pdfBuf, fileName, caption).catch(e =>
-          console.error(`Erro ao enviar ATPV-e ${ufUpper} por WhatsApp (ação ${action}):`, e.message));
-      }
-      return res.json({ success: true, pdf_token: token, result: merged });
-    }
-
-    // A ação em si não devolveu o PDF (ex.: registrar/atualizar responderam só
-    // JSON) — se a Chekaki sinaliza que o PDF já existe, busca e cacheia agora.
-    await ensureAtpvePdfCached(uf, qr.rows[0].id, req.user.id, merged, notifyPhone);
-    res.json({ success: true, result: merged });
-  } catch (err) {
-    console.error(`Erro em ação ATPV-e ${uf.toUpperCase()} [${action}]:`, err.message);
-    res.status(500).json({ error: 'Erro interno.' });
-  }
-}
-
-// Botão "Excluir" — cancela o pedido na Chekaki. Marca a situação localmente como
-// excluída mesmo que a resposta da Chekaki não devolva um campo de situação claro,
-// para o botão sumir da lista de qualquer forma.
-const atpveExcluirPostProcess = merged => ({
-  ...merged,
-  situacao_codigo: 'excluida',
-  situacao_descricao: merged.situacao_descricao || 'EXCLUÍDA',
-});
-
-// Botão "Alterar" — corrige os dados de um pedido ATPV-e, sem cobrar de novo. Usa
-// POST /api/atpve-<uf>/:id/alterar, rota que existe nas quatro UFs (confirmado por
-// teste direto na Chekaki) mas não aparece na documentação de integração dela; o
-// corpo é o pedido inteiro, igual ao /cadastrar (a Chekaki substitui o registro).
-// Só vale em CADASTRADA (1) e PROCESSANDO (3): em qualquer situação posterior o
-// pedido já saiu das mãos da Chekaki (COMUNICADA = documento transmitido, correção
-// só no DETRAN de origem). Lista de permissão, não de bloqueio — situação
-// desconhecida/vazia também não libera a alteração.
-const ATPVE_SITUACOES_ALTERAVEIS = ['1', '3'];
-
-function atpveAlterarGuard(meta) {
-  const cod = String(meta.situacao_codigo || '');
-  if (ATPVE_SITUACOES_ALTERAVEIS.includes(cod)) return null;
-  const desc = meta.situacao_descricao ? ` (situação atual: ${meta.situacao_descricao})` : '';
-  return `Este ATPV-e só pode ser alterado enquanto está CADASTRADA ou PROCESSANDO${desc}.`;
-}
-
-for (const uf of ATPVE_UFS) {
-  // Botão "Atualizar" — atualiza situação/PDF do pedido.
-  app.post(`/api/queries/:id/atpve-${uf}-atualizar`, requireAuth, (req, res) =>
-    callAtpveAction(req, res, uf, 'atualizar'));
-
-  // Botão "Registrar" — efetiva o registro no DETRAN (some com o passo manual que o
-  // usuário precisa confirmar; não é feito automaticamente no cadastro).
-  app.post(`/api/queries/:id/atpve-${uf}-registrar`, requireAuth, (req, res) =>
-    callAtpveAction(req, res, uf, 'registrar'));
-
-  app.post(`/api/queries/:id/atpve-${uf}-excluir`, requireAuth, (req, res) =>
-    callAtpveAction(req, res, uf, 'excluir', { postProcess: atpveExcluirPostProcess }));
-
-  app.post(`/api/queries/:id/atpve-${uf}-alterar`, requireAuth, (req, res) => {
-    const built = buildAtpveCadastroBody(uf, req.body?.params);
-    if (built.error) return res.status(400).json({ error: built.error });
-    return callAtpveAction(req, res, uf, 'alterar', {
-      upstreamBody: built.body,
-      guard: atpveAlterarGuard,
-      onSuccess: async (queryId, merged) => {
-        // Guarda os dados corrigidos para o painel e o próximo "Alterar" abrirem
-        // com o que está de fato na Chekaki.
-        await pool.query('UPDATE queries SET params=$1 WHERE id=$2',
-          [JSON.stringify(stripAtpveAnexos(req.body?.params)), queryId]);
-        // Um PDF em cache emitido ANTES da correção está desatualizado — descarta
-        // para o próximo download vir com os dados novos (ensureAtpvePdfCached logo
-        // abaixo já rebusca na Chekaki quando o PDF volta a estar disponível).
-        await pool.query('DELETE FROM pdf_cache WHERE query_id=$1', [queryId]);
-      },
-    });
-  });
-}
 
 // ── GET /api/pdf/:token ───────────────────────────────────────────────────────
 app.get('/api/pdf/:token', requireAuth, async (req, res) => {
@@ -2391,7 +2059,7 @@ app.get('/api/pdf/:token', requireAuth, async (req, res) => {
   }
 });
 
-// Algumas APIs upstream (ex.: chekaki.online) aninham o motivo real do erro em
+// Algumas APIs upstream (ex.: portaldespachantes.online) aninham o motivo real do erro em
 // `details.details.msg` em vez de expor no nível raiz — desce a cadeia de
 // `details` para achar a mensagem mais específica disponível.
 function extractApiErrorMsg(data) {
@@ -3907,7 +3575,7 @@ function buildConsultaRenavamPdfBuffer(service, data, params) {
 // Vercel (sem @napi-rs/canvas disponível) — derrubando o servidor inteiro. A
 // v1.1.1 usa um pdf.js antigo, só de texto, sem essa dependência.
 // ── Campo sem dado nos relatórios de terceiro ────────────────────────────────
-// A Chekaki (e às vezes a despbrasil) escreve um TRAVESSÃO onde não tem o dado:
+// O portal (e às vezes a despbrasil) escreve um TRAVESSÃO onde não tem o dado:
 // a PUG6I42, por exemplo, volta do consultar-placa-v2 com "DATA DO CRV: —".
 // Sem tratar, esse "—" é um valor como outro qualquer — ele passava na
 // conferência de ATPVE_CAMPOS_OBRIGATORIOS, ia impresso na célula "DATA EMISSÃO
@@ -4083,7 +3751,7 @@ function extractRawPdfStrings(pdfBuf) {
   return saida;
 }
 
-// ── Extração de campos — "Proprietário Atual (v2)" (Chekaki devolve um PDF
+// ── Extração de campos — "Proprietário Atual (v2)" (portal devolve um PDF
 // pronto, mas em formato "Rótulo:" numa linha e o valor sozinho na linha
 // seguinte, diferente do formato "Rótulo: valor" da despbrasil acima). Usada
 // para completar ano de fabricação/modelo, marca/modelo, cor, data do CRV e
@@ -4420,22 +4088,22 @@ async function fetchCodigoSegurancaCrvFields(placa, knownRenavam) {
 }
 
 // ── Consultas complementares da "Número ATPV-E" — Proprietário Atual (v2) via
-// Chekaki (consultar-placa-v2), Código Segurança CRV via Vistocar/despbrasil
-// (ver fetchCodigoSegurancaCrvFields) e Consulta Comunicado via Chekaki (ver
+// portal (consultar-placa-v2), Código Segurança CRV via Vistocar/despbrasil
+// (ver fetchCodigoSegurancaCrvFields) e Consulta Comunicado via portal (ver
 // fetchComunicadoDataVenda), para completar os campos que a despbrasil não
 // retorna ou retorna errado (o preço de R$120 já reflete o custo das 4
 // consultas encadeadas, ver SERVICES/consultar-Numero-ATPVE).
 //
 // A Proprietário Atual (v2) é tentada DUAS vezes e a falha passou a registrar o
-// corpo devolvido pela Chekaki: antes o log tinha só o status HTTP, e quando
+// corpo devolvido pelo portal: antes o log tinha só o status HTTP, e quando
 // ela falhava o ATPVe saía assim mesmo, com sete células em branco (nome/
 // município/UF do vendedor, ano de fabricação, ano do modelo, cor e data do
 // CRV) — documento inútil pro despachante, mas cobrado. Quem decide entregar ou
 // recusar é a conferência de atpveCamposFaltando, nos dois chamadores.
 async function fetchProprietarioAtualV2Fields(placa) {
-  const r = await fetch(`${BASE_API_URL}/consultar-placa-v2`, {
+  const r = await fetch(`${PORTAL_BASE_URL}/consultar-placa-v2`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', chaveAcesso: CHAVE_ACESSO },
+    headers: { 'Content-Type': 'application/json', chaveAcesso: PORTAL_DESP_KEY },
     body: JSON.stringify({ placa }),
   });
   const buf = Buffer.from(await r.arrayBuffer());
@@ -4445,7 +4113,7 @@ async function fetchProprietarioAtualV2Fields(placa) {
   return extractLinePairFieldsFromPdf(buf);
 }
 
-// ── Data real da venda — "Consulta Comunicado" (Chekaki) ─────────────────────
+// ── Data real da venda — "Consulta Comunicado" (portal) ─────────────────────
 // A despbrasil devolve, em "Data declarada da venda", a data de GERAÇÃO da
 // ATPVe; quem guarda a data que o vendedor comunicou ao Detran é a Consulta
 // Comunicado (POST /consultar-comunicado, placa + renavam), o mesmo serviço
@@ -4466,9 +4134,9 @@ const COMUNICADO_DATA_VENDA_KEYS = ['datadavenda', 'datavenda'];
 const DATA_BR_RE = /\b(\d{2}\/\d{2}\/\d{4})\b/;
 
 async function fetchComunicadoDataVendaUmaVez(placa, renavam) {
-  const r = await fetch(`${BASE_API_URL}/consultar-comunicado`, {
+  const r = await fetch(`${PORTAL_BASE_URL}/consultar-comunicado`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', chaveAcesso: CHAVE_ACESSO },
+    headers: { 'Content-Type': 'application/json', chaveAcesso: PORTAL_DESP_KEY },
     body: JSON.stringify({ placa, renavam }),
   });
   const buf = Buffer.from(await r.arrayBuffer());
@@ -4489,7 +4157,7 @@ async function fetchComunicadoDataVendaUmaVez(placa, renavam) {
 }
 
 // Duas tentativas, mesma régua da Proprietário Atual (v2): falha isolada da
-// Chekaki é comum e custa só uma segunda chamada.
+// portal é comum e custa só uma segunda chamada.
 async function fetchComunicadoDataVenda(placa, renavam) {
   for (let tentativa = 1; tentativa <= 2; tentativa++) {
     try {
@@ -4590,7 +4258,7 @@ function atpveCamposFaltando(fields) {
 }
 
 // Aviso ao admin quando o ATPVe é recusado por falta de dado: a causa é sempre
-// uma upstream fora do ar (Chekaki, Vistocar ou despbrasil), e sem esse aviso a
+// uma upstream fora do ar (portal, Vistocar ou despbrasil), e sem esse aviso a
 // única forma de descobrir era o cliente reclamar do documento em branco.
 async function avisarAdminAtpveIncompleto(placa, faltando, origem) {
   if (!ADMIN_PHONE) return;
@@ -4601,7 +4269,7 @@ async function avisarAdminAtpveIncompleto(placa, faltando, origem) {
     `🧾 *Origem:* ${origem}`,
     `❌ *Campos em branco:* ${faltando.join(', ')}`,
     ``,
-    `O pedido foi recusado sem cobrar. Confira o saldo e o status das APIs (Chekaki consultar-placa-v2, Vistocar/despbrasil código de segurança).`,
+    `O pedido foi recusado sem cobrar. Confira o saldo e o status das APIs (portal consultar-placa-v2, Vistocar/despbrasil código de segurança).`,
   ].join('\n');
   await sendWhatsApp(ADMIN_PHONE, msg).catch(() => {});
 }
@@ -5243,7 +4911,7 @@ function buildComunicacaoVendaPdfBuffer(service, data, params) {
       ]);
       doc.moveDown(0.4);
 
-      // Sem seção "RESULTADO" com a resposta bruta da Chekaki: o campo de situação
+      // Sem seção "RESULTADO" com a resposta bruta do portal: o campo de situação
       // dela (ex.: "importado") ficaria congelado no momento da inserção e seria
       // enganoso depois. A única situação refletida aqui é o cancelamento (acima),
       // porque cacheComunicacaoVendaPdf regera este PDF quando isso acontece — o
@@ -5266,7 +4934,7 @@ function buildComunicacaoVendaPdfBuffer(service, data, params) {
 // Devolve true quando a consulta foi fechada NESTA chamada (estava
 // 'aguardando_pdf' e virou 'success') e false quando já estava fechada antes —
 // é o que deixa o chamador distinguir "concluiu agora" de "pedido antigo sendo
-// mexido de novo na tela" (ver finalizeAtpveQuery).
+// mexido de novo na tela".
 async function finalizePendingQuery(queryId, userId, descricao) {
   const claimed = await pool.query(
     `UPDATE queries SET status='success' WHERE id=$1 AND status='aguardando_pdf'
@@ -5286,135 +4954,17 @@ async function finalizePendingQuery(queryId, userId, descricao) {
   return true;
 }
 
-// ATPV-e: hoje a cobrança acontece no cadastro (ver processCatalogQuery), então
-// aqui só passam pelo débito os pedidos do modelo antigo, que ficaram
-// 'aguardando_pdf' sem transaction_id.
-async function finalizeAtpveQuery(uf, queryId, userId) {
-  const fechouAgora = await finalizePendingQuery(queryId, userId, `Consulta: Intenção de Venda ${uf.toUpperCase()}`);
-  // Só entra na fila da conferência o pedido concluído AGORA. Sem esse guarda,
-  // abrir um ATPV-e antigo em "Meus ATPV-e" e clicar numa ação que devolve o
-  // PDF (esta função roda de novo) enfileiraria um pedido de meses atrás — que
-  // seria conferido e, no limite, estornado. A conferência vale só daqui para
-  // frente: o histórico não é reprocessado.
-  if (fechouAgora) await agendarVerificacaoIntencaoVenda(uf, queryId);
-}
-
-// Garante um PDF em cache válido (7 dias) pro pedido sempre que a Chekaki sinalizar
-// pdf_disponivel=true. O Cadastrar nem sempre devolve o PDF pronto na hora — placas
-// que passam por verificação extra (LAUDOCAR) respondem com JSON e só depois ficam
-// com pdf_disponivel=true — então sem isso o usuário ficava sem PDF nenhum até
-// clicar manualmente em "Atualizar". Não sobrescreve um cache ainda válido. Quando
-// um PDF é cacheado aqui (ou seja, é a primeira vez que fica disponível) e
-// notifyPhone é informado, também envia por WhatsApp — cobre o caso em que o
-// cadastro original não devolveu PDF na hora e por isso o envio síncrono não rodou.
-// Quem fecha/cobra a consulta é finalizeAtpveQuery, logo acima.
-async function ensureAtpvePdfCached(uf, queryId, userId, fresh, notifyPhone) {
-  if (!fresh?.pdf_disponivel || !fresh?.id) return;
-  try {
-    const existing = await pool.query(
-      `SELECT 1 FROM pdf_cache WHERE query_id=$1 AND expires_at > NOW()`, [queryId]
-    );
-    // PDF já entregue por outro caminho (ex.: veio direto na resposta de
-    // "Registrar") — nada a cachear, mas a consulta ainda pode estar presa em
-    // 'aguardando_pdf'.
-    if (existing.rows.length) return finalizeAtpveQuery(uf, queryId, userId);
-
-    const pr = await fetch(`${BASE_API_URL}/api/atpve-${uf}/${fresh.id}/pdf`, {
-      headers: { 'chaveAcesso': CHAVE_ACESSO },
-    });
-    if (!pr.ok || !(pr.headers.get('content-type') || '').includes('application/pdf')) return;
-    const buf = Buffer.from(await pr.arrayBuffer());
-
-    await finalizeAtpveQuery(uf, queryId, userId);
-
-    const token = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
-    await pool.query(
-      `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
-      [queryId, userId, token, buf.toString('base64'), expiresAt]
-    );
-    if (notifyPhone) {
-      const ufUpper = uf.toUpperCase();
-      const placa = (fresh.placa || '').toUpperCase();
-      const caption = `✅ *ATPV-e ${ufUpper} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
-      const fileName = `ATPVE-${ufUpper}-${placa || 'doc'}.pdf`;
-      const sent = await sendWhatsAppPdf(notifyPhone, buf, fileName, caption).catch(e => {
-        console.error(`Erro ao enviar ATPV-e ${ufUpper} por WhatsApp [id ${fresh.id}]:`, e.message);
-        return false;
-      });
-      if (!sent) console.error(`Falha ao enviar ATPV-e ${ufUpper} por WhatsApp [id ${fresh.id}] para ${notifyPhone}`);
-    }
-  } catch (e) {
-    console.error(`Erro ao cachear PDF do ATPV-e ${uf.toUpperCase()} [id ${fresh.id}]:`, e.message);
-  }
-}
-
-// Correlaciona a Intenção de Venda recém-cadastrada com seu registro na Chekaki
-// (GET /api/atpve-<uf> — "Listar pedidos", endpoint que retorna os pedidos de toda a
-// chave de acesso), guardando id/protocolo/situação em queries.result_data — usado
-// pelo botão "Atualizar" e pela situação exibida em "Meus ATPV-e". Retorna o
-// registro encontrado (ou null) para o chamador decidir se ainda precisa buscar/
-// notificar o PDF (ver ensureAtpvePdfCached). Best effort: uma falha aqui nunca
-// deve impedir a entrega do PDF já emitido.
-async function correlateAtpveRecord(uf, queryId, placa) {
-  try {
-    const lr = await fetch(`${BASE_API_URL}/api/atpve-${uf}`, {
-      headers: { 'chaveAcesso': CHAVE_ACESSO },
-    });
-    const ldata = await lr.json().catch(() => null);
-    const list = Array.isArray(ldata) ? ldata
-      : Array.isArray(ldata?.data) ? ldata.data
-      : Array.isArray(ldata?.pedidos) ? ldata.pedidos
-      : [];
-    const alvo  = String(placa || '').toUpperCase();
-    const match = list.find(it => String(it.placa || '').toUpperCase() === alvo);
-    if (match) {
-      await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(match), queryId]);
-    }
-    return match || null;
-  } catch (e) {
-    console.error(`Erro ao correlacionar pedido ATPV-e ${uf.toUpperCase()}:`, e.message);
-    return null;
-  }
-}
-
-// Dispara "Registrar no DETRAN" automaticamente logo após o cadastro de um
-// ATPV-e MG. Diferente de RJ/SP/MS — onde a Chekaki avança sozinha de
-// CADASTRADA até COMUNICADA sem nenhuma ação nossa —, pedidos MG ficam parados
-// em CADASTRADA indefinidamente até alguém chamar Registrar; sem isso o
-// cliente ficava com o pedido preso esperando alguém notar e clicar no botão
-// manual em "Meus ATPV-e" (foi o que aconteceu com os primeiros pedidos MG
-// migrados para a Chekaki). Best-effort: não é problema se a Chekaki responder
-// que "ainda não concluiu com PDF" (ela só confirma que entrou em
-// processamento) — qualquer falha aqui é só logada, o botão manual e o cron
-// runAtpvePendingCheck continuam cobrindo o pedido normalmente.
-async function autoRegistrarAtpveMg(uf, queryId, atpveId) {
-  try {
-    await fetch(`${BASE_API_URL}/api/atpve-${uf}/${atpveId}/registrar`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO },
-      body: JSON.stringify({}),
-    });
-    const fresh = await fetchAtpveById(uf, atpveId);
-    if (fresh) await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(fresh), queryId]);
-    return fresh;
-  } catch (e) {
-    console.error(`Erro ao auto-registrar ATPV-e ${uf.toUpperCase()} [id ${atpveId}]:`, e.message);
-    return null;
-  }
-}
-
-// Consulta o status atual de uma comunicação de venda na Chekaki (GET
+// Consulta o status atual de uma comunicação de venda no portal (GET
 // /api/comunicado-venda/:id — testado direto: o "id" válido para essa rota (e
 // para /comunicacao-venda/transmitir/:id) é o "comunicacao_id" de NÍVEL RAIZ do
 // JSON devolvido no Inserir, não o comunicacao_id aninhado em "data" — este
-// último é de outro sistema interno da Chekaki e devolve 404 aqui). Usado para
+// último é de outro sistema interno do portal e devolve 404 aqui). Usado para
 // sincronizar o status de comunicações já transmitidas fora do painel (ex.:
-// direto no site da Chekaki) e para conferir a situação antes do Cancelar.
+// direto no site do portal) e para conferir a situação antes do Cancelar.
 async function correlateComunicacaoVenda(comunicacaoId) {
   try {
-    const r = await fetch(`${BASE_API_URL}/api/comunicado-venda/${comunicacaoId}`, {
-      headers: { 'chaveAcesso': CHAVE_ACESSO },
+    const r = await fetch(`${PORTAL_BASE_URL}/api/comunicado-venda/${comunicacaoId}`, {
+      headers: { 'chaveAcesso': PORTAL_DESP_KEY },
     });
     const data = await r.json().catch(() => null);
     if (!r.ok || !data) return null;
@@ -5462,7 +5012,7 @@ async function cacheComunicacaoVendaPdf(queryId, userId, params, meta = null) {
 // Monta e valida o payload de Comunicação de Venda a partir dos params do
 // formulário — extraído para função reutilizável entre o Inserir (POST
 // /comunicacao-venda) e o Alterar (POST /comunicacao-venda/salvar/:id, mesmo
-// formato de corpo exigido pela Chekaki). Retorna { body } ou { error }.
+// formato de corpo exigido pelo portal). Retorna { body } ou { error }.
 function buildComunicacaoVendaBody(params) {
   const v    = params?.vendedor  || {};
   const c    = params?.comprador || {};
@@ -5471,8 +5021,8 @@ function buildComunicacaoVendaBody(params) {
   const veic = params?.veiculo   || {};
   const crv  = veic.crv          || {};
 
-  // Regras abaixo replicadas do próprio formulário do CHEKAKI (montarPayloadDoFormulario
-  // / coletarErrosPayload em chekaki.online/comunicacao-venda), inspecionado após o
+  // Regras abaixo replicadas do próprio formulário do PORTAL (montarPayloadDoFormulario
+  // / coletarErrosPayload em portaldespachantes.online/comunicacao-venda), inspecionado após o
   // upstream rejeitar payloads estruturalmente corretos — a documentação da API não
   // cobre normalizações (padding) nem alguns campos exigidos.
   const placa    = (veic.placa   || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -5555,10 +5105,10 @@ function buildComunicacaoVendaBody(params) {
 }
 
 // Botão "Alterar" de "Meus Comunicados de Venda" — corrige uma comunicação
-// ainda "importada" (não transmitida) direto na Chekaki (POST
+// ainda "importada" (não transmitida) direto no portal (POST
 // /comunicacao-venda/salvar/:id, mesmo "comunicacao_id" usado no Transmitir),
-// sem precisar abrir o site da Chekaki manualmente. Reenvia o payload
-// completo (a Chekaki substitui o registro inteiro) e, em caso de sucesso,
+// sem precisar abrir o site do portal manualmente. Reenvia o payload
+// completo (a portal substitui o registro inteiro) e, em caso de sucesso,
 // atualiza os params salvos localmente para refletir a correção no painel.
 // Sem custo adicional — mesma lógica do Transmitir.
 app.post('/api/queries/:id/comunicacao-venda-alterar', requireAuth, async (req, res) => {
@@ -5576,14 +5126,14 @@ app.post('/api/queries/:id/comunicacao-venda-alterar', requireAuth, async (req, 
     if (meta._cancelado) return res.status(400).json({ error: 'Esta comunicação foi cancelada.' });
     const comunicacaoId = meta.comunicacao_id;
     if (!comunicacaoId)
-      return res.status(400).json({ error: 'Esta comunicação ainda não tem um identificador da Chekaki vinculado. Tente novamente em alguns instantes.' });
+      return res.status(400).json({ error: 'Esta comunicação ainda não tem um identificador do portal vinculado. Tente novamente em alguns instantes.' });
 
     const built = buildComunicacaoVendaBody(req.body || {});
     if (built.error) return res.status(400).json({ error: built.error });
 
-    const upRes = await fetch(`${BASE_API_URL}/comunicacao-venda/salvar/${comunicacaoId}`, {
+    const upRes = await fetch(`${PORTAL_BASE_URL}/comunicacao-venda/salvar/${comunicacaoId}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO },
+      headers: { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY },
       body: JSON.stringify(built.body),
     });
     const upData = await upRes.json().catch(() => null);
@@ -5600,7 +5150,7 @@ app.post('/api/queries/:id/comunicacao-venda-alterar', requireAuth, async (req, 
   }
 });
 
-// Botão "Transmitir" de "Meus Comunicados de Venda" — finaliza na Chekaki uma
+// Botão "Transmitir" de "Meus Comunicados de Venda" — finaliza no portal uma
 // comunicação já inserida (situação inicial "importado" → "comunicado"; sem
 // transmitir, a comunicação de venda não é considerada concluída). Usa o
 // "comunicacao_id" salvo em result_data no momento do Inserir Comunicação
@@ -5619,11 +5169,11 @@ app.post('/api/queries/:id/comunicacao-venda-transmitir', requireAuth, async (re
     try { meta = JSON.parse(qr.rows[0].result_data || '{}'); } catch {}
     const comunicacaoId = meta.comunicacao_id;
     if (!comunicacaoId)
-      return res.status(400).json({ error: 'Esta comunicação ainda não tem um identificador da Chekaki vinculado. Tente novamente em alguns instantes.' });
+      return res.status(400).json({ error: 'Esta comunicação ainda não tem um identificador do portal vinculado. Tente novamente em alguns instantes.' });
 
-    const upRes = await fetch(`${BASE_API_URL}/comunicacao-venda/transmitir/${comunicacaoId}`, {
+    const upRes = await fetch(`${PORTAL_BASE_URL}/comunicacao-venda/transmitir/${comunicacaoId}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO },
+      headers: { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY },
       body: JSON.stringify({}),
     });
     const upData = await upRes.json().catch(() => null);
@@ -5633,13 +5183,13 @@ app.post('/api/queries/:id/comunicacao-venda-transmitir', requireAuth, async (re
       return res.status(upRes.status).json({ error: errMsg });
     }
 
-    // O nome do campo de situação na resposta da Chekaki não é documentado/estável
+    // O nome do campo de situação na resposta do portal não é documentado/estável
     // o suficiente para o painel confiar nele para esconder o botão "Transmitir" —
     // marca um flag próprio, garantido, para não permitir transmitir de novo.
     const merged = { ...meta, ...(upData || {}), _transmitido: true };
     await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), qr.rows[0].id]);
 
-    // Só agora (comunicação já "comunicada" na Chekaki) gera o comprovante em PDF
+    // Só agora (comunicação já "comunicada" no portal) gera o comprovante em PDF
     // e cacheia por 7 dias — antes da transmissão o botão "PDF" fica indisponível
     // em "Meus Comunicados de Venda" (ver renderMeusComunicadosVenda).
     try {
@@ -5657,7 +5207,7 @@ app.post('/api/queries/:id/comunicacao-venda-transmitir', requireAuth, async (re
   }
 });
 
-// GET /api/queries/:id/comunicacao-venda-motivos — busca na Chekaki os motivos
+// GET /api/queries/:id/comunicacao-venda-motivos — busca no portal os motivos
 // de cancelamento disponíveis para uma comunicação já transmitida (mesma
 // tarifa do serviço avulso "Motivos de Cancelamento" no catálogo). Usado para
 // popular a escolha antes de confirmar o Cancelar em "Meus Comunicados de Venda".
@@ -5684,8 +5234,8 @@ app.get('/api/queries/:id/comunicacao-venda-motivos', requireAuth, async (req, r
     if (parseFloat(user.credits) < price)
       return res.status(400).json({ error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}` });
 
-    const upRes = await fetch(`${BASE_API_URL}/motivos-cancelamento/${protocolo}`, {
-      headers: { 'chaveAcesso': CHAVE_ACESSO },
+    const upRes = await fetch(`${PORTAL_BASE_URL}/motivos-cancelamento/${protocolo}`, {
+      headers: { 'chaveAcesso': PORTAL_DESP_KEY },
     });
     const upData = await upRes.json().catch(() => null);
     if (!upRes.ok || !Array.isArray(upData?.motivos))
@@ -5703,9 +5253,9 @@ app.get('/api/queries/:id/comunicacao-venda-motivos', requireAuth, async (req, r
   }
 });
 
-// POST /api/queries/:id/comunicacao-venda-cancelar — cancela na Chekaki uma
+// POST /api/queries/:id/comunicacao-venda-cancelar — cancela no portal uma
 // comunicação já transmitida (mesma tarifa do serviço avulso "Cancelar
-// Comunicação Venda" no catálogo). Ação irreversível na Chekaki.
+// Comunicação Venda" no catálogo). Ação irreversível no portal.
 app.post('/api/queries/:id/comunicacao-venda-cancelar', requireAuth, async (req, res) => {
   try {
     const idMotivo = parseInt(req.body?.id_motivo_cancelamento, 10);
@@ -5735,17 +5285,17 @@ app.post('/api/queries/:id/comunicacao-venda-cancelar', requireAuth, async (req,
     if (parseFloat(user.credits) < price)
       return res.status(400).json({ error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}` });
 
-    const upRes = await fetch(`${BASE_API_URL}/cancelar-comunicacao-venda`, {
+    const upRes = await fetch(`${PORTAL_BASE_URL}/cancelar-comunicacao-venda`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO },
+      headers: { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY },
       body: JSON.stringify({ id: comunicacaoId, protocolo, id_motivo_cancelamento: idMotivo }),
     });
     const upData = await upRes.json().catch(() => null);
 
-    // Bug visto em produção: a Chekaki confirmava o cancelamento (ação irreversível
+    // Bug visto em produção: a portal confirmava o cancelamento (ação irreversível
     // lá, cobrança já efetuada aqui) mas o painel continuava mostrando "Comunicado"
     // pra sempre. Em vez de confiar cegamente em upRes.ok, reconfere o status real
-    // na Chekaki sempre que a resposta local não vier "ok" — algumas vezes o
+    // no portal sempre que a resposta local não vier "ok" — algumas vezes o
     // cancelamento é aceito lá mesmo com uma resposta de erro aqui.
     let confirmedCancelado = upRes.ok;
     let statusData = upData;
@@ -6606,22 +6156,16 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     }
 
     // Build URL and method
-    let apiUrl = `${BASE_API_URL}/${serviceId}`;
+    let apiUrl = `${PORTAL_BASE_URL}/${serviceId}`;
     let method = 'POST';
     let body = params || {};
 
-    // CRLV Agendado: solicitar (demais UFs). Mesmo contrato nos dois hosts —
-    // só o CE (PORTAL_AGENDADO_SVCS) fala com o portaldespachantes.online.
+    // CRLV Agendado: solicitar. A entrada é placa OU CPF conforme a UF (ver
+    // inputType de cada crlv-agendado-<uf>), por isso não há validação de placa
+    // aqui — quem recusa entrada inválida é a upstream.
     if (isAgendadoSolicitar(serviceId)) {
       const svcDef = SERVICES.find(s => s.id === serviceId);
-      // Os agendados do chekaki pedem placa OU CPF conforme a UF (ver inputType),
-      // então a validação de placa vale só para os do portal, que são só placa.
-      if (PORTAL_AGENDADO_SVCS.has(serviceId)) {
-        const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
-        if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
-        params = { ...params, placa };
-      }
-      apiUrl = `${agendadoBaseUrl(serviceId)}/api/crlv-agendado/solicitar`;
+      apiUrl = `${PORTAL_BASE_URL}/api/crlv-agendado/solicitar`;
       body = { ...params, uf: svcDef?.uf || params.uf };
     }
     // CRLV Agendado: verificar status
@@ -6634,27 +6178,27 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         // Pedido do portal (hoje o CE): o prefixo é nosso, a API só conhece o número.
         apiUrl = `${PORTAL_BASE_URL}/api/crlv-agendado/${pid.slice(PORTAL_PEDIDO_PREFIX.length)}`;
       } else {
-        apiUrl = `${BASE_API_URL}/api/crlv-agendado/${pid}`;
+        apiUrl = `${PORTAL_BASE_URL}/api/crlv-agendado/${pid}`;
       }
       method = 'GET'; body = null;
     }
     // Comunicado venda por ID (GET)
     if (serviceId === 'com-venda-por-id' && params?.id) {
-      apiUrl = `${BASE_API_URL}/api/comunicado-venda/${params.id}`;
+      apiUrl = `${PORTAL_BASE_URL}/api/comunicado-venda/${params.id}`;
       method = 'GET'; body = null;
     }
     // Comunicado venda desbloquear
     if (serviceId === 'com-venda-desbloquear') {
-      apiUrl = `${BASE_API_URL}/api/comunicado-venda/desbloquear`;
+      apiUrl = `${PORTAL_BASE_URL}/api/comunicado-venda/desbloquear`;
     }
     // Transmitir comunicação de venda
     if (serviceId === 'venda-transmitir' && params?.id) {
-      apiUrl = `${BASE_API_URL}/comunicacao-venda/transmitir/${params.id}`;
+      apiUrl = `${PORTAL_BASE_URL}/comunicacao-venda/transmitir/${params.id}`;
       body = {};
     }
     // Motivos cancelamento
     if (serviceId === 'motivos-cancelamento' && params?.protocolo) {
-      apiUrl = `${BASE_API_URL}/motivos-cancelamento/${params.protocolo}`;
+      apiUrl = `${PORTAL_BASE_URL}/motivos-cancelamento/${params.protocolo}`;
       method = 'GET'; body = null;
     }
     // Inserir comunicação de venda — a API exige id/numero_via/cidade/valor como número
@@ -6732,7 +6276,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       method = 'POST';
       body   = { servico: DESPBRASIL_SVCS[serviceId].servico, placa, ...(DESPBRASIL_SVCS[serviceId].extra || {}) };
     }
-    // ATPV-e por chassi via Chekaki — mesmo endpoint de consultar-atpve-v1
+    // ATPV-e por chassi via portal — mesmo endpoint de consultar-atpve-v1
     // (aceita chassi OU placa+renavam, nunca os dois juntos no corpo).
     if (serviceId === 'consultar-atpve') {
       const chassi = (params?.chassi || '').toUpperCase().replace(/\s/g, '');
@@ -6740,8 +6284,8 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         return res.status(400).json({ error: 'Chassi deve ter exatamente 17 caracteres.' });
       body = { chassi };
     }
-    // ATPV-e por placa + renavam via Chekaki (volta do despbrasil pra API antiga —
-    // BASE_API_URL/consultar-atpve, mesmo endpoint de antes do commit 9305042).
+    // ATPV-e por placa + renavam via portal (volta do despbrasil pra API antiga —
+    // PORTAL_BASE_URL/consultar-atpve, mesmo endpoint de antes do commit 9305042).
     if (serviceId === 'consultar-atpve-v1') {
       const placa   = (params?.placa   || '').toUpperCase().replace(/\s|-/g, '');
       const renavam = (params?.renavam || '').replace(/\D/g, '');
@@ -6749,22 +6293,8 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
       if (renavam.length < 9 || renavam.length > 11)
         return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
-      apiUrl = `${BASE_API_URL}/consultar-atpve`;
+      apiUrl = `${PORTAL_BASE_URL}/consultar-atpve`;
       body = { placa, renavam };
-    }
-    // Intenção de Venda (RJ/SP/MS) — registra a venda e emite o ATPV-e na hora
-    // (substitui o antigo fluxo manual de upload de documentos). A API devolve o
-    // PDF pronto. Mesmo corpo/validação para os três estados — só muda a URL.
-    if (ATPVE_UFS.some(uf => serviceId === `intencao-venda-${uf}`)) {
-      const atpveUf = serviceId.split('-')[2];
-      const built = buildAtpveCadastroBody(atpveUf, params);
-      if (built.error) return res.status(400).json({ error: built.error });
-      apiUrl = `${BASE_API_URL}/api/atpve-${atpveUf}/cadastrar`;
-      body   = built.body;
-    }
-    // CNH: converte cpfCnpj → cpf para a nova API
-    if (serviceId === 'consultar-cnh') {
-      body = { cpf: (params?.cpfCnpj || '').replace(/\D/g, '') };
     }
     // Serviço via API Vistocar (auth JWT em getVistocarToken, ver header
     // Authorization abaixo). Resposta é JSON com PDF pronto em base64.
@@ -7031,7 +6561,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     } else if (VISTOCAR_ENDPOINTS[serviceId]) {
       fetchHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await getVistocarToken()}` };
     } else {
-      fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO };
+      fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY };
     }
     const fetchOpts = { method, headers: fetchHeaders };
     if (isDatacubeForm) {
@@ -7059,7 +6589,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         }
       } catch {}
       console.error(`Erro API [${serviceId}] HTTP ${apiRes.status}: ${errMsg}`);
-      // Reemissão por Chassi/Placa (Chekaki) e Número ATPV-E (despbrasil): na
+      // Reemissão por Chassi/Placa (portal) e Número ATPV-E (despbrasil): na
       // prática todo erro aqui significa que não há documento disponível para
       // essa placa/chassi — a mensagem crua da upstream soa como erro de
       // sistema, então troca por algo mais claro (o erro original já foi logado).
@@ -7211,7 +6741,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     }
 
     // serviços que retornam JSON com pdf_base64
-    const PDF_BASE64_SVCS = ['consultar-placa-crv', 'consulta-debitos-portal'];
+    const PDF_BASE64_SVCS = ['consulta-debitos-portal'];
     let base64PdfBuf = null;
     // CRLV-e CE: identificador do registro na Vistocar, preenchido no tratamento
     // de resposta abaixo e usado depois para criar a pendência do webhook.
@@ -7456,59 +6986,6 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       }
     }
 
-    // ── Intenção de Venda (ATPVE): cobrança no cadastro ───────────────────────
-    // Exceção deliberada à regra de nunca cobrar sem resultado: a Chekaki aceitou
-    // o pedido (situação CADASTRADA) e a partir daí o custo já foi assumido, mesmo
-    // que o PDF só saia depois (verificação extra/LAUDOCAR). Se o documento não
-    // for emitido, a devolução é feita manualmente pelo admin — por isso o cron
-    // runAtpvePendingCheck avisa o admin no lugar de estornar sozinho.
-    // O status continua 'aguardando_pdf' até o PDF sair (é ele que mantém o
-    // pedido na varredura do cron e o selo "Aguardando emissão" no painel);
-    // transaction_id preenchido é o que marca a consulta como já cobrada.
-    if (ATPVE_UFS.some(uf => serviceId === `intencao-venda-${uf}`)) {
-      const atpveUf = serviceId.split('-')[2];
-      const placa = String(params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
-      const qRow = await pool.query(
-        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
-         VALUES ($1,$2,$3,$4,'aguardando_pdf',$5,'pdf',$6) RETURNING id`,
-        [userId, serviceId, service.name, JSON.stringify(stripAtpveAnexos(params)), price, JSON.stringify({ placa })]
-      );
-      const queryId = qRow.rows[0].id;
-
-      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]);
-      const txRow = await pool.query(
-        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
-        [userId, price, `Consulta: ${service.name}`]
-      );
-      await pool.query('UPDATE queries SET transaction_id=$1 WHERE id=$2', [txRow.rows[0].id, queryId]);
-
-      let match = await correlateAtpveRecord(atpveUf, queryId, placa);
-      // MG não avança sozinho como RJ/SP/MS — ver autoRegistrarAtpveMg.
-      if (atpveUf === 'mg' && match?.id && !match.pdf_disponivel && String(match.situacao_codigo) === '1') {
-        match = await autoRegistrarAtpveMg(atpveUf, queryId, match.id) || match;
-      }
-      if (match?.pdf_disponivel) {
-        await ensureAtpvePdfCached(atpveUf, queryId, userId, match, user.phone);
-      }
-      await notifyAdminNewQuery(user, service, price, params);
-
-      const after = await pool.query('SELECT status FROM queries WHERE id=$1', [queryId]);
-      const emitido = after.rows[0]?.status === 'success';
-      if (emitido) {
-        return res.json({
-          success: true,
-          result: { status: 'ATPV-e emitido com sucesso! O documento já está disponível no seu histórico e foi enviado pelo WhatsApp.' },
-          charged: price,
-        });
-      }
-      return res.json({
-        success: true,
-        pending: true,
-        result: { status: 'Cadastro registrado e cobrado! Seu ATPV-e está em processamento — assim que sair, você recebe o documento pelo WhatsApp e aqui no histórico. Se ele não for emitido, fale com o suporte para a devolução do valor.' },
-        charged: price,
-      });
-    }
-
     // ── Debita créditos somente após validar resposta ─────────────────────────
     await pool.query(
       'UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]
@@ -7522,7 +6999,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     // Exceção: Inserir Comunicação Venda não vira PDF aqui — o comprovante só é
     // gerado depois, quando o usuário transmite (ver /comunicacao-venda-transmitir),
     // porque antes disso a comunicação ainda está "importada", não "comunicada".
-    // O JSON de origem (com o "id" da Chekaki) fica salvo mesmo assim — é o que
+    // O JSON de origem (com o "id" do portal) fica salvo mesmo assim — é o que
     // habilita o botão "Transmitir" em "Meus Comunicados de Venda".
     const resultData = willBePdfOrHtml ? null
       : JSON.stringify(genericParseOk ? genericData : { resposta: bodyStr });
@@ -7602,11 +7079,10 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         const pedido = data?.pedido || data?.data?.pedido || {};
         const svcData = data?.servico || data?.data?.servico || {};
         const pedidoIdCru = pedido.id ?? pedido.pedido_id ?? data?.id ?? data?.pedido_id ?? data?.data?.id ?? '-';
-        // O portal numera os pedidos igual ao chekaki, então o id sozinho não diz
-        // a quem perguntar o status depois. O prefixo resolve isso — e vai também
-        // para a resposta que aparece na tela e fica no histórico, senão o cliente
-        // copiaria dali o número cru e o "Ver Status" perguntaria no host errado.
-        const ehPortal = PORTAL_AGENDADO_SVCS.has(serviceId) && pedidoIdCru !== '-';
+        // Prefixo PORTAL- desligado: com um host só (o AutoCRLV usa o prefixo
+        // próprio "AUTOCRLV-"), o número cru já identifica o pedido. Continua
+        // sendo aceito na leitura, para os pedidos antigos que o têm gravado.
+        const ehPortal = false;
         const pedidoId = ehPortal ? PORTAL_PEDIDO_PREFIX + pedidoIdCru : pedidoIdCru;
         if (ehPortal && data && typeof data === 'object') {
           if (data.pedido_id !== undefined) data.pedido_id = pedidoId;
@@ -7662,7 +7138,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
             );
             if (already.rows.length === 0) {
               // pdf_url costuma vir relativo — a base é o host que emitiu o pedido.
-              const fullUrl = /^https?:\/\//i.test(pdfPath) ? pdfPath : agendadoHostDoPedido(pedidoIdNotif) + pdfPath;
+              const fullUrl = /^https?:\/\//i.test(pdfPath) ? pdfPath : PORTAL_BASE_URL + pdfPath;
               const pdfApiRes = await fetch(fullUrl);
               if (pdfApiRes.ok) {
                 const pdfBuf = Buffer.from(await pdfApiRes.arrayBuffer());
@@ -7686,7 +7162,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         }
       }
 
-      // Inserir Comunicação Venda: não expõe o JSON bruto da Chekaki (traz um campo
+      // Inserir Comunicação Venda: não expõe o JSON bruto do portal (traz um campo
       // de situação tipo "importado" que confundiria o usuário) — o comprovante em
       // PDF só é gerado depois, na transmissão (ver /comunicacao-venda-transmitir).
       if (serviceId === 'inserir-comunicacao-venda') {
@@ -7715,7 +7191,7 @@ app.post('/api/query', requireAuth, (req, res) =>
 // (/api/v1): os serviços "manuais" (upload de PDF pelo super admin) não
 // respondem na hora — não há hoje uma rota de API para o cliente buscar esse
 // resultado depois. "Intenção de Venda (ATPVE)" já é 100% automatizado (RJ/SP/MS
-// via Chekaki, MG via Infosimples) e por isso está liberado pela API.
+// via portal, MG via Infosimples) e por isso está liberado pela API.
 const V1_EXCLUDED_GROUPS = [];
 function isV1Eligible(serviceId) {
   const svc = SERVICES.find(s => s.id === serviceId);
@@ -7797,8 +7273,7 @@ app.post('/api/v1/crlv-rj-reemissao-2', requireApiKey, (req, res) => {
 // Mesmo núcleo (processCatalogQuery) e mesmo preço do painel (basePrice *
 // markup), mas autenticado por chave em vez de cookie JWT, e debitando sempre
 // da conta vinculada à chave — chave Geral (pós-paga, sem usuário) não serve
-// aqui, só para os endpoints ATPV-e (MG/SP) e CRLV 2 Rio Reemissão (ver
-// proxyAtpveExternal adiante e runCrlvRj2General acima).
+// aqui, só para o CRLV 2 Rio Reemissão (ver runCrlvRj2General acima).
 app.post('/api/v1/:serviceId', requireApiKey, (req, res) => {
   if (!req.apiUser)
     return res.status(403).json({ error: 'Esta chave é do tipo Geral e não pode ser usada para o catálogo de Nova Consulta.' });
@@ -7835,7 +7310,7 @@ function findAndStripBase64Pdf(obj) {
 
 // ── POST /api/query-v2 (API Datacube — aba "Opção 2 Nova Consulta") ───────────
 // Fluxo isolado do /api/query: usa o mesmo saldo/tabelas do usuário, mas nunca
-// toca em SERVICES, MANUAL_SERVICE_IDS ou nas integrações chekaki/autocrlv.
+// toca em SERVICES, MANUAL_SERVICE_IDS ou nas integrações portal/autocrlv.
 app.post('/api/query-v2', requireAuth, async (req, res) => {
   const { serviceId, params } = req.body;
   if (!serviceId) return res.status(400).json({ error: 'Serviço não informado.' });
@@ -8351,204 +7826,6 @@ function externalApiPriceFor(serviceId) {
   return serviceId === 'crlv-rj-reemissao-2' ? CRLV_RJ_REEMISSAO_2_API_PRICE : EXTERNAL_API_PRICE;
 }
 
-// ── API externa /api/v1/atpve-<uf> — ATPV-e via Chekaki ──────────────────────
-// MG substituiu os antigos endpoints Infosimples (/api/v1/detran-mg/intencao-venda
-// e /api/v1/detran-mg/atpve). Espelha 1:1 os 9 endpoints da API ATPV-e da
-// Chekaki (mesmos caminhos, verbos e formatos de resposta da documentação de
-// integração), trocando só a autenticação — chave mcd_ aqui, chaveAcesso da
-// casa na upstream. Cobrança apenas no "cadastrar" (EXTERNAL_API_PRICE) e
-// somente após sucesso da upstream; os demais endpoints gerenciam um pedido já
-// criado/pago (consultar, PDF, atualizar, registrar no DETRAN, excluir) e não
-// debitam nada. Atenção: a upstream não segrega pedidos por cliente — qualquer
-// chave mcd_ enxerga/opera os pedidos ATPV-e daquele estado de toda a chaveAcesso
-// da casa (aceitável no modelo contratual, chaves só para parceiros de confiança).
-//
-// UFs expostas na API externa (subconjunto de ATPVE_UFS: só os estados com
-// documentação de integração publicada para parceiros). Já teve 'mg', 'sp' e
-// 'ms'.
-//
-// HOJE VAZIO: a Intenção de Venda saiu do catálogo (ver SERVICES) e as rotas
-// /api/v1/atpve-<uf>/* saíram junto — com a lista vazia o loop abaixo não
-// registra nenhuma, e quem chamar recebe 404. O caminho continua de pé, igual
-// a VISTOCAR_ASYNC_SVCS e PORTAL_AGENDADO_SVCS: para reexpor um estado basta
-// devolver a UF aqui, sem mexer em proxyAtpveExternal.
-//
-// Atenção ao reativar/desativar: são 9 rotas por UF e havia 8 chaves de API
-// ativas quando isto foi desligado — parceiro com integração passa a receber
-// 404 sem aviso prévio, então avise antes.
-const ATPVE_EXTERNAL_UFS = [];
-
-async function proxyAtpveExternal(req, res, uf, upstreamPath, { charge = false } = {}) {
-  const serviceId = `atpve-${uf}`;
-  const ufLabel   = uf.toUpperCase();
-  const price = EXTERNAL_API_PRICE;
-  try {
-    if (charge && req.apiUser) {
-      const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.apiUser.id]);
-      const user = ur.rows[0];
-      if (!user || !user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
-      if (parseFloat(user.credits) < price)
-        return res.status(402).json({
-          error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}`,
-        });
-    }
-
-    let upRes, buf;
-    try {
-      upRes = await fetch(`${BASE_API_URL}${upstreamPath}`, {
-        method: req.method,
-        headers: { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO },
-        ...(req.method !== 'GET' ? { body: JSON.stringify(req.body || {}) } : {}),
-      });
-      buf = Buffer.from(await upRes.arrayBuffer());
-    } catch (e) {
-      console.error(`Erro na API Chekaki [externo ${upstreamPath}]:`, e.message);
-      return res.status(502).json({ error: 'Erro ao consultar a API. Tente novamente.' });
-    }
-
-    // 401/403 da Chekaki indicam problema com a NOSSA chaveAcesso, não com a
-    // chave mcd_ do cliente — repassar confundiria a integração dele.
-    if (upRes.status === 401 || upRes.status === 403) {
-      console.error(`Chekaki recusou a chaveAcesso [externo ${upstreamPath}] HTTP ${upRes.status}: ${buf.toString().slice(0, 300)}`);
-      return res.status(502).json({ error: 'Erro de configuração no provedor. Contate o suporte.' });
-    }
-
-    const contentType = upRes.headers.get('content-type') || 'application/json';
-    const isPdf = contentType.includes('application/pdf');
-
-    // Erro de negócio da upstream (400/404/422/500): repassa como veio, sem cobrar.
-    if (!upRes.ok) return res.status(upRes.status).set('Content-Type', contentType).send(buf);
-
-    if (charge) {
-      // Sem os anexos em Base64 do /cadastrar (podem somar dezenas de MB e não
-      // servem para nada depois que a upstream aceitou o pedido).
-      const params = stripAtpveAnexos(req.body);
-      if (!req.apiUser) {
-        // Chave geral (pós-paga): registra para a página Cobranças API do admin.
-        await pool.query(
-          `INSERT INTO api_general_queries (api_key_id, service_id, params, result_data)
-           VALUES ($1,$2,$3,$4)`,
-          [req.apiKey.id, serviceId, JSON.stringify(params), JSON.stringify({ success: true })]
-        );
-      } else {
-        await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.apiUser.id]);
-        const txRow = await pool.query(
-          `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
-          [req.apiUser.id, price, `Consulta: ATPV-e ${ufLabel} — Cadastrar (API externa)`]
-        );
-        const qRow = await pool.query(
-          `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type, result_data)
-           VALUES ($1,$2,$3,$4,'success',$5,$6,$7,$8) RETURNING id`,
-          [req.apiUser.id, serviceId, `ATPV-e ${ufLabel} (API externa)`,
-           JSON.stringify(params), price, txRow.rows[0].id,
-           isPdf ? 'pdf' : 'json', isPdf ? '{}' : buf.toString()]
-        );
-        // Documento já emitido (a upstream devolveu o PDF): entra na fila da
-        // conferência da intenção de venda, igual ao pedido feito pelo painel.
-        // Pedido que volta JSON ainda está em análise e é o parceiro quem o
-        // conclui depois pelo /registrar — esse caminho não passa por aqui e
-        // fica de fora da conferência.
-        if (isPdf) await agendarVerificacaoIntencaoVenda(uf, qRow.rows[0].id);
-        if (isPdf) {
-          // Mesmo cache de 7 dias do painel: o dono da chave rebaixa o PDF pelo
-          // histórico sem nova cobrança.
-          const pdfToken = crypto.randomBytes(32).toString('hex');
-          await pool.query(
-            `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
-            [qRow.rows[0].id, req.apiUser.id, pdfToken, buf.toString('base64'),
-             new Date(Date.now() + 7 * 24 * 3600 * 1000)]
-          ).catch(e => console.error(`Erro ao salvar pdf_cache (${serviceId} externo):`, e.message));
-        }
-      }
-    }
-
-    res.status(upRes.status).set('Content-Type', contentType);
-    if (isPdf) {
-      const placa = (req.body?.placa || '').toString().toUpperCase().replace(/[\s-]/g, '');
-      res.set('Content-Disposition', upRes.headers.get('content-disposition')
-        || `attachment; filename="${serviceId}${placa ? '-' + placa : ''}-${Date.now()}.pdf"`);
-    }
-    return res.send(buf);
-  } catch (err) {
-    console.error(`Erro em API externa [${serviceId} ${upstreamPath}]:`, err.message);
-    res.status(500).json({ error: 'Erro interno. Tente novamente.' });
-  }
-}
-
-// Valida o :id numérico antes de montá-lo na URL da upstream.
-function atpveExternalIdParam(req, res) {
-  const id = parseInt(req.params.id, 10);
-  if (!Number.isInteger(id) || id <= 0) {
-    res.status(400).json({ error: 'ID do pedido inválido.' });
-    return null;
-  }
-  return id;
-}
-
-// Os 9 endpoints de cada UF exposta (MG, SP, MS). A rota /protocolo/:protocolo é
-// registrada antes de /:id para não ser capturada pelo parâmetro numérico.
-for (const uf of ATPVE_EXTERNAL_UFS) {
-  const ext = `/api/v1/atpve-${uf}`;   // nossa rota
-  const up  = `/api/atpve-${uf}`;      // caminho na Chekaki
-
-  // Listar pedidos
-  app.get(ext, requireApiKey, (req, res) =>
-    proxyAtpveExternal(req, res, uf, up));
-
-  // Cadastrar (única rota cobrada)
-  app.post(`${ext}/cadastrar`, requireApiKey, (req, res) => {
-    const placa   = (req.body?.placa || '').toString().toUpperCase().replace(/[\s-]/g, '');
-    const renavam = (req.body?.renavam || '').toString().replace(/\D/g, '');
-    if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
-    if (renavam.length < 9 || renavam.length > 11)
-      return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
-    return proxyAtpveExternal(req, res, uf, `${up}/cadastrar`, { charge: true });
-  });
-
-  // Consultar por protocolo
-  app.get(`${ext}/protocolo/:protocolo`, requireApiKey, (req, res) => {
-    const protocolo = (req.params.protocolo || '').trim();
-    if (!/^[A-Za-z0-9._-]{1,64}$/.test(protocolo))
-      return res.status(400).json({ error: 'Protocolo inválido.' });
-    return proxyAtpveExternal(req, res, uf, `${up}/protocolo/${encodeURIComponent(protocolo)}`);
-  });
-
-  // Consultar por ID
-  app.get(`${ext}/:id`, requireApiKey, (req, res) => {
-    const id = atpveExternalIdParam(req, res);
-    if (id) proxyAtpveExternal(req, res, uf, `${up}/${id}`);
-  });
-
-  // Baixar PDF
-  app.get(`${ext}/:id/pdf`, requireApiKey, (req, res) => {
-    const id = atpveExternalIdParam(req, res);
-    if (id) proxyAtpveExternal(req, res, uf, `${up}/${id}/pdf`);
-  });
-
-  // PDF em Base64
-  app.get(`${ext}/:id/pdf/base64`, requireApiKey, (req, res) => {
-    const id = atpveExternalIdParam(req, res);
-    if (id) proxyAtpveExternal(req, res, uf, `${up}/${id}/pdf/base64`);
-  });
-
-  // Atualizar situação/PDF
-  app.post(`${ext}/:id/atualizar`, requireApiKey, (req, res) => {
-    const id = atpveExternalIdParam(req, res);
-    if (id) proxyAtpveExternal(req, res, uf, `${up}/${id}/atualizar`);
-  });
-
-  // Registrar no DETRAN
-  app.post(`${ext}/:id/registrar`, requireApiKey, (req, res) => {
-    const id = atpveExternalIdParam(req, res);
-    if (id) proxyAtpveExternal(req, res, uf, `${up}/${id}/registrar`);
-  });
-
-  // Excluir
-  app.post(`${ext}/:id/excluir`, requireApiKey, (req, res) => {
-    const id = atpveExternalIdParam(req, res);
-    if (id) proxyAtpveExternal(req, res, uf, `${up}/${id}/excluir`);
-  });
-}
 
 // ── Gestão de chaves de API (admin) ───────────────────────────────────────────
 // A API é contratual (sem self-service, ver seção API da landing page): o admin
@@ -8663,9 +7940,9 @@ app.post('/api/admin/api-cobrancas/:id/cobrar', requireAuth, requireSuperAdmin, 
 
     let placa = '';
     try { placa = (JSON.parse(q.params || '{}').placa || '').toUpperCase(); } catch {}
-    // ATPV-e (MG/SP) não está em SERVICES/SERVICES_V3 — é rota exclusiva da API
-    // externa, então o nome amigável vem daqui para não vazar o id na mensagem.
-    const svcName = (ATPVE_EXTERNAL_UFS.includes(q.service_id.replace('atpve-', ''))
+    // Registro antigo de ATPV-e da API externa (rota removida): o id não existe
+    // em catálogo nenhum, então vira nome amigável aqui para não aparecer cru.
+    const svcName = (/^atpve-[a-z]{2}$/.test(q.service_id)
         ? `ATPV-e ${q.service_id.replace('atpve-', '').toUpperCase()} — Cadastrar`
         : null)
       || SERVICES_V3.find(s => s.id === q.service_id)?.name
@@ -9117,7 +8394,7 @@ app.put('/api/profile/password', requireAuth, async (req, res) => {
 });
 
 app.get('/api/chave/diagnostico', requireAuth, async (req, res) => {
-  const raw = (process.env.CHAVE_ACESSO || '');
+  const raw = (process.env.PORTAL_DESP_KEY || '');
   res.json({
     tamanho: raw.length,
     inicio: raw.slice(0, 10) + '...',
@@ -12131,8 +11408,8 @@ async function checkCrlvAgendadoStatus(pedidoId) {
     apiUrl  = `${PORTAL_BASE_URL}/api/crlv-agendado/${pid.slice(PORTAL_PEDIDO_PREFIX.length)}`;
     headers = { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY };
   } else {
-    apiUrl  = `${BASE_API_URL}/api/crlv-agendado/${pid}`;
-    headers = { 'Content-Type': 'application/json', 'chaveAcesso': CHAVE_ACESSO };
+    apiUrl  = `${PORTAL_BASE_URL}/api/crlv-agendado/${pid}`;
+    headers = { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY };
   }
   const apiRes = await fetch(apiUrl, { method: 'GET', headers });
   if (!apiRes.ok) return null;
@@ -12167,7 +11444,7 @@ async function runCrlvAgendadoPendingCheck() {
 
       const status = await checkCrlvAgendadoStatus(row.pedido_id);
       if (status?.podeBaixar && status.pdfPath && row.phone) {
-        const fullUrl = /^https?:\/\//i.test(status.pdfPath) ? status.pdfPath : agendadoHostDoPedido(row.pedido_id) + status.pdfPath;
+        const fullUrl = /^https?:\/\//i.test(status.pdfPath) ? status.pdfPath : PORTAL_BASE_URL + status.pdfPath;
         const pdfApiRes = await fetch(fullUrl);
         if (pdfApiRes.ok) {
           const pdfBuf = Buffer.from(await pdfApiRes.arrayBuffer());
@@ -12275,290 +11552,6 @@ app.post('/api/admin/crlv-agendado-status-check', requireAuth, requireSuperAdmin
   }
 });
 
-// Varre as Intenções de Venda (RJ/SP/MS/MG) recentes que ainda estão 'aguardando_pdf'
-// (cobrança condicionada — ver processCatalogQuery) e reconsulta cada uma na
-// Chekaki. Cobre dois casos: (1) o cadastro devolveu id mas o PDF ainda não
-// tinha saído (verificação extra/LAUDOCAR) — reconsulta por id; (2) a correlação
-// inicial por placa falhou (corrida com a listagem da Chekaki) e nunca chegou a
-// ter id — tenta correlacionar de novo. Sem essa varredura periódica o usuário só
-// receberia o PDF se clicasse manualmente em "Atualizar". Como a cobrança é feita
-// no cadastro (ver processCatalogQuery), nada é estornado aqui: passado o prazo
-// sem PDF, o cron avisa admin e cliente uma única vez e a devolução fica a cargo
-// do admin. Pedidos do modelo antigo (sem transaction_id, nunca cobrados)
-// continuam sendo marcados como 'cancelado'.
-async function runAtpvePendingCheck() {
-  const { rows } = await pool.query(
-    `SELECT q.id AS query_id, q.user_id, q.service_id, q.result_data, q.created_at,
-            q.transaction_id, q.amount, u.phone, u.name AS user_name
-     FROM queries q JOIN users u ON u.id = q.user_id
-     WHERE q.service_id IN ('intencao-venda-rj','intencao-venda-sp','intencao-venda-ms','intencao-venda-mg')
-       AND q.status = 'aguardando_pdf'
-       AND q.created_at > NOW() - INTERVAL '7 days'
-     ORDER BY q.created_at DESC LIMIT 200`
-  );
-  let checked = 0, notified = 0, cancelled = 0, alerted = 0;
-  for (const row of rows) {
-    const uf = row.service_id.split('-')[2];
-    let meta = {};
-    try { meta = JSON.parse(row.result_data || '{}'); } catch {}
-
-    checked++;
-    try {
-      const fresh = meta.id
-        ? await fetchAtpveById(uf, meta.id)
-        : await correlateAtpveRecord(uf, row.query_id, meta.placa);
-      if (fresh) {
-        // fetchAtpveById não grava sozinho (correlateAtpveRecord já grava por
-        // conta própria) — persiste o merge só nesse caminho.
-        let merged = meta.id ? { ...meta, ...fresh } : fresh;
-        // MG não avança sozinho como RJ/SP/MS (ver autoRegistrarAtpveMg) — se o
-        // pedido ainda estiver CADASTRADA aqui, é porque o disparo automático no
-        // cadastro falhou ou não rodou (ex.: correlação inicial não achou o id
-        // ainda). O cron tenta de novo a cada passada até sair de CADASTRADA.
-        if (uf === 'mg' && merged.id && !merged.pdf_disponivel && String(merged.situacao_codigo) === '1') {
-          const reg = await autoRegistrarAtpveMg(uf, row.query_id, merged.id);
-          if (reg) merged = { ...merged, ...reg };
-        }
-        if (meta.id) {
-          await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), row.query_id]);
-        }
-        // O aviso de atraso mais abaixo regrava result_data — parte do que acabou
-        // de ser persistido, não do meta lido no início da passada.
-        meta = merged;
-        if (merged.pdf_disponivel) {
-          await ensureAtpvePdfCached(uf, row.query_id, row.user_id, merged, row.phone);
-          notified++;
-          continue;
-        }
-      }
-
-      // Ainda sem PDF e já passou do prazo. O pedido cobrado no cadastro NÃO é
-      // estornado nem cancelado automaticamente: a devolução é decisão do admin
-      // (pode ser que o documento ainda saia). O cron só avisa uma vez — o aviso
-      // fica marcado no result_data para não repetir a cada passada — e segue
-      // acompanhando o pedido enquanto ele estiver na janela de 7 dias.
-      const ageMs = Date.now() - new Date(row.created_at).getTime();
-      if (ageMs > ASYNC_PDF_REFUND_HOURS * 3600 * 1000) {
-        if (!row.transaction_id) {
-          // Pedido do modelo antigo (nunca cobrado) — segue cancelando como antes.
-          const cancelledRow = await pool.query(
-            `UPDATE queries SET status='cancelado' WHERE id=$1 AND status='aguardando_pdf' RETURNING id`,
-            [row.query_id]
-          );
-          if (cancelledRow.rows.length) {
-            cancelled++;
-            if (row.phone) {
-              const msg = `⚠️ *Intenção de Venda (ATPVE) — ${uf.toUpperCase()}*\n\nNão conseguimos confirmar a emissão do documento dentro do prazo esperado. Você não foi cobrado por essa tentativa. Se precisar, tente novamente ou fale com o suporte.`;
-              await sendWhatsApp(row.phone, msg).catch(() => {});
-            }
-          }
-        } else if (!meta.aviso_atraso_enviado) {
-          alerted++;
-          const placa = (meta.placa || '').toUpperCase();
-          const valor = fmtMoneyBRL(parseFloat(row.amount || 0));
-          if (ADMIN_PHONE) {
-            const msgAdmin = `⚠️ *ATPV-e ${uf.toUpperCase()} sem PDF há ${ASYNC_PDF_REFUND_HOURS}h*\n\n🔤 Placa: ${placa || '-'}\n👤 Cliente: ${row.user_name || '-'}\n💰 Cobrado: ${valor}\n🧾 Consulta: ${row.query_id}\n\nO pedido foi cobrado no cadastro. Verifique na Chekaki e devolva o valor manualmente se o documento não sair.`;
-            await sendWhatsApp(ADMIN_PHONE, msgAdmin).catch(() => {});
-          }
-          if (row.phone) {
-            const msgCliente = `⚠️ *Intenção de Venda (ATPVE) — ${uf.toUpperCase()}*\n\nSeu ATPV-e${placa ? ` da placa ${placa}` : ''} ainda não foi emitido. Já estamos verificando com o DETRAN — se o documento não sair, o valor é devolvido. Qualquer dúvida, fale com o suporte.`;
-            await sendWhatsApp(row.phone, msgCliente).catch(() => {});
-          }
-          await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2',
-            [JSON.stringify({ ...meta, aviso_atraso_enviado: true }), row.query_id]);
-        }
-      }
-    } catch (e) {
-      console.error(`Erro ao checar ATPV-e ${uf.toUpperCase()} pendente [query ${row.query_id}]:`, e.message);
-    }
-    await new Promise(r => setTimeout(r, 400));
-  }
-  console.log(`✅ Checagem ATPV-e pendentes: ${checked} verificados, ${notified} avisados, ${cancelled} cancelados, ${alerted} atrasados (devolução manual)`);
-  return { checked, notified, cancelled, alerted, total: rows.length };
-}
-
-// ── Conferência da intenção de venda no BIN Nacional ─────────────────────────
-// O ATPV-e sair não garante que o DETRAN atribuiu a intenção de venda ao
-// veículo — e é a restrição, não o papel, que o cliente comprou. Por isso todo
-// pedido concluído é reconferido no BIN Nacional (o mesmo /veiculos/bin-nacional
-// da aba "Opção 2 Nova Consulta", ver SERVICES_V2/dc-bin-nacional) e, se a
-// restrição não estiver lá, o valor é estornado sozinho.
-//
-// A espera de 2 horas é de propósito: a base nacional não reflete o registro na
-// mesma hora, e conferir cedo demais estornaria pedido bom. A conferência custa
-// uma consulta Datacube por pedido, paga pela casa — daí o limite de tentativas
-// quando a resposta vem indeterminada (API fora do ar, placa sem retorno), em
-// vez de repetir para sempre.
-const ATPVE_VERIFICACAO_HORAS = 2;
-const ATPVE_VERIFICACAO_TENTATIVAS = 5;
-// A Datacube devolve a restrição sem acento ("INTENCAO VENDA"), mas a regex
-// aceita as duas grafias para não depender disso.
-const INTENCAO_VENDA_RE = /INTEN[ÇC][ÃA]O\s+(DE\s+)?VENDA/i;
-
-// true = restrição encontrada, false = ausente, null = não deu para saber
-// (nesse caso o cron tenta de novo na próxima passada).
-async function temIntencaoVendaNoBinNacional(placa) {
-  const r = await fetch(`${DATACUBE_API_URL}/veiculos/bin-nacional`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ auth_token: DATACUBE_TOKEN, placa }).toString(),
-  });
-  const d = await r.json().catch(() => null);
-  if (!r.ok || d?.status !== true || !d?.result) {
-    console.error(`[atpve-verificacao] BIN Nacional sem resposta útil para ${placa}: HTTP ${r.status} ${JSON.stringify(d).slice(0, 200)}`);
-    return null;
-  }
-  const rest = d.result.restricoes_e_impedimentos || {};
-  const candidatos = [...(Array.isArray(rest.restricoes_list) ? rest.restricoes_list : []), rest.restricoes || ''];
-  return candidatos.some(x => INTENCAO_VENDA_RE.test(String(x)));
-}
-
-// Põe o pedido na fila da conferência. Só entra pedido concluído E cobrado —
-// sem transaction_id não há o que estornar, e sem placa não há o que consultar.
-async function agendarVerificacaoIntencaoVenda(uf, queryId) {
-  try {
-    const r = await pool.query(
-      'SELECT status, transaction_id, params, result_data FROM queries WHERE id=$1', [queryId]
-    );
-    const q = r.rows[0];
-    if (!q || q.status !== 'success' || !q.transaction_id) return;
-
-    let placa = '';
-    for (const campo of [q.result_data, q.params]) {
-      if (placa) break;
-      try { placa = (JSON.parse(campo || '{}').placa || '').toString(); } catch {}
-    }
-    placa = placa.toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (placa.length !== 7) return;
-
-    await pool.query(
-      `INSERT INTO atpve_verificacoes (query_id, uf, placa) VALUES ($1,$2,$3)
-       ON CONFLICT (query_id) DO NOTHING`,
-      [queryId, uf.toUpperCase(), placa]
-    );
-  } catch (e) {
-    console.error(`[atpve-verificacao] falha ao agendar a conferência da consulta ${queryId}:`, e.message);
-  }
-}
-
-// Roda junto do cron do ATPV-e (a cada 5 min): pega o que já passou das 2 horas
-// e ainda não foi conferido. Estorno usa refundQuery, que é idempotente.
-async function runAtpveIntencaoVendaCheck() {
-  const { rows } = await pool.query(
-    `SELECT v.id, v.query_id, v.uf, v.placa, v.tentativas,
-            q.user_id, q.amount, u.phone, u.name AS user_name
-       FROM atpve_verificacoes v
-       JOIN queries q ON q.id = v.query_id
-       JOIN users u ON u.id = q.user_id
-      WHERE v.verificada_em IS NULL
-        AND v.tentativas < $1
-        AND v.concluida_em < NOW() - ($2 || ' hours')::interval
-      ORDER BY v.concluida_em ASC LIMIT 50`,
-    [ATPVE_VERIFICACAO_TENTATIVAS, String(ATPVE_VERIFICACAO_HORAS)]
-  );
-
-  let conferidos = 0, comIntencao = 0, estornados = 0, indefinidos = 0;
-  for (const row of rows) {
-    conferidos++;
-    let tem = null;
-    try {
-      tem = await temIntencaoVendaNoBinNacional(row.placa);
-    } catch (e) {
-      console.error(`[atpve-verificacao] erro no BIN Nacional da placa ${row.placa}:`, e.message);
-    }
-
-    // Indeterminado: só marca a tentativa e volta na próxima passada. Esgotadas
-    // as tentativas, o admin é avisado — nada é estornado no escuro.
-    if (tem === null) {
-      indefinidos++;
-      const upd = await pool.query(
-        'UPDATE atpve_verificacoes SET tentativas = tentativas + 1 WHERE id=$1 RETURNING tentativas',
-        [row.id]
-      );
-      if (upd.rows[0]?.tentativas >= ATPVE_VERIFICACAO_TENTATIVAS) {
-        await pool.query(
-          `UPDATE atpve_verificacoes SET verificada_em=NOW(), resultado='INDETERMINADO',
-                  detalhe='BIN Nacional não respondeu em ' || tentativas || ' tentativas' WHERE id=$1`,
-          [row.id]
-        );
-        if (ADMIN_PHONE) {
-          await sendWhatsApp(ADMIN_PHONE,
-            `⚠️ *ATPV-e ${row.uf} — conferência sem resposta*\n\n🔤 Placa: ${row.placa}\n👤 Cliente: ${row.user_name || '-'}\n🧾 Consulta: ${row.query_id}\n\nO BIN Nacional não respondeu em ${ATPVE_VERIFICACAO_TENTATIVAS} tentativas. Confira a intenção de venda na mão e devolva o valor se ela não constar.`
-          ).catch(() => {});
-        }
-      }
-      continue;
-    }
-
-    if (tem) {
-      comIntencao++;
-      await pool.query(
-        `UPDATE atpve_verificacoes SET verificada_em=NOW(), tentativas = tentativas + 1,
-                resultado='COM_INTENCAO' WHERE id=$1`,
-        [row.id]
-      );
-      continue;
-    }
-
-    // Sem a restrição no veículo: o cliente pagou por um registro que não
-    // aconteceu, então devolve.
-    const valor = parseFloat(row.amount || 0);
-    const ok = await refundQuery(row.query_id, row.user_id, valor,
-      `ATPV-e ${row.uf} sem intenção de venda registrada (placa ${row.placa})`);
-    await pool.query(
-      `UPDATE atpve_verificacoes SET verificada_em=NOW(), tentativas = tentativas + 1,
-              resultado='SEM_INTENCAO', estornado=$2,
-              detalhe=$3 WHERE id=$1`,
-      [row.id, ok, ok ? null : 'Consulta já estava estornada ou sem valor a devolver']
-    );
-    if (!ok) continue;
-
-    estornados++;
-    if (row.phone) {
-      await sendWhatsApp(row.phone,
-        `💰 *Devolvemos o valor do seu ATPV-e ${row.uf}*\n\n🔤 Placa: ${row.placa}\n💵 Estornado: ${fmtMoneyBRL(valor)}\n\nConferimos na base nacional ${ATPVE_VERIFICACAO_HORAS}h depois da emissão e a *intenção de venda não consta* no veículo. O crédito já voltou para o seu saldo. Se precisar do documento de novo, é só refazer — qualquer dúvida, fale com o suporte.`
-      ).catch(() => {});
-    }
-    if (ADMIN_PHONE) {
-      await sendWhatsApp(ADMIN_PHONE,
-        `↩️ *Estorno automático de ATPV-e ${row.uf}*\n\n🔤 Placa: ${row.placa}\n👤 Cliente: ${row.user_name || '-'}\n💵 Devolvido: ${fmtMoneyBRL(valor)}\n🧾 Consulta: ${row.query_id}\n\nO BIN Nacional não mostrou a intenção de venda ${ATPVE_VERIFICACAO_HORAS}h depois da emissão.`
-      ).catch(() => {});
-    }
-    await new Promise(r => setTimeout(r, 300));
-  }
-
-  console.log(`✅ Conferência de intenção de venda: ${conferidos} conferidos, ${comIntencao} com restrição, ${estornados} estornados, ${indefinidos} sem resposta`);
-  return { conferidos, comIntencao, estornados, indefinidos, total: rows.length };
-}
-
-// ── GET /api/cron/atpve-rj-status (Vercel Cron) — nome histórico, hoje varre
-// RJ+SP+MS+MG numa passada só; ver runAtpvePendingCheck. ──────────────────────
-app.get('/api/cron/atpve-rj-status', async (req, res) => {
-  const secret = process.env.CRON_SECRET || '';
-  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  try {
-    const result = await runAtpvePendingCheck();
-    const verificacao = await runAtpveIntencaoVendaCheck();
-    res.json({ success: true, ...result, verificacao });
-  } catch (err) {
-    console.error('Erro no cron atpve-rj-status:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── POST /api/admin/atpve-rj-status-check (teste manual pelo admin) ──────────
-app.post('/api/admin/atpve-rj-status-check', requireAuth, requireSuperAdmin, async (req, res) => {
-  try {
-    const result = await runAtpvePendingCheck();
-    const verificacao = await runAtpveIntencaoVendaCheck();
-    res.json({ success: true, ...result, verificacao });
-  } catch (err) {
-    console.error('Erro na checagem manual ATPV-e:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // ── Iniciar ───────────────────────────────────────────────────────────────────
 // require.main === module → true quando rodado diretamente (node server.js)

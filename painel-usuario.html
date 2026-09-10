@@ -140,13 +140,6 @@
       </svg>
       <span style="color:#a5b4fc;font-weight:bold">Infosimples Nova Consulta</span>
     </div>
-    <div class="nav-item" data-section="intencao" onclick="showSection('intencao')">
-      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-          d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-      </svg>
-      <span style="color:#f9a8d4;font-weight:bold">Intenção de Venda (ATPVE)</span>
-    </div>
     <a href="/recarga-pix"
       class="nav-item"
       style="color:#86efac;border:1px solid rgba(34,197,94,.4);background:rgba(20,83,45,.35);">
@@ -277,7 +270,7 @@
       </div>
 
       <!-- Catálogo rápido — todas as consultas das abas "Acesse Aqui Para as
-           Principais Consultas", "Intenção de Venda (ATPVE)" e "Coisas de
+           Principais Consultas" e "Coisas de
            Despachantes" numa vitrine só, com busca. Os atalhos das demais
            seções (Opção 2, Infosimples, Extras, Histórico, Preços) saíram
            daqui de propósito: ficam só no menu lateral, destacados por cor —
@@ -873,115 +866,6 @@
       </div>
     </section>
 
-    <!-- ── INTENÇÃO DE VENDA (ATPVE) ───────────────────────────────────── -->
-    <section id="section-intencao" class="dash-section hidden space-y-5">
-
-      <div>
-        <h2 class="text-xl font-bold text-gray-800">Intenção de Venda (ATPVE)</h2>
-        <p id="intencao-subtitulo" class="text-sm text-gray-500">Preencha os dados do veículo, vendedor e comprador — o ATPV-e (RJ/SP/MS/MG) é emitido na hora, sem envio de documentos.</p>
-      </div>
-
-      <!-- Emissão encerrada: aparece quando o catálogo não traz nenhum serviço do
-           grupo "Intenção de Venda (ATPVE)". A aba continua no ar porque os
-           pedidos já emitidos vivem aqui embaixo, em "Meus ATPV-e". -->
-      <div id="intencao-sem-emissao"
-        class="hidden card bg-amber-50 border border-amber-300 text-sm text-amber-900 flex gap-3">
-        <span class="text-xl flex-shrink-0">🛑</span>
-        <div>
-          <div class="font-semibold mb-1">Novas emissões encerradas</div>
-          <p>A emissão de Intenção de Venda (ATPV-e) não está mais disponível nesta plataforma.</p>
-          <p class="mt-1">Seus ATPV-e já emitidos continuam abaixo, em <strong>Meus ATPV-e</strong>, com download do PDF e as ações de Atualizar, Registrar, Alterar e Excluir funcionando normalmente.</p>
-        </div>
-      </div>
-
-      <!-- Saldo disponível -->
-      <div id="intencao-saldo-wrap" class="card bg-gradient-to-br from-orange-50 to-white border border-orange-200 flex items-center gap-4">
-        <div class="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center text-xl flex-shrink-0">💳</div>
-        <div>
-          <div class="text-sm text-gray-600">Saldo disponível</div>
-          <div id="intencao-credits" class="text-2xl font-bold text-orange-600">R$ 0,00</div>
-        </div>
-        <div class="ml-auto text-xs text-gray-400">Mesmo saldo da aba Acesse Aqui Para as Principais Consultas</div>
-      </div>
-
-      <!-- Seleção de categoria -->
-      <div id="intencao-category-wrap" class="card">
-        <h3 class="font-semibold text-gray-800 mb-4">Selecione o Estado</h3>
-        <div id="intencao-category-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-3"></div>
-      </div>
-
-      <!-- Formulário -->
-      <div id="intencao-form-wrap" class="card hidden">
-        <div class="flex items-center justify-between mb-4">
-          <div>
-            <h3 id="intencao-form-name" class="font-semibold text-gray-800"></h3>
-            <div class="flex items-center gap-2 mt-1">
-              <span class="text-xs text-gray-500">Custo:</span>
-              <span id="intencao-form-price" class="price-tag"></span>
-            </div>
-          </div>
-          <button onclick="resetIntencaoForm()" class="text-xs text-gray-500 hover:text-gray-700">✕ Cancelar</button>
-        </div>
-
-        <div id="intencao-manutencao"
-          class="hidden bg-amber-50 border border-amber-300 rounded-lg px-4 py-3 text-sm text-amber-800 flex gap-2 mb-4">
-          <span class="flex-shrink-0">🛠️</span>
-          <span id="intencao-manutencao-msg"></span>
-        </div>
-
-        <div class="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-800 flex gap-2 mb-4">
-          <span class="flex-shrink-0">⚠️</span>
-          <div>
-            <p class="font-semibold">Atenção — conferência dos dados</p>
-            <p class="mt-1">Revise com cuidado todas as informações antes de concluir o ATPV-e. Dados preenchidos incorretamente após a finalização do documento não podem ser corrigidos por esta plataforma.</p>
-            <p class="mt-1">Em caso de erro após o ATPV concluído, o cancelamento ou desfazimento só pode ser feito diretamente junto ao DETRAN de origem. Não nos responsabilizamos por dados inseridos de forma errada.</p>
-          </div>
-        </div>
-
-        <form id="intencao-form" onsubmit="submitIntencao(event)" class="space-y-5">
-          <div id="intencao-form-fields"></div>
-
-          <div id="intencao-form-error"
-            class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm flex gap-2">
-            <span class="flex-shrink-0">⚠️</span>
-            <span id="intencao-form-error-msg"></span>
-          </div>
-
-          <button id="intencao-submit-btn" type="submit" class="btn-primary w-full justify-center py-3">
-            <span id="intencao-submit-text">Emitir ATPV-e</span>
-            <svg id="intencao-spinner" class="hidden w-4 h-4 spin" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-            </svg>
-          </button>
-        </form>
-      </div>
-
-      <!-- Resultado -->
-      <div id="intencao-result-wrap" class="hidden result-card p-5">
-        <div class="flex items-center gap-3">
-          <div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-xl">✅</div>
-          <div>
-            <div class="font-bold text-green-800">ATPV-e gerado com sucesso</div>
-            <div id="intencao-result-msg" class="text-sm text-green-700">O PDF foi baixado automaticamente.</div>
-          </div>
-        </div>
-        <div class="grid grid-cols-2 gap-3 mt-4">
-          <button id="intencao-result-pdf-btn" type="button" class="btn-secondary w-full justify-center">📥 Baixar PDF</button>
-          <button onclick="resetIntencaoForm()" class="btn-secondary w-full justify-center">🔄 Novo Pedido</button>
-        </div>
-      </div>
-
-      <!-- Meus ATPV-e (RJ/SP/MS/MG) -->
-      <div class="card">
-        <h3 class="font-semibold text-gray-800 mb-1">Meus ATPV-e</h3>
-        <p class="text-xs text-gray-500 mb-4">Suas emissões de ATPV-e (RJ, SP, MS e MG) nesta conta. O PDF fica disponível para novo download por 7 dias.</p>
-        <div id="meus-atpve-list" class="space-y-1">
-          <div class="text-center py-6 text-gray-400 text-sm">Nenhuma emissão de ATPV-e ainda.</div>
-        </div>
-      </div>
-    </section>
-
     <!-- ── HISTÓRICO ───────────────────────────────────────────────────── -->
     <section id="section-history" class="dash-section hidden space-y-5">
 
@@ -1233,7 +1117,6 @@ const sectionTitles = {
   extras:   'Consultas Extras',
   query2:   'Opção 2 Nova Consulta',
   query3:   'Infosimples Nova Consulta',
-  intencao: 'Intenção de Venda (ATPVE)',
   history:  'Histórico',
   prices:   'Tabela de Preços',
   profile:  'Perfil',
@@ -1346,7 +1229,6 @@ async function init() {
     buildCatalog();
     buildDespachantesList();
     buildExtrasList();
-    buildIntencaoCategoryGrid();
     renderServiceListV2();
     await Promise.all([loadStats(), loadQueries(), loadAssinaturaStatus()]);
   } catch {
@@ -1369,577 +1251,8 @@ async function loadStats() {
     document.getElementById('extras-credits').textContent      = fmt(d.credits);
     document.getElementById('query2-credits').textContent     = fmt(d.credits);
     document.getElementById('query3-credits').textContent     = fmt(d.credits);
-    document.getElementById('intencao-credits').textContent   = fmt(d.credits);
     document.getElementById('header-credits').textContent     = fmt(d.credits);
   } catch {}
-}
-
-// ── Intenção de Venda (ATPVE) ────────────────────────────────────────────────
-let selectedIntencaoSvc = null;
-// Quando preenchido, o formulário está em modo "Alterar" (botão ✏️ Alterar de
-// "Meus ATPV-e"): submitIntencao corrige o pedido existente em vez de emitir um
-// novo. Guarda { queryId, uf } — ver alterarAtpve.
-let editingAtpve = null;
-const INTENCAO_ICONS = {
-  'intencao-venda-rj': '🟢', 'intencao-venda-sp': '🟡', 'intencao-venda-ms': '🟠',
-  'intencao-venda-mg': '🔵',
-};
-// Selo exibido em "Meus ATPV-e" para identificar rapidamente o estado do pedido.
-const ATPVE_UF_LABELS = { 'intencao-venda-rj': 'RJ', 'intencao-venda-sp': 'SP', 'intencao-venda-ms': 'MS', 'intencao-venda-mg': 'MG' };
-
-// Só há emissão de ATPV-e se o catálogo trouxer algum estado do grupo. Hoje
-// não traz (ver SERVICES no server.js): a aba vira consulta dos pedidos
-// antigos. É consultado em mais de um lugar, por isso não fica só numa flag
-// calculada uma vez — allServices chega por fetch e pode demorar.
-const intencaoTemEmissao = () =>
-  allServices.some(s => s.group === 'Intenção de Venda (ATPVE)');
-
-function buildIntencaoCategoryGrid() {
-  const svcs = allServices.filter(s => s.group === 'Intenção de Venda (ATPVE)');
-
-  // Catálogo sem nenhum estado = emissão retirada do ar. Esconde o bloco de
-  // escolha e o saldo — que só servem para emitir — e explica o que houve, em
-  // vez de deixar um grid vazio. "Meus ATPV-e" continua visível: é o que
-  // atende quem já pagou.
-  const semEmissao = svcs.length === 0;
-  document.getElementById('intencao-sem-emissao').classList.toggle('hidden', !semEmissao);
-  document.getElementById('intencao-category-wrap').classList.toggle('hidden', semEmissao);
-  document.getElementById('intencao-saldo-wrap').classList.toggle('hidden', semEmissao);
-  if (semEmissao)
-    document.getElementById('intencao-subtitulo').textContent =
-      'Acompanhe os ATPV-e já emitidos nesta conta.';
-  if (semEmissao) return;
-
-  document.getElementById('intencao-category-grid').innerHTML = svcs.map(s => `
-    <div class="service-cat" data-svc="${s.id}" onclick="selectIntencaoCategory(${JSON.stringify(s).replace(/"/g,"&quot;")}, this)">
-      <div class="text-2xl mb-1">${INTENCAO_ICONS[s.id] || s.icon}</div>
-      <div class="font-semibold text-gray-800 text-sm leading-tight">${s.name}</div>
-      ${s.unavailable ? '<div class="mt-1"><span class="svc-badge bg-amber-100 text-amber-800">Em manutenção</span></div>' : ''}
-      <div class="text-xs text-gray-400 mt-0.5">${fmt(s.price)}</div>
-    </div>`).join('');
-}
-
-function selectIntencaoCategory(svc, cardEl) {
-  if (typeof svc === 'string') svc = JSON.parse(svc);
-  selectedIntencaoSvc = svc;
-  // Escolher um estado sempre volta ao modo de emissão — se o formulário estava
-  // aberto em "Alterar", o clique aqui é o usuário desistindo da correção.
-  editingAtpve = null;
-  document.getElementById('intencao-submit-text').textContent = 'Emitir ATPV-e';
-  document.querySelectorAll('#intencao-category-grid .service-cat').forEach(el => el.classList.remove('selected'));
-  cardEl?.classList.add('selected');
-
-  document.getElementById('intencao-form-name').textContent  = svc.name;
-  document.getElementById('intencao-form-price').textContent = fmt(svc.price);
-  // Estado em manutenção (unavailable no catálogo): o formulário continua visível
-  // para o usuário ver do que se trata, mas o envio fica travado — o servidor
-  // recusa esse serviço em /api/query de qualquer forma.
-  setIntencaoManutencao(svc);
-  renderIntencaoRjFields(svc.uf ? svc.uf.toUpperCase() : 'RJ');
-  document.getElementById('intencao-form-wrap').classList.remove('hidden');
-  document.getElementById('intencao-result-wrap').classList.add('hidden');
-  scrollToIntencaoForm('intencao-form-wrap');
-}
-
-// Liga/desliga o modo manutenção do formulário de ATPV-e. Passar null (ou um
-// serviço liberado) volta ao normal — é o que "Alterar" faz, já que corrigir um
-// pedido antigo não passa pela emissão suspensa.
-function setIntencaoManutencao(svc) {
-  const emManutencao = !!(svc && svc.unavailable);
-  const aviso = document.getElementById('intencao-manutencao');
-  aviso.classList.toggle('hidden', !emManutencao);
-  if (emManutencao)
-    document.getElementById('intencao-manutencao-msg').textContent =
-      svc.slowNote || 'Consulta temporariamente em manutenção.';
-  document.getElementById('intencao-submit-btn').disabled = emManutencao;
-  document.getElementById('intencao-submit-text').textContent =
-    emManutencao ? 'Em manutenção' : 'Emitir ATPV-e';
-}
-
-function scrollToIntencaoForm(id) {
-  setTimeout(() => {
-    const el = document.getElementById(id);
-    const header = document.querySelector('header');
-    const offset = (header ? header.offsetHeight : 0) + 16;
-    const top = el.getBoundingClientRect().top + window.scrollY - offset;
-    window.scrollTo({ top, behavior: 'smooth' });
-  }, 50);
-}
-
-// Campos do formulário de Intenção de Venda RJ — chamada direta à API Chekaki
-// (POST /api/atpve-rj/cadastrar), que já devolve o ATPV-e pronto em PDF.
-const ATPVE_RJ_FIELDS = [
-  { group: 'Veículo', fields: [
-    { name: 'placa', label: 'Placa', required: true, placeholder: 'ABC1D23' },
-    { name: 'renavam', label: 'Renavam', required: true },
-    { name: 'chassi', label: 'Chassi', required: true },
-    { name: 'ano_fabricacao', label: 'Ano de Fabricação', required: true },
-    { name: 'ano_modelo', label: 'Ano do Modelo', required: true },
-    { name: 'kilometragem', label: 'Quilometragem', required: true },
-  ]},
-  { group: 'CRV', fields: [
-    { name: 'crv_numero', label: 'Número do CRV', required: true },
-    { name: 'crv_numero_via', label: 'Número da Via', required: true },
-    { name: 'crv_uf_emissao', label: 'UF de Emissão', required: true, placeholder: 'RJ' },
-    { name: 'crv_data_emissao', label: 'Data de Emissão', required: true, placeholder: 'DD/MM/AAAA' },
-    { name: 'crv_codigo_seguranca', label: 'Código de Segurança', required: false },
-  ]},
-  { group: 'Vendedor', fields: [
-    { name: 'vendedor_tipo_pessoa', label: 'Tipo de Pessoa', required: true, type: 'select', options: [['F','Física'],['J','Jurídica']] },
-    { name: 'vendedor_documento', label: 'CPF/CNPJ', required: true },
-    { name: 'vendedor_nome', label: 'Nome', required: true },
-    { name: 'vendedor_email', label: 'E-mail', required: true },
-  ]},
-  { group: 'Venda', fields: [
-    { name: 'venda_cidade', label: 'Cidade da Venda', required: true },
-    { name: 'venda_valor', label: 'Valor da Venda', required: true, placeholder: 'Ex.: 25000,00' },
-    { name: 'venda_data', label: 'Data da Venda', required: true, placeholder: 'DD/MM/AAAA' },
-  ]},
-  { group: 'Comprador', fields: [
-    { name: 'comprador_tipo_pessoa', label: 'Tipo de Pessoa', required: true, type: 'select', options: [['F','Física'],['J','Jurídica']] },
-    { name: 'comprador_documento', label: 'CPF/CNPJ', required: true },
-    { name: 'comprador_nome', label: 'Nome', required: true },
-    { name: 'comprador_email', label: 'E-mail', required: true },
-    { name: 'comprador_cep', label: 'CEP', required: true, placeholder: '00000000' },
-    { name: 'comprador_logradouro', label: 'Logradouro', required: true },
-    { name: 'comprador_numero', label: 'Número', required: true },
-    { name: 'comprador_complemento', label: 'Complemento', required: false },
-    { name: 'comprador_bairro', label: 'Bairro', required: true },
-    { name: 'comprador_cidade', label: 'Cidade', required: true },
-    { name: 'comprador_uf', label: 'UF', required: true, placeholder: 'RJ' },
-  ]},
-];
-
-// Anexos em Base64 do /cadastrar (documentação de integração ATPV-e SP de
-// 18/08/2026) — só aparecem no formulário de SP, o único estado com os anexos
-// documentados. Opcionais: se o DETRAN exigir algum, a Chekaki responde com a
-// mensagem pedindo o documento. A CNH muda de campo quando a parte é pessoa
-// jurídica (CNH do representante), por isso `key` recebe os params já montados.
-const ATPVE_SP_ANEXOS = [
-  { slot: 'crlve', label: 'CRLV-e (PDF)', key: () => 'crlve_pdf_base64' },
-  { slot: 'vendedor_cnh', label: 'CNH do vendedor (ou do representante, se PJ)',
-    key: p => p.vendedor_tipo_pessoa === 'J' ? 'vendedor_cnh_representante_pdf_base64' : 'vendedor_cnh_pdf_base64' },
-  { slot: 'vendedor_comprovante', label: 'Comprovante de endereço do vendedor', key: () => 'vendedor_comprovante_base64' },
-  { slot: 'comprador_cnh', label: 'CNH do comprador (ou do representante, se PJ)',
-    key: p => p.comprador_tipo_pessoa === 'J' ? 'comprador_cnh_representante_pdf_base64' : 'comprador_cnh_pdf_base64' },
-  { slot: 'comprador_comprovante', label: 'Comprovante de endereço do comprador', key: () => 'comprador_comprovante_base64' },
-];
-
-const ATPVE_ANEXO_MAX_BYTES = 7 * 1024 * 1024;
-
-// Lê o anexo escolhido e guarda só o Base64 (sem o prefixo data:) no input
-// oculto que buildIntencaoRjParams envia — mesmo padrão do comprovante da
-// Comunicação de Venda (handleComprovanteUploadV2).
-function handleAtpveAnexoUpload(input, slot) {
-  const statusEl = document.getElementById('ia-status-' + slot);
-  const hiddenEl = document.getElementById('ia-' + slot);
-  const file = input.files && input.files[0];
-  const falha = msg => {
-    statusEl.textContent = msg;
-    statusEl.className = 'text-xs text-red-500 mt-1';
-    input.value = '';
-    hiddenEl.value = '';
-  };
-  if (!file) { hiddenEl.value = ''; statusEl.textContent = ''; return; }
-  if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf'))
-    return falha('Arquivo inválido. Selecione um PDF.');
-  if (file.size > ATPVE_ANEXO_MAX_BYTES)
-    return falha('Arquivo muito grande. Envie um PDF de até 7 MB.');
-
-  statusEl.textContent = 'Carregando...';
-  statusEl.className = 'text-xs text-gray-500 mt-1';
-  const reader = new FileReader();
-  reader.onload = () => {
-    hiddenEl.value = String(reader.result).split(',')[1] || '';
-    statusEl.textContent = `✓ ${file.name} (${(file.size / 1024).toFixed(0)} KB)`;
-    statusEl.className = 'text-xs text-green-600 mt-1';
-  };
-  reader.onerror = () => falha('Erro ao ler o arquivo. Tente novamente.');
-  reader.readAsDataURL(file);
-}
-
-function renderAtpveAnexosGroup() {
-  const campo = a => `
-    <div>
-      <label class="label">${escapeHtml(a.label)}</label>
-      <input type="file" class="input-field" accept="application/pdf,.pdf"
-             onchange="handleAtpveAnexoUpload(this, '${a.slot}')">
-      <input type="hidden" id="ia-${a.slot}">
-      <div id="ia-status-${a.slot}" class="text-xs text-gray-500 mt-1"></div>
-    </div>`;
-  return `
-    <div class="mb-4">
-      <h4 class="text-xs font-semibold text-gray-500 uppercase mb-2">Documentos (PDF)</h4>
-      <p class="text-xs text-gray-500 mb-2">
-        Opcionais — envie os que tiver. Ao alterar um pedido, os anexos precisam ser reenviados.
-      </p>
-      <div class="grid sm:grid-cols-2 gap-4">${ATPVE_SP_ANEXOS.map(campo).join('')}</div>
-    </div>`;
-}
-
-function renderIntencaoRjFields(ufPlaceholder = 'RJ') {
-  const field = f => {
-    const req = f.required ? ' <span class="text-red-500">*</span>' : '';
-    // crv_uf_emissao/comprador_uf usam "RJ" como placeholder no spec, mas o campo é
-    // compartilhado por RJ/SP/MS — troca pelo UF do estado selecionado.
-    const placeholder = (f.name === 'crv_uf_emissao' || f.name === 'comprador_uf')
-      ? ufPlaceholder : (f.placeholder || '');
-    const input = f.type === 'select'
-      ? `<select id="ir-${f.name}" class="input-field" ${f.required ? 'required' : ''}>
-           <option value="">Selecione...</option>
-           ${f.options.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
-         </select>`
-      : `<input id="ir-${f.name}" type="text" class="input-field" placeholder="${escapeHtml(placeholder)}"${f.name === 'comprador_cep' ? ' inputmode="numeric" maxlength="8"' : ''} ${f.required ? 'required' : ''}>`;
-    // O CEP do comprador ganha uma linha de status logo abaixo do campo, usada
-    // pelo autopreenchimento via ViaCEP (mesmo padrão de f-c_cep e f2-...cep).
-    const status = f.name === 'comprador_cep' ? '<p id="ir-cep-status" class="text-xs mt-1 hidden"></p>' : '';
-    return `<div><label class="label">${escapeHtml(f.label)}${req}</label>${input}${status}</div>`;
-  };
-  document.getElementById('intencao-form-fields').innerHTML = ATPVE_RJ_FIELDS.map(g => `
-    <div class="mb-4">
-      <h4 class="text-xs font-semibold text-gray-500 uppercase mb-2">${escapeHtml(g.group)}</h4>
-      <div class="grid sm:grid-cols-2 gap-4">${g.fields.map(field).join('')}</div>
-    </div>`).join('') + (ufPlaceholder === 'SP' ? renderAtpveAnexosGroup() : '');
-
-  // Máscara do CEP do comprador (só dígitos, 8) — ao completar, busca o endereço
-  // no ViaCEP e preenche logradouro/bairro/cidade/UF. Vale para os 4 estados,
-  // que compartilham este formulário.
-  const cepEl = document.getElementById('ir-comprador_cep');
-  if (cepEl) {
-    cepEl.addEventListener('input', function() {
-      this.value = this.value.replace(/\D/g, '').slice(0, 8);
-      if (this.value.length === 8) autocompletarCepAtpve(this.value);
-      else setAtpveCepStatus('');
-    });
-    cepEl.addEventListener('blur', function() {
-      if (this.value && this.value.length !== 8)
-        setAtpveCepStatus('⚠️ CEP incompleto — informe os 8 dígitos.', 'text-amber-600');
-    });
-  }
-}
-
-function setAtpveCepStatus(msg, cor) {
-  const el = document.getElementById('ir-cep-status');
-  if (!el) return;
-  el.textContent = msg || '';
-  el.className = `text-xs mt-1 ${cor || ''}`;
-  if (!msg) el.classList.add('hidden');
-}
-
-async function autocompletarCepAtpve(cep) {
-  setAtpveCepStatus('⏳ Buscando endereço…', 'text-blue-600');
-  try {
-    const r = await fetch(`/api/cep/${cep}`);
-    const data = await r.json();
-    if (!r.ok) { setAtpveCepStatus('⚠️ ' + (data.error || 'CEP não encontrado.'), 'text-amber-600'); return; }
-
-    // A Chekaki recebe o nome do município (não o código IBGE) em comprador_cidade.
-    const set = (name, val) => { const el = document.getElementById('ir-' + name); if (el && val) el.value = val; };
-    set('comprador_logradouro', data.logradouro);
-    set('comprador_bairro',     data.bairro);
-    set('comprador_cidade',     data.cidade_nome);
-    set('comprador_uf',         data.uf);
-
-    setAtpveCepStatus(`✅ ${data.cidade_nome ? data.cidade_nome + '/' + data.uf : 'Endereço encontrado'} — confira os campos.`, 'text-green-600');
-  } catch {
-    setAtpveCepStatus('⚠️ Erro ao buscar CEP. Preencha manualmente.', 'text-amber-600');
-  }
-}
-
-function buildIntencaoRjParams() {
-  const params = {};
-  ATPVE_RJ_FIELDS.forEach(g => g.fields.forEach(f => {
-    params[f.name] = (document.getElementById('ir-' + f.name)?.value || '').trim();
-  }));
-  // Anexos só existem no formulário de SP; nos demais estados os inputs não
-  // foram renderizados e nada é acrescentado ao payload.
-  ATPVE_SP_ANEXOS.forEach(a => {
-    const b64 = document.getElementById('ia-' + a.slot)?.value || '';
-    if (b64) params[a.key(params)] = b64;
-  });
-  return params;
-}
-
-function validateIntencaoRjParams(p) {
-  for (const g of ATPVE_RJ_FIELDS) {
-    for (const f of g.fields) {
-      if (f.required && !p[f.name]) return `Campo obrigatório: ${f.label}`;
-    }
-  }
-  if (String(p.comprador_cep || '').replace(/\D/g, '').length !== 8)
-    return 'CEP do comprador inválido. Deve ter 8 dígitos.';
-  return null;
-}
-
-function preencherIntencaoRjFields(p) {
-  ATPVE_RJ_FIELDS.forEach(g => g.fields.forEach(f => {
-    const el = document.getElementById('ir-' + f.name);
-    if (!el) return;
-    const val = p[f.name] ?? '';
-    el.value = f.name === 'comprador_cep' ? String(val).replace(/\D/g, '').slice(0, 8) : val;
-  }));
-  setAtpveCepStatus('');
-}
-
-// Botão "Alterar" de "Meus ATPV-e" — reabre o formulário do estado do pedido já
-// preenchido com os dados salvos, para corrigir algo (placa, nome do comprador,
-// valor) antes de o ATPV-e ser comunicado ao DETRAN. Sem custo: submitIntencao
-// detecta editingAtpve e envia para /api/queries/:id/atpve-<uf>-alterar em vez de
-// criar um novo pedido.
-function alterarAtpve(uf, queryId) {
-  const q = allQueries.find(x => x.id === queryId);
-  if (!q) return;
-  let p = {};
-  try { p = JSON.parse(q.params || '{}'); } catch {}
-  // A emissão saiu do catálogo, mas "Alterar" é para pedido JÁ PAGO e precisa
-  // continuar funcionando. Sem este fallback o allServices.find voltaria
-  // undefined e o botão morreria em silêncio. Só o nome é usado daqui.
-  const svcId = `intencao-venda-${uf}`;
-  const svc = allServices.find(s => s.id === svcId)
-    || { id: svcId, name: `Intenção de Venda ${ATPVE_UF_LABELS[svcId] || uf.toUpperCase()}` };
-
-  editingAtpve = { queryId, uf };
-  selectedIntencaoSvc = svc;
-  document.getElementById('intencao-form-name').textContent  = `✏️ Alterar ${svc.name}`;
-  document.getElementById('intencao-form-price').textContent = 'Grátis';
-  setIntencaoManutencao(null);
-  renderIntencaoRjFields(uf.toUpperCase());
-  preencherIntencaoRjFields(p);
-  document.getElementById('intencao-submit-text').textContent = 'Salvar Alterações';
-  document.getElementById('intencao-category-wrap').classList.add('hidden');
-  document.getElementById('intencao-form-wrap').classList.remove('hidden');
-  document.getElementById('intencao-result-wrap').classList.add('hidden');
-  document.getElementById('intencao-form-error').classList.add('hidden');
-  scrollToIntencaoForm('intencao-form-wrap');
-}
-
-function resetIntencaoForm(showCats = true) {
-  selectedIntencaoSvc = null;
-  editingAtpve = null;
-  setIntencaoManutencao(null);
-  document.getElementById('intencao-form').reset();
-  document.getElementById('intencao-form-error').classList.add('hidden');
-  document.getElementById('intencao-form-wrap').classList.add('hidden');
-  document.getElementById('intencao-result-wrap').classList.add('hidden');
-  document.getElementById('intencao-result-pdf-btn').classList.remove('hidden');
-  document.querySelectorAll('#intencao-category-grid .service-cat').forEach(el => el.classList.remove('selected'));
-  // Sem emissão no catálogo o bloco "Selecione o Estado" está vazio: reexibi-lo
-  // aqui (Cancelar / Novo Pedido, que ainda aparecem no fluxo de Alterar um
-  // pedido antigo) mostraria um card em branco ao cliente.
-  if (showCats && intencaoTemEmissao())
-    document.getElementById('intencao-category-wrap').classList.remove('hidden');
-}
-
-// "Meus ATPV-e" — lista as próprias emissões (RJ + SP + MS), fonte: histórico
-// local do usuário, já isolado por conta em /api/queries. Não usamos o endpoint
-// "Listar pedidos" da Chekaki (GET /api/atpve-<uf>) direto no painel porque ele é
-// indexado pela chave de acesso da plataforma inteira, não por usuário — expor a
-// lista bruta vazaria dados (placa, CPF, endereço) de outros clientes que também
-// emitem ATPV-e. O servidor correlaciona o pedido com o registro da Chekaki
-// (id/protocolo/situação) e guarda em atpve_meta, o que habilita o botão "Atualizar".
-function renderMeusAtpve() {
-  const wrap = document.getElementById('meus-atpve-list');
-  if (!wrap) return;
-  const list = allQueries.filter(q => ATPVE_UF_LABELS[q.service_id]);
-  if (!list.length) {
-    wrap.innerHTML = `<div class="text-center py-6 text-gray-400 text-sm">Nenhuma emissão de ATPV-e ainda.</div>`;
-    return;
-  }
-  wrap.innerHTML = list.map(q => {
-    const uf = q.service_id.split('-')[2]; // intencao-venda-<uf>
-    let p = {};
-    try { p = JSON.parse(q.params || '{}'); } catch {}
-    let meta = {};
-    try { meta = JSON.parse(q.atpve_meta || '{}'); } catch {}
-    const placa      = p.placa || '—';
-    const comprador   = p.comprador_nome || '';
-    const situacao    = meta.situacao || meta.status || meta.situacao_descricao || '';
-    const protocolo   = meta.protocolo || '';
-    // "Registrar" e "Excluir" continuam válidos em qualquer estágio anterior ao
-    // final — não só na CADASTRADA (1) mas também na PROCESSANDO (3): "Registrar"
-    // consegue avançar um pedido travado em PROCESSANDO até COMUNICADA (confirmado
-    // testando direto no painel da Chekaki). Só escondemos quando já está
-    // COMUNICADA (5) ou foi excluído — aí sim a Chekaki não oferece mais essas ações.
-    const situacaoCodigo = String(meta.situacao_codigo || '');
-    const podeRegistrarOuExcluir = !!meta.id && situacaoCodigo !== '5' && situacaoCodigo !== 'excluida';
-    // "Alterar" é mais restrito que Registrar/Excluir: a Chekaki só aceita corrigir
-    // os dados em CADASTRADA (1) e PROCESSANDO (3) — daí em diante o pedido já saiu
-    // das mãos dela (o servidor confere de novo em atpveAlterarGuard).
-    const podeAlterar = !!meta.id && (situacaoCodigo === '1' || situacaoCodigo === '3');
-    // O ATPV-e é cobrado no cadastro, então 'aguardando_pdf' já pode estar
-    // debitado — quem diz se houve cobrança é q.cobrada (transaction_id no
-    // servidor), não o status. Pedidos antigos, do modelo em que só o PDF
-    // confirmado cobrava, seguem aparecendo como aguardando/não cobrado.
-    const aguardando = q.status === 'aguardando_pdf';
-    const cancelado   = q.status === 'cancelado';
-    const amountDisplay = !semCobranca(q)
-      ? `<div class="text-sm font-semibold text-red-500">-${fmt(q.amount)}</div>`
-      : aguardando
-        ? `<span class="badge-amber">⏳ Aguardando</span>`
-        : `<span class="badge-red">❌ Não cobrado</span>`;
-    const pdfDisplay = q.pdf_token
-      ? `<a href="/api/pdf/${q.pdf_token}" target="_blank" class="text-xs bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded font-medium">📥 PDF</a>`
-      : aguardando
-        ? `<span class="text-xs text-amber-600">Aguardando emissão...</span>`
-        : cancelado
-          ? `<span class="text-xs text-gray-400">Não emitido</span>`
-          : `<span class="text-xs text-gray-400">PDF expirado</span>`;
-    return `
-    <div class="py-2 border-b border-gray-50 last:border-0">
-      <div class="flex items-center justify-between gap-3 flex-wrap">
-        <div class="min-w-0">
-          <div class="text-sm font-medium text-gray-800 truncate">
-            <span class="inline-block text-[10px] font-bold text-orange-600 bg-orange-50 border border-orange-200 rounded px-1.5 py-0.5 mr-1 align-middle">${uf.toUpperCase()}</span>
-            ${escapeHtml(placa)}${comprador ? ' · ' + escapeHtml(comprador) : ''}
-          </div>
-          <div class="text-xs text-gray-400">${fmtDate(q.created_at)}${protocolo ? ' · Protocolo: ' + escapeHtml(protocolo) : ''}</div>
-          ${situacao ? `<div class="text-xs text-blue-600 mt-0.5">${escapeHtml(String(situacao))}</div>` : ''}
-        </div>
-        <div class="text-right flex-shrink-0 flex items-center gap-2 flex-wrap justify-end">
-          ${amountDisplay}
-          ${podeRegistrarOuExcluir ? `<button type="button" onclick="registrarAtpve('${uf}', ${q.id}, this)" class="text-xs bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded font-medium">✅ Registrar</button>` : ''}
-          ${podeAlterar ? `<button type="button" onclick="alterarAtpve('${uf}', ${q.id})" class="text-xs bg-amber-500 hover:bg-amber-600 text-white px-2 py-1 rounded font-medium">✏️ Alterar</button>` : ''}
-          ${meta.id ? `<button type="button" onclick="atualizarAtpve('${uf}', ${q.id}, this)" class="text-xs bg-gray-600 hover:bg-gray-700 text-white px-2 py-1 rounded font-medium">🔄 Atualizar</button>` : ''}
-          ${podeRegistrarOuExcluir ? `<button type="button" onclick="excluirAtpve('${uf}', ${q.id}, this)" class="text-xs bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded font-medium">🗑️ Excluir</button>` : ''}
-          ${pdfDisplay}
-        </div>
-      </div>
-    </div>`;
-  }).join('');
-}
-
-async function runAtpveAction(endpoint, queryId, btnEl, loadingText, successMsg) {
-  const originalText = btnEl.textContent;
-  btnEl.disabled = true;
-  btnEl.textContent = loadingText;
-  try {
-    const r = await fetch(`/api/queries/${queryId}/${endpoint}`, { method: 'POST' });
-    const d = await r.json();
-    if (!r.ok) {
-      toast(d.error || 'Erro ao processar.', 'error');
-      return;
-    }
-    toast(successMsg);
-    await loadQueries();
-  } catch {
-    toast('Erro de conexão.', 'error');
-  } finally {
-    btnEl.disabled = false;
-    btnEl.textContent = originalText;
-  }
-}
-
-function atualizarAtpve(uf, queryId, btnEl) {
-  runAtpveAction(`atpve-${uf}-atualizar`, queryId, btnEl, 'Atualizando...', 'Pedido atualizado!');
-}
-
-function registrarAtpve(uf, queryId, btnEl) {
-  if (!confirm('Confirma o registro deste ATPV-e no DETRAN? Essa ação não pode ser desfeita.')) return;
-  runAtpveAction(`atpve-${uf}-registrar`, queryId, btnEl, 'Registrando...', 'ATPV-e registrado no DETRAN!');
-}
-
-function excluirAtpve(uf, queryId, btnEl) {
-  if (!confirm('Tem certeza que deseja excluir este pedido de ATPV-e? Essa ação não pode ser desfeita.')) return;
-  runAtpveAction(`atpve-${uf}-excluir`, queryId, btnEl, 'Excluindo...', 'Pedido excluído.');
-}
-
-async function submitIntencao(e) {
-  e.preventDefault();
-  const errEl    = document.getElementById('intencao-form-error');
-  const errMsgEl = document.getElementById('intencao-form-error-msg');
-  errEl.classList.add('hidden');
-
-  // Emissão suspensa: só barra a emissão nova — corrigir um pedido já pago
-  // (editingAtpve) continua liberado, porque não passa pelo serviço em manutenção.
-  if (!editingAtpve && selectedIntencaoSvc?.unavailable) {
-    errMsgEl.textContent = selectedIntencaoSvc.slowNote || 'Consulta temporariamente em manutenção.';
-    errEl.classList.remove('hidden');
-    return;
-  }
-
-  const params = buildIntencaoRjParams();
-  const validationError = validateIntencaoRjParams(params);
-  if (validationError) {
-    errMsgEl.textContent = validationError;
-    errEl.classList.remove('hidden');
-    return;
-  }
-
-  const btn = document.getElementById('intencao-submit-btn');
-  const btnText = document.getElementById('intencao-submit-text');
-  const spinner = document.getElementById('intencao-spinner');
-  btn.disabled = true; btnText.textContent = 'Processando...'; spinner.classList.remove('hidden');
-
-  try {
-    // Modo "Alterar" (botão ✏️ Alterar em Meus ATPV-e): corrige o pedido existente
-    // na Chekaki, sem emitir um novo nem cobrar de novo.
-    if (editingAtpve) {
-      const { queryId, uf } = editingAtpve;
-      const r = await fetch(`/api/queries/${queryId}/atpve-${uf}-alterar`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ params }),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        errMsgEl.textContent = d.error || 'Erro ao alterar o pedido.';
-        errEl.classList.remove('hidden');
-        return;
-      }
-      toast('Pedido alterado!');
-      resetIntencaoForm();
-      await loadQueries();
-      return;
-    }
-
-    const r = await fetch('/api/query', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ serviceId: selectedIntencaoSvc.id, params }),
-    });
-
-    const ct = r.headers.get('content-type') || '';
-    if (ct.includes('application/pdf')) {
-      const blob = await r.blob();
-      lastPdfBlob = blob;
-      triggerPdfDownload(blob, selectedIntencaoSvc.id);
-      document.getElementById('intencao-form-wrap').classList.add('hidden');
-      document.getElementById('intencao-category-wrap').classList.add('hidden');
-      document.getElementById('intencao-result-pdf-btn').onclick = () => triggerPdfDownload(blob, selectedIntencaoSvc.id);
-      document.getElementById('intencao-result-wrap').classList.remove('hidden');
-      document.getElementById('intencao-result-wrap').scrollIntoView({ behavior: 'smooth' });
-      toast('ATPV-e gerado! PDF sendo baixado.');
-      await Promise.all([loadStats(), loadQueries()]);
-    } else {
-      const d = await r.json();
-      if (!r.ok) {
-        errMsgEl.textContent = d.error || 'Erro ao emitir o ATPV-e.';
-        errEl.classList.remove('hidden');
-        return;
-      }
-      // Sucesso sem PDF não é esperado para este serviço, mas trata para não deixar a tela travada.
-      document.getElementById('intencao-form-wrap').classList.add('hidden');
-      document.getElementById('intencao-category-wrap').classList.add('hidden');
-      document.getElementById('intencao-result-msg').textContent = d.result?.status || 'Solicitação concluída com sucesso!';
-      document.getElementById('intencao-result-pdf-btn').classList.add('hidden');
-      document.getElementById('intencao-result-wrap').classList.remove('hidden');
-      document.getElementById('intencao-result-wrap').scrollIntoView({ behavior: 'smooth' });
-      await Promise.all([loadStats(), loadQueries()]);
-    }
-  } catch {
-    errMsgEl.textContent = 'Erro de conexão. Tente novamente.';
-    errEl.classList.remove('hidden');
-  } finally {
-    if (editingAtpve) {
-      btn.disabled = false;
-      btnText.textContent = 'Salvar Alterações';
-    } else {
-      // Devolve o botão ao estado do serviço — se ele estiver em manutenção,
-      // continua travado em vez de voltar a oferecer "Emitir ATPV-e".
-      setIntencaoManutencao(selectedIntencaoSvc);
-    }
-    spinner.classList.add('hidden');
-  }
 }
 
 // ── Consultas ──────────────────────────────────────────────────────────────────
@@ -1959,15 +1272,14 @@ async function loadQueries() {
     const d = await r.json();
     allQueries = d.queries || [];
     renderRecentQueries();
-    renderMeusAtpve();
     renderMeusComunicadosVenda();
   } catch {}
 }
 
 // "Meus Comunicados de Venda" — lista as próprias inserções de Comunicação de
-// Venda e permite transmitir cada uma (finalização exigida na Chekaki; sem isso
+// Venda e permite transmitir cada uma (finalização exigida no portal; sem isso
 // a comunicação fica só "importada", não "comunicada"). Sem custo adicional: a
-// cobrança já ocorreu no Inserir Comunicação Venda. O "id" da Chekaki vem de
+// cobrança já ocorreu no Inserir Comunicação Venda. O "id" do portal vem de
 // comunicacao_venda_meta (ver GET /api/queries), salvo no momento da inserção.
 function renderMeusComunicadosVenda() {
   const wrap = document.getElementById('meus-comunicados-venda-list');
@@ -2014,14 +1326,38 @@ function renderMeusComunicadosVenda() {
   }).join('');
 }
 
+// Dispara uma ação POST sobre um pedido já existente e recarrega o histórico.
+// Nasceu para os botões do ATPV-e (removido com a migração de fornecedor) e
+// ficou porque a Comunicação de Venda usa o mesmo padrão de botão.
+async function runQueryAction(endpoint, queryId, btnEl, loadingText, successMsg) {
+  const originalText = btnEl.textContent;
+  btnEl.disabled = true;
+  btnEl.textContent = loadingText;
+  try {
+    const r = await fetch(`/api/queries/${queryId}/${endpoint}`, { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) {
+      toast(d.error || 'Erro ao processar.', 'error');
+      return;
+    }
+    toast(successMsg);
+    await loadQueries();
+  } catch {
+    toast('Erro de conexão.', 'error');
+  } finally {
+    btnEl.disabled = false;
+    btnEl.textContent = originalText;
+  }
+}
+
 function transmitirComunicacaoVenda(queryId, btnEl) {
   if (!confirm('Confirma a transmissão desta comunicação de venda? Depois de transmitida ela não pode ser desfeita por aqui.')) return;
-  runAtpveAction('comunicacao-venda-transmitir', queryId, btnEl, 'Transmitindo...', 'Comunicação de venda transmitida com sucesso!');
+  runQueryAction('comunicacao-venda-transmitir', queryId, btnEl, 'Transmitindo...', 'Comunicação de venda transmitida com sucesso!');
 }
 
 // Botão "Alterar" — reabre o formulário de Inserir Comunicação de Venda
 // pré-preenchido com os dados já salvos, para corrigir algo (ex.: data da
-// venda errada) antes de transmitir, sem precisar entrar na Chekaki direto.
+// venda errada) antes de transmitir, sem precisar entrar no portal direto.
 // submitQuery() detecta editingComunicacaoVendaQueryId e envia para
 // /api/queries/:id/comunicacao-venda-alterar em vez de criar uma nova consulta.
 function alterarComunicacaoVenda(queryId) {
@@ -2076,7 +1412,7 @@ function preencherFormVenda(p) {
 
 // Cancelar (pago, mesma tarifa dos serviços avulsos "Motivos de Cancelamento" e
 // "Cancelar Comunicação Venda" do catálogo): primeiro busca os motivos
-// disponíveis na Chekaki, depois deixa o usuário escolher um antes de confirmar.
+// disponíveis no portal, depois deixa o usuário escolher um antes de confirmar.
 async function cancelarComunicacaoVenda(queryId, btnEl) {
   if (!confirm('Buscar os motivos de cancelamento disponíveis? Essa consulta custa R$ 4,20.')) return;
   const originalText = btnEl.textContent;
@@ -2287,7 +1623,6 @@ function filterHistory() { renderHistoryTable(); }
 function renderPrices() {
   const groups = {};
   allServices.forEach(s => {
-    if (s.group === 'Intenção de Venda (ATPVE)') return;
     if (!groups[s.group]) groups[s.group] = [];
     groups[s.group].push(s);
   });
@@ -2464,29 +1799,10 @@ function apiExampleParams(inputType) {
       placa: 'ABC1D23', descricaoDocumental: 'Documentos recebidos: CRV original e comprovante de residência.',
       carteirinhaFrente: 'data:image/jpeg;base64,...', carteirinhaVerso: 'data:image/jpeg;base64,...',
     },
-    atpve_rj_cadastro: atpveCadastroExample('RJ', 'RIO DE JANEIRO'),
-    atpve_sp_cadastro: atpveCadastroExample('SP', 'SÃO PAULO'),
-    atpve_ms_cadastro: atpveCadastroExample('MS', 'CAMPO GRANDE'),
-    atpve_mg_cadastro: atpveCadastroExample('MG', 'BELO HORIZONTE'),
   };
   return map[inputType] || {};
 }
 
-// Corpo de exemplo do cadastro de Intenção de Venda (RJ/SP/MS/MG) — mesmos campos
-// obrigatórios nos 4 estados (ver ATPVE_UFS em processCatalogQuery no server),
-// só muda a UF/cidade de exemplo.
-function atpveCadastroExample(uf, cidade) {
-  return {
-    placa: 'ABC1D23', renavam: '00000000000', ano_fabricacao: '2020', ano_modelo: '2020',
-    chassi: '9BWZZZ377VT004251', kilometragem: '50000',
-    crv_numero: '123456789012', crv_numero_via: '1', crv_uf_emissao: uf, crv_data_emissao: '01/01/2020',
-    vendedor_tipo_pessoa: 'F', vendedor_documento: '00000000000', vendedor_nome: 'NOME DO VENDEDOR', vendedor_email: 'vendedor@email.com',
-    venda_cidade: cidade, venda_valor: '15000', venda_data: '01/01/2026',
-    comprador_tipo_pessoa: 'F', comprador_documento: '00000000000', comprador_nome: 'NOME DO COMPRADOR', comprador_email: 'comprador@email.com',
-    comprador_cep: '00000000', comprador_logradouro: 'RUA EXEMPLO', comprador_numero: '100',
-    comprador_bairro: 'CENTRO', comprador_cidade: cidade, comprador_uf: uf,
-  };
-}
 
 function showApiDocFor(serviceId) {
   const s = allServices.find(x => x.id === serviceId);
@@ -2558,13 +1874,6 @@ function quickSelect(serviceId) {
     selectService(svc);
     return;
   }
-  // Intenção de Venda (ATPVE) também tem aba própria — formulário grande, com
-  // as duas partes da venda —, então abre lá com o estado já selecionado.
-  if (svc.group === 'Intenção de Venda (ATPVE)') {
-    showSection('intencao');
-    selectIntencaoCategory(svc, document.querySelector(`#intencao-category-grid .service-cat[data-svc="${svc.id}"]`));
-    return;
-  }
   showSection('query');
   // Select the category first, then the service
   selectedCat = svc.group;
@@ -2620,7 +1929,7 @@ function requery(serviceId, paramsJson) {
 
 // ── Catálogo da Visão Geral ────────────────────────────────────────────────────
 // Vitrine única com TODAS as consultas das três abas que o usuário mais usa
-// ("Acesse Aqui Para as Principais Consultas", "Intenção de Venda (ATPVE)" e
+// ("Acesse Aqui Para as Principais Consultas" e
 // "Coisas de Despachantes") — a Visão Geral era só um menu de atalhos e o
 // usuário não achava a consulta. Não duplica catálogo nem formulário: o card
 // só encaminha para a aba de origem já com o serviço aberto (openCatalogService
@@ -2653,7 +1962,6 @@ const CATALOG_GROUP_ORDER = [
   'Débitos por Estado',
   'Consultas Básicas',
   'Consulta Completa',
-  'Intenção de Venda (ATPVE)',
   'Para os Despachantes',
   'Comunicação Venda',
   'CRV',
@@ -2676,7 +1984,6 @@ const CATALOG_GROUP_META = {
   'Débitos por Estado':     { icon:'🏛️' },
   'Consultas Básicas':      { icon:'🔍' },
   'Consulta Completa':      { icon:'🧾' },
-  'Intenção de Venda (ATPVE)': { icon:'📝', badge:'Formulário', badgeClass:'bg-pink-100 text-pink-700' },
   'Para os Despachantes':   { icon:'🧑‍💼', badge:'Assinatura',  badgeClass:'bg-emerald-100 text-emerald-700' },
   'Comunicação Venda':      { icon:'📨' },
   'CRV':                    { icon:'🔐' },
@@ -2852,7 +2159,7 @@ function openCatalogService(id) {
 function buildCategoryGrid() {
   // "Para os Despachantes" fica fora daqui — tem aba própria (Coisas de
   // Despachantes, ver buildDespachantesList).
-  const cats = [...new Set(allServices.map(s => s.group))].filter(c => c !== 'CRLV-e Agendado' && c !== 'Intenção de Venda (ATPVE)' && c !== 'CRLV-e Rio de Janeiro' && c !== 'Para os Despachantes');
+  const cats = [...new Set(allServices.map(s => s.group))].filter(c => c !== 'CRLV-e Agendado' && c !== 'CRLV-e Rio de Janeiro' && c !== 'Para os Despachantes');
   const catIcons = {
     'Consultas Básicas':       { icon:'🔍', color:'bg-blue-50 border-blue-200' },
     'Débitos e Documentação':  { icon:'💳', color:'bg-red-50 border-red-200' },
@@ -3228,7 +2535,7 @@ function buildDespachantesList() {
 // Vitrine única dos CRLV-e que NÃO saem na hora, na ordem da doc da Vistocar
 // ("Integração API": DF, ES, PB, RN, RS, SC), mais o ATPV-e. Cada id aponta
 // para o serviço que ATENDE aquela UF hoje — e eles vêm de fornecedores
-// diferentes (Chekaki no "CRLV-e Agendado", Datacube no RS), por
+// diferentes (portal no "CRLV-e Agendado", Datacube no RS), por
 // isso continuam aparecendo também nas abas de origem: esta aba não duplica
 // cadastro nenhum, só reúne os atalhos num lugar só.
 const EXTRAS_SERVICE_IDS = [
@@ -3254,19 +2561,6 @@ function buildExtrasList() {
         <div class="text-xs text-gray-400 mt-0.5">${inputTypeLabel(s.inputType)}</div>
       </div>
       <div class="price-tag text-sm flex-shrink-0">${fmtPrice(s.price)}</div>
-    </button>`);
-  // ATPV-e não é um serviço solto: o cadastro pede as duas partes, valor e
-  // documentos, num formulário próprio na aba "Intenção de Venda (ATPVE)" —
-  // aqui vira um atalho para lá em vez de uma cópia do formulário.
-  botoes.push(`
-    <button type="button" onclick="showSection('intencao')"
-      class="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-violet-300 hover:bg-violet-50 text-left transition-all">
-      <span class="text-xl flex-shrink-0">📝</span>
-      <div class="min-w-0 flex-1">
-        <div class="font-medium text-gray-800 text-sm">ATPV-e (Intenção de Venda)</div>
-        <div class="text-xs text-gray-400 mt-0.5">RJ, SP, MS e MG — abre a aba própria</div>
-      </div>
-      <div class="text-xs text-violet-600 font-semibold flex-shrink-0">Abrir →</div>
     </button>`);
   document.getElementById('extras-service-list').innerHTML = botoes.join('');
 }
@@ -4382,7 +3676,7 @@ async function submitQuery(e) {
   setQueryLoading(true);
 
   // Modo "Alterar" (botão ✏️ Alterar em Meus Comunicados de Venda): reenvia o
-  // payload completo para /comunicacao-venda/salvar/:id na Chekaki em vez de
+  // payload completo para /comunicacao-venda/salvar/:id no portal em vez de
   // criar uma nova consulta — sem cobrança adicional.
   if (editingComunicacaoVendaQueryId) {
     try {
@@ -4798,7 +4092,7 @@ function showJsonResult(data, svc) {
   const pdfPath = result?.pedido?.pdf_url || result?.status_resumo?.pdf_url || '';
   const podeBaixar = result?.pdf_disponivel === true || result?.status_resumo?.pode_baixar_pdf === true;
   if (svc.id === 'crlv-agendado-status' && podeBaixar && pdfPath) {
-    crlvLink.href = /^https?:\/\//i.test(pdfPath) ? pdfPath : 'https://chekaki.online' + pdfPath;
+    crlvLink.href = /^https?:\/\//i.test(pdfPath) ? pdfPath : 'https://portaldespachantes.online' + pdfPath;
     crlvDownloadDiv.classList.remove('hidden');
   } else {
     crlvDownloadDiv.classList.add('hidden');
