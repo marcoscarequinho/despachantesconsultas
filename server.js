@@ -110,7 +110,11 @@ const CONSULTASFACIL_KEY      = process.env.CONSULTASFACIL_KEY || '';
 const DESPBRASIL_BASE_URL = 'https://despbrasil.com.br/functions/apiConsulta';
 const DESPBRASIL_KEY      = process.env.DESPBRASIL_KEY || '';
 const DESPBRASIL_SVCS = {
-  'security-code-vistocar':     { servico: 'codigo_seguranca' },
+  // versao:'v2' — o "Consulta 2 Código Segurança CRV (PDF)" passou a usar a
+  // versão 2 do serviço na despbrasil. Vai no corpo junto de servico/placa
+  // (ver o spread de `extra` em processCatalogQuery); sem ele a API responde
+  // pela versão antiga.
+  'security-code-vistocar':     { servico: 'codigo_seguranca', extra: { versao: 'v2' } },
   'verificar-crlv':    { servico: 'verificar_crlv' },
   'consulta-renavam':  { servico: 'consulta_renavam' },
   'consultar-Numero-ATPVE': { servico: 'numero_atpve' },
