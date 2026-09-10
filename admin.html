@@ -176,6 +176,14 @@
           <div id="st-month-queries" class="text-2xl font-bold text-gray-800">—</div>
           <div class="text-xs text-gray-400 mt-0.5">este mês</div>
         </div>
+        <!-- Saldo no fornecedor (portaldespachantes.online). Conta pré-paga: sem
+             saldo, todas as consultas que passam por lá param de uma vez. Fica
+             vermelho quando cruza o mínimo que dispara o aviso no WhatsApp. -->
+        <div class="stat-card border-l-amber-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Saldo no Portal</div>
+          <div id="st-saldo-portal" class="text-2xl font-bold text-gray-800">—</div>
+          <div id="st-saldo-portal-sub" class="text-xs text-gray-400 mt-0.5">fornecedor (pré-pago)</div>
+        </div>
       </div>
 
       <!-- Tabela de todos os usuários no dashboard -->
@@ -1405,6 +1413,41 @@ async function loadStats() {
     document.getElementById('st-today-queries').textContent  = d.today_queries;
     document.getElementById('st-month-queries').textContent  = d.month_queries;
   } catch (err) { toast('Erro de conexão ao carregar estatísticas.', 'error'); }
+  loadSaldoPortal();
+}
+
+// Saldo no fornecedor. Vai em requisição própria, depois das estatísticas: ela
+// depende de uma API externa e pode demorar ou falhar — travar o dashboard
+// inteiro por causa disso seria pior do que mostrar o card sem valor.
+async function loadSaldoPortal() {
+  const el  = document.getElementById('st-saldo-portal');
+  const sub = document.getElementById('st-saldo-portal-sub');
+  if (!el) return;
+  // Falha ao consultar não é saldo baixo: limpa também a cor do número, senão
+  // um "—" herdaria o vermelho do alerta anterior e passaria alarme falso.
+  const semValor = (motivo) => {
+    el.textContent  = '—';
+    el.className    = 'text-2xl font-bold text-gray-800';
+    sub.textContent = motivo;
+    sub.className   = 'text-xs text-gray-400 mt-0.5';
+  };
+  try {
+    const r = await fetch('/api/admin/saldo-portal', { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || typeof d.saldo !== 'number') {
+      semValor('não foi possível consultar');
+      return;
+    }
+    el.textContent = fmt(d.saldo);
+    const baixo = d.saldo <= (d.minimo ?? 130);
+    el.className = 'text-2xl font-bold ' + (baixo ? 'text-red-600' : 'text-gray-800');
+    sub.textContent = baixo
+      ? `abaixo do mínimo (${fmt(d.minimo ?? 130)}) — repor`
+      : (d.consumo ? `${d.consumo.consultas} consultas no mês` : 'fornecedor (pré-pago)');
+    sub.className = 'text-xs mt-0.5 ' + (baixo ? 'text-red-600 font-semibold' : 'text-gray-400');
+  } catch {
+    semValor('não foi possível consultar');
+  }
 }
 
 // ── Usuários ────────────────────────────────────────────────────────────────
