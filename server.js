@@ -11653,9 +11653,16 @@ const BROADCAST_MIN_MEMBROS = [{ nome: BROADCAST_GROUP_DOCUMENTALISTAS, minimo: 
 
 // Nome de grupo no WhatsApp costuma ter emoji/sufixo extra
 // (ex.: "PORTAL⚔️DESPACHANTES🇧🇷📌"), por isso startsWith e nao igualdade.
+// Acento e espaco repetido tambem saem da comparacao: os nomes-alvo sao
+// digitados a mao e o grupo pode estar salvo sem acento ("NOTICIAS DE
+// SAQUAREMA") ou com dois espacos no meio ("ARARUAMA NEWS RJ  01").
+const normalizaNomeGrupo = s => (s || '')
+  .normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .replace(/\s+/g, ' ').trim().toUpperCase();
+
 function nomeGrupoCombina(nome, alvos) {
-  const n = (nome || '').trim().toUpperCase();
-  return alvos.some(a => n.startsWith(a.trim().toUpperCase()));
+  const n = normalizaNomeGrupo(nome);
+  return alvos.some(a => n.startsWith(normalizaNomeGrupo(a)));
 }
 
 // Quantos membros um grupo tem hoje (Z-API group-metadata). Retorna null se a
@@ -11979,6 +11986,127 @@ app.post('/api/admin/broadcast-whatsapp-tabela', requireAuth, requireSuperAdmin,
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('Erro no broadcast tabela manual:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── EducaAI (suead.com.br) — disparo diario as 10h BRT ───────────────────────
+// Campanha de outra marca, fora do catalogo de consultas: vai so para os grupos
+// listados aqui (incluir), nunca para a base inteira. Texto puro, sem imagem
+// nem video, e sem rodizio — a mensagem e sempre a mesma.
+const BROADCAST_EDUCAAI_GRUPOS = [
+  'ANÚNCIO ARARUAMA NEWS RJ 01',
+  'NOTÍCIAS DE SAQUAREMA',
+  'LAGOS INFORMAÇÃO NEWS',
+  BROADCAST_GROUP_SERVICOS,
+  'SOS IGUABINHA',
+  'Grupo de divulgação de vendas em geral',
+  'Amigos de Cabo Frio',
+  'REGIÃO DOS LAGOS RJ',
+  'NOTÓRIOS NOTÍCIAS 24H',
+  // De proposito casa com DOIS grupos: existem duas "Notícias de Arraial do
+  // Cabo" na conta, com ids diferentes, e as duas devem receber.
+  'Notícias de Arraial do Cabo',
+  'OLX LAGOS E LINKS WHATSAPP',
+];
+
+const BROADCAST_EDUCAAI_MENSAGEM = `Olá! Tudo bem? 📱
+
+Se você busca transformar e modernizar processos educativos com tecnologia de ponta, precisa conhecer o EducaAI. Combinamos inteligência artificial e soluções práticas para otimizar o aprendizado e potencializar resultados no setor educacional. 🚀
+
+Confira nossas soluções e saiba mais em nosso site:
+👉 https://www.suead.com.br/`;
+
+// O cron e diario, mas a Vercel pode repetir a execucao — esta troca atomica
+// (mesma tabela do disparo da tabela de servicos) garante um envio por dia.
+// O guarda e por DIA no fuso de Brasilia, nao por intervalo de horas: um
+// disparo manual a tarde nao pode bloquear o cron das 10h do dia seguinte
+// (com janela de 24h, bloquearia).
+async function reservarDisparoEducaAI() {
+  const r = await pool.query(
+    `INSERT INTO broadcast_agenda (canal, ultimo_envio) VALUES ($1, NOW())
+     ON CONFLICT (canal) DO UPDATE SET ultimo_envio = NOW()
+      WHERE (broadcast_agenda.ultimo_envio AT TIME ZONE 'America/Sao_Paulo')::date
+          < (NOW() AT TIME ZONE 'America/Sao_Paulo')::date
+     RETURNING ultimo_envio`,
+    ['educaai']
+  );
+  return r.rowCount > 0;
+}
+
+// Devolve a marca para ontem quando o disparo nem chegou a sair (Z-API fora do
+// ar): a proxima execucao tenta de novo em vez de pular o dia.
+async function devolverDisparoEducaAI() {
+  await pool.query(
+    `UPDATE broadcast_agenda
+        SET ultimo_envio = ultimo_envio - INTERVAL '1 day'
+      WHERE canal = 'educaai'`
+  ).catch(() => {});
+}
+
+async function runBroadcastEducaAI() {
+  const dests = await selecionarDestinosBroadcast({
+    canal: 'educaai',
+    incluir: BROADCAST_EDUCAAI_GRUPOS,
+  });
+  console.log(`📢 Broadcast [educaai]: ${dests.length} grupos`);
+
+  // Grupo da lista que a Z-API nao devolveu (nome mudou, saimos do grupo): sem
+  // isso o disparo "funciona" caindo em menos grupos a cada dia, sem aviso.
+  const faltando = BROADCAST_EDUCAAI_GRUPOS.filter(
+    alvo => !dests.some(d => nomeGrupoCombina(d.name, [alvo]))
+  );
+  if (faltando.length) console.warn(`⚠️  Broadcast [educaai] nao encontrou: ${faltando.join(' | ')}`);
+
+  let sent = 0, failed = 0;
+  for (const dest of dests) {
+    try {
+      await sendBroadcastText(dest.phone, BROADCAST_EDUCAAI_MENSAGEM);
+      sent++;
+    } catch {
+      failed++;
+    }
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  console.log(`✅ Broadcast educaai concluído: ${sent} enviados, ${failed} falhas`);
+  return { sent, failed, total: dests.length, naoEncontrados: faltando };
+}
+
+// ── GET /api/cron/broadcast-whatsapp-educaai (Vercel Cron — todo dia 13h UTC =
+// 10h BRT) ───────────────────────────────────────────────────────────────────
+app.get('/api/cron/broadcast-whatsapp-educaai', async (req, res) => {
+  const secret = process.env.CRON_SECRET || '';
+  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    if (!await reservarDisparoEducaAI())
+      return res.json({ success: true, skipped: 'o disparo EducaAI de hoje já saiu' });
+    try {
+      const result = await runBroadcastEducaAI();
+      res.json({ success: true, ...result });
+    } catch (err) {
+      await devolverDisparoEducaAI();
+      throw err;
+    }
+  } catch (err) {
+    console.error('Erro no cron broadcast educaai:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/admin/broadcast-whatsapp-educaai (disparo manual pelo admin) ────
+// Sai na hora e marca o dia como disparado, para o cron das 10h não repetir.
+app.post('/api/admin/broadcast-whatsapp-educaai', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const result = await runBroadcastEducaAI();
+    await pool.query(
+      `INSERT INTO broadcast_agenda (canal, ultimo_envio) VALUES ('educaai', NOW())
+       ON CONFLICT (canal) DO UPDATE SET ultimo_envio = NOW()`
+    );
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Erro no broadcast educaai manual:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

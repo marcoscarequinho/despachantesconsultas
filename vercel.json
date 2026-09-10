@@ -30,6 +30,10 @@
       "schedule": "0 14 * * *"
     },
     {
+      "path": "/api/cron/broadcast-whatsapp-educaai",
+      "schedule": "0 13 * * *"
+    },
+    {
       "path": "/api/cron/crlv-agendado-status",
       "schedule": "*/15 * * * *"
     },
