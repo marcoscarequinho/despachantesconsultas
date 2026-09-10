@@ -110,11 +110,11 @@ const CONSULTASFACIL_KEY      = process.env.CONSULTASFACIL_KEY || '';
 const DESPBRASIL_BASE_URL = 'https://despbrasil.com.br/functions/apiConsulta';
 const DESPBRASIL_KEY      = process.env.DESPBRASIL_KEY || '';
 const DESPBRASIL_SVCS = {
-  // versao:'v2' — o "Consulta 2 Código Segurança CRV (PDF)" passou a usar a
-  // versão 2 do serviço na despbrasil. Vai no corpo junto de servico/placa
-  // (ver o spread de `extra` em processCatalogQuery); sem ele a API responde
-  // pela versão antiga.
-  'security-code-vistocar':     { servico: 'codigo_seguranca', extra: { versao: 'v2' } },
+  // versao:'v1' — o "Consulta 2 Código Segurança CRV (PDF)" usa a versão 1 do
+  // serviço na despbrasil. Vai no corpo junto de servico/placa (ver o spread
+  // de `extra` em processCatalogQuery). Chegou a ficar em 'v2' por algumas
+  // horas em 10/09/2026 e voltou para 'v1'.
+  'security-code-vistocar':     { servico: 'codigo_seguranca', extra: { versao: 'v1' } },
   // "consulta_generica": o serviço em si vem em nome_servico, dentro do corpo.
   // `arquivo` só existe para o PDF do WhatsApp não sair como
   // "consulta_generica-ABC1D23.pdf" na mão do cliente.
