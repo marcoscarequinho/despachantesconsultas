@@ -439,14 +439,10 @@
           </div>
           <div class="price-tag text-base flex-shrink-0">R$ 28,00</div>
         </button>
-        <button type="button" onclick="showSection('intencao')"
-          class="w-full sm:w-auto sm:min-w-[280px] flex items-center gap-4 rounded-xl border-2 border-orange-300 bg-gradient-to-r from-orange-50 to-white p-4 text-left shadow-sm hover:shadow-md hover:border-orange-400 transition-all">
-          <div class="w-14 h-14 rounded-full bg-orange-100 flex items-center justify-center text-3xl flex-shrink-0">📝</div>
-          <div class="min-w-0 flex-1">
-            <div class="font-bold text-gray-800">Intenção de Venda (ATPVE)</div>
-            <div class="text-sm text-orange-700 font-medium">⚡ RJ, SP, MS e MG</div>
-          </div>
-        </button>
+        <!-- O atalho de emissão de Intenção de Venda (ATPV-e) saiu daqui junto
+             com os 4 serviços do catálogo: era um convite a emitir, e a aba
+             hoje só mostra os pedidos antigos. Ela continua no menu lateral,
+             para quem precisa de "Meus ATPV-e". -->
       </div>
 
       <!-- Seleção de categoria -->
@@ -882,11 +878,24 @@
 
       <div>
         <h2 class="text-xl font-bold text-gray-800">Intenção de Venda (ATPVE)</h2>
-        <p class="text-sm text-gray-500">Preencha os dados do veículo, vendedor e comprador — o ATPV-e (RJ/SP/MS/MG) é emitido na hora, sem envio de documentos.</p>
+        <p id="intencao-subtitulo" class="text-sm text-gray-500">Preencha os dados do veículo, vendedor e comprador — o ATPV-e (RJ/SP/MS/MG) é emitido na hora, sem envio de documentos.</p>
+      </div>
+
+      <!-- Emissão encerrada: aparece quando o catálogo não traz nenhum serviço do
+           grupo "Intenção de Venda (ATPVE)". A aba continua no ar porque os
+           pedidos já emitidos vivem aqui embaixo, em "Meus ATPV-e". -->
+      <div id="intencao-sem-emissao"
+        class="hidden card bg-amber-50 border border-amber-300 text-sm text-amber-900 flex gap-3">
+        <span class="text-xl flex-shrink-0">🛑</span>
+        <div>
+          <div class="font-semibold mb-1">Novas emissões encerradas</div>
+          <p>A emissão de Intenção de Venda (ATPV-e) não está mais disponível nesta plataforma.</p>
+          <p class="mt-1">Seus ATPV-e já emitidos continuam abaixo, em <strong>Meus ATPV-e</strong>, com download do PDF e as ações de Atualizar, Registrar, Alterar e Excluir funcionando normalmente.</p>
+        </div>
       </div>
 
       <!-- Saldo disponível -->
-      <div class="card bg-gradient-to-br from-orange-50 to-white border border-orange-200 flex items-center gap-4">
+      <div id="intencao-saldo-wrap" class="card bg-gradient-to-br from-orange-50 to-white border border-orange-200 flex items-center gap-4">
         <div class="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center text-xl flex-shrink-0">💳</div>
         <div>
           <div class="text-sm text-gray-600">Saldo disponível</div>
@@ -1378,8 +1387,29 @@ const INTENCAO_ICONS = {
 // Selo exibido em "Meus ATPV-e" para identificar rapidamente o estado do pedido.
 const ATPVE_UF_LABELS = { 'intencao-venda-rj': 'RJ', 'intencao-venda-sp': 'SP', 'intencao-venda-ms': 'MS', 'intencao-venda-mg': 'MG' };
 
+// Só há emissão de ATPV-e se o catálogo trouxer algum estado do grupo. Hoje
+// não traz (ver SERVICES no server.js): a aba vira consulta dos pedidos
+// antigos. É consultado em mais de um lugar, por isso não fica só numa flag
+// calculada uma vez — allServices chega por fetch e pode demorar.
+const intencaoTemEmissao = () =>
+  allServices.some(s => s.group === 'Intenção de Venda (ATPVE)');
+
 function buildIntencaoCategoryGrid() {
   const svcs = allServices.filter(s => s.group === 'Intenção de Venda (ATPVE)');
+
+  // Catálogo sem nenhum estado = emissão retirada do ar. Esconde o bloco de
+  // escolha e o saldo — que só servem para emitir — e explica o que houve, em
+  // vez de deixar um grid vazio. "Meus ATPV-e" continua visível: é o que
+  // atende quem já pagou.
+  const semEmissao = svcs.length === 0;
+  document.getElementById('intencao-sem-emissao').classList.toggle('hidden', !semEmissao);
+  document.getElementById('intencao-category-wrap').classList.toggle('hidden', semEmissao);
+  document.getElementById('intencao-saldo-wrap').classList.toggle('hidden', semEmissao);
+  if (semEmissao)
+    document.getElementById('intencao-subtitulo').textContent =
+      'Acompanhe os ATPV-e já emitidos nesta conta.';
+  if (semEmissao) return;
+
   document.getElementById('intencao-category-grid').innerHTML = svcs.map(s => `
     <div class="service-cat" data-svc="${s.id}" onclick="selectIntencaoCategory(${JSON.stringify(s).replace(/"/g,"&quot;")}, this)">
       <div class="text-2xl mb-1">${INTENCAO_ICONS[s.id] || s.icon}</div>
@@ -1661,8 +1691,12 @@ function alterarAtpve(uf, queryId) {
   if (!q) return;
   let p = {};
   try { p = JSON.parse(q.params || '{}'); } catch {}
-  const svc = allServices.find(s => s.id === `intencao-venda-${uf}`);
-  if (!svc) return;
+  // A emissão saiu do catálogo, mas "Alterar" é para pedido JÁ PAGO e precisa
+  // continuar funcionando. Sem este fallback o allServices.find voltaria
+  // undefined e o botão morreria em silêncio. Só o nome é usado daqui.
+  const svcId = `intencao-venda-${uf}`;
+  const svc = allServices.find(s => s.id === svcId)
+    || { id: svcId, name: `Intenção de Venda ${ATPVE_UF_LABELS[svcId] || uf.toUpperCase()}` };
 
   editingAtpve = { queryId, uf };
   selectedIntencaoSvc = svc;
@@ -1689,7 +1723,11 @@ function resetIntencaoForm(showCats = true) {
   document.getElementById('intencao-result-wrap').classList.add('hidden');
   document.getElementById('intencao-result-pdf-btn').classList.remove('hidden');
   document.querySelectorAll('#intencao-category-grid .service-cat').forEach(el => el.classList.remove('selected'));
-  if (showCats) document.getElementById('intencao-category-wrap').classList.remove('hidden');
+  // Sem emissão no catálogo o bloco "Selecione o Estado" está vazio: reexibi-lo
+  // aqui (Cancelar / Novo Pedido, que ainda aparecem no fluxo de Alterar um
+  // pedido antigo) mostraria um card em branco ao cliente.
+  if (showCats && intencaoTemEmissao())
+    document.getElementById('intencao-category-wrap').classList.remove('hidden');
 }
 
 // "Meus ATPV-e" — lista as próprias emissões (RJ + SP + MS), fonte: histórico

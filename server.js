@@ -734,17 +734,22 @@ const SERVICES = [
   { id:'crv-antigo-se', name:'Consulta CRV antigo SE', group:'Número CRV (Apenas antigos)', basePrice:448.00, inputType:'placa', icon:'📁', uf:'se', noMarkup:true, slowNote:'Atenção: esta consulta pode levar de 3 a 5 dias para a entrega do documento.' },
   { id:'crv-antigo-to', name:'Consulta CRV antigo TO', group:'Número CRV (Apenas antigos)', basePrice:350.00, inputType:'placa', icon:'📁', uf:'to', noMarkup:true, slowNote:'Atenção: esta consulta pode levar de 3 a 5 dias para a entrega do documento.' },
   { id:'crv-antigo-sc', name:'Consulta CRV antigo SC', group:'Número CRV (Apenas antigos)', basePrice:600.00, inputType:'placa', icon:'📁', uf:'sc', noMarkup:true, slowNote:'Atenção: esta consulta pode levar de 3 a 5 dias para a entrega do documento.' },
-  // ── Intenção de Venda (ATPVE) — 100% automáticas via Chekaki: cadastro e
-  // emissão do ATPV-e num único passo (api/atpve-<uf>/cadastrar), ver
-  // ATPVE_UFS/processCatalogQuery. MG migrou da Infosimples (que exigia dois
-  // serviços separados: registrar intenção + emitir ATPV-e) para este mesmo
-  // fluxo único da Chekaki — por isso não existe mais um serviço "Emitir
-  // ATPV-e MG" à parte: cadastrar já entrega o documento pronto, como em
-  // RJ/SP/MS ──
-  { id:'intencao-venda-rj', name:'Intenção de Venda RJ', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'atpve_rj_cadastro', icon:'📝', uf:'rj' },
-  { id:'intencao-venda-sp', name:'Intenção de Venda SP', group:'Intenção de Venda (ATPVE)', basePrice:60.00, noMarkup:true, inputType:'atpve_sp_cadastro', icon:'📝', uf:'sp' },
-  { id:'intencao-venda-ms', name:'Intenção de Venda MS', group:'Intenção de Venda (ATPVE)', basePrice:60.00, noMarkup:true, inputType:'atpve_ms_cadastro', icon:'📝', uf:'ms' },
-  { id:'intencao-venda-mg', name:'Intenção de Venda MG', group:'Intenção de Venda (ATPVE)', basePrice:60.00, noMarkup:true, inputType:'atpve_mg_cadastro', icon:'📝', uf:'mg' },
+  // ── Intenção de Venda (ATPVE) — RETIRADA DO CATÁLOGO ──────────────────────
+  // Os 4 serviços (intencao-venda-rj/sp/ms/mg) saíram daqui: sem entrada no
+  // SERVICES, processCatalogQuery devolve "serviço não encontrado" e nenhuma
+  // emissão nova acontece, nem pelo painel (/api/query) nem por chave de API
+  // (/api/v1/:serviceId). Cadastravam e emitiam o ATPV-e num passo só na
+  // Chekaki (api/atpve-<uf>/cadastrar).
+  //
+  // O que fica de pé de propósito, porque atende pedido JÁ PAGO:
+  //   - ATPVE_UFS e as rotas /api/queries/:id/atpve-<uf>-* (Atualizar,
+  //     Registrar, Alterar, Excluir) da aba "Meus ATPV-e";
+  //   - runAtpvePendingCheck, que busca por service_id literal e entrega os
+  //     pedidos em aguardando_pdf;
+  //   - runAtpveIntencaoVendaCheck/atpve_verificacoes, que confere a restrição
+  //     no Detran e estorna quem não recebeu.
+  // Nada disso consulta o catálogo, então sobrevive à retirada. Para reativar,
+  // basta devolver as 4 linhas abaixo (preços: RJ 70,00 e SP/MS/MG 60,00).
 ];
 
 // Serviços desta categoria não retornam resultado na hora: o pedido fica
@@ -8359,11 +8364,19 @@ function externalApiPriceFor(serviceId) {
 // da casa (aceitável no modelo contratual, chaves só para parceiros de confiança).
 //
 // UFs expostas na API externa (subconjunto de ATPVE_UFS: só os estados com
-// documentação de integração publicada para parceiros). MS entrou em
-// 02/09/2026 com a doc de 9 endpoints — mesmo contrato de MG e SP, então
-// bastou a UF aqui; conferido antes com GET /api/atpve-ms na Chekaki, que já
-// responde o mesmo envelope { success, total, pedidos } dos outros dois.
-const ATPVE_EXTERNAL_UFS = ['mg', 'sp', 'ms'];
+// documentação de integração publicada para parceiros). Já teve 'mg', 'sp' e
+// 'ms'.
+//
+// HOJE VAZIO: a Intenção de Venda saiu do catálogo (ver SERVICES) e as rotas
+// /api/v1/atpve-<uf>/* saíram junto — com a lista vazia o loop abaixo não
+// registra nenhuma, e quem chamar recebe 404. O caminho continua de pé, igual
+// a VISTOCAR_ASYNC_SVCS e PORTAL_AGENDADO_SVCS: para reexpor um estado basta
+// devolver a UF aqui, sem mexer em proxyAtpveExternal.
+//
+// Atenção ao reativar/desativar: são 9 rotas por UF e havia 8 chaves de API
+// ativas quando isto foi desligado — parceiro com integração passa a receber
+// 404 sem aviso prévio, então avise antes.
+const ATPVE_EXTERNAL_UFS = [];
 
 async function proxyAtpveExternal(req, res, uf, upstreamPath, { charge = false } = {}) {
   const serviceId = `atpve-${uf}`;
