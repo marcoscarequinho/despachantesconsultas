@@ -11513,6 +11513,102 @@ async function runVistocarPendingCheck() {
   return { verificadas: rows.length, entregues, cancelled };
 }
 
+// ── Aviso de saldo baixo no portaldespachantes.online ────────────────────────
+// A conta é pré-paga: sem saldo, TODA consulta que fala com o portal para de
+// funcionar de uma vez (é a maior parte do catálogo). O dono acompanha o saldo
+// de perto e repõe; este aviso é a rede de segurança para quando ele estiver
+// longe do painel.
+const SALDO_PORTAL_MINIMO = 130.00;
+// Enquanto o saldo seguir abaixo do mínimo, repete o aviso neste intervalo em
+// vez de mandar um a cada execução do cron — que roda de hora em hora.
+const SALDO_ALERTA_INTERVALO_HORAS = 6;
+
+async function consultarSaldoPortal() {
+  const r = await fetch(`${PORTAL_BASE_URL}/api/consumo`, {
+    headers: { 'chaveAcesso': PORTAL_DESP_KEY },
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status} ao consultar o consumo do portal.`);
+  const d = await r.json().catch(() => null);
+  const saldo = Number(d?.saldo);
+  // Saldo ausente ou não numérico é resposta inesperada: melhor falhar alto do
+  // que tratar como zero e disparar alarme falso.
+  if (!Number.isFinite(saldo)) throw new Error('Resposta do portal sem o campo "saldo".');
+  return { saldo, consumo: d?.consumo || null };
+}
+
+// Troca atômica na mesma tabela do broadcast (canal + ultimo_envio): garante um
+// aviso por intervalo mesmo se a Vercel executar o cron duas vezes.
+async function reservarAlertaSaldo() {
+  const r = await pool.query(
+    `INSERT INTO broadcast_agenda (canal, ultimo_envio) VALUES ($1, NOW())
+     ON CONFLICT (canal) DO UPDATE SET ultimo_envio = NOW()
+      WHERE broadcast_agenda.ultimo_envio <= NOW() - make_interval(hours => $2)
+     RETURNING ultimo_envio`,
+    ['saldo-portal', SALDO_ALERTA_INTERVALO_HORAS]
+  );
+  return r.rowCount > 0;
+}
+
+async function runSaldoPortalCheck() {
+  const { saldo, consumo } = await consultarSaldoPortal();
+  const fmt = v => 'R$ ' + Number(v).toFixed(2).replace('.', ',');
+
+  if (saldo > SALDO_PORTAL_MINIMO) {
+    // Voltou a ficar acima do mínimo: libera o próximo aviso para sair assim
+    // que cair de novo, sem esperar o intervalo.
+    await pool.query(
+      `UPDATE broadcast_agenda SET ultimo_envio = NOW() - make_interval(hours => $1)
+        WHERE canal = 'saldo-portal'`,
+      [SALDO_ALERTA_INTERVALO_HORAS]
+    ).catch(() => {});
+    return { saldo, alertado: false, motivo: 'saldo acima do mínimo' };
+  }
+
+  if (!await reservarAlertaSaldo())
+    return { saldo, alertado: false, motivo: 'já avisado nas últimas horas' };
+
+  const msg = [
+    `⚠️ *Saldo baixo no Portal Despachantes*`,
+    ``,
+    `💰 *Saldo atual:* ${fmt(saldo)}`,
+    `📉 *Mínimo configurado:* ${fmt(SALDO_PORTAL_MINIMO)}`,
+    ...(consumo ? [
+      ``,
+      `📊 *Consumo do mês:* ${consumo.consultas} consultas (${fmt(consumo.valor)})`,
+      `❌ *Com erro:* ${consumo.consultasComErro}`,
+    ] : []),
+    ``,
+    `Sem saldo, as consultas que passam pelo portal param de funcionar.`,
+  ].join('\n');
+  await sendWhatsApp(ADMIN_PHONE, msg).catch(() => {});
+  console.log(`⚠️  Aviso de saldo baixo enviado: ${fmt(saldo)}`);
+  return { saldo, alertado: true };
+}
+
+// ── GET /api/cron/saldo-portal (Vercel Cron — de hora em hora) ───────────────
+app.get('/api/cron/saldo-portal', async (req, res) => {
+  const secret = process.env.CRON_SECRET || '';
+  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    res.json({ success: true, ...(await runSaldoPortalCheck()) });
+  } catch (err) {
+    console.error('Erro no cron de saldo do portal:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/admin/saldo-portal (consulta manual pelo admin) ────────────────
+// Devolve o saldo na hora, sem depender do gatilho.
+app.post('/api/admin/saldo-portal', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    res.json({ success: true, minimo: SALDO_PORTAL_MINIMO, ...(await consultarSaldoPortal()) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── GET /api/cron/crlv-agendado-status (Vercel Cron) ──────────────────────────
 app.get('/api/cron/crlv-agendado-status', async (req, res) => {
   const secret = process.env.CRON_SECRET || '';

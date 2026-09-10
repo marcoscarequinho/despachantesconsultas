@@ -34,6 +34,10 @@
       "schedule": "0 13 * * *"
     },
     {
+      "path": "/api/cron/saldo-portal",
+      "schedule": "0 * * * *"
+    },
+    {
       "path": "/api/cron/crlv-agendado-status",
       "schedule": "*/15 * * * *"
     },
