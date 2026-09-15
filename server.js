@@ -133,19 +133,29 @@ const VISTOCAR_PASSWORD = process.env.VISTOCAR_PASSWORD || '';
 const VISTOCAR_ENDPOINTS = {
   'security-code-vistocar-2': 'security-code',
   'vistocar-debitos-cod-barra': 'debitos-cod-barra',
+  'atpve-vistocar-rj': 'atpve-rj',
+  'atpve-vistocar-mg': 'atpve-mg',
 };
+
+// ATPV-e (Intenção de Venda) pela Vistocar — o único grupo do VISTOCAR_ENDPOINTS
+// que NÃO manda { plate }: o corpo é o cadastro inteiro da venda (vendedor,
+// comprador, veículo e três arquivos em base64), montado em montarCorpoAtpveVistocar.
+// Vale para os dois estados; trocar de UF é só acrescentar a rota acima e o
+// serviço no SERVICES, porque o contrato é idêntico (conferido em 15/09/2026
+// contra atpve-rj e atpve-mg: a mesma lista de campos obrigatórios nos dois).
+const VISTOCAR_ATPVE_SVCS = new Set(['atpve-vistocar-rj', 'atpve-vistocar-mg']);
 
 // Serviços Vistocar ASSÍNCRONOS: o POST não devolve documento nenhum, só REGISTRA
 // a consulta (devolve movementId + "CONSULTA PENDENTE") e o PDF chega depois em
 // POST /api/webhooks/vistocar. Por isso não passam pelo tratamento de resposta com
 // pdfBase64 dos demais e só são cobrados na entrega (ver finalizePendingQuery).
 //
-// HOJE A LISTA ESTÁ VAZIA: o CE, único que usava esse fluxo, passou para o CRLV-e
-// Agendado do portaldespachantes.online. O webhook e a
-// entrega continuam de pé de propósito — ainda existem pedidos antigos em
-// vistocar_pending para entregar, e habilitar outra UF volta a ser só: rota em
+// O CE, que usava esse fluxo, passou para o CRLV-e Agendado do
+// portaldespachantes.online; quem ocupa a lista hoje é o ATPV-e RJ/MG. O webhook
+// e a entrega continuam de pé também para os pedidos antigos do CE em
+// vistocar_pending, e habilitar outra UF continua sendo: rota em
 // VISTOCAR_ENDPOINTS + serviço em SERVICES + id aqui.
-const VISTOCAR_ASYNC_SVCS = new Set();
+const VISTOCAR_ASYNC_SVCS = new Set([...VISTOCAR_ATPVE_SVCS]);
 
 // Cache do token JWT da Vistocar em memória do processo — o login devolve um token
 // válido por 40 min (doc da Vistocar), então evitamos logar a cada consulta. Renova
@@ -167,6 +177,180 @@ async function getVistocarToken() {
   vistocarToken = data.data.token;
   vistocarTokenExpiresAt = Date.now() + 38 * 60 * 1000;
   return vistocarToken;
+}
+
+// ── ATPV-e Vistocar: montagem e validação do corpo ───────────────────────────
+// A rota de ATPV-e aceita placa "XXXXXXX" e base64 "xx" sem reclamar: ela só
+// para na PRIMEIRA checagem que falha e, quando tudo passa, REGISTRA o cadastro
+// (e cobra o fornecedor). Por isso a validação daqui é mais dura que o normal —
+// pedido malformado tem que morrer aqui, não lá. A ordem das checagens da API,
+// levantada campo a campo em 15/09/2026, é: UF de emissão do CRV → UF/cidade da
+// venda → documentos → endereço do comprador → anos → renavam.
+
+const ATPVE_UFS_VALIDAS = new Set(['AC','AL','AM','AP','BA','CE','DF','ES','GO','MA','MG','MS','MT','PA','PB','PE','PI','PR','RJ','RN','RO','RR','RS','SC','SE','SP','TO']);
+
+// Limite por arquivo enviado (CRLV-e e os dois comprovantes). 8 MB por anexo dá
+// folga para PDF escaneado e ainda cabe nos 50mb do express.json com os três
+// juntos, já contando o inchaço de 33% do base64.
+const ATPVE_ANEXO_MAX_BYTES = 8 * 1024 * 1024;
+
+// Aceita tanto data URL ("data:application/pdf;base64,JVBER...") quanto base64
+// puro: o painel manda puro, mas um integrador desavisado manda a data URL
+// inteira e o arquivo chegaria corrompido do outro lado, sem erro visível.
+function limparAnexoBase64(valor) {
+  return String(valor || '').replace(/^data:[^,]*,/, '').replace(/\s+/g, '');
+}
+
+function validarAnexoAtpve(valor, rotulo) {
+  const b64 = limparAnexoBase64(valor);
+  if (!b64) return { erro: `Anexe o ${rotulo}.` };
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(b64) || b64.length < 100)
+    return { erro: `O ${rotulo} não é um arquivo válido. Selecione o arquivo novamente.` };
+  if (Math.floor(b64.length * 3 / 4) > ATPVE_ANEXO_MAX_BYTES)
+    return { erro: `O ${rotulo} passa de 8 MB. Reduza o arquivo e tente de novo.` };
+  return { b64 };
+}
+
+// DD/MM/AAAA (como o painel digita) ou AAAA-MM-DD já pronto → AAAA-MM-DD, que é
+// o formato que a Vistocar devolve no eco do cadastro.
+function dataBrParaIso(valor) {
+  const s = String(valor || '').trim();
+  let d, m, a;
+  const br = s.match(/^(\d{2})[\/\-.](\d{2})[\/\-.](\d{4})$/);
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (br)       { [, d, m, a] = br; }
+  else if (iso) { [, a, m, d] = iso; }
+  else return null;
+  const dt = new Date(`${a}-${m}-${d}T12:00:00Z`);
+  if (Number.isNaN(dt.getTime()) || dt.getUTCDate() !== Number(d) || dt.getUTCMonth() + 1 !== Number(m))
+    return null;
+  return `${a}-${m}-${d}`;
+}
+
+// "10.000,00", "10000.00" e 10000 viram 10000. Havendo vírgula, ela é a decimal
+// e os pontos são de milhar (é assim que o campo é digitado em português). Sem
+// vírgula o ponto é ambíguo: "10000.50" é decimal, mas "1.234" é milhar — o
+// desempate é o formato de milhar inteiro (grupos exatos de 3 dígitos), porque
+// tratar "1.234" como um real e vinte e três seria errar o valor da venda.
+function valorVendaParaNumero(valor) {
+  let s = String(valor ?? '').trim().replace(/[R$\s]/g, '');
+  if (!s) return null;
+  if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
+  const n = Number(s);
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
+}
+
+// Troca os três anexos em base64 por uma marca curta, para o pedido caber em
+// queries.params e na mensagem do admin sem carregar os megabytes do arquivo.
+const ATPVE_CAMPOS_ANEXO = ['crlvePdfBase64', 'comprovanteEnderecoVendedor', 'comprovanteEnderecoComprador'];
+function paramsSemAnexosAtpve(params) {
+  const limpo = { ...(params || {}) };
+  for (const campo of ATPVE_CAMPOS_ANEXO) {
+    if (!limpo[campo]) continue;
+    const kb = Math.round(limparAnexoBase64(limpo[campo]).length * 3 / 4 / 1024);
+    limpo[campo] = `[arquivo enviado — ${kb} KB]`;
+  }
+  return limpo;
+}
+
+// Devolve { body } ou { erro } — nunca as duas coisas. O tipo de pessoa é
+// deduzido do documento (11 dígitos = F, 14 = J), como no "venda" da comunicação
+// de venda: o cliente não escolhe pessoa física/jurídica numa aba à parte.
+function montarCorpoAtpveVistocar(service, params) {
+  const p = params || {};
+  const txt   = v => String(v ?? '').trim();
+  const dig   = v => txt(v).replace(/\D/g, '');
+  const uf    = v => txt(v).toUpperCase().slice(0, 2);
+  const ufCrv = (service.uf || '').toUpperCase();
+
+  const placa = txt(p.placa).toUpperCase().replace(/[\s-]/g, '');
+  if (!/^[A-Z]{3}[0-9][A-Z0-9][0-9]{2}$/.test(placa))
+    return { erro: 'Placa inválida. Informe no formato ABC1D23 ou ABC1234.' };
+
+  const renavam = dig(p.renavam);
+  if (renavam.length < 9 || renavam.length > 11)
+    return { erro: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' };
+
+  const anoFabricacao = dig(p.anoFabricacao);
+  const anoModelo     = dig(p.anoModelo);
+  if (!/^\d{4}$/.test(anoFabricacao)) return { erro: 'Ano de fabricação inválido. Informe os 4 dígitos.' };
+  if (!/^\d{4}$/.test(anoModelo))     return { erro: 'Ano do modelo inválido. Informe os 4 dígitos.' };
+
+  const dataVenda = dataBrParaIso(p.dataVenda);
+  if (!dataVenda) return { erro: 'Data da venda inválida. Use o formato DD/MM/AAAA.' };
+  const valorVenda = valorVendaParaNumero(p.valorVenda);
+  if (valorVenda === null) return { erro: 'Valor da venda inválido. Informe um valor maior que zero.' };
+
+  const ufVenda = uf(p.ufVenda) || ufCrv;
+  if (!ATPVE_UFS_VALIDAS.has(ufVenda)) return { erro: 'UF do local da venda inválida.' };
+  const cidadeVenda = txt(p.cidadeVenda);
+  if (!cidadeVenda) return { erro: 'Informe a cidade do local da venda.' };
+
+  const documentoVendedor  = dig(p.documentoVendedor);
+  const documentoComprador = dig(p.documentoComprador);
+  if (documentoVendedor.length !== 11 && documentoVendedor.length !== 14)
+    return { erro: 'CPF/CNPJ do vendedor inválido. Informe 11 dígitos (CPF) ou 14 (CNPJ).' };
+  if (documentoComprador.length !== 11 && documentoComprador.length !== 14)
+    return { erro: 'CPF/CNPJ do comprador inválido. Informe 11 dígitos (CPF) ou 14 (CNPJ).' };
+  const nomeVendedor  = txt(p.nomeVendedor);
+  const nomeComprador = txt(p.nomeComprador);
+  if (nomeVendedor.length  < 3) return { erro: 'Informe o nome (ou razão social) do vendedor.' };
+  if (nomeComprador.length < 3) return { erro: 'Informe o nome (ou razão social) do comprador.' };
+
+  const cepComprador = dig(p.cepComprador);
+  if (cepComprador.length !== 8) return { erro: 'CEP do comprador inválido. Informe os 8 dígitos.' };
+  const logradouroComprador = txt(p.logradouroComprador);
+  const numeroComprador     = txt(p.numeroComprador);
+  const bairroComprador     = txt(p.bairroComprador);
+  const cidadeComprador     = txt(p.cidadeComprador);
+  const ufComprador         = uf(p.ufComprador);
+  if (!logradouroComprador) return { erro: 'Informe o logradouro do comprador.' };
+  if (!numeroComprador)     return { erro: 'Informe o número do endereço do comprador (se não houver, informe S/N).' };
+  if (!bairroComprador)     return { erro: 'Informe o bairro do comprador.' };
+  if (!cidadeComprador)     return { erro: 'Informe a cidade do comprador.' };
+  if (!ATPVE_UFS_VALIDAS.has(ufComprador)) return { erro: 'UF do comprador inválida.' };
+
+  const crlve       = validarAnexoAtpve(p.crlvePdfBase64, 'CRLV-e em PDF');
+  if (crlve.erro) return { erro: crlve.erro };
+  const compVend    = validarAnexoAtpve(p.comprovanteEnderecoVendedor, 'comprovante de endereço do vendedor');
+  if (compVend.erro) return { erro: compVend.erro };
+  const compCompr   = validarAnexoAtpve(p.comprovanteEnderecoComprador, 'comprovante de endereço do comprador');
+  if (compCompr.erro) return { erro: compCompr.erro };
+
+  // Campos do CRV impresso: a API aceita sem eles, e nem todo veículo tem CRV em
+  // papel (CRV digital), então ficam opcionais — só vão quando preenchidos.
+  const dataEmissaoCrv = p.dataEmissaoCrv ? dataBrParaIso(p.dataEmissaoCrv) : null;
+  if (p.dataEmissaoCrv && !dataEmissaoCrv)
+    return { erro: 'Data de emissão do CRV inválida. Use o formato DD/MM/AAAA.' };
+
+  const body = {
+    placa, renavam, dataVenda, valorVenda,
+    cidadeVenda, ufVenda, ufEmissaoCrv: ufCrv,
+    anoFabricacao, anoModelo,
+    tipoPessoaVendedor:  documentoVendedor.length === 14 ? 'J' : 'F',
+    documentoVendedor, nomeVendedor,
+    tipoPessoaComprador: documentoComprador.length === 14 ? 'J' : 'F',
+    documentoComprador, nomeComprador,
+    cepComprador, logradouroComprador, numeroComprador, bairroComprador,
+    cidadeComprador, ufComprador,
+    crlvePdfBase64: crlve.b64,
+    comprovanteEnderecoVendedor: compVend.b64,
+    comprovanteEnderecoComprador: compCompr.b64,
+  };
+  const opcionais = {
+    complementoComprador: txt(p.complementoComprador),
+    emailVendedor: txt(p.emailVendedor),
+    emailComprador: txt(p.emailComprador),
+    chassi: txt(p.chassi).toUpperCase(),
+    kilometragem: dig(p.kilometragem),
+    numeroCrv: dig(p.numeroCrv),
+    codigoSegurancaCrv: dig(p.codigoSegurancaCrv),
+    numeroViaCrv: dig(p.numeroViaCrv),
+    dataEmissaoCrv,
+  };
+  for (const [k, v] of Object.entries(opcionais)) if (v) body[k] = v;
+  return { body };
 }
 
 // Prefixa o DDI 55 (Brasil) quando ausente. Não dá pra decidir isso olhando só
@@ -740,6 +924,19 @@ const SERVICES = [
   { id:'crv-antigo-se', name:'Consulta CRV antigo SE', group:'Número CRV (Apenas antigos)', basePrice:448.00, inputType:'placa', icon:'📁', uf:'se', noMarkup:true, slowNote:'Atenção: esta consulta pode levar de 3 a 5 dias para a entrega do documento.' },
   { id:'crv-antigo-to', name:'Consulta CRV antigo TO', group:'Número CRV (Apenas antigos)', basePrice:350.00, inputType:'placa', icon:'📁', uf:'to', noMarkup:true, slowNote:'Atenção: esta consulta pode levar de 3 a 5 dias para a entrega do documento.' },
   { id:'crv-antigo-sc', name:'Consulta CRV antigo SC', group:'Número CRV (Apenas antigos)', basePrice:600.00, inputType:'placa', icon:'📁', uf:'sc', noMarkup:true, slowNote:'Atenção: esta consulta pode levar de 3 a 5 dias para a entrega do documento.' },
+  // ── Intenção de Venda (ATPVE) — API Vistocar ────────────────────────────────
+  // Voltaram em 15/09/2026, depois de a emissão pela Chekaki sair do catálogo em
+  // 10/09/2026 (commit fa5ae61): agora quem emite é a Vistocar, em rota por
+  // estado (VISTOCAR_ENDPOINTS → apiclient/atpve-rj e apiclient/atpve-mg).
+  // Preço fechado de R$ 70,00 nos dois (noMarkup:true).
+  //
+  // São ASSÍNCRONOS (VISTOCAR_ASYNC_SVCS): o POST só devolve o protocolo do
+  // cadastro e o documento chega depois pelo webhook — por isso o cliente NÃO é
+  // cobrado no envio, só quando o ATPV-e é entregue (finalizePendingQuery), e o
+  // painel acompanha a emissão pela barra de progresso
+  // (GET /api/queries/:id/atpve-status).
+  { id:'atpve-vistocar-rj', name:'Intenção de Venda / ATPV-e RJ', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'atpve_vistocar', icon:'📝', uf:'rj' },
+  { id:'atpve-vistocar-mg', name:'Intenção de Venda / ATPV-e MG', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'atpve_vistocar', icon:'📝', uf:'mg' },
 ];
 
 // Serviços desta categoria não retornam resultado na hora: o pedido fica
@@ -6282,11 +6479,22 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     // Serviço via API Vistocar (auth JWT em getVistocarToken, ver header
     // Authorization abaixo). Resposta é JSON com PDF pronto em base64.
     if (VISTOCAR_ENDPOINTS[serviceId]) {
-      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
-      if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
       apiUrl = `${VISTOCAR_BASE_URL}/apiclient/${VISTOCAR_ENDPOINTS[serviceId]}`;
       method = 'POST';
-      body   = { plate: placa };
+      if (VISTOCAR_ATPVE_SVCS.has(serviceId)) {
+        // ATPV-e: corpo próprio (o cadastro inteiro da venda), não { plate }.
+        const montado = montarCorpoAtpveVistocar(service, params);
+        if (montado.erro) return res.status(400).json({ error: montado.erro });
+        body = montado.body;
+        // Com o corpo montado, os anexos já cumpriram o papel deles. Daqui para
+        // baixo `params` ainda é gravado em queries.params e vai na mensagem do
+        // admin — e megabytes de base64 nos dois lugares não servem para nada.
+        params = paramsSemAnexosAtpve(params);
+      } else {
+        const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+        if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+        body = { plate: placa };
+      }
     }
     // Débitos por Estado / Dívida Ativa — API Datacube (form-urlencoded, retorna JSON que vira PDF)
     const isDcDebito = serviceId.startsWith('dc-debito-');
@@ -6738,6 +6946,9 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     // CRLV-e CE: identificador do registro na Vistocar, preenchido no tratamento
     // de resposta abaixo e usado depois para criar a pendência do webhook.
     let vistocarMovementId = null;
+    // Serviço da lista de assíncronos que, nesta chamada, voltou com o documento
+    // pronto — segue pelo caminho normal de PDF em vez de virar pendência.
+    let vistocarEntregaImediata = false;
     if (PDF_BASE64_SVCS.includes(serviceId)) {
       let parsed;
       try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
@@ -6870,19 +7081,37 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
       if (VISTOCAR_ASYNC_SVCS.has(serviceId)) {
         // Assíncrono: a resposta de sucesso só confirma o REGISTRO da consulta
-        // ("CONSULTA PENDENTE", resultAvailable=false) e devolve o movementId; o
-        // documento chega depois em POST /api/webhooks/vistocar. Sem movementId
-        // não há como correlacionar a notificação com este pedido, então isso é
-        // tratado como falha (nada é cobrado — a cobrança só ocorre na entrega).
-        const ok = parsed?.status === 200 && parsed?.response?.success === true
-          && (parsed?.response?.movementId || parsed?.response?.movementId === 0);
+        // ("CONSULTA PENDENTE"/"Cadastro do ATPVe realizado com sucesso",
+        // resultAvailable=false) e devolve o movementId; o documento chega depois
+        // em POST /api/webhooks/vistocar. Sem movementId não há como correlacionar
+        // a notificação com este pedido, então isso é tratado como falha (nada é
+        // cobrado — a cobrança só ocorre na entrega).
+        const ok = parsed?.status === 200 && parsed?.response?.success === true;
         if (!ok) {
           const orgao = service.uf ? `Detran-${service.uf.toUpperCase()}` : 'órgão';
-          const errMsg = parsed?.message || parsed?.response?.msg || `Não foi possível registrar a consulta no ${orgao}.`;
+          const errMsg = parsed?.message || parsed?.response?.msg || parsed?.response?.error
+            || `Não foi possível registrar a consulta no ${orgao}.`;
           console.error(`[${serviceId}] resposta inesperada da Vistocar: ${JSON.stringify(parsed)}`);
           return res.status(422).json({ error: errMsg });
         }
-        vistocarMovementId = String(parsed.response.movementId);
+        // O ATPV-e pode sair pronto na própria resposta do cadastro
+        // (arquivoPdfBase64 preenchido). Quando isso acontece não há o que
+        // esperar: segue pelo caminho normal de PDF, cobrando agora.
+        const jaPronto = parsed?.response?.arquivoPdfBase64 || parsed?.response?.pdfBase64;
+        if (jaPronto) {
+          base64PdfBuf = Buffer.from(String(jaPronto).replace(/^data:[^,]+,/, '').replace(/\s/g, ''), 'base64');
+          vistocarEntregaImediata = true;
+        } else {
+          // O CRLV-e devolve movementId; o ATPV-e pode identificar o pedido pelo
+          // protocolo. Guarda o que vier, na ordem em que o webhook correlaciona
+          // (data.movementId), e recusa se não vier nenhum dos dois.
+          const id = parsed?.response?.movementId ?? parsed?.response?.protocolo;
+          if (id === null || id === undefined || String(id).trim() === '') {
+            console.error(`[${serviceId}] Vistocar aceitou o pedido sem movementId/protocolo: ${JSON.stringify(parsed)}`);
+            return res.status(422).json({ error: 'A emissão foi aceita, mas sem número de protocolo para acompanhar. Fale com o suporte antes de tentar de novo.' });
+          }
+          vistocarMovementId = String(id).trim();
+        }
       } else if (serviceId === 'vistocar-debitos-cod-barra') {
         // Mesmo padrão de envelope dos outros endpoints Vistocar: status/message no
         // nível raiz, dados de verdade dentro de "response" (aqui: success/registros).
@@ -6910,14 +7139,14 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       }
     }
 
-    // ── Vistocar assíncrono (hoje CRLV-e Ceará): registrado agora, cobrado na entrega ──
+    // ── Vistocar assíncrono (CRLV-e Ceará antigo, ATPV-e RJ/MG): registrado agora, cobrado na entrega ──
     // A consulta foi só REGISTRADA no Detran (ver tratamento de resposta acima):
     // não há documento ainda, então nada é debitado aqui e o fluxo sai antes das
     // validações de resultado abaixo, que esperam um documento. A consulta fica
     // 'aguardando_pdf' e o débito acontece quando o webhook da Vistocar entrega o
     // PDF (ver POST /api/webhooks/vistocar → finalizePendingQuery). Se o documento
     // nunca sair, runVistocarPendingCheck marca como 'cancelado' sem cobrar nada.
-    if (VISTOCAR_ASYNC_SVCS.has(serviceId)) {
+    if (VISTOCAR_ASYNC_SVCS.has(serviceId) && !vistocarEntregaImediata) {
       await ensureDbReady();   // vistocar_pending é tabela nova — ver ensureDbReady
       const placa = String(params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
       const qRow = await pool.query(
@@ -6936,11 +7165,17 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         [vistocarMovementId, qRow.rows[0].id, userId, user.phone || null, serviceId, placa]
       );
       await notifyAdminNewQuery(user, service, price, params);
+      const orgao = service.uf ? `Detran-${service.uf.toUpperCase()}` : 'Detran';
       return res.json({
         success: true,
         pending: true,
+        // queryId: é por ele que o painel acompanha a emissão na barra de
+        // progresso (GET /api/queries/:id/atpve-status).
+        queryId: qRow.rows[0].id,
         result: {
-          status: `Consulta registrada no ${service.uf ? `Detran-${service.uf.toUpperCase()}` : 'Detran'}! O documento ainda está sendo emitido — assim que sair, ele chega pelo WhatsApp e fica no seu histórico. Você só é cobrado quando o PDF for entregue.`,
+          status: VISTOCAR_ATPVE_SVCS.has(serviceId)
+            ? `Cadastro enviado ao ${orgao}! O ATPV-e ainda está sendo emitido — assim que sair, ele chega pelo WhatsApp e fica no seu histórico. Você só é cobrado quando o documento for entregue.`
+            : `Consulta registrada no ${orgao}! O documento ainda está sendo emitido — assim que sair, ele chega pelo WhatsApp e fica no seu histórico. Você só é cobrado quando o PDF for entregue.`,
           protocolo: vistocarMovementId,
         },
         charged: 0,
@@ -9276,6 +9511,59 @@ async function cancelarPendenciaVistocar(pend, motivo) {
     await sendWhatsApp(pend.phone, msg).catch(() => {});
   }
 }
+
+// ── GET /api/queries/:id/atpve-status ────────────────────────────────────────
+// Alimenta a barra de progresso do painel enquanto o ATPV-e está sendo emitido.
+// Não é só leitura de banco: a cada consulta ele TENTA buscar o resultado na
+// Vistocar (entregarResultadoVistocar, o mesmo do webhook e do cron), porque
+// quem está com a tela aberta esperando não pode depender de a notificação
+// chegar. A entrega é idempotente — claim atômico em finalizePendingQuery e
+// checagem do pdf_cache —, então chamar de novo não cobra nem entrega duas vezes.
+app.get('/api/queries/:id/atpve-status', requireAuth, async (req, res) => {
+  try {
+    const qr = await pool.query(
+      `SELECT id, service_id, service_name, status, created_at FROM queries
+       WHERE id=$1 AND user_id=$2`,
+      [req.params.id, req.user.id]
+    );
+    if (!qr.rows.length) return res.status(404).json({ error: 'Consulta não encontrada.' });
+    let q = qr.rows[0];
+
+    if (q.status === 'aguardando_pdf') {
+      await ensureDbReady();   // vistocar_pending é tabela nova — ver ensureDbReady
+      const pr = await pool.query('SELECT * FROM vistocar_pending WHERE query_id=$1', [q.id]);
+      if (pr.rows.length) {
+        try { await entregarResultadoVistocar(pr.rows[0]); }
+        catch (e) { console.error(`[atpve-status] falha ao buscar o resultado da query ${q.id}:`, e.message); }
+        const rel = await pool.query('SELECT status FROM queries WHERE id=$1', [q.id]);
+        if (rel.rows.length) q.status = rel.rows[0].status;
+      }
+    }
+
+    const pdf = await pool.query(
+      `SELECT token FROM pdf_cache WHERE query_id=$1 AND expires_at > NOW() ORDER BY id DESC LIMIT 1`,
+      [q.id]
+    );
+    const decorridoSegundos = Math.max(0, Math.round((Date.now() - new Date(q.created_at).getTime()) / 1000));
+    // O prazo é o mesmo em que runVistocarPendingCheck desiste e cancela sem
+    // cobrar — é ele que a barra usa de régua, para não prometer um tempo nosso.
+    const prazoSegundos = ASYNC_PDF_REFUND_HOURS * 3600;
+
+    if (pdf.rows.length) {
+      return res.json({ situacao: 'pronto', token: pdf.rows[0].token, decorridoSegundos, prazoSegundos });
+    }
+    if (q.status === 'cancelado') {
+      return res.json({
+        situacao: 'cancelado', decorridoSegundos, prazoSegundos,
+        mensagem: 'O documento não pôde ser emitido. Você não foi cobrado por essa tentativa.',
+      });
+    }
+    return res.json({ situacao: 'aguardando', decorridoSegundos, prazoSegundos });
+  } catch (err) {
+    console.error('Erro em /api/queries/:id/atpve-status:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
 
 app.post('/api/webhooks/vistocar', async (req, res) => {
   const payload = req.body || {};

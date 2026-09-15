@@ -495,6 +495,41 @@
         </form>
       </div>
 
+      <!-- Emissão do ATPV-e em andamento ────────────────────────────────────
+           O ATPV-e não sai na resposta da requisição: o cadastro vai para o
+           Detran e o documento é emitido depois. Esta é a tela que segura quem
+           está esperando — barra de progresso por tempo decorrido (não há
+           percentual de verdade do lado do Detran) e busca do resultado a cada
+           poucos segundos em /api/queries/:id/atpve-status. -->
+      <div id="atpve-progress-wrap" class="hidden space-y-4">
+        <div class="card border border-amber-200">
+          <div class="flex items-center gap-3 mb-4">
+            <div id="atpve-progress-icon" class="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center text-xl">⏳</div>
+            <div>
+              <div id="atpve-progress-title" class="font-bold text-amber-800">Emitindo o ATPV-e</div>
+              <div id="atpve-progress-service" class="text-sm text-gray-600"></div>
+            </div>
+          </div>
+          <div class="w-full bg-gray-100 rounded-full h-3 overflow-hidden">
+            <div id="atpve-progress-bar" class="h-3 bg-amber-500 rounded-full" style="width:4%; transition: width .8s ease"></div>
+          </div>
+          <div class="flex justify-between items-baseline gap-3 mt-2">
+            <span id="atpve-progress-msg" class="text-xs text-amber-700">Cadastro enviado ao Detran…</span>
+            <span id="atpve-progress-time" class="text-xs text-gray-400 flex-shrink-0"></span>
+          </div>
+          <div id="atpve-progress-proto" class="text-xs text-gray-500 mt-3"></div>
+          <p class="text-xs text-gray-500 mt-2">Pode fechar esta página: o PDF também chega pelo WhatsApp e fica no Histórico. Você só é cobrado quando o documento for entregue.</p>
+          <div id="atpve-progress-done" class="hidden mt-4 text-center">
+            <a id="atpve-progress-link" href="#" target="_blank" rel="noopener" class="btn-primary inline-flex items-center gap-2">
+              📥 Baixar ATPV-e (PDF)
+            </a>
+          </div>
+        </div>
+        <button onclick="resetForm()" class="btn-secondary w-full justify-center">
+          🔄 Nova Emissão
+        </button>
+      </div>
+
       <!-- Resultado -->
       <div id="query-result-wrap" class="hidden space-y-4">
         <div class="result-card p-5">
@@ -1375,6 +1410,8 @@ function alterarComunicacaoVenda(queryId) {
   document.getElementById('service-selector-wrap').classList.add('hidden');
   document.getElementById('query-form-wrap').classList.remove('hidden');
   document.getElementById('query-result-wrap').classList.add('hidden');
+  pararAtpveProgress();
+  document.getElementById('atpve-progress-wrap').classList.add('hidden');
   document.getElementById('form-error').classList.add('hidden');
   document.getElementById('query-form-wrap').scrollIntoView({ behavior:'smooth', block:'nearest' });
 }
@@ -1685,6 +1722,7 @@ function inputTypeLabel(t) {
     crlv_agendado_cpf:   'Entrada: Placa + Renavam + CPF (assíncrono)',
     pedido_id_get:       'Entrada: ID do Pedido',
     venda:               'Entrada: Dados completos da venda',
+    atpve_vistocar:      'Entrada: Dados da venda + CRLV-e e comprovantes (assíncrono)',
     cancelar_venda:      'Entrada: ID + Protocolo + Motivo',
     protocolo:           'Entrada: Protocolo',
     protocolo_get:       'Entrada: Protocolo (GET)',
@@ -1753,6 +1791,23 @@ function apiExampleParams(inputType) {
     placa_renavam_cpf:   { placa: 'ABC1D23', renavam: '00000000000', cpf: '00000000000' },
     crlv_agendado_placa: { placa: 'ABC1D23' },
     crlv_agendado_cpf:   { placa: 'ABC1D23', renavam: '00000000000', cpf: '00000000000' },
+    // ATPV-e: os três anexos vão em base64 PURO (sem o prefixo "data:").
+    // A resposta não traz o documento — vem { pending: true, result.protocolo }
+    // e o PDF sai depois, pelo WhatsApp e no histórico da conta.
+    atpve_vistocar: {
+      placa: 'ABC1D23', renavam: '00000000000',
+      anoFabricacao: '2020', anoModelo: '2021',
+      dataVenda: '01/09/2026', valorVenda: '10000.00',
+      cidadeVenda: 'RIO DE JANEIRO', ufVenda: 'RJ',
+      nomeVendedor: 'NOME DO VENDEDOR', documentoVendedor: '00000000000',
+      nomeComprador: 'NOME DO COMPRADOR', documentoComprador: '00000000000',
+      cepComprador: '20000000', logradouroComprador: 'RUA EXEMPLO',
+      numeroComprador: '100', bairroComprador: 'CENTRO',
+      cidadeComprador: 'RIO DE JANEIRO', ufComprador: 'RJ',
+      crlvePdfBase64: 'JVBERi0...',
+      comprovanteEnderecoVendedor: 'JVBERi0...',
+      comprovanteEnderecoComprador: 'JVBERi0...',
+    },
     crv_full: {
       placa: 'ABC1D23', renavam: '00000000000',
       crv: { numero: '123456789012', codigo_seguranca: '00000000000', numero_via: '1', data_emissao: '01/01/2020', uf_emissao: 'RJ' },
@@ -1938,6 +1993,8 @@ let catalogFilter = 'all';
 // continuam contando pelo grupo real do serviço. Destacar outra consulta é
 // acrescentar o id nesta lista.
 const CATALOG_DESTAQUES = [
+  'atpve-vistocar-rj',        // Intenção de Venda / ATPV-e RJ
+  'atpve-vistocar-mg',        // Intenção de Venda / ATPV-e MG
   'consultar-Numero-ATPVE',   // Reemissão da ATPVe Com Comunicação de Venda
   'consultar-atpve-v1',       // Reemissão ATPV-e (Placa)
   'consultar-atpve',          // Reemissão ATPV-e (Chassi)
@@ -1951,6 +2008,7 @@ const CATALOG_GRUPO_DESTAQUE = 'Destaques';
 // fim, na ordem do servidor — grupo novo no server.js aparece sozinho.
 const CATALOG_GROUP_ORDER = [
   CATALOG_GRUPO_DESTAQUE,
+  'Intenção de Venda (ATPVE)',
   'CRLV-e Rio de Janeiro',
   'CRLV-e Digital',
   'CRLV-e Agendado',
@@ -1973,6 +2031,7 @@ const CATALOG_GROUP_ORDER = [
 // agendado, que é a dúvida que mais chega no suporte.
 const CATALOG_GROUP_META = {
   'Destaques':              { icon:'⭐', badge:'⭐ Destaque',   badgeClass:'bg-orange-100 text-orange-700' },
+  'Intenção de Venda (ATPVE)': { icon:'📝', badge:'⏳ Em emissão', badgeClass:'bg-amber-100 text-amber-800' },
   'CRLV-e Rio de Janeiro':  { icon:'📄', badge:'⚡ Na hora',    badgeClass:'bg-orange-100 text-orange-700' },
   'CRLV-e Digital':         { icon:'📄' },
   'CRLV-e Agendado':        { icon:'⏳', badge:'⏳ Agendado',   badgeClass:'bg-amber-100 text-amber-800' },
@@ -1992,9 +2051,13 @@ const CATALOG_GROUP_META = {
 };
 
 // Selo por serviço, para quando o do grupo mentiria — por exemplo um serviço que
-// não sai na hora dentro de um grupo marcado como "⚡ Na hora". Hoje vazio: o
-// único que usava (CRLV-e Rio Agendado) saiu do catálogo.
-const CATALOG_BADGE_SERVICO = {};
+// não sai na hora dentro de um grupo marcado como "⚡ Na hora". Os dois ATPV-e
+// estão no bloco Destaques, que se anunciaria como "⭐ Destaque"; o que o cliente
+// precisa saber antes de clicar é que o documento não sai na hora.
+const CATALOG_BADGE_SERVICO = {
+  'atpve-vistocar-rj': { badge:'⏳ Em emissão', badgeClass:'bg-amber-100 text-amber-800' },
+  'atpve-vistocar-mg': { badge:'⏳ Em emissão', badgeClass:'bg-amber-100 text-amber-800' },
+};
 
 // Busca sem acento e sem caixa: "debito rj" acha "Débitos RJ".
 const catNorm = s => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -2652,6 +2715,8 @@ function selectService(svc) {
   renderFormFields(svc.inputType, svc);
   document.getElementById('query-form-wrap').classList.remove('hidden');
   document.getElementById('query-result-wrap').classList.add('hidden');
+  pararAtpveProgress();
+  document.getElementById('atpve-progress-wrap').classList.add('hidden');
   document.getElementById('form-error').classList.add('hidden');
   const submitBtn = document.getElementById('query-submit');
   submitBtn.disabled = !!svc.unavailable;
@@ -2671,6 +2736,7 @@ function queryActionLabel(inputType) {
   if (inputType === 'procuracao_veicular') return 'Gerar Procuração';
   if (inputType === 'nota_prestacao_servicos') return 'Gerar Nota';
   if (inputType === 'asd') return 'Gerar ASD RJ';
+  if (inputType === 'atpve_vistocar') return 'Emitir ATPV-e';
   return 'Realizar Consulta';
 }
 
@@ -2740,6 +2806,103 @@ function renderFormFields(inputType, svc) {
       ${field('crv_data','Data Emissão','text','01/01/2020')}
       ${field('crv_uf','UF Emissão','text','SP')}
     </div>`;
+
+  // ── Intenção de Venda / ATPV-e (Vistocar) ──────────────────────────────────
+  // Formulário grande porque a API exige o cadastro inteiro da venda, incluindo
+  // TRÊS arquivos (CRLV-e e os comprovantes de endereço das duas partes) — sem
+  // eles a rota nem aceita o pedido. Os campos do CRV impresso ficam opcionais:
+  // a API aceita sem eles e nem todo veículo tem CRV em papel.
+  // A UF de emissão do CRV não é campo: ela é a do próprio serviço (ATPV-e RJ
+  // emite CRV do RJ), e é ela que decide a configuração no Detran.
+  const atpveUfOptions = ['AC','AL','AM','AP','BA','CE','DF','ES','GO','MA','MG','MS','MT','PA','PB','PE','PI','PR','RJ','RN','RO','RR','RS','SC','SE','SP','TO'];
+  const atpveUfSelect = (id, label, selecionada) =>
+    `<div>
+      <label class="label">${label} <span class="text-red-500">*</span></label>
+      <select id="f-${id}" class="input-field" required>
+        ${atpveUfOptions.map(u => `<option value="${u}" ${u === selecionada ? 'selected' : ''}>${u}</option>`).join('')}
+      </select>
+    </div>`;
+  const atpveArquivo = (id, label, ajuda) =>
+    `<div>
+      <label class="label">${label} <span class="text-red-500">*</span></label>
+      <input type="file" id="f-${id}-file" class="input-field" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
+        onchange="handleAnexoAtpve(this, '${id}')">
+      <input type="hidden" id="f-${id}">
+      <div class="text-xs text-gray-500 mt-1">${ajuda}</div>
+      <div id="f-${id}-status" class="text-xs text-gray-500 mt-1"></div>
+    </div>`;
+  const atpveUfServico = (svc?.uf || 'RJ').toUpperCase();
+  const atpveBody = `
+    <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
+      <p class="text-xs font-semibold text-amber-800 mb-1">⏳ O ATPV-e não sai na hora</p>
+      <p class="text-xs text-amber-700">O cadastro vai para o Detran-${atpveUfServico} e o documento é emitido em seguida. A tela acompanha a emissão por uma barra de progresso, e o PDF também chega pelo WhatsApp. <strong>Você só é cobrado quando o ATPV-e for entregue.</strong></p>
+    </div>
+
+    <div class="font-semibold text-gray-700 text-sm mb-2">Veículo</div>
+    <div class="grid grid-cols-2 gap-3">
+      ${field('at_placa','Placa','text','ABC1D23 ou ABC-1234')}
+      ${field('at_renavam','Renavam','text','12345678901',true,'inputmode="numeric" maxlength="11"')}
+    </div>
+    <div class="grid grid-cols-3 gap-3">
+      ${field('at_ano_fab','Ano Fabricação','text','2020',true,'inputmode="numeric" maxlength="4"')}
+      ${field('at_ano_mod','Ano Modelo','text','2021',true,'inputmode="numeric" maxlength="4"')}
+      ${field('at_km','Quilometragem','text','50000',false,'inputmode="numeric"')}
+    </div>
+    ${field('at_chassi','Chassi','text','9BWZZZ377VT004251',false,'maxlength="17"')}
+
+    <div class="font-semibold text-gray-700 text-sm mt-3 mb-1">CRV impresso (opcional)</div>
+    <p class="text-xs text-gray-500 mb-2">Preencha se o veículo tiver CRV em papel. Deixe em branco no caso de CRV digital.</p>
+    <div class="grid grid-cols-2 gap-3">
+      ${field('at_crv_numero','Número do CRV','text','123456789012',false,'inputmode="numeric"')}
+      ${field('at_crv_codigo','Código de Segurança do CRV','text','12345678901',false,'inputmode="numeric"')}
+      ${field('at_crv_via','Nº da Via','text','1',false,'inputmode="numeric"')}
+      ${field('at_crv_data','Data de Emissão do CRV','text','DD/MM/AAAA',false)}
+    </div>
+
+    <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Venda</div>
+    <div class="grid grid-cols-2 gap-3">
+      ${field('at_venda_data','Data da Venda','text','DD/MM/AAAA')}
+      ${field('at_venda_valor','Valor da Venda (R$)','text','10.000,00')}
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      ${field('at_venda_cidade','Cidade do Local da Venda','text','RIO DE JANEIRO')}
+      ${atpveUfSelect('at_venda_uf','UF do Local da Venda', atpveUfServico)}
+    </div>
+
+    <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Vendedor</div>
+    <p class="text-xs text-gray-500 -mt-1 mb-2">Informe CPF (pessoa física) ou CNPJ (pessoa jurídica) — o tipo é detectado automaticamente pela quantidade de dígitos.</p>
+    <div class="grid grid-cols-2 gap-3">
+      ${field('at_v_doc','CPF/CNPJ do Vendedor','text','000.000.000-00 ou CNPJ')}
+      ${field('at_v_nome','Nome / Razão Social do Vendedor','text','NOME COMPLETO')}
+    </div>
+    ${field('at_v_email','E-mail do Vendedor','text','vendedor@email.com',false)}
+
+    <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Comprador</div>
+    <p class="text-xs text-gray-500 -mt-1 mb-2">Informe CPF (pessoa física) ou CNPJ (pessoa jurídica) — o tipo é detectado automaticamente pela quantidade de dígitos.</p>
+    <div class="grid grid-cols-2 gap-3">
+      ${field('at_c_doc','CPF/CNPJ do Comprador','text','000.000.000-00 ou CNPJ')}
+      ${field('at_c_nome','Nome / Razão Social do Comprador','text','NOME COMPLETO')}
+    </div>
+    ${field('at_c_email','E-mail do Comprador','text','comprador@email.com',false)}
+    <div class="grid grid-cols-2 gap-3">
+      ${field('at_c_cep','CEP do Comprador (8 dígitos)','text','20000000',true,'inputmode="numeric" maxlength="9"')}
+      ${field('at_c_logradouro','Logradouro','text','RUA EXEMPLO')}
+    </div>
+    <p id="atpve-cep-status" class="text-xs mt-1 mb-2 hidden"></p>
+    <div class="grid grid-cols-3 gap-3">
+      ${field('at_c_numero','Número','text','123 (ou S/N)')}
+      ${field('at_c_bairro','Bairro','text','CENTRO')}
+      ${field('at_c_complemento','Complemento','text','APTO 101',false)}
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      ${field('at_c_cidade','Cidade','text','RIO DE JANEIRO')}
+      ${atpveUfSelect('at_c_uf','UF do Comprador', atpveUfServico)}
+    </div>
+
+    <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Documentos (obrigatórios)</div>
+    ${atpveArquivo('at_crlve','CRLV-e do veículo (PDF)','O documento digital do veículo, em PDF. Até 8 MB.')}
+    ${atpveArquivo('at_comp_v','Comprovante de endereço do vendedor','PDF ou foto legível. Até 8 MB.')}
+    ${atpveArquivo('at_comp_c','Comprovante de endereço do comprador','PDF ou foto legível. Até 8 MB.')}`;
 
   const templates = {
     placa: placaField,
@@ -3139,6 +3302,8 @@ function renderFormFields(inputType, svc) {
 
     venda: vendaBody,
 
+    atpve_vistocar: atpveBody,
+
     debito_doc: placaField + renavamField +
       field('documento', 'CPF ou CNPJ do Proprietário', 'text', '000.000.000-00') +
       `<p class="text-xs text-blue-600 mt-1">ℹ️ Informe o CPF ou CNPJ do proprietário do veículo.</p>`,
@@ -3264,6 +3429,22 @@ function renderFormFields(inputType, svc) {
     const ufEl = document.getElementById('f-asd_uf');
     if (ufEl) ufEl.addEventListener('input', function() {
       this.value = this.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2);
+    });
+  }
+  // ATPV-e: o form.reset() limpa o <input type="file">, mas não o base64 já
+  // lido — sem zerar aqui, reabrir o formulário mandaria o anexo do pedido
+  // anterior com os dados do pedido novo.
+  if (inputType === 'atpve_vistocar') {
+    atpveAnexos = { at_crlve: '', at_comp_v: '', at_comp_c: '' };
+    const placaEl = document.getElementById('f-at_placa');
+    if (placaEl) placaEl.addEventListener('input', function() {
+      this.value = this.value.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 8);
+    });
+    const cepEl = document.getElementById('f-at_c_cep');
+    if (cepEl) cepEl.addEventListener('input', function() {
+      const d = this.value.replace(/\D/g, '').slice(0, 8);
+      this.value = d.replace(/(\d{5})(\d{1,3})/, '$1-$2');
+      if (d.length === 8) autocompletarCepAtpve(d);
     });
   }
   // Máscara CEP da Declaração de Residência (00000-000, sem autopreenchimento —
@@ -3617,6 +3798,100 @@ function lerCarteirinhaAsd(inputEl, lado) {
   reader.readAsDataURL(file);
 }
 
+// ── Anexos do ATPV-e ────────────────────────────────────────────────────────
+// Guardados aqui em base64 puro (sem o prefixo "data:"), e não no próprio
+// <input type="file">, porque é isso que vai no corpo JSON de /api/query.
+let atpveAnexos = { at_crlve: '', at_comp_v: '', at_comp_c: '' };
+const ATPVE_ANEXO_MAX_MB = 8;
+
+function handleAnexoAtpve(input, campo) {
+  const statusEl = document.getElementById(`f-${campo}-status`);
+  const hiddenEl = document.getElementById(`f-${campo}`);
+  const setStatus = (msg, cor) => { if (statusEl) { statusEl.textContent = msg; statusEl.className = `text-xs mt-1 ${cor}`; } };
+  const limpar = () => { atpveAnexos[campo] = ''; if (hiddenEl) hiddenEl.value = ''; };
+
+  const file = input.files && input.files[0];
+  if (!file) { limpar(); setStatus('', 'text-gray-500'); return; }
+
+  const tiposOk = ['application/pdf', 'image/jpeg', 'image/png'];
+  const extOk = /\.(pdf|jpe?g|png)$/i.test(file.name);
+  if (!tiposOk.includes(file.type) && !extOk) {
+    limpar(); input.value = '';
+    setStatus('Arquivo inválido. Envie um PDF, JPG ou PNG.', 'text-red-500');
+    return;
+  }
+  if (file.size > ATPVE_ANEXO_MAX_MB * 1024 * 1024) {
+    limpar(); input.value = '';
+    setStatus(`Arquivo de ${(file.size / 1024 / 1024).toFixed(1)} MB — o limite é ${ATPVE_ANEXO_MAX_MB} MB.`, 'text-red-500');
+    return;
+  }
+
+  setStatus('⏳ Carregando…', 'text-gray-500');
+  const guardar = (base64, rotulo) => {
+    atpveAnexos[campo] = base64;
+    if (hiddenEl) hiddenEl.value = base64 ? '1' : '';   // só marca "tem anexo": o base64 mesmo fica em atpveAnexos
+    setStatus(`✓ ${file.name} (${rotulo})`, 'text-green-600');
+  };
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    const ehPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+    if (ehPdf) { guardar(String(reader.result).split(',')[1] || '', `${(file.size / 1024).toFixed(0)} KB`); return; }
+    // Foto de comprovante tirada no celular passa de 5 MB com facilidade, e são
+    // três anexos numa requisição só — reduz para 1800px no maior lado antes de
+    // virar base64, que é o mesmo tratamento da digitalização da carteirinha na
+    // ASD. Comprovante de endereço continua legível nesse tamanho.
+    const img = new Image();
+    img.onload = () => {
+      const escala = Math.min(1, 1800 / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width  = Math.round(img.width * escala);
+      canvas.height = Math.round(img.height * escala);
+      const ctx = canvas.getContext('2d');
+      // Fundo branco: JPEG não tem transparência e um PNG com alfa sairia preto.
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      const base64 = dataUrl.split(',')[1] || '';
+      guardar(base64, `${canvas.width}×${canvas.height}, ${(base64.length * 3 / 4 / 1024).toFixed(0)} KB`);
+    };
+    img.onerror = () => { limpar(); setStatus('Não foi possível ler essa imagem. Tente outro arquivo.', 'text-red-500'); };
+    img.src = reader.result;
+  };
+  reader.onerror = () => {
+    limpar();
+    setStatus('Erro ao ler o arquivo. Tente de novo.', 'text-red-500');
+  };
+  reader.readAsDataURL(file);
+}
+
+// Mesmo /api/cep do resto do painel, mas aqui o que interessa é o NOME da
+// cidade (a API da Vistocar quer o nome, não o código IBGE).
+async function autocompletarCepAtpve(cep) {
+  const status = document.getElementById('atpve-cep-status');
+  const setStatus = (msg, cor) => {
+    if (!status) return;
+    status.className = `text-xs mt-1 mb-2 ${cor}`;
+    status.textContent = msg;
+    status.classList.remove('hidden');
+  };
+  setStatus('⏳ Buscando endereço…', 'text-blue-600');
+  try {
+    const r = await fetch(`/api/cep/${cep}`);
+    const data = await r.json();
+    if (!r.ok) { setStatus('⚠️ ' + (data.error || 'CEP não encontrado.'), 'text-amber-600'); return; }
+    const set = (id, val) => { const el = document.getElementById('f-' + id); if (el && val) el.value = val; };
+    set('at_c_logradouro', data.logradouro);
+    set('at_c_bairro',     data.bairro);
+    set('at_c_cidade',     data.cidade_nome);
+    set('at_c_uf',         data.uf);
+    setStatus(`✅ ${data.cidade_nome ? data.cidade_nome + '/' + data.uf : 'Endereço encontrado'} — confira os campos.`, 'text-green-600');
+  } catch {
+    setStatus('⚠️ Erro ao buscar CEP. Preencha manualmente.', 'text-amber-600');
+  }
+}
+
 async function autocompletarCep(cep) {
   const status = document.getElementById('cep-status');
   const setStatus = (msg, cor) => {
@@ -3646,6 +3921,10 @@ async function autocompletarCep(cep) {
 function resetForm(showCats = true) {
   selectedSvc = null;
   editingComunicacaoVendaQueryId = null;
+  // Sem isso o acompanhamento do ATPV-e continuaria batendo no servidor com o
+  // painel já em outra tela.
+  pararAtpveProgress();
+  document.getElementById('atpve-progress-wrap').classList.add('hidden');
   document.getElementById('query-form-wrap').classList.add('hidden');
   document.getElementById('query-result-wrap').classList.add('hidden');
   document.getElementById('service-selector-wrap').classList.add('hidden');
@@ -3724,6 +4003,14 @@ async function submitQuery(e) {
           return;
         }
         showFormError(data.error || 'Erro ao realizar consulta.');
+        return;
+      }
+      // Pedido aceito mas ainda sem documento (ATPV-e e demais assíncronos da
+      // Vistocar): em vez do card de "consulta concluída", que mentiria, abre a
+      // barra de progresso, que acompanha a emissão até o PDF sair.
+      if (data.pending && selectedSvc.inputType === 'atpve_vistocar') {
+        showAtpveProgress(data, selectedSvc);
+        await loadQueries();
         return;
       }
       if (data.html_token) {
@@ -3913,6 +4200,44 @@ function buildParams(inputType) {
       carteirinhaVerso: asdCarteirinha.verso || '',
     };
 
+  // Intenção de Venda / ATPV-e: nomes iguais aos da API da Vistocar, para o
+  // caminho do dado ficar óbvio entre o campo da tela e o corpo enviado
+  // (ver montarCorpoAtpveVistocar no server.js). A UF de emissão do CRV não
+  // entra aqui: quem manda é o serviço escolhido.
+  if (inputType === 'atpve_vistocar')
+    return {
+      placa: g('at_placa'),
+      renavam: cd(g('at_renavam')),
+      chassi: g('at_chassi'),
+      anoFabricacao: g('at_ano_fab'),
+      anoModelo: g('at_ano_mod'),
+      kilometragem: cd(g('at_km')),
+      numeroCrv: cd(g('at_crv_numero')),
+      codigoSegurancaCrv: cd(g('at_crv_codigo')),
+      numeroViaCrv: cd(g('at_crv_via')),
+      dataEmissaoCrv: g('at_crv_data'),
+      dataVenda: g('at_venda_data'),
+      valorVenda: g('at_venda_valor'),
+      cidadeVenda: g('at_venda_cidade'),
+      ufVenda: g('at_venda_uf'),
+      nomeVendedor: g('at_v_nome'),
+      documentoVendedor: cd(g('at_v_doc')),
+      emailVendedor: g('at_v_email'),
+      nomeComprador: g('at_c_nome'),
+      documentoComprador: cd(g('at_c_doc')),
+      emailComprador: g('at_c_email'),
+      cepComprador: cd(g('at_c_cep')),
+      logradouroComprador: g('at_c_logradouro'),
+      numeroComprador: g('at_c_numero'),
+      complementoComprador: g('at_c_complemento'),
+      bairroComprador: g('at_c_bairro'),
+      cidadeComprador: g('at_c_cidade'),
+      ufComprador: g('at_c_uf'),
+      crlvePdfBase64: atpveAnexos.at_crlve || '',
+      comprovanteEnderecoVendedor: atpveAnexos.at_comp_v || '',
+      comprovanteEnderecoComprador: atpveAnexos.at_comp_c || '',
+    };
+
   if (inputType === 'venda') {
     const vDoc = cd(g('v_cpf'));
     const cDoc = cd(g('c_cpf'));
@@ -3941,6 +4266,38 @@ function buildParams(inputType) {
 // Validação rápida no cliente antes de enviar (espelha as regras do servidor,
 // para dar feedback imediato sem depender da resposta da API externa).
 function validateParams(inputType, p) {
+  // ATPV-e: conferência só do que dá para ver daqui, para o cliente corrigir sem
+  // ida ao servidor. A validação que vale é a de montarCorpoAtpveVistocar — esta
+  // aqui existe para não mandar um formulário obviamente incompleto.
+  if (inputType === 'atpve_vistocar') {
+    const dig = v => String(v || '').replace(/\D/g, '');
+    const placa = String(p.placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!/^[A-Z]{3}[0-9][A-Z0-9][0-9]{2}$/.test(placa))
+      return 'Placa inválida. Informe no formato ABC1D23 ou ABC-1234.';
+    const renavam = dig(p.renavam);
+    if (renavam.length < 9 || renavam.length > 11) return 'Renavam inválido. Deve ter entre 9 e 11 dígitos.';
+    if (!/^\d{4}$/.test(p.anoFabricacao)) return 'Ano de fabricação inválido. Informe os 4 dígitos.';
+    if (!/^\d{4}$/.test(p.anoModelo))     return 'Ano do modelo inválido. Informe os 4 dígitos.';
+    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(p.dataVenda)) return 'Data da venda inválida. Use o formato DD/MM/AAAA.';
+    if (!p.valorVenda)   return 'Informe o valor da venda.';
+    if (!p.cidadeVenda)  return 'Informe a cidade do local da venda.';
+    const vDoc = dig(p.documentoVendedor), cDoc = dig(p.documentoComprador);
+    if (vDoc.length !== 11 && vDoc.length !== 14) return 'CPF/CNPJ do vendedor inválido. Informe 11 dígitos (CPF) ou 14 (CNPJ).';
+    if (!p.nomeVendedor) return 'Informe o nome (ou razão social) do vendedor.';
+    if (cDoc.length !== 11 && cDoc.length !== 14) return 'CPF/CNPJ do comprador inválido. Informe 11 dígitos (CPF) ou 14 (CNPJ).';
+    if (!p.nomeComprador) return 'Informe o nome (ou razão social) do comprador.';
+    if (dig(p.cepComprador).length !== 8) return 'CEP do comprador inválido. Informe os 8 dígitos.';
+    if (!p.logradouroComprador) return 'Informe o logradouro do comprador.';
+    if (!p.numeroComprador)     return 'Informe o número do endereço do comprador (se não houver, informe S/N).';
+    if (!p.bairroComprador)     return 'Informe o bairro do comprador.';
+    if (!p.cidadeComprador)     return 'Informe a cidade do comprador.';
+    if (p.dataEmissaoCrv && !/^\d{2}\/\d{2}\/\d{4}$/.test(p.dataEmissaoCrv))
+      return 'Data de emissão do CRV inválida. Use o formato DD/MM/AAAA.';
+    if (!p.crlvePdfBase64)               return 'Anexe o CRLV-e do veículo em PDF.';
+    if (!p.comprovanteEnderecoVendedor)  return 'Anexe o comprovante de endereço do vendedor.';
+    if (!p.comprovanteEnderecoComprador) return 'Anexe o comprovante de endereço do comprador.';
+    return null;
+  }
   if (inputType === 'declaracao_residencia') {
     if (!p.nome)                    return 'Informe o nome completo.';
     if (p.cpf.length !== 11)        return 'CPF inválido. Deve ter 11 dígitos.';
@@ -4064,6 +4421,112 @@ function showPdfResult(svc) {
   };
   document.getElementById('query-result-wrap').scrollIntoView({ behavior:'smooth' });
   toast('Consulta concluída! PDF sendo baixado.');
+}
+
+// ── Barra de progresso do ATPV-e ────────────────────────────────────────────
+// Não existe percentual de verdade: o Detran não informa andamento, só "ainda
+// não" e "pronto". A barra é uma curva do TEMPO DECORRIDO que chega perto de 90%
+// e para ali — nunca finge 100% antes de o PDF existir, que é o que faria o
+// cliente achar que o documento sumiu. Quem decide o fim é o servidor, em
+// /api/queries/:id/atpve-status.
+let atpveProgressTimer = null;
+let atpveProgressTick  = null;
+
+function pararAtpveProgress() {
+  if (atpveProgressTimer) { clearTimeout(atpveProgressTimer); atpveProgressTimer = null; }
+  if (atpveProgressTick)  { clearInterval(atpveProgressTick); atpveProgressTick = null; }
+}
+
+function atpveTempoTexto(segundos) {
+  const m = Math.floor(segundos / 60), s = segundos % 60;
+  if (m < 60) return `${m}m ${String(s).padStart(2, '0')}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+}
+
+function showAtpveProgress(data, svc) {
+  pararAtpveProgress();
+  document.getElementById('query-form-wrap').classList.add('hidden');
+  document.getElementById('query-result-wrap').classList.add('hidden');
+  document.getElementById('atpve-progress-wrap').classList.remove('hidden');
+  document.getElementById('atpve-progress-done').classList.add('hidden');
+  document.getElementById('atpve-progress-service').textContent = svc.name;
+
+  const protocolo = data?.result?.protocolo || '';
+  document.getElementById('atpve-progress-proto').innerHTML = protocolo
+    ? `Protocolo: <strong>${escapeHtml(String(protocolo))}</strong>`
+    : '';
+
+  const uf = (svc.uf || '').toUpperCase();
+  const inicio = Date.now();
+  const bar   = document.getElementById('atpve-progress-bar');
+  const msgEl = document.getElementById('atpve-progress-msg');
+  const timeEl = document.getElementById('atpve-progress-time');
+
+  const desenhar = () => {
+    const t = Math.round((Date.now() - inicio) / 1000);
+    // 4% de saída, tendendo a 90%: metade do caminho em ~4 min, que é a faixa em
+    // que a maioria sai. Passou disso, a barra quase não anda mais — de propósito.
+    const pct = 4 + 86 * (1 - Math.exp(-t / 240));
+    bar.style.width = `${pct.toFixed(1)}%`;
+    timeEl.textContent = atpveTempoTexto(t);
+    msgEl.textContent =
+      t < 20  ? `Cadastro enviado ao Detran${uf ? '-' + uf : ''}…` :
+      t < 120 ? 'O Detran está processando a intenção de venda…' :
+      t < 600 ? 'Aguardando a emissão do ATPV-e…' :
+                'A emissão está demorando mais que o normal. Pode fechar a página — avisamos pelo WhatsApp.';
+  };
+  desenhar();
+  atpveProgressTick = setInterval(desenhar, 1000);
+
+  const queryId = data.queryId;
+  if (!queryId) return;   // sem id não há o que acompanhar; o WhatsApp entrega
+
+  const consultar = async () => {
+    try {
+      const r = await fetch(`/api/queries/${queryId}/atpve-status`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'falha ao consultar o status');
+
+      if (d.situacao === 'pronto') {
+        pararAtpveProgress();
+        bar.style.width = '100%';
+        bar.className = 'h-3 bg-green-500 rounded-full';
+        document.getElementById('atpve-progress-icon').textContent = '✅';
+        document.getElementById('atpve-progress-icon').className = 'w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-xl';
+        document.getElementById('atpve-progress-title').textContent = 'ATPV-e emitido!';
+        document.getElementById('atpve-progress-title').className = 'font-bold text-green-800';
+        msgEl.textContent = 'Documento pronto.';
+        msgEl.className = 'text-xs text-green-700';
+        const link = document.getElementById('atpve-progress-link');
+        link.href = `/api/pdf/${d.token}`;
+        document.getElementById('atpve-progress-done').classList.remove('hidden');
+        window.open(`/api/pdf/${d.token}`, '_blank');
+        toast('ATPV-e emitido com sucesso!');
+        await Promise.all([loadStats(), loadQueries()]);
+        return;
+      }
+      if (d.situacao === 'cancelado') {
+        pararAtpveProgress();
+        bar.style.width = '100%';
+        bar.className = 'h-3 bg-red-400 rounded-full';
+        document.getElementById('atpve-progress-icon').textContent = '⚠️';
+        document.getElementById('atpve-progress-icon').className = 'w-10 h-10 bg-red-100 rounded-full flex items-center justify-center text-xl';
+        document.getElementById('atpve-progress-title').textContent = 'Emissão não concluída';
+        document.getElementById('atpve-progress-title').className = 'font-bold text-red-700';
+        msgEl.textContent = d.mensagem || 'O documento não pôde ser emitido. Você não foi cobrado.';
+        msgEl.className = 'text-xs text-red-600';
+        await loadQueries();
+        return;
+      }
+    } catch (e) {
+      // Falha de rede não encerra o acompanhamento: tenta de novo na próxima volta.
+    }
+    const t = (Date.now() - inicio) / 1000;
+    // Enquanto é provável que saia, pergunta de 8 em 8 segundos; depois de 20
+    // minutos afrouxa para 1 minuto — a essa altura quem entrega é o WhatsApp.
+    atpveProgressTimer = setTimeout(consultar, t < 1200 ? 8000 : 60000);
+  };
+  atpveProgressTimer = setTimeout(consultar, 6000);
 }
 
 function showJsonResult(data, svc) {
