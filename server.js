@@ -11295,6 +11295,194 @@ app.post('/api/admin/manual-queries/:id/resend-whatsapp', requireAuth, requireSu
   }
 });
 
+// ── ADMIN: pedidos de ATPV-e ─────────────────────────────────────────────────
+// Controle total dos pedidos, com as MESMAS ações que o cliente tem no painel —
+// a diferença é só quem está olhando. Por isso as rotas reaproveitam as mesmas
+// funções (entregarResultadoVistocar, cancelarPendenciaVistocar) em vez de
+// mexerem no banco por fora: o que o admin faz aqui e o que o cron faz sozinho
+// passam exatamente pelo mesmo caminho, sem estado divergente.
+const ATPVE_ADMIN_SVCS = [...VISTOCAR_ATPVE_SVCS];
+// Pedido só pode ser apagado depois desta idade, e um de cada vez (não há rota
+// de exclusão em lote de propósito). O prazo casa com a validade do pdf_cache
+// (7 dias) com folga: passados 30 dias o documento já não está mais lá para
+// baixar, e o que sobra é registro. A transação financeira NÃO some junto —
+// ela vive em `transactions`, que não é apagada aqui.
+const ATPVE_ADMIN_EXCLUSAO_DIAS = 30;
+
+app.get('/api/admin/atpve-pedidos', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    await ensureDbReady();   // vistocar_pending é tabela nova — ver ensureDbReady
+    const r = await pool.query(
+      `SELECT q.id, q.service_id, q.service_name, q.status, q.amount, q.params, q.result_data,
+              q.created_at, q.whatsapp_sent_at, q.transaction_id,
+              u.id AS user_id, u.name AS user_name, u.email AS user_email, u.phone AS user_phone,
+              p.movement_id AS pendencia_movement_id, p.created_at AS pendencia_desde,
+              (SELECT 1 FROM pdf_cache c WHERE c.query_id = q.id AND c.expires_at > NOW() LIMIT 1) AS tem_pdf
+         FROM queries q
+         JOIN users u ON u.id = q.user_id
+         LEFT JOIN vistocar_pending p ON p.query_id = q.id
+        WHERE q.service_id = ANY($1)
+        ORDER BY (q.status = 'aguardando_pdf') DESC, q.created_at DESC
+        LIMIT 500`,
+      [ATPVE_ADMIN_SVCS]
+    );
+    // params/result_data são TEXT com JSON; o painel do admin recebe já parseado
+    // para não repetir try/catch em cada célula da tabela.
+    const pedidos = r.rows.map(row => {
+      let params = {}, result = {};
+      try { params = JSON.parse(row.params || '{}'); } catch {}
+      try { result = JSON.parse(row.result_data || '{}'); } catch {}
+      return {
+        id: row.id,
+        service_id: row.service_id,
+        service_name: row.service_name,
+        uf: (SERVICES.find(s => s.id === row.service_id)?.uf || '').toUpperCase(),
+        status: row.status,
+        amount: row.amount,
+        cobrada: !!row.transaction_id,
+        created_at: row.created_at,
+        whatsapp_sent_at: row.whatsapp_sent_at,
+        tem_pdf: !!row.tem_pdf,
+        pendente: !!row.pendencia_movement_id,
+        pendencia_desde: row.pendencia_desde,
+        protocolo: result.movementId || row.pendencia_movement_id || null,
+        placa: (params.placa || result.placa || '').toUpperCase(),
+        comprador: params.nomeComprador || '',
+        vendedor: params.nomeVendedor || '',
+        valor_venda: params.valorVenda || '',
+        data_venda: params.dataVenda || '',
+        user: { id: row.user_id, name: row.user_name, email: row.user_email, phone: row.user_phone },
+      };
+    });
+    res.json({ pedidos, prazoHoras: ASYNC_PDF_REFUND_HOURS, exclusaoDias: ATPVE_ADMIN_EXCLUSAO_DIAS });
+  } catch (err) {
+    console.error('Erro ao listar pedidos de ATPV-e no admin:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// Força a busca do documento na Vistocar agora, sem esperar o cron nem o cliente
+// abrir a tela. É idempotente — a entrega tem claim atômico e checagem de cache.
+app.post('/api/admin/atpve-pedidos/:id/verificar', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    await ensureDbReady();
+    const qr = await pool.query(
+      `SELECT id, service_id, status FROM queries WHERE id=$1`, [req.params.id]);
+    if (!qr.rows.length) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    if (!ATPVE_ADMIN_SVCS.includes(qr.rows[0].service_id))
+      return res.status(400).json({ error: 'Este pedido não é de ATPV-e.' });
+
+    const pr = await pool.query('SELECT * FROM vistocar_pending WHERE query_id=$1', [qr.rows[0].id]);
+    if (!pr.rows.length) {
+      const atual = await pool.query('SELECT status FROM queries WHERE id=$1', [qr.rows[0].id]);
+      return res.json({ success: true, entregue: false, status: atual.rows[0].status,
+        motivo: 'Não há pendência aberta para este pedido (já foi entregue ou cancelado).' });
+    }
+    const r = await entregarResultadoVistocar(pr.rows[0]);
+    const atual = await pool.query('SELECT status FROM queries WHERE id=$1', [qr.rows[0].id]);
+    res.json({ success: true, entregue: r.entregue, motivo: r.motivo || null, status: atual.rows[0].status });
+  } catch (err) {
+    console.error('Erro ao verificar pedido de ATPV-e no admin:', err.message);
+    res.status(500).json({ error: err.message || 'Erro interno.' });
+  }
+});
+
+// Reenvia por WhatsApp o ATPV-e já entregue — para quando o cliente diz que não
+// recebeu. Mesmo padrão do reenvio dos serviços manuais.
+app.post('/api/admin/atpve-pedidos/:id/reenviar-whatsapp', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const qr = await pool.query(
+      `SELECT q.id, q.service_id, q.service_name, q.params, u.phone
+         FROM queries q JOIN users u ON u.id = q.user_id WHERE q.id=$1`,
+      [req.params.id]
+    );
+    if (!qr.rows.length) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    const q = qr.rows[0];
+    if (!ATPVE_ADMIN_SVCS.includes(q.service_id))
+      return res.status(400).json({ error: 'Este pedido não é de ATPV-e.' });
+    const phone = (req.body?.phone || '').replace(/\D/g, '') || q.phone;
+    if (!phone) return res.status(400).json({ error: 'Cliente sem telefone cadastrado. Informe um número no reenvio.' });
+
+    const pr = await pool.query(
+      `SELECT pdf_data FROM pdf_cache WHERE query_id=$1 ORDER BY created_at DESC LIMIT 1`, [q.id]);
+    if (!pr.rows.length) return res.status(404).json({ error: 'Este pedido ainda não tem documento entregue.' });
+
+    let placa = '';
+    try { placa = (JSON.parse(q.params || '{}').placa || '').toUpperCase(); } catch {}
+    const buf = Buffer.from(pr.rows[0].pdf_data, 'base64');
+    const caption = `✅ *${q.service_name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
+    const sent = await sendWhatsAppPdf(phone, buf, `${q.service_id}-${placa || q.id}.pdf`, caption).catch(() => false);
+    if (!sent) return res.status(502).json({ error: 'Falha ao reenviar pelo WhatsApp. Tente novamente.' });
+
+    await pool.query(`UPDATE queries SET whatsapp_sent_at = NOW() WHERE id=$1`, [q.id]);
+    res.json({ success: true, phone });
+  } catch (err) {
+    console.error('Erro no reenvio de ATPV-e no admin:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// Encerra um pedido que não vai sair. Não há estorno a fazer: o ATPV-e só é
+// cobrado na entrega, então cancelar um pendente é sempre sem cobrança — o
+// cliente é avisado por WhatsApp pela própria cancelarPendenciaVistocar.
+app.post('/api/admin/atpve-pedidos/:id/cancelar', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    await ensureDbReady();
+    const qr = await pool.query(`SELECT id, service_id, status FROM queries WHERE id=$1`, [req.params.id]);
+    if (!qr.rows.length) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    if (!ATPVE_ADMIN_SVCS.includes(qr.rows[0].service_id))
+      return res.status(400).json({ error: 'Este pedido não é de ATPV-e.' });
+    if (qr.rows[0].status !== 'aguardando_pdf')
+      return res.status(400).json({ error: 'Só dá para cancelar pedido que ainda está aguardando o documento.' });
+
+    const pr = await pool.query('SELECT * FROM vistocar_pending WHERE query_id=$1', [qr.rows[0].id]);
+    if (pr.rows.length) {
+      await cancelarPendenciaVistocar(pr.rows[0], (req.body?.motivo || '').trim() || 'cancelado pelo suporte');
+    } else {
+      await pool.query(`UPDATE queries SET status='cancelado' WHERE id=$1 AND status='aguardando_pdf'`, [qr.rows[0].id]);
+    }
+    const atual = await pool.query('SELECT status FROM queries WHERE id=$1', [qr.rows[0].id]);
+    res.json({ success: true, status: atual.rows[0].status });
+  } catch (err) {
+    console.error('Erro ao cancelar pedido de ATPV-e no admin:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// Exclusão de UM pedido, e só depois de ATPVE_ADMIN_EXCLUSAO_DIAS. Não existe
+// exclusão em lote aqui de propósito: apagar registro é irreversível e um clique
+// errado num "excluir todos" levaria o histórico inteiro junto.
+// Um pedido ainda aguardando NÃO é apagado — ele tem pendência viva na Vistocar,
+// e some da fila sem ninguém saber que o documento ainda pode chegar. Cancele
+// antes; aí ele vira 'cancelado' e pode ser apagado.
+app.delete('/api/admin/atpve-pedidos/:id', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, service_id, status, created_at FROM queries WHERE id=$1`, [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    const q = r.rows[0];
+    if (!ATPVE_ADMIN_SVCS.includes(q.service_id))
+      return res.status(400).json({ error: 'Este pedido não é de ATPV-e.' });
+    if (q.status === 'aguardando_pdf')
+      return res.status(400).json({ error: 'Este pedido ainda aguarda o documento. Cancele antes de excluir.' });
+
+    const dias = (Date.now() - new Date(q.created_at).getTime()) / 86400000;
+    if (dias < ATPVE_ADMIN_EXCLUSAO_DIAS)
+      return res.status(400).json({
+        error: `Só é possível excluir depois de ${ATPVE_ADMIN_EXCLUSAO_DIAS} dias. Este pedido tem ${Math.floor(dias)} dia(s).`,
+      });
+
+    // pdf_cache e vistocar_pending têm ON DELETE CASCADE na query; a transação
+    // financeira fica, porque extrato não se apaga junto com histórico.
+    await pool.query('DELETE FROM queries WHERE id=$1', [q.id]);
+    console.log(`🗑️  Pedido de ATPV-e ${q.id} excluído pelo admin (${Math.floor(dias)} dias).`);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Erro ao excluir pedido de ATPV-e:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
 const noCache = (res) => res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
 
 // ── GET /api/html/:token ──────────────────────────────────────────────────────

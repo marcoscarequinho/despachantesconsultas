@@ -101,6 +101,9 @@
     <div class="nav-item" data-section="assinantes" onclick="showSection('assinantes')">
       <span class="text-lg">📜</span> Lista de Assinantes
     </div>
+    <div class="nav-item" data-section="atpve" onclick="showSection('atpve')">
+      <span class="text-lg">📝</span> Pedidos ATPV-e
+    </div>
   </nav>
 
   <div class="p-3 border-t border-gray-700 space-y-1">
@@ -573,6 +576,74 @@
       </div>
     </section>
 
+    <!-- ── PEDIDOS DE ATPV-e ─────────────────────────────────────────────────
+         Controle total dos pedidos, com as mesmas ações que o cliente tem no
+         painel dele. As ações chamam as mesmas funções do cron (verificar =
+         entregarResultadoVistocar, cancelar = cancelarPendenciaVistocar), então
+         o que o admin faz aqui não cria estado diferente do automático. -->
+    <section id="section-atpve" class="admin-section hidden space-y-4">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Pedidos de ATPV-e</h2>
+        <p class="text-sm text-gray-500">Todos os pedidos de <strong>Intenção de Venda / ATPV-e</strong> (RJ e MG), de todos os clientes. O documento não sai na hora: o pedido fica <strong>aguardando</strong> até o Detran emitir, e <strong>só é cobrado na entrega</strong> — cancelar um pendente nunca cobra nada. Pedidos com mais de <strong>30 dias</strong> ganham o botão de excluir, um a um; o lançamento no extrato do cliente não é apagado junto.</p>
+      </div>
+
+      <div class="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        <div class="stat-card border-l-amber-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Aguardando</div>
+          <div id="atpve-aguardando" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">ainda sem documento</div>
+        </div>
+        <div class="stat-card border-l-red-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Atrasados</div>
+          <div id="atpve-atrasados" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">passaram do prazo</div>
+        </div>
+        <div class="stat-card border-l-green-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Entregues</div>
+          <div id="atpve-entregues" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">documento emitido</div>
+        </div>
+        <div class="stat-card border-l-gray-400">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Cancelados</div>
+          <div id="atpve-cancelados" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">sem cobrança</div>
+        </div>
+      </div>
+
+      <div class="card p-0 overflow-hidden">
+        <div class="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-gray-100">
+          <input id="atpve-search" type="text" class="input-field flex-1 min-w-48" placeholder="Buscar por placa, cliente, e-mail, protocolo ou comprador..." oninput="renderAtpvePedidos()">
+          <select id="atpve-filtro" class="input-field w-auto" onchange="renderAtpvePedidos()">
+            <option value="todos">Todos</option>
+            <option value="aguardando">Aguardando</option>
+            <option value="atrasados">Atrasados</option>
+            <option value="entregues">Entregues</option>
+            <option value="cancelados">Cancelados</option>
+          </select>
+          <button onclick="loadAtpvePedidos()" class="btn-secondary text-xs">🔄 Atualizar</button>
+          <button onclick="verificarTodosAtpve()" class="btn-primary text-xs">⚡ Verificar todos os pendentes</button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Pedido</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Cliente</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden lg:table-cell">Venda</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">Protocolo</th>
+                <th class="px-4 py-3 text-center font-semibold text-gray-600">Status</th>
+                <th class="px-4 py-3 text-right font-semibold text-gray-600">Ações</th>
+              </tr>
+            </thead>
+            <tbody id="atpve-tbody" class="divide-y divide-gray-50">
+              <tr><td colspan="6" class="px-4 py-8"><div class="space-y-2"><div class="skeleton"></div><div class="skeleton"></div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="atpve-count" class="px-4 py-2 text-xs text-gray-400 border-t border-gray-100"></div>
+      </div>
+    </section>
+
     <!-- ── COBRANÇAS API ────────────────────────────────────────────────────── -->
     <section id="section-api-cobrancas" class="admin-section hidden space-y-4">
       <div>
@@ -912,7 +983,7 @@ const fmt = v => 'R$ ' + parseFloat(v||0).toLocaleString('pt-BR',{minimumFractio
 const fmtDate = s => { const d=new Date(s); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
 
 let allUsers = [], allTx = [], allQueries = [], allServices = [], allManualQueries = [];
-const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API', 'assinantes':'Lista de Assinantes Cadastrados' };
+const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API', 'assinantes':'Lista de Assinantes Cadastrados', 'atpve':'Pedidos de ATPV-e' };
 
 function toast(msg, type='success') {
   const el = document.getElementById('toast');
@@ -943,6 +1014,7 @@ function showSection(id) {
   if (id === 'avulsas') loadPublicOrders();
   if (id === 'api-cobrancas') loadApiCharges();
   if (id === 'assinantes') loadAssinantes();
+  if (id === 'atpve') loadAtpvePedidos();
 }
 
 function refreshCurrentSection() {
@@ -959,10 +1031,193 @@ function refreshCurrentSection() {
   if (id === 'avulsas')   loadPublicOrders();
   if (id === 'api-cobrancas') loadApiCharges();
   if (id === 'assinantes')    loadAssinantes();
+  if (id === 'atpve')         loadAtpvePedidos();
 }
 
 function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
 function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+// ── Pedidos de ATPV-e ───────────────────────────────────────────────────────
+// A tabela mostra dados digitados pelo cliente (nome do comprador, vendedor),
+// então tudo o que vem do banco passa por aqui antes de virar HTML.
+const escAtpve = s => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+
+async function loadAtpvePedidos() {
+  try {
+    const r = await fetch('/api/admin/atpve-pedidos');
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      toast(err.error || 'Erro ao carregar pedidos de ATPV-e.', 'error');
+      return;
+    }
+    const d = await r.json();
+    allAtpvePedidos = d.pedidos || [];
+    atpvePrazoHoras = d.prazoHoras || 48;
+    atpveExclusaoDias = d.exclusaoDias || 30;
+    renderAtpvePedidos();
+  } catch { toast('Erro de conexão ao carregar pedidos de ATPV-e.', 'error'); }
+}
+
+// Atrasado = ainda aguardando depois do prazo em que o cron desiste e cancela.
+// É a fila que merece olho, e não o total de pendentes.
+const atpveAtrasado = p =>
+  p.status === 'aguardando_pdf' &&
+  (Date.now() - new Date(p.created_at)) > atpvePrazoHoras * 3600 * 1000;
+
+// O botão de excluir só existe depois de 30 dias e nunca em pedido que ainda
+// aguarda documento — esse tem pendência viva na Vistocar e sumiria da fila sem
+// ninguém saber que o ATPV-e ainda pode chegar. O servidor barra os dois casos
+// de novo; isto aqui é só para não oferecer o que vai ser recusado.
+const atpveDiasDeVida = p => (Date.now() - new Date(p.created_at)) / 86400000;
+const atpvePodeExcluir = p =>
+  p.status !== 'aguardando_pdf' && atpveDiasDeVida(p) >= atpveExclusaoDias;
+
+function renderAtpvePedidos() {
+  const busca  = (document.getElementById('atpve-search').value || '').toLowerCase().trim();
+  const filtro = document.getElementById('atpve-filtro').value;
+
+  const aguardando = allAtpvePedidos.filter(p => p.status === 'aguardando_pdf');
+  document.getElementById('atpve-aguardando').textContent = aguardando.length;
+  document.getElementById('atpve-atrasados').textContent  = allAtpvePedidos.filter(atpveAtrasado).length;
+  document.getElementById('atpve-entregues').textContent  = allAtpvePedidos.filter(p => p.status === 'success').length;
+  document.getElementById('atpve-cancelados').textContent = allAtpvePedidos.filter(p => p.status === 'cancelado').length;
+
+  const lista = allAtpvePedidos.filter(p => {
+    if (filtro === 'aguardando' && p.status !== 'aguardando_pdf') return false;
+    if (filtro === 'atrasados'  && !atpveAtrasado(p))             return false;
+    if (filtro === 'entregues'  && p.status !== 'success')        return false;
+    if (filtro === 'cancelados' && p.status !== 'cancelado')      return false;
+    if (!busca) return true;
+    return [p.placa, p.protocolo, p.user.name, p.user.email, p.user.phone, p.comprador, p.vendedor, String(p.id)]
+      .some(v => String(v || '').toLowerCase().includes(busca));
+  });
+
+  const selo = p => {
+    if (p.status === 'success')   return '<span class="badge bg-green-100 text-green-700">✅ Entregue</span>';
+    if (p.status === 'cancelado') return '<span class="badge bg-gray-100 text-gray-600">Cancelado</span>';
+    if (atpveAtrasado(p))         return '<span class="badge bg-red-100 text-red-700">⚠️ Atrasado</span>';
+    return '<span class="badge bg-amber-100 text-amber-800">⏳ Aguardando</span>';
+  };
+
+  document.getElementById('atpve-tbody').innerHTML = lista.length ? lista.map(p => `
+    <tr class="hover:bg-gray-50">
+      <td class="px-4 py-3 align-top">
+        <div class="font-semibold text-gray-800">${escAtpve(p.placa) || '—'}</div>
+        <div class="text-xs text-gray-500">ATPV-e ${escAtpve(p.uf)} · #${p.id}</div>
+        <div class="text-xs text-gray-400">${fmtDate(p.created_at)}</div>
+      </td>
+      <td class="px-4 py-3 align-top">
+        <div class="text-gray-800">${escAtpve(p.user.name || '—')}</div>
+        <div class="text-xs text-gray-500">${escAtpve(p.user.email || '')}</div>
+        <div class="text-xs text-gray-400">📲 ${escAtpve(p.user.phone || 'sem telefone')}</div>
+      </td>
+      <td class="px-4 py-3 align-top hidden lg:table-cell text-xs text-gray-600">
+        <div>De: ${escAtpve(p.vendedor || '—')}</div>
+        <div>Para: ${escAtpve(p.comprador || '—')}</div>
+        <div class="text-gray-400">${escAtpve(p.data_venda || '')} ${p.valor_venda ? '· ' + fmt(p.valor_venda) : ''}</div>
+      </td>
+      <td class="px-4 py-3 align-top hidden md:table-cell">
+        <div class="text-xs font-mono text-gray-600">${escAtpve(p.protocolo || '—')}</div>
+        ${p.whatsapp_sent_at ? `<div class="text-xs text-green-600">zap em ${fmtDate(p.whatsapp_sent_at)}</div>` : ''}
+      </td>
+      <td class="px-4 py-3 align-top text-center">
+        ${selo(p)}
+        <div class="text-xs text-gray-400 mt-1">${p.cobrada ? fmt(p.amount) : 'sem cobrança'}</div>
+      </td>
+      <td class="px-4 py-3 align-top text-right whitespace-nowrap">
+        ${p.status === 'aguardando_pdf' ? `
+          <button onclick="verificarAtpve(${p.id})" class="btn-primary text-xs mb-1">⚡ Verificar agora</button>
+          <button onclick="cancelarAtpve(${p.id})" class="btn-secondary text-xs mb-1">Cancelar</button>` : ''}
+        ${p.tem_pdf ? `
+          <button onclick="window.open('/api/admin/queries/${p.id}/pdf','_blank')" class="btn-secondary text-xs mb-1">📄 Abrir PDF</button>
+          <button onclick="reenviarAtpveWhatsapp(${p.id})" class="btn-secondary text-xs mb-1">📲 Reenviar</button>` : ''}
+        ${atpvePodeExcluir(p) ? `
+          <button onclick="excluirAtpve(${p.id})" class="btn-secondary text-xs mb-1 text-red-600 hover:bg-red-50">🗑️ Excluir</button>` : ''}
+      </td>
+    </tr>`).join('')
+    : '<tr><td colspan="6" class="px-4 py-8 text-center text-gray-400 text-sm">Nenhum pedido de ATPV-e encontrado.</td></tr>';
+
+  document.getElementById('atpve-count').textContent =
+    `${lista.length} de ${allAtpvePedidos.length} pedidos`;
+}
+
+// Busca o documento na Vistocar agora — o mesmo que o cron faz de 15 em 15
+// minutos e que a tela do cliente faz a cada poucos segundos.
+async function verificarAtpve(id, silencioso = false) {
+  try {
+    const r = await fetch(`/api/admin/atpve-pedidos/${id}/verificar`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { if (!silencioso) toast(d.error || 'Erro ao verificar.', 'error'); return false; }
+    if (!silencioso) {
+      toast(d.entregue ? 'Documento entregue ao cliente!' : (d.motivo || 'Ainda não disponível.'), d.entregue ? 'success' : 'error');
+      await loadAtpvePedidos();
+    }
+    return !!d.entregue;
+  } catch { if (!silencioso) toast('Erro de conexão.', 'error'); return false; }
+}
+
+// Varre a fila de pendentes de uma vez. Útil depois de uma instabilidade da
+// Vistocar, para não ficar clicando pedido por pedido.
+async function verificarTodosAtpve() {
+  const pendentes = allAtpvePedidos.filter(p => p.status === 'aguardando_pdf');
+  if (!pendentes.length) { toast('Não há pedidos aguardando.', 'error'); return; }
+  if (!confirm(`Verificar ${pendentes.length} pedido(s) pendente(s) na Vistocar agora?`)) return;
+  toast(`Verificando ${pendentes.length} pedido(s)…`);
+  let entregues = 0;
+  for (const p of pendentes) if (await verificarAtpve(p.id, true)) entregues++;
+  await loadAtpvePedidos();
+  toast(`${entregues} de ${pendentes.length} entregue(s).`, entregues ? 'success' : 'error');
+}
+
+async function reenviarAtpveWhatsapp(id) {
+  const p = allAtpvePedidos.find(x => x.id === id);
+  const padrao = p?.user?.phone || '';
+  const phone = prompt('Reenviar o ATPV-e por WhatsApp para qual número? (DDD + número)', padrao);
+  if (phone === null) return;
+  try {
+    const r = await fetch(`/api/admin/atpve-pedidos/${id}/reenviar-whatsapp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: (phone || '').replace(/\D/g, '') }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || 'Erro ao reenviar.', 'error'); return; }
+    toast('Documento reenviado pelo WhatsApp.');
+    await loadAtpvePedidos();
+  } catch { toast('Erro de conexão.', 'error'); }
+}
+
+async function cancelarAtpve(id) {
+  const motivo = prompt('Cancelar este pedido. O cliente é avisado por WhatsApp e NÃO é cobrado.\n\nMotivo (opcional):', '');
+  if (motivo === null) return;
+  try {
+    const r = await fetch(`/api/admin/atpve-pedidos/${id}/cancelar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ motivo }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || 'Erro ao cancelar.', 'error'); return; }
+    toast('Pedido cancelado, sem cobrança.');
+    await loadAtpvePedidos();
+  } catch { toast('Erro de conexão.', 'error'); }
+}
+
+// Exclusão é um pedido por vez, com confirmação que mostra de qual se trata —
+// apagar registro não tem volta.
+async function excluirAtpve(id) {
+  const p = allAtpvePedidos.find(x => x.id === id);
+  const quem = p ? `${p.placa || '#' + p.id} — ${p.user.name || ''}` : `#${id}`;
+  if (!confirm(`Excluir definitivamente o pedido ${quem}?\n\nO registro e o PDF guardado somem. O lançamento no extrato do cliente NÃO é apagado.`)) return;
+  try {
+    const r = await fetch(`/api/admin/atpve-pedidos/${id}`, { method: 'DELETE' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || 'Erro ao excluir.', 'error'); return; }
+    toast('Pedido excluído.');
+    await loadAtpvePedidos();
+  } catch { toast('Erro de conexão.', 'error'); }
+}
 
 async function init() {
   try {
@@ -1287,6 +1542,7 @@ function renderPublicOrders(orders) {
 
 // ── Lista de assinantes (Coisas de Despachantes) ─────────────────────────────
 let allAssinantes = [];
+let allAtpvePedidos = [], atpvePrazoHoras = 48, atpveExclusaoDias = 30;
 
 async function loadAssinantes() {
   try {
