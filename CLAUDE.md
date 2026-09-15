@@ -74,7 +74,7 @@ Dois detalhes que não podem ser desfeitos por engano:
 - Nesse caminho o corpo da resposta **já foi lido** como JSON no bloco de erro, então `bodyBuffer` sai vazio de propósito; ler o stream de novo lançaria exceção.
 - O id **não pode voltar** para `DESPBRASIL_SVCS`: com ele nos dois mapas, o header sairia com a `chaveAcesso` da despbrasil (o `else if` dela vem antes) e a resposta cairia no tratamento errado.
 
-O preço ao cliente não mudou (R$ 14,00): `basePrice` 10,00 sem `noMarkup`. Esse 10,00 era o custo da despbrasil e deixou de descrever custo de fornecedor — ao acertar o custo real da Vistocar, reveja os dois campos.
+O preço ao cliente não mudou: **R$ 14,00 fixo** (`basePrice` 14,00 com `noMarkup`), que é o que ele já pagava. Os custos reais são Vistocar R$ 6,90 e despbrasil R$ 7,50; pelo markup padrão de 40% os R$ 6,90 dariam R$ 9,66, mas enquanto a rota da Vistocar recusa toda placa quem atende é a reserva a R$ 7,50 — baixar agora cortaria o preço em 31% justo no período de custo mais alto (margem de R$ 2,16). Preço segurado por decisão do dono, com os números na mesa. Quando a Vistocar voltar a responder, `basePrice` 6,90 **sem** `noMarkup` devolve os R$ 9,66.
 
 ### Intenção de Venda / ATPV-e RJ e MG (Vistocar)
 

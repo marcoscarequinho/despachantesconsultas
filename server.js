@@ -803,12 +803,19 @@ const SERVICES = [
   // CRV, resposta em JSON com PDF pronto em base64 (ver VISTOCAR_ENDPOINTS).
   { id:'security-code-vistocar-2', name:'Consulta 3 Código Segurança CRV (PDF)', group:'CRV', basePrice:8.10, noMarkup:true, inputType:'placa', icon:'🔐' },
   // API Vistocar desde 15/09/2026 (apiclient/security-code-crv); antes vinha da
-  // despbrasil, pelo "consulta_generica". O PREÇO NÃO MUDOU na troca: basePrice
-  // 10,00 sem noMarkup segue entregando R$ 14,00 ao cliente, que é o que ele já
-  // pagava — era o custo da despbrasil, e o da Vistocar não foi informado, então
-  // o número aqui deixou de ser "o custo do fornecedor" e virou só o que
-  // sustenta o preço de venda. Ao acertar o custo real, reveja os dois campos.
-  { id:'numero-crv-digital', name:'Número do CRV Digital', group:'CRV', basePrice:10.00, inputType:'placa', icon:'🔢' },
+  // despbrasil, pelo "consulta_generica".
+  //
+  // R$ 14,00 FIXO (noMarkup), que é o que o cliente já pagava antes da troca —
+  // segurado de propósito, não é o custo mais markup. Custos reais: Vistocar
+  // R$ 6,90 e despbrasil R$ 7,50. Pelo markup padrão de 40%, os R$ 6,90 dariam
+  // R$ 9,66 ao cliente; só que, enquanto a rota da Vistocar recusa toda placa,
+  // QUEM ATENDE É A RESERVA da despbrasil a R$ 7,50 — baixar agora cortaria o
+  // preço em 31% justo no período de custo mais alto, deixando R$ 2,16 de
+  // margem. Decisão do dono, com os números na mesa (15/09/2026).
+  //
+  // Quando a Vistocar voltar a responder, é este o lugar de rever o preço:
+  // basePrice 6.90 SEM noMarkup devolve os R$ 9,66.
+  { id:'numero-crv-digital', name:'Número do CRV Digital', group:'CRV', basePrice:14.00, noMarkup:true, inputType:'placa', icon:'🔢' },
   // ── Análise de Crédito ──
   { id:'consultar-spc', name:'Consulta SPC/Crédito', group:'Análise de Crédito', basePrice:15.00, inputType:'cpfcnpj', icon:'📊' },
   // ── Óbito ──
