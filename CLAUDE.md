@@ -32,9 +32,9 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 | Portal Despachantes (inclui os 3 CRLV-e do Rio) | `https://portaldespachantes.online` | header `chaveAcesso` (`PORTAL_DESP_KEY`), ver `PORTAL_PLACA_MAP` |
 | AutoCRLV | `https://autocrlv.com.br` | Bearer (`AUTOCRLV_KEY`) |
 | Infosimples | `https://api.infosimples.com/api/v2/consultas` | `INFOSIMPLES_TOKEN` |
-| Despbrasil (CRLV Rio Reemissão, Código de Segurança CRV) | `https://despbrasil.com.br/functions/apiConsulta` | header `chaveAcesso` (`DESPBRASIL_KEY`), ver `DESPBRASIL_SVCS` |
+| Despbrasil (CRLV Rio Reemissão, Código de Segurança CRV, reserva do Número do CRV Digital) | `https://despbrasil.com.br/functions/apiConsulta` | header `chaveAcesso` (`DESPBRASIL_KEY`), ver `DESPBRASIL_SVCS` |
 | Consultas Fácil (CRLV Rio Reemissão v2) | `https://www.consultasfacil.net` | header `chaveAcesso` (`CONSULTASFACIL_KEY`) |
-| Vistocar (Débitos e Documentação, Código de Segurança CRV, ATPV-e RJ/MG) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
+| Vistocar (Débitos e Documentação, Código de Segurança CRV, Número do CRV Digital, ATPV-e RJ/MG) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
 | ViaCEP | `https://viacep.com.br` | público, sem chave (só recupera acento de logradouro/bairro na Reemissão da ATPVe, ver `repairAtpveAccents`) |
 | Mercado Pago (PIX e cartão de débito) | `https://api.mercadopago.com` | `MP_ACCESS_TOKEN` (servidor) + `MP_PUBLIC_KEY` (navegador) |
 | Z-API (WhatsApp) | `https://api.z-api.io` | `ZAPI_*` |
@@ -60,6 +60,21 @@ O envio do PDF por WhatsApp é decidido pelo prefixo `consultar-crlv-`, então o
 O CE hoje é só `crlv-ce-instantaneo`: passou pela Vistocar (`apiclient/crlv-ce` + webhook) e pelo agendado do portal antes de ficar só na emissão na hora. Por isso `PORTAL_AGENDADO_SVCS` está vazio e o CE saiu de `VISTOCAR_ASYNC_SVCS` (que hoje só tem os dois ATPV-e) — os dois caminhos continuam de pé para entregar pedido antigo (`vistocar_pending`, `crlv_agendado_pending`).
 
 O resto do grupo "CRLV-e Digital" continua no portal (`placa_renavam_cpf`), com **uma exceção**: o `consultar-crlv-ba`, que está no portal (`PORTAL_PLACA_MAP`, doc de 26/08/2026) e por isso é `inputType:'placa'` — a rota do portal pedia placa+renavam+CPF e tinha um campo de documento só, o que recusava proprietário pessoa jurídica. É o único id do `PORTAL_PLACA_MAP` que já começa com `consultar-crlv-`: o PDF sai no WhatsApp pela regra do prefixo, então ele **não** entra em `CRLV_PORTAL_PDF_SVCS` (entraria em duplicidade). No meio do caminho a BA passou pela Vistocar (`apiclient/crlv-ba`): a rota existe na conta, mas responde `500 "Erro interno. Saldo estornado."` em toda chamada — com placa válida, com placa inválida e até sem placa nenhuma —, ou seja, falha antes de olhar a entrada; não vale reativar sem eles confirmarem que arrumaram.
+
+### Número do CRV Digital — Vistocar com reserva na despbrasil
+
+O `numero-crv-digital` trocou de fornecedor em 15/09/2026: passou da despbrasil (serviço `consulta_generica`) para a Vistocar, em `apiclient/security-code-crv`. **Apesar do nome, essa rota é a do NÚMERO do CRV**, não a do código de segurança (o erro dela é "Erro ao consultar o número do CRV"); o envelope é o mesmo dos outros (`success` + `paid` + `pdfBase64`), então não precisou de tratamento próprio.
+
+Na troca, a rota da Vistocar **recusava toda placa** com `400 "Placa não localizada no fornecedor Nobre"` e `paid:false` — 6 placas reais do histórico e uma inventada, todas com a mesma resposta (não distinguir placa real de `XXXXXXX` é o sinal de que falha antes de olhar a entrada, igual ao `crlv-ba`). Descartadas as outras causas pelo controle: `apiclient/security-code` respondeu `200 "Consulta Realizada"` com a MESMA placa, token e conta, no mesmo minuto.
+
+Por isso existe `fetchNumeroCrvDigitalDespbrasil`: a despbrasil (que segue entregando, a R$ 7,50) assume **na mesma consulta** quando a Vistocar recusa, para o cliente não ficar sem o documento. Sem risco de cobrança dupla — a Vistocar recusa com `paid:false`. Quando a rota deles voltar, a reserva simplesmente deixa de ser chamada, sem deploy.
+
+Dois detalhes que não podem ser desfeitos por engano:
+- A recusa chega como **HTTP 4xx**, ou seja, no bloco `!apiRes.ok`, antes de `base64PdfBuf` existir — daí `crvDigitalReserva` ser declarado lá no topo, junto de `apiUrl`. Uma variável só também garante que a reserva é chamada **uma vez**, venha a recusa como 4xx ou como 200 com `success:false`.
+- Nesse caminho o corpo da resposta **já foi lido** como JSON no bloco de erro, então `bodyBuffer` sai vazio de propósito; ler o stream de novo lançaria exceção.
+- O id **não pode voltar** para `DESPBRASIL_SVCS`: com ele nos dois mapas, o header sairia com a `chaveAcesso` da despbrasil (o `else if` dela vem antes) e a resposta cairia no tratamento errado.
+
+O preço ao cliente não mudou (R$ 14,00): `basePrice` 10,00 sem `noMarkup`. Esse 10,00 era o custo da despbrasil e deixou de descrever custo de fornecedor — ao acertar o custo real da Vistocar, reveja os dois campos.
 
 ### Intenção de Venda / ATPV-e RJ e MG (Vistocar)
 

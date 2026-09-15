@@ -114,10 +114,12 @@ const DESPBRASIL_SVCS = {
   // A entrada fica porque fetchCodigoSegurancaPdfDespbrasil ainda a lê para
   // montar o fallback do consultar-Numero-ATPVE, quando a Vistocar falha.
   'security-code-vistocar':     { servico: 'codigo_seguranca', extra: { versao: 'v1' } },
-  // "consulta_generica": o serviço em si vem em nome_servico, dentro do corpo.
-  // `arquivo` só existe para o PDF do WhatsApp não sair como
-  // "consulta_generica-ABC1D23.pdf" na mão do cliente.
-  'numero-crv-digital': { servico: 'consulta_generica', extra: { nome_servico: 'Número do CRV Digital' }, arquivo: 'numero-crv-digital' },
+  // O 'numero-crv-digital' saiu daqui em 15/09/2026: passou para a Vistocar
+  // (VISTOCAR_ENDPOINTS → apiclient/security-code-crv). Ele vinha pelo
+  // "consulta_generica", com o produto em nome_servico. Tinha que sair do mapa,
+  // não só ganhar rota nova: com o id nos dois lugares, o header da requisição
+  // sairia com a chaveAcesso da despbrasil (o else-if dela vem antes) e a
+  // resposta passaria pelo tratamento errado.
   'verificar-crlv':    { servico: 'verificar_crlv' },
   'consulta-renavam':  { servico: 'consulta_renavam' },
   'consultar-Numero-ATPVE': { servico: 'numero_atpve' },
@@ -140,6 +142,12 @@ const VISTOCAR_PASSWORD = process.env.VISTOCAR_PASSWORD || '';
 const VISTOCAR_WEBHOOK_PATHS = ['/api/webhooks/vistocar', '/webhooks/vistocar'];
 const VISTOCAR_ENDPOINTS = {
   'security-code-vistocar-2': 'security-code',
+  // Apesar do nome, security-code-crv é a rota do NÚMERO do CRV, não do código
+  // de segurança (o erro dela é "Erro ao consultar o número do CRV"). Assumiu o
+  // 'numero-crv-digital' no lugar da despbrasil em 15/09/2026. Mesmo envelope
+  // dos demais (success + paid + pdfBase64), então não precisou de tratamento
+  // próprio; placa que não existe volta 400 com paid:false, sem cobrar.
+  'numero-crv-digital': 'security-code-crv',
   'vistocar-debitos-cod-barra': 'debitos-cod-barra',
   'atpve-vistocar-rj': 'atpve-rj',
   'atpve-vistocar-mg': 'atpve-mg',
@@ -794,10 +802,12 @@ const SERVICES = [
   // API Vistocar (vistocarconsulta.com.br) — segunda fonte para Código de Segurança
   // CRV, resposta em JSON com PDF pronto em base64 (ver VISTOCAR_ENDPOINTS).
   { id:'security-code-vistocar-2', name:'Consulta 3 Código Segurança CRV (PDF)', group:'CRV', basePrice:8.10, noMarkup:true, inputType:'placa', icon:'🔐' },
-  // API despbrasil.com.br pelo serviço "consulta_generica" — o nome do produto
-  // vai no corpo em "nome_servico" (ver DESPBRASIL_SVCS). basePrice = o custo
-  // cobrado por eles (R$ 10,00) e SEM noMarkup, então o cliente paga os 40% de
-  // markup padrão: R$ 14,00.
+  // API Vistocar desde 15/09/2026 (apiclient/security-code-crv); antes vinha da
+  // despbrasil, pelo "consulta_generica". O PREÇO NÃO MUDOU na troca: basePrice
+  // 10,00 sem noMarkup segue entregando R$ 14,00 ao cliente, que é o que ele já
+  // pagava — era o custo da despbrasil, e o da Vistocar não foi informado, então
+  // o número aqui deixou de ser "o custo do fornecedor" e virou só o que
+  // sustenta o preço de venda. Ao acertar o custo real, reveja os dois campos.
   { id:'numero-crv-digital', name:'Número do CRV Digital', group:'CRV', basePrice:10.00, inputType:'placa', icon:'🔢' },
   // ── Análise de Crédito ──
   { id:'consultar-spc', name:'Consulta SPC/Crédito', group:'Análise de Crédito', basePrice:15.00, inputType:'cpfcnpj', icon:'📊' },
@@ -4465,6 +4475,51 @@ async function avisarAdminAtpveIncompleto(placa, faltando, origem) {
   await sendWhatsApp(ADMIN_PHONE, msg).catch(() => {});
 }
 
+// ── Número do CRV Digital: reserva na despbrasil ─────────────────────────────
+// O fornecedor principal do 'numero-crv-digital' passou a ser a Vistocar
+// (apiclient/security-code-crv), mas em 15/09/2026 essa rota recusava TODA placa
+// com "Placa não localizada no fornecedor Nobre" — inclusive placas que a rota
+// irmã (security-code) atendia no mesmo minuto, com o mesmo token. Enquanto isso
+// não se resolve do lado deles, a despbrasil (que segue entregando) atende no
+// lugar, na mesma consulta, para o cliente não ficar sem o documento.
+//
+// Não há risco de cobrança dupla: a Vistocar devolve paid:false quando recusa.
+// Quando a rota deles voltar a responder, esta reserva simplesmente para de ser
+// chamada — sem deploy nenhum.
+//
+// Devolve o Buffer do PDF, ou null se a reserva também não entregar (aí quem
+// manda a mensagem de erro é o chamador, com o texto da Vistocar).
+async function fetchNumeroCrvDigitalDespbrasil(placa) {
+  try {
+    const r = await fetch(DESPBRASIL_BASE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', chaveAcesso: DESPBRASIL_KEY },
+      body: JSON.stringify({ servico: 'consulta_generica', nome_servico: 'Número do CRV Digital', placa }),
+    });
+    const parsed = await r.json().catch(() => null);
+    if (!r.ok || !parsed?.sucesso || !parsed?.arquivo_url) {
+      console.error(`[numero-crv-digital] reserva despbrasil não entregou: ${JSON.stringify(parsed)}`);
+      return null;
+    }
+    const pdfRes = await fetch(parsed.arquivo_url);
+    if (!pdfRes.ok) {
+      console.error(`[numero-crv-digital] reserva despbrasil: falha ao baixar arquivo_url (HTTP ${pdfRes.status}).`);
+      return null;
+    }
+    const buf = Buffer.from(await pdfRes.arrayBuffer());
+    // A despbrasil monta o PDF na hora e às vezes devolve arquivo malformado —
+    // entregar isso como documento seria pior do que devolver o erro.
+    if (buf.slice(0, 4).toString() !== '%PDF') {
+      console.error('[numero-crv-digital] reserva despbrasil: conteúdo devolvido não é um PDF.');
+      return null;
+    }
+    return buf;
+  } catch (e) {
+    console.error('[numero-crv-digital] reserva despbrasil falhou:', e.message);
+    return null;
+  }
+}
+
 // Busca o PDF da despbrasil e extrai os campos — separado em função própria pra
 // poder tentar de novo (ver runPublicAtpveComunicacaoVenda): a despbrasil parece
 // gerar o PDF na hora a cada chamada, e às vezes devolve um arquivo malformado
@@ -6351,6 +6406,14 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     let method = 'POST';
     let body = params || {};
 
+    // PDF que a reserva da despbrasil trouxe quando a Vistocar recusou o
+    // 'numero-crv-digital' (ver fetchNumeroCrvDigitalDespbrasil). Fica declarado
+    // aqui em cima porque a recusa pode chegar como HTTP 4xx — que sai no bloco
+    // !apiRes.ok, antes de base64PdfBuf existir — ou como 200 com success:false,
+    // já no tratamento da resposta. Guardar o buffer numa variável só garante
+    // que a reserva é chamada UMA vez, aconteça pelo caminho que acontecer.
+    let crvDigitalReserva = null;
+
     // CRLV Agendado: solicitar. A entrada é placa OU CPF conforme a UF (ver
     // inputType de cada crlv-agendado-<uf>), por isso não há validação de placa
     // aqui — quem recusa entrada inválida é a upstream.
@@ -6809,11 +6872,24 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       } else if (serviceId === 'consultar-Numero-ATPVE') {
         errMsg = 'Não encontramos o número do ATPV-E para essa placa no momento. Tente novamente mais tarde ou fale com o suporte.';
       }
-      return res.status(apiRes.status).json({ error: errMsg });
+      // Número do CRV Digital: a Vistocar recusa com HTTP 400 (e paid:false, sem
+      // cobrar), então é aqui que a reserva da despbrasil entra. Entregando o
+      // documento, o fluxo SEGUE em vez de responder erro — o que vem abaixo até
+      // base64PdfBuf está todo dentro de `if (isDatacubeForm)`, que é falso para
+      // este serviço, e o buffer é consumido no tratamento da resposta Vistocar.
+      if (serviceId === 'numero-crv-digital') {
+        crvDigitalReserva = await fetchNumeroCrvDigitalDespbrasil(
+          String(params?.placa || '').toUpperCase().replace(/[\s-]/g, ''));
+      }
+      if (!crvDigitalReserva) return res.status(apiRes.status).json({ error: errMsg });
+      console.log(`[${serviceId}] Vistocar recusou (HTTP ${apiRes.status}); documento entregue pela reserva despbrasil.`);
     }
 
-    // Lê o corpo uma única vez
-    const bodyBuffer = Buffer.from(await apiRes.arrayBuffer());
+    // Lê o corpo uma única vez. Exceção: quando a reserva do CRV Digital
+    // assumiu, o corpo JÁ FOI lido (como JSON) no bloco de erro acima e o stream
+    // não pode ser lido de novo — segue com corpo vazio, que faz o tratamento
+    // da resposta cair no ramo em que a reserva é usada.
+    const bodyBuffer = crvDigitalReserva ? Buffer.alloc(0) : Buffer.from(await apiRes.arrayBuffer());
     let   bodyStr    = bodyBuffer.toString('utf8');
     const isRealPdf  = bodyBuffer.slice(0, 4).toString() === '%PDF';
 
@@ -7143,10 +7219,28 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           && parsed?.response?.paid === true && parsed?.response?.pdfBase64;
         if (!ok) {
           const errMsg = parsed?.message || parsed?.response?.msg || 'Nenhum resultado encontrado para essa consulta.';
-          console.error(`[${serviceId}] resposta inesperada da Vistocar: ${JSON.stringify(parsed)}`);
-          return res.status(422).json({ error: errMsg });
+          // Com a reserva já em mãos o corpo aqui é vazio de propósito (ver a
+          // leitura de bodyBuffer): logar "resposta inesperada: null" faria
+          // parecer defeito uma consulta que foi entregue, e o erro de verdade
+          // da Vistocar já saiu no log lá em cima.
+          if (!crvDigitalReserva)
+            console.error(`[${serviceId}] resposta inesperada da Vistocar: ${JSON.stringify(parsed)}`);
+          // Número do CRV Digital: antes de devolver erro, a reserva da
+          // despbrasil (ver fetchNumeroCrvDigitalDespbrasil). Se a recusa veio
+          // como HTTP 4xx, crvDigitalReserva já foi preenchido lá em cima e a
+          // reserva NÃO é chamada de novo; este ramo cobre a recusa que chega
+          // como 200 com success:false. A Vistocar recusa sem cobrar
+          // (paid:false), então não há cobrança dupla em nenhum dos dois.
+          if (!crvDigitalReserva && serviceId === 'numero-crv-digital') {
+            crvDigitalReserva = await fetchNumeroCrvDigitalDespbrasil(
+              String(params?.placa || '').toUpperCase().replace(/[\s-]/g, ''));
+            if (crvDigitalReserva) console.log(`[${serviceId}] Vistocar recusou; documento entregue pela reserva despbrasil.`);
+          }
+          if (!crvDigitalReserva) return res.status(422).json({ error: errMsg });
+          base64PdfBuf = crvDigitalReserva;
+        } else {
+          base64PdfBuf = Buffer.from(parsed.response.pdfBase64, 'base64');
         }
-        base64PdfBuf = Buffer.from(parsed.response.pdfBase64, 'base64');
       }
     }
 
