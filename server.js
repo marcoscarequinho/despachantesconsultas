@@ -130,6 +130,14 @@ const DESPBRASIL_SVCS = {
 const VISTOCAR_BASE_URL = 'https://vistocarconsulta.com.br/api/v1';
 const VISTOCAR_LOGIN    = process.env.VISTOCAR_LOGIN    || '';
 const VISTOCAR_PASSWORD = process.env.VISTOCAR_PASSWORD || '';
+
+// Caminhos que atendem a notificação da Vistocar. O cadastrado na conta deles é
+// o primeiro (com /api), e é o que registrarWebhookVistocar continua mandando;
+// o segundo existe porque o endereço circula também sem o /api, e uma
+// notificação que bate no caminho errado vira 404 — perda silenciosa de
+// documento, já que a entrega passaria a depender só da varredura do cron.
+// Os dois precisam estar aqui E no express.json (rawBody da assinatura).
+const VISTOCAR_WEBHOOK_PATHS = ['/api/webhooks/vistocar', '/webhooks/vistocar'];
 const VISTOCAR_ENDPOINTS = {
   'security-code-vistocar-2': 'security-code',
   'vistocar-debitos-cod-barra': 'debitos-cod-barra',
@@ -1451,11 +1459,14 @@ function ensureDbReady() {
 // RG/CNH tiradas do celular somam bem mais que 1 PDF).
 // verify: a assinatura do webhook da Vistocar é calculada sobre o corpo BRUTO
 // (bytes recebidos, antes do parse), então guardamos o buffer só nessa rota —
-// manter a cópia em todas encareceria as requisições grandes.
+// manter a cópia em todas encareceria as requisições grandes. São os DOIS
+// caminhos de VISTOCAR_WEBHOOK_PATHS: sem o rawBody a assinatura não confere e
+// a notificação seria descartada como falsa.
 app.use(express.json({
   limit: '50mb',
   verify: (req, res, buf) => {
-    if (req.originalUrl && req.originalUrl.startsWith('/api/webhooks/vistocar')) req.rawBody = buf;
+    const url = req.originalUrl || '';
+    if (VISTOCAR_WEBHOOK_PATHS.some(p => url.startsWith(p))) req.rawBody = buf;
   },
 }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -9429,7 +9440,11 @@ app.post('/api/admin/pix-reconcile', requireAuth, requireSuperAdmin, async (req,
 // O cadastro do endpoint é feito pela própria API (POST /apiclient/webhook/save,
 // ver registrarWebhookVistocar) e a chaveSeguranca fica no banco, não em
 // variável de ambiente — nada para configurar à mão.
-const VISTOCAR_WEBHOOK_URL = `${WEBHOOK_BASE_URL || 'https://www.despachantesconsultas.com.br'}/api/webhooks/vistocar`;
+// O que vai para o cadastro na Vistocar é o caminho COM /api (o primeiro de
+// VISTOCAR_WEBHOOK_PATHS) — é o que está ativo na conta deles e já entregou
+// notificação. O outro caminho é só tolerância do lado de cá; mudar este valor
+// re-registraria o webhook sem necessidade.
+const VISTOCAR_WEBHOOK_URL = `${WEBHOOK_BASE_URL || 'https://www.despachantesconsultas.com.br'}${VISTOCAR_WEBHOOK_PATHS[0]}`;
 
 async function getVistocarWebhookSecret() {
   const r = await pool.query('SELECT chave_seguranca FROM vistocar_webhook_config ORDER BY id DESC LIMIT 1');
@@ -9565,7 +9580,7 @@ app.get('/api/queries/:id/atpve-status', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/webhooks/vistocar', async (req, res) => {
+app.post(VISTOCAR_WEBHOOK_PATHS, async (req, res) => {
   const payload = req.body || {};
   const eventId = req.headers['x-webhook-id'] || payload.eventId || null;
   const movementKey = payload?.data?.movementId != null ? String(payload.data.movementId) : null;
