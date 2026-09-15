@@ -294,6 +294,11 @@
         <!-- No celular a fila de categorias rola na horizontal em vez de quebrar
              em 8 linhas e empurrar os cards para fora da tela. -->
         <div id="catalog-filters" class="flex gap-2 mb-5 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible"></div>
+        <!-- Assinatura Digital em faixa própria, ACIMA do bloco Destaques: é o
+             serviço que fecha o ciclo dos documentos gerados na aba
+             Despachantes, e como card comum no meio da grade ele passaria
+             despercebido. Preenchido por renderAssinaturaDestaque(). -->
+        <div id="catalog-assinatura-destaque" class="hidden mb-6"></div>
         <div id="catalog-grid" class="space-y-7">
           <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <div class="skeleton h-36 w-full"></div>
@@ -1723,6 +1728,7 @@ function inputTypeLabel(t) {
     pedido_id_get:       'Entrada: ID do Pedido',
     venda:               'Entrada: Dados completos da venda',
     atpve_vistocar:      'Entrada: Dados da venda + CRLV-e e comprovantes (assíncrono)',
+    assinatura_digital:  'Entrada: PDF + dados de quem assina',
     cancelar_venda:      'Entrada: ID + Protocolo + Motivo',
     protocolo:           'Entrada: Protocolo',
     protocolo_get:       'Entrada: Protocolo (GET)',
@@ -2122,11 +2128,44 @@ function clearCatalogFilters() {
   busca?.focus();
 }
 
+// Faixa da Assinatura Digital, acima dos Destaques. Só aparece quando o serviço
+// está no resultado do filtro/busca atual — senão ficaria contradizendo a busca
+// logo acima dela.
+function renderAssinaturaDestaque(svcsVisiveis) {
+  const wrap = document.getElementById('catalog-assinatura-destaque');
+  if (!wrap) return;
+  const svc = (svcsVisiveis || []).find(s => s.id === 'assinatura-digital');
+  if (!svc) { wrap.classList.add('hidden'); wrap.innerHTML = ''; return; }
+
+  const liberado = assinaturaLiberada(svc.id);
+  wrap.classList.remove('hidden');
+  wrap.innerHTML = `
+    <button type="button" onclick="openCatalogService('assinatura-digital')"
+      class="w-full text-left bg-gradient-to-r from-emerald-50 to-white border border-emerald-200 rounded-xl p-4 sm:p-5 hover:border-emerald-400 hover:shadow-md transition-all">
+      <div class="flex items-center gap-4">
+        <div class="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center text-2xl flex-shrink-0">✍️</div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="font-bold text-gray-800">${escapeHtml(svc.name)}</span>
+            <span class="svc-badge bg-emerald-100 text-emerald-700">Assinatura</span>
+          </div>
+          <p class="text-xs text-gray-600 mt-1 leading-snug">
+            Mande qualquer PDF para assinar por e-mail ou WhatsApp — inclusive a
+            <strong>Declaração de Residência</strong>, a <strong>ASD RJ</strong> e a
+            <strong>Nota de Prestação de Serviços</strong> que você gera em Coisas de Despachantes.
+          </p>
+        </div>
+        <span class="svc-cta flex-shrink-0">${liberado ? 'Enviar' : '🔑 Assinar'}</span>
+      </div>
+    </button>`;
+}
+
 function renderCatalog() {
   const grid = document.getElementById('catalog-grid');
   if (!grid) return;
   const termo = document.getElementById('catalog-search')?.value.trim() || '';
   const svcs  = catalogFiltered();
+  renderAssinaturaDestaque(svcs);
 
   document.getElementById('catalog-clear')
     .classList.toggle('hidden', !termo && catalogFilter === 'all');
@@ -2256,6 +2295,7 @@ function buildCategoryGrid() {
 const ASSINATURA_IDS = [
   'assinatura-consulta-placas',
   'assinatura-codigo-seguranca-crv',
+  'assinatura-digital',
   'declaracao-residencia-detran-rj',
   'nota-prestacao-servicos-despachante',
   'gerar-asd',
@@ -2264,6 +2304,8 @@ const ASSINATURA_PLACAS_ID = 'assinatura-consulta-placas';
 // Código de Segurança CRV incluído na assinatura — cota própria, contada
 // separadamente da de placas (ver consultasCrvRestantes em /api/assinatura/status).
 const ASSINATURA_CRV_ID = 'assinatura-codigo-seguranca-crv';
+// Assinatura Digital (Assinafy) — terceira cota independente das outras duas.
+const ASSINATURA_DIGITAL_ID = 'assinatura-digital';
 let assinaturaStatus = null;
 let assinaturaPollTimer = null;
 let assinaturaSvcPendente = null;
@@ -2297,6 +2339,11 @@ function assinaturaLiberada(serviceId) {
   if (serviceId === ASSINATURA_CRV_ID &&
       assinaturaStatus.consultasCrvRestantes !== null &&
       assinaturaStatus.consultasCrvRestantes <= 0) return false;
+  // Cota da Assinatura Digital, também independente.
+  if (serviceId === ASSINATURA_DIGITAL_ID &&
+      assinaturaStatus.assinaturasRestantes !== null &&
+      assinaturaStatus.assinaturasRestantes !== undefined &&
+      assinaturaStatus.assinaturasRestantes <= 0) return false;
   return true;
 }
 
@@ -2737,6 +2784,7 @@ function queryActionLabel(inputType) {
   if (inputType === 'nota_prestacao_servicos') return 'Gerar Nota';
   if (inputType === 'asd') return 'Gerar ASD RJ';
   if (inputType === 'atpve_vistocar') return 'Emitir ATPV-e';
+  if (inputType === 'assinatura_digital') return 'Enviar para Assinatura';
   return 'Realizar Consulta';
 }
 
@@ -3304,6 +3352,30 @@ function renderFormFields(inputType, svc) {
 
     atpve_vistocar: atpveBody,
 
+    // Assinatura Digital (Assinafy). O aviso do topo é o pedido do dono: o
+    // cliente não percebe sozinho que dá para assinar os documentos que a
+    // própria aba gera, e é justamente o uso mais natural do serviço.
+    assinatura_digital: `
+      <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 mb-3">
+        <p class="text-xs font-semibold text-emerald-800 mb-1">✍️ Serve para qualquer PDF</p>
+        <p class="text-xs text-emerald-700">Você pode usar para assinar qualquer documento em PDF — inclusive os que você mesmo gera aqui em <strong>Coisas de Despachantes</strong>, como a <strong>Declaração de Residência</strong>, a <strong>ASD RJ</strong> e a <strong>Nota de Prestação de Serviços</strong>. Gere o documento, baixe o PDF e mande assinar por aqui.</p>
+      </div>
+      <div>
+        <label class="label">Documento em PDF <span class="text-red-500">*</span></label>
+        <input type="file" id="f-assin_arquivo-file" class="input-field" accept="application/pdf,.pdf"
+          onchange="handleArquivoAssinatura(this)">
+        <input type="hidden" id="f-assin_arquivo">
+        <div class="text-xs text-gray-500 mt-1">O arquivo que será assinado. Até 10 MB.</div>
+        <div id="f-assin_arquivo-status" class="text-xs text-gray-500 mt-1"></div>
+      </div>
+      <div class="font-semibold text-gray-700 text-sm mt-3 mb-1">Quem vai assinar</div>
+      <p class="text-xs text-gray-500 mb-2">Informe o e-mail, o WhatsApp ou os dois — é por onde o pedido de assinatura chega para a pessoa.</p>
+      ${field('assin_nome','Nome completo do signatário','text','NOME COMPLETO')}
+      <div class="grid grid-cols-2 gap-3">
+        ${field('assin_email','E-mail','text','pessoa@email.com',false)}
+        ${field('assin_whatsapp','WhatsApp (DDD + número)','text','22999951574',false,'inputmode="numeric"')}
+      </div>`,
+
     debito_doc: placaField + renavamField +
       field('documento', 'CPF ou CNPJ do Proprietário', 'text', '000.000.000-00') +
       `<p class="text-xs text-blue-600 mt-1">ℹ️ Informe o CPF ou CNPJ do proprietário do veículo.</p>`,
@@ -3434,6 +3506,9 @@ function renderFormFields(inputType, svc) {
   // ATPV-e: o form.reset() limpa o <input type="file">, mas não o base64 já
   // lido — sem zerar aqui, reabrir o formulário mandaria o anexo do pedido
   // anterior com os dados do pedido novo.
+  // Assinatura Digital: o form.reset() limpa o <input type="file">, mas nao o
+  // base64 ja lido — sem zerar aqui, reabrir mandaria o PDF do pedido anterior.
+  if (inputType === 'assinatura_digital') assinaturaArquivo = { base64: '', nome: '' };
   if (inputType === 'atpve_vistocar') {
     atpveAnexos = { at_crlve: '', at_comp_v: '', at_comp_c: '' };
     const placaEl = document.getElementById('f-at_placa');
@@ -3798,6 +3873,40 @@ function lerCarteirinhaAsd(inputEl, lado) {
   reader.readAsDataURL(file);
 }
 
+// ── Arquivo da Assinatura Digital ───────────────────────────────────────────
+// Só PDF: é o que a Assinafy aceita para pedido de assinatura. Guardado em
+// base64 puro aqui, e não no <input type="file">, porque é isso que vai no
+// corpo JSON de /api/query.
+let assinaturaArquivo = { base64: '', nome: '' };
+function handleArquivoAssinatura(input) {
+  const statusEl = document.getElementById('f-assin_arquivo-status');
+  const hiddenEl = document.getElementById('f-assin_arquivo');
+  const setStatus = (msg, cor) => { if (statusEl) { statusEl.textContent = msg; statusEl.className = `text-xs mt-1 ${cor}`; } };
+  const limpar = () => { assinaturaArquivo = { base64: '', nome: '' }; if (hiddenEl) hiddenEl.value = ''; };
+
+  const file = input.files && input.files[0];
+  if (!file) { limpar(); setStatus('', 'text-gray-500'); return; }
+  if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) {
+    limpar(); input.value = '';
+    setStatus('Arquivo inválido. Envie um PDF.', 'text-red-500');
+    return;
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    limpar(); input.value = '';
+    setStatus(`Arquivo de ${(file.size / 1024 / 1024).toFixed(1)} MB — o limite é 10 MB.`, 'text-red-500');
+    return;
+  }
+  setStatus('⏳ Carregando…', 'text-gray-500');
+  const reader = new FileReader();
+  reader.onload = () => {
+    assinaturaArquivo = { base64: String(reader.result).split(',')[1] || '', nome: file.name };
+    if (hiddenEl) hiddenEl.value = assinaturaArquivo.base64 ? '1' : '';
+    setStatus(`✓ ${file.name} (${(file.size / 1024).toFixed(0)} KB)`, 'text-green-600');
+  };
+  reader.onerror = () => { limpar(); setStatus('Erro ao ler o arquivo. Tente de novo.', 'text-red-500'); };
+  reader.readAsDataURL(file);
+}
+
 // ── Anexos do ATPV-e ────────────────────────────────────────────────────────
 // Guardados aqui em base64 puro (sem o prefixo "data:"), e não no próprio
 // <input type="file">, porque é isso que vai no corpo JSON de /api/query.
@@ -4013,6 +4122,13 @@ async function submitQuery(e) {
         await loadQueries();
         return;
       }
+      // Assinatura Digital: o pedido foi criado, mas o documento assinado só
+      // existe depois que a pessoa assina — mesma ideia, tela própria.
+      if (data.pending && selectedSvc.inputType === 'assinatura_digital') {
+        showAssinaturaProgress(data, selectedSvc);
+        await Promise.all([loadQueries(), loadAssinaturaStatus()]);
+        return;
+      }
       if (data.html_token) {
         window.open(`/api/html/${data.html_token}`, '_blank');
         showHtmlResult(selectedSvc, data);
@@ -4200,6 +4316,17 @@ function buildParams(inputType) {
       carteirinhaVerso: asdCarteirinha.verso || '',
     };
 
+  // Assinatura Digital: o PDF vai em base64 puro; o nome do arquivo acompanha
+  // para o documento chegar identificado para quem assina.
+  if (inputType === 'assinatura_digital')
+    return {
+      arquivoBase64: assinaturaArquivo.base64 || '',
+      nomeArquivo: assinaturaArquivo.nome || '',
+      nome: g('assin_nome'),
+      email: g('assin_email'),
+      whatsapp: cd(g('assin_whatsapp')),
+    };
+
   // Intenção de Venda / ATPV-e: nomes iguais aos da API da Vistocar, para o
   // caminho do dado ficar óbvio entre o campo da tela e o corpo enviado
   // (ver montarCorpoAtpveVistocar no server.js). A UF de emissão do CRV não
@@ -4266,6 +4393,17 @@ function buildParams(inputType) {
 // Validação rápida no cliente antes de enviar (espelha as regras do servidor,
 // para dar feedback imediato sem depender da resposta da API externa).
 function validateParams(inputType, p) {
+  if (inputType === 'assinatura_digital') {
+    if (!p.arquivoBase64) return 'Anexe o documento em PDF que será assinado.';
+    if (!p.nome || p.nome.length < 3) return 'Informe o nome completo de quem vai assinar.';
+    if (!p.email && !p.whatsapp)
+      return 'Informe o e-mail ou o WhatsApp de quem vai assinar — é por onde o pedido de assinatura chega.';
+    if (p.email && !/^[^s@]+@[^s@]+.[^s@]{2,}$/.test(p.email)) return 'E-mail do signatário inválido.';
+    const w = String(p.whatsapp || '').replace(/D/g, '');
+    if (w && (w.length < 10 || w.length > 13))
+      return 'WhatsApp do signatário inválido. Informe DDD + número (ex.: 22999951574).';
+    return null;
+  }
   // ATPV-e: conferência só do que dá para ver daqui, para o cliente corrigir sem
   // ida ao servidor. A validação que vale é a de montarCorpoAtpveVistocar — esta
   // aqui existe para não mandar um formulário obviamente incompleto.
@@ -4527,6 +4665,95 @@ function showAtpveProgress(data, svc) {
     atpveProgressTimer = setTimeout(consultar, t < 1200 ? 8000 : 60000);
   };
   atpveProgressTimer = setTimeout(consultar, 6000);
+}
+
+// ── Acompanhamento da Assinatura Digital ────────────────────────────────────
+// Reaproveita o painel do ATPV-e, mas SEM a curva de progresso: ali a espera é
+// uma máquina emitindo (minutos), aqui é uma pessoa assinando — pode ser em
+// cinco minutos ou em três dias. Uma barra subindo sozinha prometeria um prazo
+// que não existe, então ela fica parada num estado de espera e quem declara o
+// fim é o servidor, em /api/queries/:id/assinatura-status.
+function showAssinaturaProgress(data, svc) {
+  pararAtpveProgress();
+  document.getElementById('query-form-wrap').classList.add('hidden');
+  document.getElementById('query-result-wrap').classList.add('hidden');
+  document.getElementById('atpve-progress-wrap').classList.remove('hidden');
+  document.getElementById('atpve-progress-done').classList.add('hidden');
+
+  const r = data?.result || {};
+  const icon  = document.getElementById('atpve-progress-icon');
+  const title = document.getElementById('atpve-progress-title');
+  const bar   = document.getElementById('atpve-progress-bar');
+  const msgEl = document.getElementById('atpve-progress-msg');
+  const timeEl = document.getElementById('atpve-progress-time');
+
+  icon.textContent = '✍️';
+  icon.className = 'w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center text-xl';
+  title.textContent = 'Aguardando assinatura';
+  title.className = 'font-bold text-amber-800';
+  document.getElementById('atpve-progress-service').textContent =
+    `${r.documento || svc.name} — ${r.signatario || ''}`;
+  document.getElementById('atpve-progress-proto').innerHTML = r.enviado_para
+    ? `Pedido enviado para <strong>${escapeHtml(String(r.enviado_para))}</strong>`
+    : '';
+  bar.className = 'h-3 bg-amber-400 rounded-full';
+  bar.style.width = '30%';
+  msgEl.className = 'text-xs text-amber-700';
+  msgEl.textContent = 'O documento está com quem vai assinar.';
+
+  const inicio = Date.now();
+  atpveProgressTick = setInterval(() => {
+    timeEl.textContent = atpveTempoTexto(Math.round((Date.now() - inicio) / 1000));
+  }, 1000);
+
+  const queryId = data.queryId;
+  if (!queryId) return;
+
+  const consultar = async () => {
+    try {
+      const resp = await fetch(`/api/queries/${queryId}/assinatura-status`);
+      const d = await resp.json();
+      if (!resp.ok) throw new Error(d.error || 'falha ao consultar');
+
+      if (d.situacao === 'pronto') {
+        pararAtpveProgress();
+        bar.className = 'h-3 bg-green-500 rounded-full';
+        bar.style.width = '100%';
+        icon.textContent = '✅';
+        icon.className = 'w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-xl';
+        title.textContent = 'Documento assinado!';
+        title.className = 'font-bold text-green-800';
+        msgEl.textContent = 'Assinatura concluída.';
+        msgEl.className = 'text-xs text-green-700';
+        const link = document.getElementById('atpve-progress-link');
+        link.href = `/api/pdf/${d.token}`;
+        link.textContent = '📥 Baixar documento assinado';
+        document.getElementById('atpve-progress-done').classList.remove('hidden');
+        window.open(`/api/pdf/${d.token}`, '_blank');
+        toast('Documento assinado com sucesso!');
+        await Promise.all([loadQueries(), loadAssinaturaStatus()]);
+        return;
+      }
+      if (d.situacao === 'cancelado') {
+        pararAtpveProgress();
+        bar.className = 'h-3 bg-red-400 rounded-full';
+        bar.style.width = '100%';
+        icon.textContent = '⚠️';
+        icon.className = 'w-10 h-10 bg-red-100 rounded-full flex items-center justify-center text-xl';
+        title.textContent = 'Não assinado';
+        title.className = 'font-bold text-red-700';
+        msgEl.textContent = d.mensagem || 'O documento não foi assinado.';
+        msgEl.className = 'text-xs text-red-600';
+        await loadQueries();
+        return;
+      }
+    } catch { /* falha de rede não encerra o acompanhamento */ }
+    // Cadência lenta de propósito: do outro lado tem uma pessoa, não uma fila
+    // de processamento. 20s nos primeiros 10 minutos, 2 minutos depois disso.
+    const t = (Date.now() - inicio) / 1000;
+    atpveProgressTimer = setTimeout(consultar, t < 600 ? 20000 : 120000);
+  };
+  atpveProgressTimer = setTimeout(consultar, 15000);
 }
 
 function showJsonResult(data, svc) {

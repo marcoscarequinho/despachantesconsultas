@@ -35,6 +35,7 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 | Despbrasil (CRLV Rio Reemissão, Código de Segurança CRV, reserva do Número do CRV Digital) | `https://despbrasil.com.br/functions/apiConsulta` | header `chaveAcesso` (`DESPBRASIL_KEY`), ver `DESPBRASIL_SVCS` |
 | Consultas Fácil (CRLV Rio Reemissão v2) | `https://www.consultasfacil.net` | header `chaveAcesso` (`CONSULTASFACIL_KEY`) |
 | Vistocar (Débitos e Documentação, Código de Segurança CRV, Número do CRV Digital, ATPV-e RJ/MG) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
+| Assinafy (Assinatura Digital de documentos) | `https://api.assinafy.com.br/v1` | header `X-Api-Key` (`ASSINAFY_API_KEY`) + `ASSINAFY_ACCOUNT_ID` |
 | ViaCEP | `https://viacep.com.br` | público, sem chave (só recupera acento de logradouro/bairro na Reemissão da ATPVe, ver `repairAtpveAccents`) |
 | Mercado Pago (PIX e cartão de débito) | `https://api.mercadopago.com` | `MP_ACCESS_TOKEN` (servidor) + `MP_PUBLIC_KEY` (navegador) |
 | Z-API (WhatsApp) | `https://api.z-api.io` | `ZAPI_*` |
@@ -60,6 +61,19 @@ O envio do PDF por WhatsApp é decidido pelo prefixo `consultar-crlv-`, então o
 O CE hoje é só `crlv-ce-instantaneo`: passou pela Vistocar (`apiclient/crlv-ce` + webhook) e pelo agendado do portal antes de ficar só na emissão na hora. Por isso `PORTAL_AGENDADO_SVCS` está vazio e o CE saiu de `VISTOCAR_ASYNC_SVCS` (que hoje só tem os dois ATPV-e) — os dois caminhos continuam de pé para entregar pedido antigo (`vistocar_pending`, `crlv_agendado_pending`).
 
 O resto do grupo "CRLV-e Digital" continua no portal (`placa_renavam_cpf`), com **uma exceção**: o `consultar-crlv-ba`, que está no portal (`PORTAL_PLACA_MAP`, doc de 26/08/2026) e por isso é `inputType:'placa'` — a rota do portal pedia placa+renavam+CPF e tinha um campo de documento só, o que recusava proprietário pessoa jurídica. É o único id do `PORTAL_PLACA_MAP` que já começa com `consultar-crlv-`: o PDF sai no WhatsApp pela regra do prefixo, então ele **não** entra em `CRLV_PORTAL_PDF_SVCS` (entraria em duplicidade). No meio do caminho a BA passou pela Vistocar (`apiclient/crlv-ba`): a rota existe na conta, mas responde `500 "Erro interno. Saldo estornado."` em toda chamada — com placa válida, com placa inválida e até sem placa nenhuma —, ou seja, falha antes de olhar a entrada; não vale reativar sem eles confirmarem que arrumaram.
+
+### Assinatura Digital (Assinafy)
+
+Entrou em 15/09/2026 no grupo "Para os Despachantes" (`assinatura-digital`, `inputType:'assinatura_digital'`). É o único do grupo que **não gera documento**: manda um PDF que o cliente já tem para outra pessoa assinar — inclusive os que a própria aba gera (Declaração de Residência, ASD, Nota de Prestação de Serviços), que é o uso mais natural e por isso está dito no formulário e na faixa da Visão Geral.
+
+- **Grátis como o resto do grupo, mas com cota própria** (`ASSINATURA_DIGITAL_COTA`, 5 por período, colunas `cota_assinatura`/`queries_used_assinatura`). A razão é a mesma da cota do CRV: diferente da Declaração e da ASD, cada envio **custa dinheiro na Assinafy** (R$ 5,00), então não pode dividir as 50 de placa. A migração faz backfill nas assinaturas por PIX vigentes, para o serviço valer de imediato para quem já assina.
+- **Credenciais só em variável de ambiente**: `ASSINAFY_API_KEY` é um segredo de workspace com **acesso total** e este repositório é **público** — a chave nunca pode entrar no código. `ASSINAFY_ACCOUNT_ID` anda em par com ela.
+- **Três chamadas encadeadas** (`enviarParaAssinaturaAssinafy`): sobe o PDF (`POST /accounts/{acc}/documents`, multipart) → cria o signatário (`POST /accounts/{acc}/signers`) → pede a assinatura (`POST /documents/{id}/assignments`, `method:'virtual'`). O `virtual` é o único viável aqui: o `collect` exigiria posicionar campos sobre o PDF, que o painel não tem como fazer. Entre o upload e o assignment há `aguardarDocumentoPronto` — o documento passa por `metadata_processing` e recusa o pedido se for cedo demais (a chamada inteira leva ~10s por causa disso).
+- **`notification_methods` segue o que o cliente preencheu**: e-mail, WhatsApp ou os dois. WhatsApp custa mais e só funciona em plano pago da Assinafy; por isso só vai quando o número é informado. A validação exige pelo menos um dos dois — sem canal, ninguém é avisado de que tem documento para assinar.
+- **A espera é humana, não de máquina**: o PDF assinado só existe depois que a pessoa assina, o que pode levar dias. A consulta fica `aguardando_pdf` com `amount 0` e `assinafy_pending` guarda o `document_id`. A entrega (`entregarAssinaturaDigital`) roda em dois lugares: `GET /api/queries/:id/assinatura-status`, que a tela de acompanhamento chama, e `runAssinafyPendingCheck`, que pega carona no cron de 15 em 15 minutos do CRLV/Vistocar (para quem fechou a página). É idempotente — claim atômico no status + checagem do `pdf_cache`.
+- **Não usa `finalizePendingQuery`**: ele criaria uma transação de R$ 0,00 no extrato, já que quem paga o envio é a assinatura. O claim do status é feito na mão.
+- **A tela de acompanhamento não tem barra que anda** (`showAssinaturaProgress`): reaproveita o painel do ATPV-e, mas com a barra parada num estado de espera. Uma curva subindo sozinha prometeria um prazo que não existe — do outro lado tem uma pessoa. O polling também é lento de propósito (20s nos primeiros 10 min, 2 min depois).
+- **Faixa própria na Visão Geral** (`#catalog-assinatura-destaque`, `renderAssinaturaDestaque`), **acima** do bloco Destaques: como card comum no meio da grade ele passaria despercebido. Só aparece quando o serviço está no resultado da busca/filtro atual, para não contradizer a busca logo acima.
 
 ### Número do CRV Digital — Vistocar com reserva na despbrasil
 
@@ -140,4 +154,4 @@ Vitrine que reúne num lugar só os CRLV-e que **não saem na hora** (DF, ES, PB
 
 ## Variáveis de ambiente (.env)
 
-`DATABASE_URL`, `JWT_SECRET`, `MP_ACCESS_TOKEN`, `MP_PUBLIC_KEY`, `AUTOCRLV_KEY`, `PORTAL_DESP_KEY`, `DATACUBE_TOKEN`, `INFOSIMPLES_TOKEN`, `DESPBRASIL_KEY`, `CONSULTASFACIL_KEY`, `VISTOCAR_LOGIN`, `VISTOCAR_PASSWORD`, `ZAPI_INSTANCE_ID`, `ZAPI_TOKEN`, `ZAPI_CLIENT_TOKEN`, `WEBHOOK_BASE_URL`, `ADMIN_PHONE`. O `.env` existe localmente e não é commitado.
+`DATABASE_URL`, `JWT_SECRET`, `MP_ACCESS_TOKEN`, `MP_PUBLIC_KEY`, `AUTOCRLV_KEY`, `PORTAL_DESP_KEY`, `DATACUBE_TOKEN`, `INFOSIMPLES_TOKEN`, `DESPBRASIL_KEY`, `CONSULTASFACIL_KEY`, `VISTOCAR_LOGIN`, `VISTOCAR_PASSWORD`, `ASSINAFY_API_KEY`, `ASSINAFY_ACCOUNT_ID`, `ZAPI_INSTANCE_ID`, `ZAPI_TOKEN`, `ZAPI_CLIENT_TOKEN`, `WEBHOOK_BASE_URL`, `ADMIN_PHONE`. O `.env` existe localmente e não é commitado.

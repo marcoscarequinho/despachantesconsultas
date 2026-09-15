@@ -43,10 +43,17 @@ const ASSINATURA_PLACAS_SERVICE_ID = 'assinatura-consulta-placas';
 // divide as 50 do plano — tem teto separado, contado em queries_used_crv.
 const ASSINATURA_CRV_COTA = 5;
 const ASSINATURA_CRV_SERVICE_ID = 'assinatura-codigo-seguranca-crv';
+// Assinatura Digital (Assinafy) — terceira cota própria, pela mesma razão da do
+// CRV: cada envio custa na Assinafy, então não pode dividir as 50 de placa.
+// Teto de 5 por período, que ao custo de hoje (R$ 5,00 o envio) é o que cabe
+// dentro dos R$ 30,00 do plano sem virar prejuízo.
+const ASSINATURA_DIGITAL_COTA = 5;
+const ASSINATURA_DIGITAL_SERVICE_ID = 'assinatura-digital';
 // Serviços que exigem assinatura ativa (todo o grupo "Para os Despachantes").
 const ASSINATURA_SERVICE_IDS = [
   ASSINATURA_PLACAS_SERVICE_ID,
   ASSINATURA_CRV_SERVICE_ID,
+  ASSINATURA_DIGITAL_SERVICE_ID,
   'declaracao-residencia-detran-rj',
   'nota-prestacao-servicos-despachante',
   'gerar-asd',
@@ -124,6 +131,126 @@ const DESPBRASIL_SVCS = {
   'consulta-renavam':  { servico: 'consulta_renavam' },
   'consultar-Numero-ATPVE': { servico: 'numero_atpve' },
 };
+
+// ── Assinafy (assinafy.com.br) — assinatura digital de documentos ────────────
+// Header X-Api-Key, envelope { status, message, data } em todas as respostas.
+// A chave é um segredo de workspace COM ACESSO TOTAL e este repositório é
+// PÚBLICO: ela só pode existir em variável de ambiente, nunca no código.
+// O accountId é o id do workspace (My Account → Workspaces); vem do ambiente
+// junto da chave porque as duas coisas andam em par — trocar de conta é trocar
+// as duas.
+const ASSINAFY_BASE_URL   = 'https://api.assinafy.com.br/v1';
+const ASSINAFY_API_KEY    = process.env.ASSINAFY_API_KEY    || '';
+const ASSINAFY_ACCOUNT_ID = process.env.ASSINAFY_ACCOUNT_ID || '';
+
+// Ciclo de vida do documento na Assinafy (GET /v1/documents/statuses):
+// uploading → uploaded → metadata_processing → metadata_ready → pending_signature
+// → certificating → certificated. Só "certificated" tem documento assinado para
+// baixar; "rejected_by_signer"/"rejected_by_user"/"expired"/"failed" encerram sem
+// assinatura.
+const ASSINAFY_STATUS_PRONTO   = 'certificated';
+const ASSINAFY_STATUS_ENCERRADO = new Set(['rejected_by_signer', 'rejected_by_user', 'expired', 'failed']);
+
+// Toda resposta vem embrulhada em { status, message, data } — inclusive os erros,
+// que trazem a explicação em "message". Desembrulha aqui para o resto do código
+// lidar só com o payload, e levanta erro com a mensagem deles quando falha.
+async function assinafyReq(caminho, { method = 'GET', json, form } = {}) {
+  if (!ASSINAFY_API_KEY || !ASSINAFY_ACCOUNT_ID)
+    throw new Error('Assinatura Digital não configurada no servidor (ASSINAFY_API_KEY/ASSINAFY_ACCOUNT_ID).');
+  const headers = { 'X-Api-Key': ASSINAFY_API_KEY };
+  // form-data monta o próprio Content-Type com o boundary — definir o header na
+  // mão aqui quebraria o upload.
+  if (json) headers['Content-Type'] = 'application/json';
+  const r = await fetch(`${ASSINAFY_BASE_URL}${caminho}`, {
+    method,
+    headers,
+    body: form || (json ? JSON.stringify(json) : undefined),
+  });
+  const data = await r.json().catch(() => null);
+  if (!r.ok || !data || (data.status && data.status >= 400)) {
+    const msg = data?.message || `HTTP ${r.status}`;
+    throw new Error(`Assinafy ${caminho}: ${msg}`);
+  }
+  return data.data;
+}
+
+// O PDF recém-enviado passa por metadata_processing antes de aceitar pedido de
+// assinatura. Espera o documento ficar pronto em vez de disparar o assignment
+// cedo demais e tomar erro — são poucos segundos na prática.
+async function aguardarDocumentoPronto(documentId, tentativas = 12) {
+  for (let i = 0; i < tentativas; i++) {
+    const doc = await assinafyReq(`/documents/${encodeURIComponent(documentId)}`);
+    const status = doc?.status || doc?.document?.status;
+    if (status && !['uploading', 'uploaded', 'metadata_processing'].includes(status)) return status;
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  return null;
+}
+
+// Fluxo completo do "Quick Start" da doc: sobe o PDF, cria o signatário e pede a
+// assinatura. Método "virtual" = o signatário só confirma, sem campos para
+// preencher (o "collect" exigiria posicionar campos no PDF, que o painel não tem
+// como fazer). Devolve { documentId, signerId, assignmentId }.
+async function enviarParaAssinaturaAssinafy({ pdfBuffer, nomeArquivo, nome, email, whatsapp }) {
+  const form = new FormData();
+  form.append('file', new Blob([pdfBuffer], { type: 'application/pdf' }), nomeArquivo);
+  const doc = await assinafyReq(`/accounts/${ASSINAFY_ACCOUNT_ID}/documents`, { method: 'POST', form });
+  const documentId = doc?.id || doc?.document?.id;
+  if (!documentId) throw new Error('Assinafy não devolveu o id do documento enviado.');
+
+  const signatario = { full_name: nome };
+  if (email)    signatario.email = email;
+  if (whatsapp) signatario.whatsapp_phone_number = whatsapp;
+  const signer = await assinafyReq(`/accounts/${ASSINAFY_ACCOUNT_ID}/signers`, { method: 'POST', json: signatario });
+  const signerId = signer?.id || signer?.signer?.id;
+  if (!signerId) throw new Error('Assinafy não devolveu o id do signatário.');
+
+  await aguardarDocumentoPronto(documentId);
+
+  // notification_methods = por onde o signatário é avisado. WhatsApp custa mais e
+  // só funciona em plano pago, então só vai quando o número foi informado; o
+  // e-mail acompanha sempre que houver e-mail. Sem nada informado a Assinafy
+  // assume Email, e a validação do nosso lado já exige um dos dois.
+  const canais = [];
+  if (email)    canais.push('Email');
+  if (whatsapp) canais.push('Whatsapp');
+  const assignment = await assinafyReq(`/documents/${encodeURIComponent(documentId)}/assignments`, {
+    method: 'POST',
+    json: {
+      method: 'virtual',
+      signers: [{
+        id: signerId,
+        verification_method: email ? 'Email' : 'Whatsapp',
+        notification_methods: canais,
+      }],
+    },
+  });
+
+  return { documentId, signerId, assignmentId: assignment?.id || null };
+}
+
+// Busca o documento assinado quando ele estiver pronto. Devolve
+// { pronto, encerrado, status, pdf } — pdf só vem com status certificated.
+async function buscarDocumentoAssinadoAssinafy(documentId) {
+  const doc = await assinafyReq(`/documents/${encodeURIComponent(documentId)}`);
+  const status = doc?.status || doc?.document?.status || null;
+  if (status !== ASSINAFY_STATUS_PRONTO)
+    return { pronto: false, encerrado: ASSINAFY_STATUS_ENCERRADO.has(status), status, pdf: null };
+
+  // O artefato "certificated" é o PDF assinado com a página de certificado.
+  // Este download NÃO passa pelo assinafyReq: a resposta é o arquivo, não o
+  // envelope JSON.
+  const r = await fetch(`${ASSINAFY_BASE_URL}/documents/${encodeURIComponent(documentId)}/download/certificated`, {
+    headers: { 'X-Api-Key': ASSINAFY_API_KEY },
+  });
+  if (!r.ok) return { pronto: false, encerrado: false, status, pdf: null };
+  const buf = Buffer.from(await r.arrayBuffer());
+  if (buf.slice(0, 4).toString() !== '%PDF') {
+    console.error(`[assinatura-digital] download de ${documentId} não veio como PDF.`);
+    return { pronto: false, encerrado: false, status, pdf: null };
+  }
+  return { pronto: true, encerrado: false, status, pdf: buf };
+}
 
 // API Vistocar (vistocarconsulta.com.br) — login JWT (VISTOCAR_LOGIN/VISTOCAR_PASSWORD)
 // + POST em apiclient/<endpoint> com Bearer, corpo { plate: "ABC1D23" } (campo em
@@ -727,6 +854,14 @@ const SERVICES = [
   // de baixo da mesma folha, no espaço que o formulário reserva para elas.
   // Gratuito (antes R$ 9,50).
   { id:'gerar-asd', name:'Gerar ASD RJ', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'asd', icon:'📑' },
+  // Assinatura Digital (Assinafy) — o único do grupo que NÃO gera documento: ele
+  // manda um PDF que o cliente já tem para alguém assinar. Serve para qualquer
+  // PDF, inclusive os que a própria aba gera (Declaração de Residência, ASD,
+  // Nota de Prestação de Serviços) — é o fecho natural deles.
+  // Gratuito como o resto do grupo, mas com cota própria: diferente da
+  // Declaração e da ASD, cada envio custa dinheiro na Assinafy
+  // (ver ASSINATURA_DIGITAL_COTA).
+  { id:'assinatura-digital', name:'Assinatura Digital', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'assinatura_digital', icon:'✍️' },
   // ── CRLV-e Rio de Janeiro (destaque no topo da Nova Consulta) ──
   // Saem da API portaldespachantes.online (consultar-crlv-rj e -rj2, ver
   // PORTAL_PLACA_MAP): mesmo contrato — POST { placa }, header chaveAcesso e o
@@ -1268,6 +1403,34 @@ async function initDB() {
     `UPDATE subscriptions SET cota_crv=$1 WHERE cota_crv IS NULL AND origem='PIX'`,
     [ASSINATURA_CRV_COTA]
   );
+  // Cota da Assinatura Digital — mesma mecânica da do CRV (coluna própria +
+  // backfill nas assinaturas por PIX já vigentes), para o serviço novo valer de
+  // imediato para quem já assina, sem esperar renovar o período.
+  await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS cota_assinatura INTEGER`);
+  await pool.query(`
+    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS queries_used_assinatura INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(
+    `UPDATE subscriptions SET cota_assinatura=$1 WHERE cota_assinatura IS NULL AND origem='PIX'`,
+    [ASSINATURA_DIGITAL_COTA]
+  );
+  // Pedidos de assinatura em andamento: a Assinafy devolve o documento assinado
+  // só depois que o signatário assina — pode ser em minutos ou dias. Guardamos o
+  // id do documento para buscar o resultado depois (cron/painel), do mesmo jeito
+  // que vistocar_pending faz com o movementId.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS assinafy_pending (
+      id           SERIAL PRIMARY KEY,
+      document_id  VARCHAR(100) UNIQUE NOT NULL,
+      query_id     INTEGER REFERENCES queries(id) ON DELETE CASCADE,
+      user_id      INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      phone        VARCHAR(20),
+      nome_arquivo VARCHAR(255),
+      signatario   VARCHAR(255),
+      created_at   TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_assinafy_pending_query ON assinafy_pending(query_id);`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS whatsapp_inbox (
       id           SERIAL PRIMARY KEY,
@@ -5641,7 +5804,8 @@ async function refundQuery(queryId, userId, amount, reason) {
 // coisas, a indefinida é a que vale.
 async function getAssinaturaVigente(userId) {
   const r = await pool.query(
-    `SELECT id, expires_at, queries_used, cota, queries_used_crv, cota_crv, origem FROM subscriptions
+    `SELECT id, expires_at, queries_used, cota, queries_used_crv, cota_crv,
+            queries_used_assinatura, cota_assinatura, origem FROM subscriptions
      WHERE user_id=$1 AND (expires_at IS NULL OR expires_at > NOW())
      ORDER BY expires_at DESC NULLS FIRST LIMIT 1`,
     [userId]
@@ -5655,6 +5819,8 @@ async function getAssinaturaVigente(userId) {
 async function assinaturaGateDespachantes(userId, serviceId) {
   if (!ASSINATURA_SERVICE_IDS.includes(serviceId)) return { ok: true, assinatura: null };
 
+  // A cota da Assinatura Digital entra na mesma leitura de assinatura vigente
+  // abaixo; a checagem dela fica logo depois das outras duas.
   const assinatura = await getAssinaturaVigente(userId);
   if (!assinatura) {
     return {
@@ -5681,6 +5847,15 @@ async function assinaturaGateDespachantes(userId, serviceId) {
       ok: false,
       code: 'COTA_ESGOTADA',
       error: `Você já usou as ${assinatura.cota_crv} consultas de Código de Segurança CRV deste período da assinatura. A cota é renovada ao pagar um novo período.`,
+    };
+  }
+  // Cota da Assinatura Digital, também independente das outras duas.
+  if (serviceId === ASSINATURA_DIGITAL_SERVICE_ID &&
+      assinatura.cota_assinatura !== null && assinatura.queries_used_assinatura >= assinatura.cota_assinatura) {
+    return {
+      ok: false,
+      code: 'COTA_ESGOTADA',
+      error: `Você já usou os ${assinatura.cota_assinatura} envios de Assinatura Digital deste período da assinatura. A cota é renovada ao pagar um novo período.`,
     };
   }
   return { ok: true, assinatura };
@@ -5718,6 +5893,95 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     // popup certo (assinar x cota esgotada).
     const gate = await assinaturaGateDespachantes(userId, serviceId);
     if (!gate.ok) return res.status(402).json({ error: gate.error, code: gate.code });
+
+    // ── Assinatura Digital (Assinafy) ─────────────────────────────────────────
+    // Não gera documento nem consulta nada: manda um PDF que o cliente já tem
+    // para alguém assinar. Sai do fluxo comum porque são três chamadas
+    // encadeadas (documento → signatário → pedido de assinatura) e porque o
+    // resultado — o PDF assinado — só existe depois que o signatário assina.
+    if (serviceId === ASSINATURA_DIGITAL_SERVICE_ID) {
+      const nome     = String(params?.nome || '').trim();
+      const email    = String(params?.email || '').trim().toLowerCase();
+      const whatsRaw = String(params?.whatsapp || '').replace(/\D/g, '');
+      const nomeArquivo = String(params?.nomeArquivo || '').trim() || 'documento.pdf';
+
+      if (nome.length < 3)
+        return res.status(400).json({ error: 'Informe o nome completo de quem vai assinar.' });
+      if (!email && !whatsRaw)
+        return res.status(400).json({ error: 'Informe o e-mail ou o WhatsApp de quem vai assinar — é por onde o pedido de assinatura chega.' });
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email))
+        return res.status(400).json({ error: 'E-mail do signatário inválido.' });
+      // A Assinafy espera E.164; o painel manda só os dígitos brasileiros.
+      let whatsapp = '';
+      if (whatsRaw) {
+        if (whatsRaw.length < 10 || whatsRaw.length > 13)
+          return res.status(400).json({ error: 'WhatsApp do signatário inválido. Informe DDD + número (ex.: 22999951574).' });
+        whatsapp = '+' + (whatsRaw.length >= 12 ? whatsRaw : `55${whatsRaw}`);
+      }
+
+      const b64 = String(params?.arquivoBase64 || '').replace(/^data:[^,]*,/, '').replace(/\s+/g, '');
+      if (!b64) return res.status(400).json({ error: 'Anexe o PDF que será assinado.' });
+      if (Math.floor(b64.length * 3 / 4) > 10 * 1024 * 1024)
+        return res.status(400).json({ error: 'O PDF passa de 10 MB. Reduza o arquivo e tente de novo.' });
+      let pdfBuffer;
+      try { pdfBuffer = Buffer.from(b64, 'base64'); } catch { pdfBuffer = null; }
+      if (!pdfBuffer || pdfBuffer.slice(0, 4).toString() !== '%PDF')
+        return res.status(400).json({ error: 'O arquivo anexado não é um PDF válido. Selecione o arquivo novamente.' });
+
+      let envio;
+      try {
+        envio = await enviarParaAssinaturaAssinafy({ pdfBuffer, nomeArquivo, nome, email, whatsapp });
+      } catch (e) {
+        // Nada de cota consumida: o pedido não chegou a ser criado.
+        console.error(`[${serviceId}] falha ao enviar para assinatura:`, e.message);
+        return res.status(422).json({ error: 'Não foi possível enviar o documento para assinatura agora. Nada foi descontado da sua cota. Tente de novo em instantes ou fale com o suporte.' });
+      }
+
+      // Cota consumida só com o pedido criado, e de forma atômica (o WHERE
+      // impede dois envios simultâneos de furarem o teto do período).
+      const cota = await pool.query(
+        `UPDATE subscriptions SET queries_used_assinatura = queries_used_assinatura + 1
+         WHERE id=$1 AND (cota_assinatura IS NULL OR queries_used_assinatura < cota_assinatura)
+         RETURNING queries_used_assinatura`,
+        [gate.assinatura.id]
+      );
+      if (!cota.rows.length)
+        return res.status(402).json({
+          error: `Você já usou os ${gate.assinatura.cota_assinatura} envios de Assinatura Digital deste período da assinatura.`,
+          code: 'COTA_ESGOTADA',
+        });
+
+      // amount 0 e sem transaction_id: quem paga este envio é a assinatura.
+      // 'aguardando_pdf' é o mesmo status dos assíncronos — o painel já sabe
+      // mostrar que o documento ainda não chegou.
+      const destino = email || `WhatsApp ${whatsRaw}`;
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
+         VALUES ($1,$2,$3,$4,'aguardando_pdf',0,'pdf',$5) RETURNING id`,
+        [userId, serviceId, service.name,
+         JSON.stringify({ nomeArquivo, signatario: nome, destino }),
+         JSON.stringify({ documentId: envio.documentId, signatario: nome, destino, nomeArquivo })]
+      );
+      await pool.query(
+        `INSERT INTO assinafy_pending (document_id, query_id, user_id, phone, nome_arquivo, signatario)
+         VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (document_id) DO NOTHING`,
+        [envio.documentId, qRow.rows[0].id, userId, user.phone || null, nomeArquivo, nome]
+      );
+
+      return res.json({
+        success: true,
+        pending: true,
+        queryId: qRow.rows[0].id,
+        result: {
+          status: `Documento enviado para assinatura! ${nome} vai receber o pedido em ${destino}. Assim que o documento for assinado, ele aparece aqui no seu histórico e chega no seu WhatsApp.`,
+          documento: nomeArquivo,
+          signatario: nome,
+          enviado_para: destino,
+          protocolo: envio.documentId,
+        },
+        charged: 0,
+      });
+    }
 
     // ── Serviços manuais (upload de arquivo pelo super admin — resultado não vem na hora) ──
     if (MANUAL_SERVICE_IDS.includes(serviceId)) {
@@ -9157,6 +9421,7 @@ app.get('/api/assinatura/status', requireAuth, async (req, res) => {
         dias: ASSINATURA_PLACAS_DIAS,
         cota: ASSINATURA_PLACAS_COTA,
         cotaCrv: ASSINATURA_CRV_COTA,
+        cotaAssinatura: ASSINATURA_DIGITAL_COTA,
       });
     }
     // expiraEm null = sem data limite; cota/consultasRestantes null = ilimitada.
@@ -9164,6 +9429,7 @@ app.get('/api/assinatura/status', requireAuth, async (req, res) => {
     // de Segurança CRV é contada à parte (cotaCrv/consultasCrvRestantes).
     const ilimitada = assinatura.cota === null;
     const ilimitadaCrv = assinatura.cota_crv === null;
+    const ilimitadaAssin = assinatura.cota_assinatura === null;
     res.json({
       ativa: true,
       indefinida: assinatura.expires_at === null,
@@ -9173,10 +9439,13 @@ app.get('/api/assinatura/status', requireAuth, async (req, res) => {
       consultasRestantes: ilimitada ? null : Math.max(0, assinatura.cota - assinatura.queries_used),
       consultasCrvUsadas: assinatura.queries_used_crv,
       consultasCrvRestantes: ilimitadaCrv ? null : Math.max(0, assinatura.cota_crv - assinatura.queries_used_crv),
+      assinaturasUsadas: assinatura.queries_used_assinatura,
+      assinaturasRestantes: ilimitadaAssin ? null : Math.max(0, assinatura.cota_assinatura - assinatura.queries_used_assinatura),
       preco: ASSINATURA_PLACAS_PRICE,
       dias: ASSINATURA_PLACAS_DIAS,
       cota: assinatura.cota,
       cotaCrv: assinatura.cota_crv,
+      cotaAssinatura: assinatura.cota_assinatura,
     });
   } catch (err) {
     console.error('Erro em /api/assinatura/status:', err.message);
@@ -9627,6 +9896,103 @@ async function cancelarPendenciaVistocar(pend, motivo) {
     await sendWhatsApp(pend.phone, msg).catch(() => {});
   }
 }
+
+// ── Assinatura Digital: entrega do documento assinado ────────────────────────
+// Busca o PDF assinado e entrega ao dono do pedido: guarda no pdf_cache e manda
+// por WhatsApp. Usado pela tela de acompanhamento e pelo cron — daí o claim
+// atômico no status e a checagem de cache, que evitam entrega dupla.
+// Não há cobrança aqui: o envio é pago pela assinatura (amount 0), então o
+// finalizePendingQuery não serve — ele criaria uma transação de R$ 0,00.
+async function entregarAssinaturaDigital(pend) {
+  const r = await buscarDocumentoAssinadoAssinafy(pend.document_id);
+  if (r.encerrado) {
+    const marcado = await pool.query(
+      `UPDATE queries SET status='cancelado' WHERE id=$1 AND status='aguardando_pdf' RETURNING id`,
+      [pend.query_id]
+    );
+    await pool.query('DELETE FROM assinafy_pending WHERE document_id=$1', [pend.document_id]);
+    if (marcado.rows.length && pend.phone) {
+      const motivo = r.status === 'rejected_by_signer' ? 'o signatário recusou a assinatura'
+        : r.status === 'expired' ? 'o prazo de assinatura expirou'
+        : 'o pedido foi encerrado sem assinatura';
+      await sendWhatsApp(pend.phone,
+        `⚠️ *Assinatura Digital*\n\nO documento "${pend.nome_arquivo}" não foi assinado: ${motivo}.\n\nSe precisar, envie de novo pelo painel.`).catch(() => {});
+    }
+    return { entregue: false, motivo: `encerrado sem assinatura (${r.status})` };
+  }
+  if (!r.pronto) return { entregue: false, motivo: `ainda não assinado (${r.status || 'sem status'})` };
+
+  const jaTem = await pool.query('SELECT 1 FROM pdf_cache WHERE query_id=$1 AND expires_at > NOW()', [pend.query_id]);
+  if (jaTem.rows.length) {
+    await pool.query('DELETE FROM assinafy_pending WHERE document_id=$1', [pend.document_id]);
+    return { entregue: false, motivo: 'documento já havia sido entregue' };
+  }
+
+  const claimed = await pool.query(
+    `UPDATE queries SET status='success' WHERE id=$1 AND status='aguardando_pdf' RETURNING id`,
+    [pend.query_id]
+  );
+  if (!claimed.rows.length) return { entregue: false, motivo: 'pedido já fechado por outra execução' };
+
+  const token = crypto.randomBytes(32).toString('hex');
+  await pool.query(
+    `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+    [pend.query_id, pend.user_id, token, r.pdf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+  );
+
+  if (pend.phone) {
+    const caption = `✅ *Documento assinado!*\n📄 ${pend.nome_arquivo}\n✍️ Assinado por: ${pend.signatario}\n\nAssinatura digital pela MC Despachadoria.`;
+    await sendWhatsAppPdf(pend.phone, r.pdf, `assinado-${pend.nome_arquivo}`, caption)
+      .catch(e => console.error('Erro ao enviar documento assinado por WhatsApp:', e.message));
+  }
+
+  await pool.query('DELETE FROM assinafy_pending WHERE document_id=$1', [pend.document_id]);
+  console.log(`✅ Documento assinado entregue [documentId ${pend.document_id}, query ${pend.query_id}]`);
+  return { entregue: true };
+}
+
+// ── GET /api/queries/:id/assinatura-status ───────────────────────────────────
+// Alimenta a tela de acompanhamento do painel. Igual à do ATPV-e: a cada
+// consulta TENTA buscar o documento assinado, porque quem está com a tela aberta
+// não pode depender do cron. A entrega é idempotente (claim atômico no status +
+// checagem do pdf_cache), então chamar de novo não entrega duas vezes.
+app.get('/api/queries/:id/assinatura-status', requireAuth, async (req, res) => {
+  try {
+    const qr = await pool.query(
+      `SELECT id, status, created_at FROM queries WHERE id=$1 AND user_id=$2`,
+      [req.params.id, req.user.id]
+    );
+    if (!qr.rows.length) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    let q = qr.rows[0];
+
+    if (q.status === 'aguardando_pdf') {
+      await ensureDbReady();   // assinafy_pending é tabela nova — ver ensureDbReady
+      const pr = await pool.query('SELECT * FROM assinafy_pending WHERE query_id=$1', [q.id]);
+      if (pr.rows.length) {
+        try { await entregarAssinaturaDigital(pr.rows[0]); }
+        catch (e) { console.error(`[assinatura-status] falha ao buscar o documento da query ${q.id}:`, e.message); }
+        const rel = await pool.query('SELECT status FROM queries WHERE id=$1', [q.id]);
+        if (rel.rows.length) q.status = rel.rows[0].status;
+      }
+    }
+
+    const pdf = await pool.query(
+      `SELECT token FROM pdf_cache WHERE query_id=$1 AND expires_at > NOW() ORDER BY id DESC LIMIT 1`,
+      [q.id]
+    );
+    const decorridoSegundos = Math.max(0, Math.round((Date.now() - new Date(q.created_at).getTime()) / 1000));
+    if (pdf.rows.length) return res.json({ situacao: 'pronto', token: pdf.rows[0].token, decorridoSegundos });
+    if (q.status === 'cancelado')
+      return res.json({
+        situacao: 'cancelado', decorridoSegundos,
+        mensagem: 'O documento não foi assinado. Nada foi descontado da sua cota além deste envio.',
+      });
+    return res.json({ situacao: 'aguardando', decorridoSegundos });
+  } catch (err) {
+    console.error('Erro em /api/queries/:id/assinatura-status:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
 
 // ── GET /api/queries/:id/atpve-status ────────────────────────────────────────
 // Alimenta a barra de progresso do painel enquanto o ATPV-e está sendo emitido.
@@ -11891,6 +12257,32 @@ async function runCrlvAgendadoPendingCheck() {
 // documento, desiste: como a cobrança só acontece na entrega, não há estorno a
 // fazer — a consulta é marcada como 'cancelado' e o cliente avisado de que não
 // pagou nada.
+// Varre os pedidos de Assinatura Digital em aberto e tenta entregar o documento
+// assinado. Roda no mesmo cron do CRLV/Vistocar (de 15 em 15 minutos): é o que
+// atende quem fechou a página depois de enviar. Não há prazo para desistir nem
+// estorno — o envio já foi feito e pago pela assinatura; um documento que o
+// signatário nunca assina fica pendente até a Assinafy marcá-lo como expirado,
+// e aí entrarmos pelo ramo "encerrado".
+async function runAssinafyPendingCheck() {
+  await ensureDbReady();   // assinafy_pending é tabela nova — ver ensureDbReady
+  const { rows } = await pool.query(
+    `SELECT * FROM assinafy_pending ORDER BY created_at ASC LIMIT 100`
+  );
+  let entregues = 0, encerrados = 0;
+  for (const row of rows) {
+    try {
+      const r = await entregarAssinaturaDigital(row);
+      if (r.entregue) entregues++;
+      else if (String(r.motivo || '').startsWith('encerrado')) encerrados++;
+    } catch (e) {
+      console.error(`Erro ao checar assinatura pendente [documentId ${row.document_id}]:`, e.message);
+    }
+    await new Promise(r => setTimeout(r, 300));
+  }
+  if (rows.length) console.log(`✅ Assinaturas pendentes: ${rows.length} verificadas, ${entregues} entregues, ${encerrados} encerradas`);
+  return { verificadas: rows.length, entregues, encerrados };
+}
+
 async function runVistocarPendingCheck() {
   await ensureDbReady();   // vistocar_pending é tabela nova — ver ensureDbReady
   const { rows } = await pool.query(
@@ -12022,7 +12414,13 @@ app.get('/api/cron/crlv-agendado-status', async (req, res) => {
   try {
     const result = await runCrlvAgendadoPendingCheck();
     const vistocar = await runVistocarPendingCheck();
-    res.json({ success: true, ...result, vistocar });
+    // Assinatura Digital pega carona no mesmo cron: é entrega de documento
+    // pendente igual às outras duas, e não compensa um agendamento próprio.
+    // Falha aqui não pode derrubar as entregas acima, que já rodaram.
+    let assinafy = null;
+    try { assinafy = await runAssinafyPendingCheck(); }
+    catch (e) { console.error('Erro na checagem de assinaturas pendentes:', e.message); assinafy = { erro: e.message }; }
+    res.json({ success: true, ...result, vistocar, assinafy });
   } catch (err) {
     console.error('Erro no cron crlv-agendado-status:', err.message);
     res.status(500).json({ error: err.message });
