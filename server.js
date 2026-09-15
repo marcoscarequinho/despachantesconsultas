@@ -191,6 +191,50 @@ async function aguardarDocumentoPronto(documentId, tentativas = 12) {
 // assinatura. Método "virtual" = o signatário só confirma, sem campos para
 // preencher (o "collect" exigiria posicionar campos no PDF, que o painel não tem
 // como fazer). Devolve { documentId, signerId, assignmentId }.
+// O signatário é ÚNICO por e-mail na conta: criar um que já existe devolve "Um
+// signatário com este e-mail já existe". Como o mesmo comprador volta em vários
+// documentos, reaproveitar é o caso comum, não a exceção — procura primeiro e só
+// cria se não achar. A busca da Assinafy filtra por full_name OU email.
+async function acharOuCriarSignatarioAssinafy({ nome, email, whatsapp }) {
+  const procurar = async (termo) => {
+    const lista = await assinafyReq(
+      `/accounts/${ASSINAFY_ACCOUNT_ID}/signers?search=${encodeURIComponent(termo)}&per-page=100`);
+    return Array.isArray(lista) ? lista : (lista?.data || []);
+  };
+
+  if (email) {
+    const achados = await procurar(email).catch(() => []);
+    const igual = achados.find(s => String(s.email || '').toLowerCase() === email);
+    if (igual?.id) return igual.id;
+  } else if (whatsapp) {
+    // Sem e-mail só dá para procurar pelo nome, então o número tem que bater
+    // exatamente — homônimo com outro WhatsApp não pode virar o mesmo cadastro.
+    const achados = await procurar(nome).catch(() => []);
+    const soDigitos = s => String(s || '').replace(/\D/g, '');
+    const igual = achados.find(s => soDigitos(s.whatsapp_phone_number) === soDigitos(whatsapp));
+    if (igual?.id) return igual.id;
+  }
+
+  const corpo = { full_name: nome };
+  if (email)    corpo.email = email;
+  if (whatsapp) corpo.whatsapp_phone_number = whatsapp;
+  try {
+    const signer = await assinafyReq(`/accounts/${ASSINAFY_ACCOUNT_ID}/signers`, { method: 'POST', json: corpo });
+    const id = signer?.id || signer?.signer?.id;
+    if (id) return id;
+    throw new Error('Assinafy não devolveu o id do signatário.');
+  } catch (e) {
+    // Corrida ou cadastro antigo com nome diferente: se a recusa foi por já
+    // existir, a busca por e-mail resolve.
+    if (email && /já existe/i.test(e.message)) {
+      const achados = await procurar(email).catch(() => []);
+      const igual = achados.find(s => String(s.email || '').toLowerCase() === email);
+      if (igual?.id) return igual.id;
+    }
+    throw e;
+  }
+}
+
 async function enviarParaAssinaturaAssinafy({ pdfBuffer, nomeArquivo, nome, email, whatsapp }) {
   const form = new FormData();
   form.append('file', new Blob([pdfBuffer], { type: 'application/pdf' }), nomeArquivo);
@@ -198,35 +242,34 @@ async function enviarParaAssinaturaAssinafy({ pdfBuffer, nomeArquivo, nome, emai
   const documentId = doc?.id || doc?.document?.id;
   if (!documentId) throw new Error('Assinafy não devolveu o id do documento enviado.');
 
-  const signatario = { full_name: nome };
-  if (email)    signatario.email = email;
-  if (whatsapp) signatario.whatsapp_phone_number = whatsapp;
-  const signer = await assinafyReq(`/accounts/${ASSINAFY_ACCOUNT_ID}/signers`, { method: 'POST', json: signatario });
-  const signerId = signer?.id || signer?.signer?.id;
-  if (!signerId) throw new Error('Assinafy não devolveu o id do signatário.');
+  try {
+    const signerId = await acharOuCriarSignatarioAssinafy({ nome, email, whatsapp });
 
-  await aguardarDocumentoPronto(documentId);
+    await aguardarDocumentoPronto(documentId);
 
-  // notification_methods = por onde o signatário é avisado. WhatsApp custa mais e
-  // só funciona em plano pago, então só vai quando o número foi informado; o
-  // e-mail acompanha sempre que houver e-mail. Sem nada informado a Assinafy
-  // assume Email, e a validação do nosso lado já exige um dos dois.
-  const canais = [];
-  if (email)    canais.push('Email');
-  if (whatsapp) canais.push('Whatsapp');
-  const assignment = await assinafyReq(`/documents/${encodeURIComponent(documentId)}/assignments`, {
-    method: 'POST',
-    json: {
-      method: 'virtual',
-      signers: [{
-        id: signerId,
-        verification_method: email ? 'Email' : 'Whatsapp',
-        notification_methods: canais,
-      }],
-    },
-  });
+    // UM canal por signatário, não uma lista: mandar Email+Whatsapp junto é
+    // recusado com "Apenas um método de notificação é permitido por signatário"
+    // (a doc diz que aceita combinação; a API em produção, não). E-mail tem
+    // preferência quando existe — é o canal que sempre funciona e não custa
+    // extra; o WhatsApp, que exige plano pago, só entra quando é o único jeito
+    // de avisar a pessoa. A verificação acompanha o mesmo canal.
+    const canal = email ? 'Email' : 'Whatsapp';
+    const assignment = await assinafyReq(`/documents/${encodeURIComponent(documentId)}/assignments`, {
+      method: 'POST',
+      json: {
+        method: 'virtual',
+        signers: [{ id: signerId, verification_method: canal, notification_methods: [canal] }],
+      },
+    });
 
-  return { documentId, signerId, assignmentId: assignment?.id || null };
+    return { documentId, signerId, assignmentId: assignment?.id || null, canal };
+  } catch (e) {
+    // O PDF já subiu antes da falha. Sem isso ele fica órfão na conta da
+    // Assinafy, ocupando lugar num documento que ninguém vai assinar.
+    await assinafyReq(`/documents/${encodeURIComponent(documentId)}`, { method: 'DELETE' })
+      .catch(err => console.error(`[assinatura-digital] não consegui apagar o documento órfão ${documentId}:`, err.message));
+    throw e;
+  }
 }
 
 // Busca o documento assinado quando ele estiver pronto. Devolve

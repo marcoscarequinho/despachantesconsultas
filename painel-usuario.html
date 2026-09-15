@@ -3376,7 +3376,7 @@ function renderFormFields(inputType, svc) {
         <div id="f-assin_arquivo-status" class="text-xs text-gray-500 mt-1"></div>
       </div>
       <div class="font-semibold text-gray-700 text-sm mt-3 mb-1">Quem vai assinar</div>
-      <p class="text-xs text-gray-500 mb-2">Informe o e-mail, o WhatsApp ou os dois — é por onde o pedido de assinatura chega para a pessoa.</p>
+      <p class="text-xs text-gray-500 mb-2">Informe o e-mail <strong>ou</strong> o WhatsApp — é por onde o pedido de assinatura chega para a pessoa. Preenchendo os dois, o pedido vai <strong>pelo e-mail</strong> (o assinador aceita um canal por signatário).</p>
       ${field('assin_nome','Nome completo do signatário','text','NOME COMPLETO')}
       <div class="grid grid-cols-2 gap-3">
         ${field('assin_email','E-mail','text','pessoa@email.com',false)}
