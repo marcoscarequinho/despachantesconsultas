@@ -9873,8 +9873,11 @@ async function entregarResultadoVistocar(pend) {
     const placa = (pend.placa || '').toUpperCase();
     const nome = service?.name || 'Documento';
     const caption = `✅ *${nome} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
-    await sendWhatsAppPdf(pend.phone, buf, `${pend.service_id}-${placa || 'doc'}.pdf`, caption).catch(e =>
-      console.error(`Erro ao enviar ${nome} por WhatsApp:`, e.message));
+    // Mesma razão da Assinatura Digital: é whatsapp_sent_at que o admin lê para
+    // saber se o cliente recebeu, e é o que decide se vale reenviar.
+    const enviado = await sendWhatsAppPdf(pend.phone, buf, `${pend.service_id}-${placa || 'doc'}.pdf`, caption)
+      .catch(e => { console.error(`Erro ao enviar ${nome} por WhatsApp:`, e.message); return false; });
+    if (enviado) await pool.query('UPDATE queries SET whatsapp_sent_at = NOW() WHERE id=$1', [pend.query_id]).catch(() => {});
   }
 
   await pool.query('DELETE FROM vistocar_pending WHERE movement_id=$1', [movementId]);
@@ -9942,8 +9945,11 @@ async function entregarAssinaturaDigital(pend) {
 
   if (pend.phone) {
     const caption = `✅ *Documento assinado!*\n📄 ${pend.nome_arquivo}\n✍️ Assinado por: ${pend.signatario}\n\nAssinatura digital pela MC Despachadoria.`;
-    await sendWhatsAppPdf(pend.phone, r.pdf, `assinado-${pend.nome_arquivo}`, caption)
-      .catch(e => console.error('Erro ao enviar documento assinado por WhatsApp:', e.message));
+    // Marca whatsapp_sent_at no sucesso: é essa coluna que o admin mostra para
+    // saber se o cliente já recebeu, e sem isso ela diria "não enviado" sempre.
+    const enviado = await sendWhatsAppPdf(pend.phone, r.pdf, `assinado-${pend.nome_arquivo}`, caption)
+      .catch(e => { console.error('Erro ao enviar documento assinado por WhatsApp:', e.message); return false; });
+    if (enviado) await pool.query('UPDATE queries SET whatsapp_sent_at = NOW() WHERE id=$1', [pend.query_id]).catch(() => {});
   }
 
   await pool.query('DELETE FROM assinafy_pending WHERE document_id=$1', [pend.document_id]);
