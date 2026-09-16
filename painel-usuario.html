@@ -1797,7 +1797,7 @@ function apiExampleParams(inputType) {
     placa_renavam_cpf:   { placa: 'ABC1D23', renavam: '00000000000', cpf: '00000000000' },
     crlv_agendado_placa: { placa: 'ABC1D23' },
     crlv_agendado_cpf:   { placa: 'ABC1D23', renavam: '00000000000', cpf: '00000000000' },
-    // ATPV-e: os três anexos vão em base64 PURO (sem o prefixo "data:").
+    // ATPV-e: os anexos vão em base64 PURO (sem o prefixo "data:").
     // A resposta não traz o documento — vem { pending: true, result.protocolo }
     // e o PDF sai depois, pelo WhatsApp e no histórico da conta.
     atpve_vistocar: {
@@ -1811,7 +1811,6 @@ function apiExampleParams(inputType) {
       numeroComprador: '100', bairroComprador: 'CENTRO',
       cidadeComprador: 'RIO DE JANEIRO', ufComprador: 'RJ',
       crlvePdfBase64: 'JVBERi0...',
-      comprovanteEnderecoVendedor: 'JVBERi0...',
       comprovanteEnderecoComprador: 'JVBERi0...',
     },
     crv_full: {
@@ -2956,8 +2955,7 @@ function renderFormFields(inputType, svc) {
 
     <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Documentos (obrigatórios)</div>
     ${atpveArquivo('at_crlve','CRLV-e do veículo (PDF)','O documento digital do veículo, em PDF. Até 8 MB.')}
-    ${atpveArquivo('at_comp_v','Comprovante de endereço do vendedor','PDF ou foto legível. Até 8 MB.')}
-    ${atpveArquivo('at_comp_c','Comprovante de endereço do comprador','PDF ou foto legível. Até 8 MB.')}`;
+    ${atpveArquivo('at_comp_c','Comprovante de endereço do comprador','PDF ou foto legível. Até 8 MB. Só o do comprador é exigido.')}`;
 
   const templates = {
     placa: placaField,
@@ -3517,7 +3515,7 @@ function renderFormFields(inputType, svc) {
   // base64 ja lido — sem zerar aqui, reabrir mandaria o PDF do pedido anterior.
   if (inputType === 'assinatura_digital') assinaturaArquivo = { base64: '', nome: '' };
   if (inputType === 'atpve_vistocar') {
-    atpveAnexos = { at_crlve: '', at_comp_v: '', at_comp_c: '' };
+    atpveAnexos = { at_crlve: '', at_comp_c: '' };
     const placaEl = document.getElementById('f-at_placa');
     if (placaEl) placaEl.addEventListener('input', function() {
       this.value = this.value.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 8);
@@ -3917,7 +3915,7 @@ function handleArquivoAssinatura(input) {
 // ── Anexos do ATPV-e ────────────────────────────────────────────────────────
 // Guardados aqui em base64 puro (sem o prefixo "data:"), e não no próprio
 // <input type="file">, porque é isso que vai no corpo JSON de /api/query.
-let atpveAnexos = { at_crlve: '', at_comp_v: '', at_comp_c: '' };
+let atpveAnexos = { at_crlve: '', at_comp_c: '' };
 const ATPVE_ANEXO_MAX_MB = 8;
 
 function handleAnexoAtpve(input, campo) {
@@ -4368,7 +4366,6 @@ function buildParams(inputType) {
       cidadeComprador: g('at_c_cidade'),
       ufComprador: g('at_c_uf'),
       crlvePdfBase64: atpveAnexos.at_crlve || '',
-      comprovanteEnderecoVendedor: atpveAnexos.at_comp_v || '',
       comprovanteEnderecoComprador: atpveAnexos.at_comp_c || '',
     };
 
@@ -4439,7 +4436,6 @@ function validateParams(inputType, p) {
     if (p.dataEmissaoCrv && !/^\d{2}\/\d{2}\/\d{4}$/.test(p.dataEmissaoCrv))
       return 'Data de emissão do CRV inválida. Use o formato DD/MM/AAAA.';
     if (!p.crlvePdfBase64)               return 'Anexe o CRLV-e do veículo em PDF.';
-    if (!p.comprovanteEnderecoVendedor)  return 'Anexe o comprovante de endereço do vendedor.';
     if (!p.comprovanteEnderecoComprador) return 'Anexe o comprovante de endereço do comprador.';
     return null;
   }
