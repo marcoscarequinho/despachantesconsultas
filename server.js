@@ -10752,6 +10752,211 @@ function extrairDePosicoes(itens) {
   };
 }
 
+// ── CRLV-e: extração por POSIÇÃO + validação ──────────────────────────────────
+// Alimenta o "Importar CRLV-e" do formulário de ATPV-e. O CRLV-e digital é o
+// modelo nacional do SENATRAN — idêntico em RJ e MG (conferido em 16/09/2026
+// contra três documentos reais, um deles de PJ) — e é "achatado": no texto puro
+// os rótulos saem todos juntos e os valores em outra ordem, colados uns nos
+// outros ("KML1C23/RJ" seguido do chassi na mesma linha). Ler por regex ali dá
+// errado. O que salva é a POSIÇÃO: cada valor fica na linha de baixo, na MESMA
+// coluna (x) do rótulo. Por isso a leitura é por coordenada, como no ATPV-e.
+//
+// O que NÃO sai daqui, de propósito:
+// - **Código de Segurança do CRV**: o CRLV-e traz o "CÓDIGO DE SEGURANÇA DO
+//   CLA", que é do Certificado de Licenciamento Anual, não do CRV. São códigos
+//   diferentes; preencher um no campo do outro entregaria um ATPV-e com dado
+//   errado. (Se ele estivesse no CRLV-e, o serviço "Código de Segurança CRV" do
+//   nosso próprio catálogo não teria razão de existir.)
+// - **Comprador**: o CRLV-e é do vendedor; não há nada do comprador nele.
+function extrairCrlvePosicoes(itens) {
+  const norm = (s) => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+
+  const validos = (itens || [])
+    .filter(i => i && typeof i.str === 'string' && i.str.trim() && typeof i.x === 'number' && typeof i.y === 'number')
+    .map(i => ({ str: i.str, x: i.x, y: i.y }));
+  if (!validos.length) return {};
+
+  validos.sort((a, b) => b.y - a.y || a.x - b.x);
+  const linhas = [];
+  for (const it of validos) {
+    const ultima = linhas[linhas.length - 1];
+    if (ultima && Math.abs(ultima.y - it.y) < 5) ultima.itens.push(it);
+    else linhas.push({ y: it.y, itens: [it] });
+  }
+  linhas.forEach(l => l.itens.sort((a, b) => a.x - b.x));
+
+  // Rótulo é comparado por igualdade exata (normalizada): "PLACA" não pode
+  // casar com "PLACA ANTERIOR / UF", que fica logo abaixo na mesma coluna.
+  const acharLinha = (textoAlvo) => {
+    const alvo = norm(textoAlvo);
+    for (let i = 0; i < linhas.length; i++) {
+      const item = linhas[i].itens.find(it => norm(it.str) === alvo);
+      if (item) return { linhaIdx: i, item };
+    }
+    return null;
+  };
+  const valorAbaixo = (linhaIdx, x, maxLinhas = 3, xTol = 20) => {
+    for (let j = linhaIdx + 1; j < linhas.length && j <= linhaIdx + maxLinhas; j++) {
+      const cand = linhas[j].itens.find(it => Math.abs(it.x - x) <= xTol && it.str.trim());
+      if (cand) return cand.str.trim();
+    }
+    return '';
+  };
+  const campo = (rotulo) => {
+    const l = acharLinha(rotulo);
+    return l ? valorAbaixo(l.linhaIdx, l.item.x) : '';
+  };
+
+  // A UF do Detran emissor fica ao LADO do texto "DETRAN-", não abaixo.
+  const lDetran = acharLinha('DETRAN-');
+  const detran_uf = lDetran
+    ? (linhas[lDetran.linhaIdx].itens.find(it => it.x > lDetran.item.x)?.str.trim() || '')
+    : '';
+
+  // "LOCAL" vem como "CAMPOS DOS GOYTACAZES RJ" — município e UF no mesmo item,
+  // separados por espaço. A UF é o último pedaço, quando tem 2 letras.
+  const local = campo('LOCAL');
+  const mLocal = local.match(/^(.*?)\s+([A-Za-z]{2})$/);
+
+  // O PDF é mesmo um CRLV-e? Sem isso, o ATPV-e do próprio veículo (que o
+  // despachante tem aberto na mesma pasta e seleciona por engano) é lido como
+  // se fosse: placa e renavam até saem certos, mas os rótulos dele caem nos
+  // campos errados — visto ao rodar um ATPV-e real por aqui em 16/09/2026, que
+  // devolvia "DATA DECLARADA DA VENDA" como município. Melhor recusar o arquivo
+  // do que preencher um cadastro que vai ao Detran com dado de outro documento.
+  const ehCrlve = validos.some(it => norm(it.str).includes('LICENCIAMENTO DE VEICULO'))
+    || (!!acharLinha('CÓDIGO RENAVAM') && !!acharLinha('CÓDIGO DE SEGURANÇA DO CLA'));
+
+  return {
+    eh_crlve:        ehCrlve,
+    placa:           campo('PLACA'),
+    renavam:         campo('CÓDIGO RENAVAM'),
+    chassi:          campo('CHASSI'),
+    ano_fabricacao:  campo('ANO FABRICAÇÃO'),
+    ano_modelo:      campo('ANO MODELO'),
+    crv_numero:      campo('NÚMERO DO CRV'),
+    v_nome:          campo('NOME'),
+    v_doc:           campo('CPF / CNPJ'),
+    // "LOCAL" do CRLV-e é sempre "MUNICÍPIO UF" no mesmo item. Sem a UF colada
+    // no fim, o que veio não é esse campo — e um rótulo de outro documento no
+    // lugar do município é exatamente o erro que se quer evitar aqui.
+    local_cidade:    mLocal ? mLocal[1].trim() : '',
+    local_uf:        mLocal ? mLocal[2].toUpperCase() : '',
+    detran_uf:       detran_uf.toUpperCase(),
+  };
+}
+
+// Valida campo a campo o que veio do PDF. Nada entra no formulário sem passar
+// por aqui: o CRLV-e pode ter vindo de OCR (PDF escaneado), e um dado torto
+// preenchido em silêncio vira um ATPV-e errado — que é registrado no Detran e
+// cobrado. O que não passa volta como "rejeitado", com o rótulo, para o painel
+// dizer ao despachante o que ele precisa conferir e digitar à mão.
+function validarCamposCrlve(bruto) {
+  const campos = {};
+  const rejeitados = [];
+  const b = bruto || {};
+  const dig = (v) => String(v || '').replace(/\D/g, '');
+  const anoMax = new Date().getFullYear() + 1;
+  const guardar = (chave, valor) => { if (valor) campos[chave] = valor; };
+  // Só é "rejeitado" o que o PDF trouxe e não passou. Campo que simplesmente
+  // não existe no documento (CRV digital não tem número de CRV, por exemplo)
+  // não vira aviso — não há nada de errado com ele.
+  const recusar = (chave, rotulo, valorLido) => {
+    if (String(valorLido || '').trim()) rejeitados.push({ campo: chave, rotulo });
+  };
+
+  const placa = String(b.placa || '').toUpperCase().replace(/[\s-]/g, '');
+  if (/^[A-Z]{3}[0-9][A-Z0-9][0-9]{2}$/.test(placa)) guardar('placa', placa);
+  else recusar('placa', 'Placa', b.placa);
+
+  // Renavam tem 11 dígitos e a Vistocar recusa com menos ("INFORME CORRETAMENTE
+  // O RENAVAM ... DEVE TER 11 DIGITOS"). O documento às vezes sai com os zeros
+  // da frente comidos, então completamos — é o mesmo número, e sem isso o
+  // pedido morreria lá no fornecedor.
+  const renavam = dig(b.renavam);
+  if (renavam.length >= 9 && renavam.length <= 11) guardar('renavam', renavam.padStart(11, '0'));
+  else recusar('renavam', 'Renavam', b.renavam);
+
+  // Chassi: 17 posições, sem I/O/Q (padrão VIN). Veículo antigo pode ter chassi
+  // só de números, então não se exige letra.
+  const chassi = String(b.chassi || '').toUpperCase().replace(/[\s.-]/g, '');
+  if (/^[A-HJ-NPR-Z0-9]{17}$/.test(chassi)) guardar('chassi', chassi);
+  else recusar('chassi', 'Chassi', b.chassi);
+
+  for (const [chave, rotulo] of [['ano_fabricacao', 'Ano de fabricação'], ['ano_modelo', 'Ano do modelo']]) {
+    const ano = dig(b[chave]);
+    if (/^\d{4}$/.test(ano) && Number(ano) >= 1900 && Number(ano) <= anoMax) guardar(chave, ano);
+    else recusar(chave, rotulo, b[chave]);
+  }
+
+  const crvNumero = dig(b.crv_numero);
+  if (crvNumero.length >= 9 && crvNumero.length <= 12) guardar('crv_numero', crvNumero);
+  else recusar('crv_numero', 'Número do CRV', b.crv_numero);
+
+  // Documento do proprietário: dígito verificador conferido (isValidDoc). OCR
+  // troca 8 por B com facilidade — um CPF que não fecha é um CPF que não é.
+  const doc = dig(b.v_doc);
+  if (isValidDoc(doc)) guardar('v_doc', doc);
+  else recusar('v_doc', 'CPF/CNPJ do vendedor', b.v_doc);
+
+  const nome = String(b.v_nome || '').trim().replace(/\s+/g, ' ');
+  if (nome.length >= 3 && /^[A-Za-zÀ-ÿ0-9&'.\- ]+$/.test(nome)) guardar('v_nome', nome.toUpperCase());
+  else recusar('v_nome', 'Nome do vendedor', b.v_nome);
+
+  const cidade = String(b.local_cidade || '').trim().replace(/\s+/g, ' ');
+  if (cidade.length >= 2 && /^[A-Za-zÀ-ÿ'.\- ]+$/.test(cidade)) guardar('local_cidade', cidade.toUpperCase());
+  else recusar('local_cidade', 'Município do licenciamento', b.local_cidade);
+
+  const uf = String(b.local_uf || b.detran_uf || '').toUpperCase();
+  if (ATPVE_UFS_VALIDAS.has(uf)) guardar('local_uf', uf);
+  else recusar('local_uf', 'UF do licenciamento', b.local_uf || b.detran_uf);
+
+  return { campos, rejeitados };
+}
+
+// ── POST /api/pdf/extrair-crlve ───────────────────────────────────────────────
+// Irmã da /api/pdf/extrair-atpv, para o outro documento: recebe o texto e as
+// posições que o PDF.js leu no navegador e devolve os campos do CRLV-e **já
+// validados** (`{ campos, rejeitados }`), para o painel preencher o formulário
+// do ATPV-e. Sem posição não há leitura confiável neste documento (ver o
+// comentário de extrairCrlvePosicoes), então o texto puro serve só de reserva
+// para o caso do OCR, em que não há coordenada de PDF nenhuma.
+app.post('/api/pdf/extrair-crlve', requireAuth, async (req, res) => {
+  const { texto, posicoes } = req.body;
+  const temPosicoes = Array.isArray(posicoes) && posicoes.length;
+  if (!texto && !temPosicoes) return res.status(400).json({ error: 'Nenhum dado enviado.' });
+
+  let bruto = temPosicoes ? extrairCrlvePosicoes(posicoes) : {};
+
+  const txtCru = String(texto || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+  const pareceCrlve = bruto.eh_crlve || txtCru.includes('LICENCIAMENTO DE VEICULO');
+  if (!pareceCrlve)
+    return res.status(422).json({ error: 'Esse PDF não parece um CRLV-e. Selecione o Certificado de Registro e Licenciamento do veículo — o ATPV-e e o CRV não servem aqui.' });
+
+  // Reserva para texto sem coordenada (OCR): pega o que dá por rótulo. É menos
+  // confiável, e é justamente por isso que a validação acima existe — o que sair
+  // torto é recusado em vez de entrar no formulário.
+  if (!bruto.placa || !bruto.renavam) {
+    const txt = String(texto || '').replace(/\s+/g, ' ').toUpperCase();
+    const m = (r) => (txt.match(r) || [])[1] || '';
+    bruto = {
+      ...bruto,
+      placa:   bruto.placa   || m(/PLACA[^A-Z0-9]{0,20}([A-Z]{3}[\s-]?[0-9][A-Z0-9][0-9]{2})\b/),
+      renavam: bruto.renavam || m(/RENAVAM[^0-9]{0,20}(\d{9,11})\b/),
+      chassi:  bruto.chassi  || m(/CHASSI[^A-Z0-9]{0,20}([A-HJ-NPR-Z0-9]{17})\b/),
+    };
+  }
+
+  const { campos, rejeitados } = validarCamposCrlve(bruto);
+
+  // Sem placa nem renavam não houve leitura nenhuma — provavelmente o PDF não é
+  // um CRLV-e, ou é uma imagem ruim demais até para o OCR.
+  if (!campos.placa && !campos.renavam)
+    return res.status(422).json({ error: 'Não consegui ler os dados do CRLV-e. Confira se o PDF é o documento do veículo — se for uma foto, preencha à mão.' });
+
+  res.json({ campos, rejeitados });
+});
+
 // ── POST /api/pdf/extrair-atpv ────────────────────────────────────────────────
 // Recebe texto (e, se o PDF for preenchível, os campos de formulário) extraídos
 // pelo PDF.js no browser e retorna os campos identificados.

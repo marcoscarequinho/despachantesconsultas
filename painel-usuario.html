@@ -2892,6 +2892,20 @@ function renderFormFields(inputType, svc) {
       <p class="text-xs text-emerald-700">Você pode enviar para seu cliente, ou comprador do veículo, através do nosso <strong>Assinador Digital</strong>, por e-mail ou WhatsApp, o arquivo: <strong>Declaração de Residência</strong> — para que o mesmo assine e te retorne, para concluir a ATPVe.</p>
     </div>
 
+    <!-- Importar CRLV-e: o mesmo atalho da Inserir Comunicação Venda, só que
+         lendo o documento do veículo. Fica aqui em cima porque é o primeiro
+         passo — e o arquivo escolhido já vale como o anexo obrigatório lá
+         embaixo, para o despachante não procurar o mesmo PDF duas vezes. -->
+    <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
+      <p class="text-xs font-semibold text-blue-800 mb-1">📄 Importar CRLV-e em PDF</p>
+      <p class="text-xs text-blue-700 mb-2">Selecione o CRLV-e do veículo — os dados do veículo e do vendedor são preenchidos automaticamente, e o arquivo já entra como o anexo obrigatório.</p>
+      <label class="inline-flex items-center gap-2 cursor-pointer btn-primary text-xs px-4 py-2">
+        📂 Selecionar e Importar CRLV-e
+        <input type="file" id="crlve-pdf-input" accept="application/pdf" class="hidden" onchange="importarCrlvePdf()">
+      </label>
+      <p id="crlve-import-status" class="text-xs mt-2 hidden"></p>
+    </div>
+
     <div class="font-semibold text-gray-700 text-sm mb-2">Veículo</div>
     <div class="grid grid-cols-2 gap-3">
       ${field('at_placa','Placa','text','ABC1D23 ou ABC-1234')}
@@ -2954,7 +2968,7 @@ function renderFormFields(inputType, svc) {
     </div>
 
     <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Documentos (obrigatórios)</div>
-    ${atpveArquivo('at_crlve','CRLV-e do veículo (PDF)','O documento digital do veículo, em PDF. Até 8 MB.')}
+    ${atpveArquivo('at_crlve','CRLV-e do veículo (PDF)','O documento digital do veículo, em PDF. Até 8 MB. Se você usou a importação lá em cima, ele já está anexado.')}
     ${atpveArquivo('at_comp_c','Comprovante de endereço do comprador','PDF ou foto legível. Até 8 MB. Só o do comprador é exigido.')}`;
 
   const templates = {
@@ -6202,6 +6216,162 @@ async function importarAtpvPdf() {
     console.error('importarAtpvPdf:', err);
     setStatus('⚠️ Erro: ' + err.message, 'text-red-600');
   }
+}
+
+// ── Importar CRLV-e (formulário do ATPV-e) ────────────────────────────────────
+// Irmã da importarAtpvPdf, para o outro documento. Duas coisas de uma vez, e é
+// esse o ponto: preenche os campos do veículo/vendedor E deixa o arquivo pronto
+// como o anexo obrigatório do pedido — é o mesmo PDF, não faz sentido pedir duas
+// vezes. Quem extrai e valida é o servidor (/api/pdf/extrair-crlve); aqui só
+// entra no formulário o que ele devolveu como válido.
+async function importarCrlvePdf() {
+  const input  = document.getElementById('crlve-pdf-input');
+  const status = document.getElementById('crlve-import-status');
+
+  const setStatus = (msg, cor) => {
+    if (!status) return;
+    status.className = `text-xs mt-2 whitespace-pre-line ${cor}`;
+    status.textContent = msg;
+    status.classList.remove('hidden');
+  };
+
+  const file = input && input.files && input.files[0];
+  if (!file) { setStatus('⚠️ Nenhum arquivo selecionado.', 'text-amber-600'); return; }
+
+  setStatus('⏳ Lendo o CRLV-e…', 'text-blue-600');
+
+  try {
+    if (typeof pdfjsLib === 'undefined') {
+      setStatus('⚠️ PDF.js não carregado. Recarregue a página.', 'text-red-600'); return;
+    }
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://unpkg.com/pdfjs-dist@3.4.120/build/pdf.worker.min.js';
+
+    const arrayBuf = await file.arrayBuffer();
+    const pdf      = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuf) }).promise;
+
+    // O CRLV-e é "achatado": o que vale é a POSIÇÃO de cada texto na página, não
+    // a ordem em que ele sai do PDF (ver o comentário de extrairCrlvePosicoes no
+    // server.js). Por isso vai x/y de cada item, e não só o texto.
+    let texto = '';
+    const posicoes = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const pg      = await pdf.getPage(i);
+      const content = await pg.getTextContent();
+      texto += content.items.map(it => it.str).join(' ') + ' ';
+      content.items.forEach(it => {
+        if (it.str && it.str.trim()) posicoes.push({ str: it.str, x: it.transform[4], y: it.transform[5] });
+      });
+    }
+
+    // CRLV-e escaneado (foto do papel) não tem camada de texto — cai no OCR, o
+    // mesmo do importador de ATPV-e. Sem coordenada confiável, o servidor lê o
+    // que dá e recusa o resto; nada entra no formulário sem passar pela validação.
+    if (!posicoes.length && texto.replace(/\s/g, '').length < 80) {
+      setStatus('⏳ PDF sem texto — carregando OCR (pode demorar ~30s)…', 'text-blue-600');
+      await carregarTesseract();
+      const worker = await Tesseract.createWorker('por', 1, {
+        workerPath: 'https://unpkg.com/tesseract.js@5/dist/worker.min.js',
+        langPath:   'https://tessdata.projectnaptha.com/4.0.0',
+        corePath:   'https://unpkg.com/tesseract.js-core@5/tesseract-core-simd-lstm.wasm.js',
+        logger: m => {
+          if (m.status === 'recognizing text')
+            setStatus(`⏳ OCR: ${Math.round(m.progress * 100)}%…`, 'text-blue-600');
+        },
+      });
+      for (let i = 1; i <= pdf.numPages; i++) {
+        setStatus(`⏳ OCR página ${i}/${pdf.numPages}…`, 'text-blue-600');
+        const canvas = await paginaParaCanvas(await pdf.getPage(i), 2.5);
+        const { data: { text } } = await worker.recognize(canvas);
+        texto += text + ' ';
+      }
+      await worker.terminate();
+    }
+
+    setStatus('⏳ Conferindo os campos…', 'text-blue-600');
+    const r = await fetch('/api/pdf/extrair-crlve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texto, posicoes }),
+    });
+    const data = await r.json();
+    if (!r.ok) { setStatus('⚠️ ' + (data.error || 'Não consegui ler o PDF.'), 'text-amber-600'); return; }
+
+    const campos = data.campos || {};
+    const preenchidos = [];
+    const set = (id, val, label) => {
+      const el = document.getElementById('f-' + id);
+      if (el && val) { el.value = val; preenchidos.push(label); }
+    };
+    set('at_placa',      campos.placa,          'Placa');
+    set('at_renavam',    campos.renavam,        'Renavam');
+    set('at_chassi',     campos.chassi,         'Chassi');
+    set('at_ano_fab',    campos.ano_fabricacao, 'Ano fab.');
+    set('at_ano_mod',    campos.ano_modelo,     'Ano modelo');
+    set('at_crv_numero', campos.crv_numero,     'Nº do CRV');
+    set('at_v_doc',      campos.v_doc,          'CPF/CNPJ do vendedor');
+    set('at_v_nome',     campos.v_nome,         'Nome do vendedor');
+
+    // Cidade da venda: o município do licenciamento é um bom palpite, mas só
+    // quando a UF bate com a da venda — cidade de um estado com a UF de outro é
+    // recusada pela API (ela confere o par) e, pior, uma cidade válida porém
+    // errada passaria batido. Se a UF não bate, o campo fica para o despachante.
+    const ufVendaEl = document.getElementById('f-at_venda_uf');
+    const ufVenda   = ufVendaEl ? ufVendaEl.value : '';
+    if (campos.local_cidade && campos.local_uf && campos.local_uf === ufVenda)
+      set('at_venda_cidade', campos.local_cidade, 'Cidade da venda');
+
+    const linhas = [];
+    linhas.push(preenchidos.length
+      ? '✅ Preenchido: ' + preenchidos.join(', ') + '. Confira antes de enviar.'
+      : '⚠️ Não reconheci nenhum campo. Preencha à mão.');
+
+    const rejeitados = (data.rejeitados || []).map(x => x.rotulo).filter(Boolean);
+    if (rejeitados.length)
+      linhas.push('⚠️ Não consegui validar: ' + rejeitados.join(', ') + '. Digite esses campos à mão.');
+
+    // UF do documento diferente da UF do serviço é quase sempre serviço errado
+    // escolhido (o ATPV-e do RJ não emite documento de veículo de MG) — melhor
+    // dizer isso agora do que o pedido morrer no Detran depois de aceito.
+    const ufServico = (selectedSvc && selectedSvc.uf || '').toUpperCase();
+    if (campos.local_uf && ufServico && campos.local_uf !== ufServico)
+      linhas.push(`⚠️ Este CRLV-e é de ${campos.local_uf} e este serviço emite ATPV-e de ${ufServico}. Confira se escolheu a consulta certa.`);
+
+    // O mesmo arquivo vale como o anexo obrigatório do CRLV-e.
+    linhas.push(await anexarCrlveImportado(file));
+
+    setStatus(linhas.join('\n'), preenchidos.length ? 'text-green-700' : 'text-amber-600');
+
+  } catch (err) {
+    console.error('importarCrlvePdf:', err);
+    setStatus('⚠️ Erro: ' + err.message, 'text-red-600');
+  }
+}
+
+// Guarda o PDF importado como anexo do pedido (atpveAnexos.at_crlve) e escreve
+// no status do campo de arquivo, que continua lá para quem preferir anexar na
+// mão. Devolve a linha de aviso para o resumo da importação.
+async function anexarCrlveImportado(file) {
+  if (file.size > ATPVE_ANEXO_MAX_MB * 1024 * 1024)
+    return `⚠️ O arquivo tem ${(file.size / 1024 / 1024).toFixed(1)} MB e o limite do anexo é ${ATPVE_ANEXO_MAX_MB} MB — anexe um PDF menor no campo do CRLV-e.`;
+
+  const base64 = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = () => reject(new Error('não consegui ler o arquivo.'));
+    reader.readAsDataURL(file);
+  });
+  if (!base64) return '⚠️ Não consegui anexar o arquivo — selecione o CRLV-e no campo do anexo.';
+
+  atpveAnexos.at_crlve = base64;
+  const hiddenEl = document.getElementById('f-at_crlve');
+  if (hiddenEl) hiddenEl.value = '1';
+  const statusEl = document.getElementById('f-at_crlve-status');
+  if (statusEl) {
+    statusEl.className = 'text-xs mt-1 text-green-600';
+    statusEl.textContent = `✓ ${file.name} (${(file.size / 1024).toFixed(0)} KB) — anexado pela importação`;
+  }
+  return `📎 CRLV-e anexado: ${file.name}.`;
 }
 
 // ── Logout ─────────────────────────────────────────────────────────────────────
