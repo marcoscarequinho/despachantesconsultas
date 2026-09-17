@@ -325,7 +325,7 @@ const VISTOCAR_ENDPOINTS = {
 
 // ATPV-e (Intenção de Venda) pela Vistocar — o único grupo do VISTOCAR_ENDPOINTS
 // que NÃO manda { plate }: o corpo é o cadastro inteiro da venda (vendedor,
-// comprador, veículo e os arquivos em base64), montado em montarCorpoAtpveVistocar.
+// comprador, veículo e três arquivos em base64), montado em montarCorpoAtpveVistocar.
 // Vale para os dois estados; trocar de UF é só acrescentar a rota acima e o
 // serviço no SERVICES, porque o contrato é idêntico (conferido em 15/09/2026
 // contra atpve-rj e atpve-mg: a mesma lista de campos obrigatórios nos dois).
@@ -375,8 +375,8 @@ async function getVistocarToken() {
 
 const ATPVE_UFS_VALIDAS = new Set(['AC','AL','AM','AP','BA','CE','DF','ES','GO','MA','MG','MS','MT','PA','PB','PE','PI','PR','RJ','RN','RO','RR','RS','SC','SE','SP','TO']);
 
-// Limite por arquivo enviado (CRLV-e e comprovante de endereço). 8 MB por anexo
-// dá folga para PDF escaneado e ainda cabe nos 50mb do express.json com todos
+// Limite por arquivo enviado (CRLV-e e os dois comprovantes). 8 MB por anexo dá
+// folga para PDF escaneado e ainda cabe nos 50mb do express.json com os três
 // juntos, já contando o inchaço de 33% do base64.
 const ATPVE_ANEXO_MAX_BYTES = 8 * 1024 * 1024;
 
@@ -427,10 +427,8 @@ function valorVendaParaNumero(valor) {
   return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
 }
 
-// Troca os anexos em base64 por uma marca curta, para o pedido caber em
+// Troca os três anexos em base64 por uma marca curta, para o pedido caber em
 // queries.params e na mensagem do admin sem carregar os megabytes do arquivo.
-// O do vendedor segue na lista: o painel não manda mais, mas pedido antigo no
-// histórico e integrador da API externa ainda podem trazer.
 const ATPVE_CAMPOS_ANEXO = ['crlvePdfBase64', 'comprovanteEnderecoVendedor', 'comprovanteEnderecoComprador'];
 function paramsSemAnexosAtpve(params) {
   const limpo = { ...(params || {}) };
@@ -501,24 +499,10 @@ function montarCorpoAtpveVistocar(service, params) {
 
   const crlve       = validarAnexoAtpve(p.crlvePdfBase64, 'CRLV-e em PDF');
   if (crlve.erro) return { erro: crlve.erro };
+  const compVend    = validarAnexoAtpve(p.comprovanteEnderecoVendedor, 'comprovante de endereço do vendedor');
+  if (compVend.erro) return { erro: compVend.erro };
   const compCompr   = validarAnexoAtpve(p.comprovanteEnderecoComprador, 'comprovante de endereço do comprador');
   if (compCompr.erro) return { erro: compCompr.erro };
-
-  // Comprovante de endereço do VENDEDOR: deixou de ser pedido no painel em
-  // 16/09/2026. O Detran só exige o do comprador (é o endereço dele que passa a
-  // valer no registro); o do vendedor era anexo sem uso, e um arquivo a menos
-  // para o despachante caçar. A API da Vistocar exige o CAMPO, não o conteúdo:
-  // sondado em 16/09/2026 contra atpve-rj, sem o campo ela para no schema
-  // ("Comprovante de endereço do vendedor não pode ser null", VALIDATION_ERROR,
-  // antes de qualquer outra checagem), mas com string vazia ela segue adiante e
-  // só para na validação de negócio seguinte. Por isso o campo continua indo,
-  // vazio. Quem manda o arquivo (integrador da API externa que ainda o tenha no
-  // código) segue sendo atendido — e é isso que faz o caminho de volta ser só
-  // repor o upload no formulário, se a emissão for recusada lá na frente.
-  const compVend    = p.comprovanteEnderecoVendedor
-    ? validarAnexoAtpve(p.comprovanteEnderecoVendedor, 'comprovante de endereço do vendedor')
-    : { b64: '' };
-  if (compVend.erro) return { erro: compVend.erro };
 
   // Campos do CRV impresso: a API aceita sem eles, e nem todo veículo tem CRV em
   // papel (CRV digital), então ficam opcionais — só vão quando preenchidos.
