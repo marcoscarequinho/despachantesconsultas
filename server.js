@@ -1545,6 +1545,15 @@ async function initDB() {
       created_at  TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  // O ATPV-e tem DOIS identificadores e eles não se substituem: movement_id é o
+  // número interno da consulta na Vistocar (o que a notificação repete) e
+  // protocolo é o UUID do ATPV-e no Detran, o único aceito pelas rotas de
+  // registro, alteração, exclusão e situação. A tabela nasceu só com o
+  // movement_id, de quando o fluxo era o CRLV-e do Ceará — que não tem protocolo.
+  // registrado_em marca o momento em que o registro foi efetivado (PUT): nulo
+  // quer dizer "cadastrado, esperando o cliente registrar".
+  await pool.query(`ALTER TABLE vistocar_pending ADD COLUMN IF NOT EXISTS protocolo VARCHAR(100);`);
+  await pool.query(`ALTER TABLE vistocar_pending ADD COLUMN IF NOT EXISTS registrado_em TIMESTAMPTZ;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_vistocar_webhooks_movement ON vistocar_webhooks(movement_id);`);
   // A tabela nasceu sem event_id/evento (primeira versão, antes da documentação
   // do webhook) — CREATE TABLE IF NOT EXISTS não acrescenta coluna em tabela que
@@ -7347,6 +7356,11 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     // CRLV-e CE: identificador do registro na Vistocar, preenchido no tratamento
     // de resposta abaixo e usado depois para criar a pendência do webhook.
     let vistocarMovementId = null;
+    // ATPV-e: o protocolo do cadastro (um UUID), que é COISA DIFERENTE do
+    // movementId (numérico, interno da Vistocar). Só com ele dá para registrar,
+    // alterar, excluir ou consultar a situação do ATPV-e — ver os helpers do
+    // ciclo de vida perto de entregarResultadoVistocar.
+    let vistocarProtocolo = null;
     // Serviço da lista de assíncronos que, nesta chamada, voltou com o documento
     // pronto — segue pelo caminho normal de PDF em vez de virar pendência.
     let vistocarEntregaImediata = false;
@@ -7503,15 +7517,40 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           base64PdfBuf = Buffer.from(String(jaPronto).replace(/^data:[^,]+,/, '').replace(/\s/g, ''), 'base64');
           vistocarEntregaImediata = true;
         } else {
-          // O CRLV-e devolve movementId; o ATPV-e pode identificar o pedido pelo
-          // protocolo. Guarda o que vier, na ordem em que o webhook correlaciona
-          // (data.movementId), e recusa se não vier nenhum dos dois.
-          const id = parsed?.response?.movementId ?? parsed?.response?.protocolo;
+          // O CRLV-e devolve movementId; o ATPV-e devolve os DOIS, e são coisas
+          // diferentes: movementId é o número interno da consulta na Vistocar
+          // (é por ele que o webhook correlaciona a notificação) e protocolo é o
+          // UUID do ATPV-e no Detran. As rotas de registro, alteração, exclusão
+          // e situação só aceitam o protocolo — mandar o movementId nelas volta
+          // "Protocolo não encontrado" (conferido em 18/09/2026). Por isso os
+          // dois são guardados; guardar só o movementId, como era antes, deixava
+          // o cadastro sem como ser registrado e ele morria no prazo de 48h.
+          const proto = parsed?.response?.protocolo;
+          vistocarProtocolo = (proto === null || proto === undefined) ? null : String(proto).trim() || null;
+          const id = parsed?.response?.movementId ?? proto;
           if (id === null || id === undefined || String(id).trim() === '') {
             console.error(`[${serviceId}] Vistocar aceitou o pedido sem movementId/protocolo: ${JSON.stringify(parsed)}`);
             return res.status(422).json({ error: 'A emissão foi aceita, mas sem número de protocolo para acompanhar. Fale com o suporte antes de tentar de novo.' });
           }
           vistocarMovementId = String(id).trim();
+          // Cadastro de ATPV-e que volta sem protocolo não pode ser registrado
+          // pelo painel — nem pelo nosso, nem pelo do cliente. O pedido segue
+          // (o cadastro existe do lado de lá e nada foi cobrado), mas o dono é
+          // avisado na hora, porque só ele consegue registrar pelo painel da
+          // Vistocar antes de o prazo de 48h derrubar o cadastro.
+          if (VISTOCAR_ATPVE_SVCS.has(serviceId) && !vistocarProtocolo) {
+            console.error(`[${serviceId}] cadastro aceito sem protocolo: ${JSON.stringify(parsed)}`);
+            const placaAviso = String(params?.placa || '').toUpperCase();
+            sendWhatsApp(ADMIN_PHONE, [
+              `⚠️ *ATPV-e cadastrado SEM protocolo*`,
+              ``,
+              `🔤 *Placa:* ${placaAviso}`,
+              `🧾 *Serviço:* ${service.name}`,
+              `🔢 *movementId:* ${vistocarMovementId}`,
+              ``,
+              `A Vistocar não devolveu o protocolo, então o registro no Detran não pode ser feito pelo painel. Registre pelo painel da Vistocar — o cadastro cai no prazo de 48h.`,
+            ].join('\n')).catch(() => {});
+          }
         }
       } else if (serviceId === 'vistocar-debitos-cod-barra') {
         // Mesmo padrão de envelope dos outros endpoints Vistocar: status/message no
@@ -7572,30 +7611,40 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
          VALUES ($1,$2,$3,$4,'aguardando_pdf',$5,'pdf',$6) RETURNING id`,
         [userId, serviceId, service.name, JSON.stringify(params || {}), price,
-         JSON.stringify({ placa, movementId: vistocarMovementId })]
+         JSON.stringify({ placa, movementId: vistocarMovementId, protocolo: vistocarProtocolo })]
       );
       // ON CONFLICT: a Vistocar pode reaproveitar um movementId de um pedido
       // anterior da mesma placa — a pendência nova é a que vale.
       await pool.query(
-        `INSERT INTO vistocar_pending (movement_id, query_id, user_id, phone, service_id, placa)
-         VALUES ($1,$2,$3,$4,$5,$6)
+        `INSERT INTO vistocar_pending (movement_id, query_id, user_id, phone, service_id, placa, protocolo)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
          ON CONFLICT (movement_id) DO UPDATE SET query_id=EXCLUDED.query_id, user_id=EXCLUDED.user_id,
-           phone=EXCLUDED.phone, placa=EXCLUDED.placa, created_at=NOW()`,
-        [vistocarMovementId, qRow.rows[0].id, userId, user.phone || null, serviceId, placa]
+           phone=EXCLUDED.phone, placa=EXCLUDED.placa, protocolo=EXCLUDED.protocolo,
+           registrado_em=NULL, created_at=NOW()`,
+        [vistocarMovementId, qRow.rows[0].id, userId, user.phone || null, serviceId, placa, vistocarProtocolo]
       );
       await notifyAdminNewQuery(user, service, price, params);
       const orgao = service.uf ? `Detran-${service.uf.toUpperCase()}` : 'Detran';
+      // Sem protocolo o cliente não tem como registrar (a Vistocar só aceita o
+      // protocolo nessa rota), então a tela volta a ser a de espera — quem
+      // registra nesse caso é o suporte, pelo painel da Vistocar, avisado acima.
+      const aguardandoRegistro = VISTOCAR_ATPVE_SVCS.has(serviceId) && !!vistocarProtocolo;
       return res.json({
         success: true,
         pending: true,
         // queryId: é por ele que o painel acompanha a emissão na barra de
         // progresso (GET /api/queries/:id/atpve-status).
         queryId: qRow.rows[0].id,
+        // O ATPV-e nasce apenas CADASTRADO: o documento só é gerado depois do
+        // registro no Detran, que é um passo à parte e fica com o cliente (ver
+        // POST /api/queries/:id/atpve-registrar). É esta bandeira que faz o
+        // painel abrir a tela de conferência em vez da barra de progresso.
+        aguardandoRegistro,
         result: {
-          status: VISTOCAR_ATPVE_SVCS.has(serviceId)
-            ? `Cadastro enviado ao ${orgao}! O ATPV-e ainda está sendo emitido — assim que sair, ele chega pelo WhatsApp e fica no seu histórico. Você só é cobrado quando o documento for entregue.`
+          status: aguardandoRegistro
+            ? `Cadastro criado no ${orgao}! Confira os dados e clique em "Registrar no Detran" para o ATPV-e ser emitido — enquanto não registrar, o documento não existe. Você só é cobrado quando ele for entregue.`
             : `Consulta registrada no ${orgao}! O documento ainda está sendo emitido — assim que sair, ele chega pelo WhatsApp e fica no seu histórico. Você só é cobrado quando o PDF for entregue.`,
-          protocolo: vistocarMovementId,
+          protocolo: vistocarProtocolo || vistocarMovementId,
         },
         charged: 0,
       });
@@ -9878,23 +9927,145 @@ function validarAssinaturaVistocar(rawBody, timestamp, chave, assinaturaRecebida
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+// ── ATPV-e: ciclo de vida do protocolo ───────────────────────────────────────
+// O cadastro (POST) é só o primeiro passo — ele NÃO emite o documento. Sobre o
+// mesmo protocolo ainda existem, na mesma rota da UF (doc "Integração API",
+// 18/09/2026):
+//   PUT    /apiclient/atpve-<uf>            → efetiva o registro no DETRAN
+//   POST   /apiclient/atpve-<uf>/situacao   → situação + arquivoPdfBase64
+//   PUT    /apiclient/atpve-<uf>/alteracao  → corrige os dados (corpo do cadastro)
+//   DELETE /apiclient/atpve-<uf>            → cancela
+// As três primeiras e a exclusão só são aceitas em determinadas situações do
+// protocolo, e a API não documenta quais. Por isso NADA aqui tenta adivinhar a
+// tabela de situações: as ações são oferecidas e quem recusa é a Vistocar, com
+// a mensagem dela ("ATPVe não pode ser excluído - situação atual (...) não
+// permite essa operação"). Assim uma situação nova do lado deles não quebra o
+// painel nem esconde um botão que funcionaria.
+//
+// A rota de alteração não está aqui de propósito: ela exige o corpo inteiro do
+// cadastro, e os três anexos em base64 são descartados na hora de gravar
+// (paramsSemAnexosAtpve) — não temos como remontar o pedido. Corrigir um
+// cadastro errado é excluir e cadastrar de novo.
+async function chamarAtpveVistocar(serviceId, metodo, sufixo, body) {
+  const rota = VISTOCAR_ENDPOINTS[serviceId];
+  if (!rota) throw new Error(`Serviço ${serviceId} não tem rota de ATPV-e na Vistocar.`);
+  const r = await fetch(`${VISTOCAR_BASE_URL}/apiclient/${rota}${sufixo}`, {
+    method: metodo,
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await getVistocarToken()}` },
+    body: JSON.stringify(body || {}),
+  });
+  const data = await r.json().catch(() => null);
+  const resp = data?.response || {};
+  // A recusa chega de duas formas e as duas precisam ser tratadas como erro: HTTP
+  // 400 com a explicação em "message" (ex.: "Protocolo não encontrado") e HTTP 200
+  // com success:true mas "error" preenchido, que é como a Vistocar repassa o texto
+  // do fornecedor (ex.: "0-ENTIDADE NAO POSSUI CONFIGURACOES..."). Olhar só o
+  // status HTTP daria sucesso para um pedido que não andou.
+  const textoErro = (resp.error || '').trim() || null;
+  const erro = (!r.ok || textoErro)
+    ? (textoErro || resp.msg || data?.message || `HTTP ${r.status} na Vistocar`)
+    : null;
+  return { ok: !erro, erro, http: r.status, resp };
+}
+
+async function consultarSituacaoAtpve(serviceId, protocolo) {
+  const r = await chamarAtpveVistocar(serviceId, 'POST', '/situacao', { protocolo });
+  const codigo = r.resp?.situacaoCodigo;
+  return {
+    ok: r.ok,
+    erro: r.erro,
+    codigo: (codigo === null || codigo === undefined || codigo === '') ? null : String(codigo),
+    descricao: String(r.resp?.situacaoDescricao || '').trim() || null,
+    motivo: String(r.resp?.motivoSituacao || '').trim() || null,
+    pdfBase64: r.resp?.arquivoPdfBase64 || null,
+  };
+}
+
+const registrarAtpveVistocar = (serviceId, protocolo) =>
+  chamarAtpveVistocar(serviceId, 'PUT', '', { protocolo });
+const excluirAtpveVistocar = (serviceId, protocolo) =>
+  chamarAtpveVistocar(serviceId, 'DELETE', '', { protocolo });
+
+// Texto curto da situação para a tela e para o WhatsApp ("5 · COMUNICADA").
+const textoSituacaoAtpve = s =>
+  [s?.codigo, s?.descricao].filter(Boolean).join(' · ') || null;
+
+// Onde o documento é buscado depende do serviço. O ATPV-e tem rota própria de
+// situação, que devolve o PDF junto — e é a única que funciona para ele, porque
+// GET /apiclient/consult/:movementId só responde depois que a Vistocar fecha a
+// consulta. O CRLV-e (e os ATPV-e antigos, cadastrados antes de o protocolo
+// passar a ser guardado) continuam pelo consult.
+async function buscarDocumentoVistocar(pend) {
+  if (VISTOCAR_ATPVE_SVCS.has(pend.service_id) && pend.protocolo) {
+    let s;
+    try { s = await consultarSituacaoAtpve(pend.service_id, pend.protocolo); }
+    catch (e) { return { motivo: `falha ao consultar a situação: ${e.message}` }; }
+    if (!s.ok) return { motivo: s.erro || 'não foi possível consultar a situação', situacao: s };
+    // Sem PDF é o caso normal de quem ainda não registrou: o documento só passa
+    // a existir depois do PUT de registro.
+    if (!s.pdfBase64) {
+      return { motivo: `situação atual: ${textoSituacaoAtpve(s) || 'em andamento'}`, situacao: s };
+    }
+    return { b64: s.pdfBase64, situacao: s };
+  }
+  const r = await fetch(`${VISTOCAR_BASE_URL}/apiclient/consult/${encodeURIComponent(pend.movement_id)}`, {
+    headers: { 'Authorization': `Bearer ${await getVistocarToken()}` },
+  });
+  if (r.status === 404) return { motivo: 'resultado ainda não disponível' };
+  if (!r.ok) return { motivo: `HTTP ${r.status} ao buscar o resultado` };
+  const data = await r.json().catch(() => null);
+  // CRLV usa response.pdfBase64; ATPV-e usa response.arquivoPdfBase64 (doc, seção 8).
+  const b64 = data?.response?.pdfBase64 || data?.response?.arquivoPdfBase64;
+  if (!b64) return { motivo: 'resposta sem PDF' };
+  return { b64 };
+}
+
+// Efetiva o registro de um cadastro de ATPV-e no Detran e, se o documento já
+// sair na mesma hora, entrega na sequência. Usado pelo painel do cliente e pelo
+// admin — os dois passando pela MESMA função, para não existir um caminho que
+// registre sem marcar registrado_em.
+async function registrarAtpvePendencia(pend) {
+  if (!pend.protocolo) {
+    return { ok: false, erro: 'Este pedido foi cadastrado antes do registro pelo painel e não tem o protocolo guardado. Registre pelo painel da Vistocar ou cadastre de novo.' };
+  }
+  if (pend.registrado_em) return { ok: false, erro: 'Este ATPV-e já foi registrado no Detran.' };
+  const r = await registrarAtpveVistocar(pend.service_id, pend.protocolo);
+  if (!r.ok) return { ok: false, erro: r.erro };
+  await pool.query('UPDATE vistocar_pending SET registrado_em=NOW() WHERE movement_id=$1', [pend.movement_id]);
+  console.log(`✅ ATPV-e registrado no Detran [protocolo ${pend.protocolo}, query ${pend.query_id}]`);
+  // O PDF costuma demorar; se já vier, entrega (e cobra) agora.
+  const entrega = await entregarResultadoVistocar({ ...pend, registrado_em: new Date() })
+    .catch(e => { console.error(`[atpve-registrar] falha na entrega imediata:`, e.message); return { entregue: false }; });
+  return { ok: true, entregue: !!entrega.entregue, situacao: entrega.situacao || null };
+}
+
+// Cancela o cadastro no Detran e encerra a pendência sem cobrar — o mesmo
+// estado final de um pedido que não saiu no prazo (cancelarPendenciaVistocar),
+// só que pedido pelo cliente.
+async function excluirAtpvePendencia(pend) {
+  if (!pend.protocolo) {
+    return { ok: false, erro: 'Este pedido foi cadastrado antes do registro pelo painel e não tem o protocolo guardado. Exclua pelo painel da Vistocar.' };
+  }
+  const r = await excluirAtpveVistocar(pend.service_id, pend.protocolo);
+  if (!r.ok) return { ok: false, erro: r.erro };
+  await pool.query(
+    `UPDATE queries SET status='cancelado' WHERE id=$1 AND status='aguardando_pdf'`,
+    [pend.query_id]
+  );
+  await pool.query('DELETE FROM vistocar_pending WHERE movement_id=$1', [pend.movement_id]);
+  console.log(`🗑️ ATPV-e excluído no Detran [protocolo ${pend.protocolo}, query ${pend.query_id}]`);
+  return { ok: true };
+}
+
 // Busca o resultado de uma consulta concluída e entrega ao dono do pedido:
 // cobra (só agora, com o documento em mãos), guarda no pdf_cache e manda por
 // WhatsApp. Usado pelo webhook e pela varredura periódica — daí o claim atômico
 // em finalizePendingQuery e a checagem de cache, que evitam entrega dupla.
 async function entregarResultadoVistocar(pend) {
   const movementId = pend.movement_id;
-  const r = await fetch(`${VISTOCAR_BASE_URL}/apiclient/consult/${encodeURIComponent(movementId)}`, {
-    headers: { 'Authorization': `Bearer ${await getVistocarToken()}` },
-  });
-  if (r.status === 404) return { entregue: false, motivo: 'resultado ainda não disponível' };
-  if (!r.ok) return { entregue: false, motivo: `HTTP ${r.status} ao buscar o resultado` };
-
-  const data = await r.json().catch(() => null);
-  // CRLV usa response.pdfBase64; ATPV-e usa response.arquivoPdfBase64 (doc, seção 8).
-  const b64 = data?.response?.pdfBase64 || data?.response?.arquivoPdfBase64;
-  if (!b64) return { entregue: false, motivo: 'resposta sem PDF' };
-  const buf = Buffer.from(String(b64).replace(/^data:[^,]+,/, '').replace(/\s/g, ''), 'base64');
+  const achado = await buscarDocumentoVistocar(pend);
+  if (!achado.b64) return { entregue: false, motivo: achado.motivo, situacao: achado.situacao || null };
+  const buf = Buffer.from(String(achado.b64).replace(/^data:[^,]+,/, '').replace(/\s/g, ''), 'base64');
   if (buf.slice(0, 4).toString() !== '%PDF') return { entregue: false, motivo: 'conteúdo devolvido não é um PDF' };
 
   const jaTem = await pool.query('SELECT 1 FROM pdf_cache WHERE query_id=$1 AND expires_at > NOW()', [pend.query_id]);
@@ -10060,11 +10231,16 @@ app.get('/api/queries/:id/atpve-status', requireAuth, async (req, res) => {
     if (!qr.rows.length) return res.status(404).json({ error: 'Consulta não encontrada.' });
     let q = qr.rows[0];
 
+    let pend = null, situacao = null;
     if (q.status === 'aguardando_pdf') {
       await ensureDbReady();   // vistocar_pending é tabela nova — ver ensureDbReady
       const pr = await pool.query('SELECT * FROM vistocar_pending WHERE query_id=$1', [q.id]);
       if (pr.rows.length) {
-        try { await entregarResultadoVistocar(pr.rows[0]); }
+        pend = pr.rows[0];
+        try {
+          const r = await entregarResultadoVistocar(pend);
+          situacao = r.situacao || null;
+        }
         catch (e) { console.error(`[atpve-status] falha ao buscar o resultado da query ${q.id}:`, e.message); }
         const rel = await pool.query('SELECT status FROM queries WHERE id=$1', [q.id]);
         if (rel.rows.length) q.status = rel.rows[0].status;
@@ -10089,10 +10265,80 @@ app.get('/api/queries/:id/atpve-status', requireAuth, async (req, res) => {
         mensagem: 'O documento não pôde ser emitido. Você não foi cobrado por essa tentativa.',
       });
     }
-    return res.json({ situacao: 'aguardando', decorridoSegundos, prazoSegundos });
+    // Cadastrado e ainda não registrado: o painel precisa distinguir isso de
+    // "esperando o Detran emitir", porque aqui quem tem que agir é o cliente —
+    // sem o registro o ATPV-e não sai e o cadastro morre no prazo.
+    const base = {
+      decorridoSegundos, prazoSegundos,
+      protocolo: pend?.protocolo || null,
+      registrado: !!pend?.registrado_em,
+      situacaoCodigo: situacao?.codigo || null,
+      situacaoDescricao: situacao?.descricao || null,
+      motivoSituacao: situacao?.motivo || null,
+    };
+    if (pend && !pend.registrado_em && VISTOCAR_ATPVE_SVCS.has(pend.service_id) && pend.protocolo) {
+      return res.json({ ...base, situacao: 'aguardando_registro' });
+    }
+    return res.json({ ...base, situacao: 'aguardando' });
   } catch (err) {
     console.error('Erro em /api/queries/:id/atpve-status:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── Registro e exclusão do ATPV-e pelo dono do pedido ────────────────────────
+// O cadastro sozinho não emite nada: é este PUT que manda a intenção de venda
+// para o Detran. Fica com o cliente de propósito — ele confere os dados antes de
+// virar ato no Detran, e o que estiver errado se resolve excluindo e cadastrando
+// de novo (a rota de alteração exige os anexos, que não guardamos).
+async function pendenciaAtpveDoUsuario(req) {
+  await ensureDbReady();   // colunas protocolo/registrado_em são novas — ver ensureDbReady
+  const qr = await pool.query(
+    `SELECT id, service_id, status FROM queries WHERE id=$1 AND user_id=$2`,
+    [req.params.id, req.user.id]
+  );
+  if (!qr.rows.length) return { erro: 'Consulta não encontrada.', http: 404 };
+  const q = qr.rows[0];
+  if (!VISTOCAR_ATPVE_SVCS.has(q.service_id)) return { erro: 'Esta consulta não é um ATPV-e.', http: 400 };
+  if (q.status !== 'aguardando_pdf') {
+    return { erro: q.status === 'success'
+      ? 'Este ATPV-e já foi emitido.'
+      : 'Este pedido não está mais aberto.', http: 409 };
+  }
+  const pr = await pool.query('SELECT * FROM vistocar_pending WHERE query_id=$1', [q.id]);
+  if (!pr.rows.length) return { erro: 'Pedido sem pendência aberta na Vistocar.', http: 409 };
+  return { pend: pr.rows[0] };
+}
+
+app.post('/api/queries/:id/atpve-registrar', requireAuth, async (req, res) => {
+  try {
+    const { pend, erro, http } = await pendenciaAtpveDoUsuario(req);
+    if (erro) return res.status(http).json({ error: erro });
+    const r = await registrarAtpvePendencia(pend);
+    if (!r.ok) return res.status(422).json({ error: r.erro });
+    return res.json({
+      success: true,
+      entregue: r.entregue,
+      mensagem: r.entregue
+        ? 'ATPV-e registrado e emitido! O documento já está disponível.'
+        : 'ATPV-e registrado no Detran! Assim que o documento sair, ele chega pelo WhatsApp e fica no seu histórico.',
+    });
+  } catch (err) {
+    console.error('Erro em /api/queries/:id/atpve-registrar:', err.message);
+    res.status(500).json({ error: 'Erro interno ao registrar o ATPV-e.' });
+  }
+});
+
+app.post('/api/queries/:id/atpve-excluir', requireAuth, async (req, res) => {
+  try {
+    const { pend, erro, http } = await pendenciaAtpveDoUsuario(req);
+    if (erro) return res.status(http).json({ error: erro });
+    const r = await excluirAtpvePendencia(pend);
+    if (!r.ok) return res.status(422).json({ error: r.erro });
+    return res.json({ success: true, mensagem: 'Cadastro excluído. Você não foi cobrado por ele.' });
+  } catch (err) {
+    console.error('Erro em /api/queries/:id/atpve-excluir:', err.message);
+    res.status(500).json({ error: 'Erro interno ao excluir o ATPV-e.' });
   }
 });
 
@@ -11571,6 +11817,7 @@ app.get('/api/admin/atpve-pedidos', requireAuth, requireSuperAdmin, async (req, 
               q.created_at, q.whatsapp_sent_at, q.transaction_id,
               u.id AS user_id, u.name AS user_name, u.email AS user_email, u.phone AS user_phone,
               p.movement_id AS pendencia_movement_id, p.created_at AS pendencia_desde,
+              p.protocolo AS pendencia_protocolo, p.registrado_em AS pendencia_registrado_em,
               (SELECT 1 FROM pdf_cache c WHERE c.query_id = q.id AND c.expires_at > NOW() LIMIT 1) AS tem_pdf
          FROM queries q
          JOIN users u ON u.id = q.user_id
@@ -11599,7 +11846,13 @@ app.get('/api/admin/atpve-pedidos', requireAuth, requireSuperAdmin, async (req, 
         tem_pdf: !!row.tem_pdf,
         pendente: !!row.pendencia_movement_id,
         pendencia_desde: row.pendencia_desde,
-        protocolo: result.movementId || row.pendencia_movement_id || null,
+        // O protocolo (UUID) é o que serve para registrar/excluir no Detran; o
+        // movementId é só o número interno da Vistocar. Os dois vão para a tela:
+        // pedido antigo só tem o movementId, e é isso que explica por que nele
+        // os botões de registrar e excluir não aparecem.
+        protocolo: row.pendencia_protocolo || result.protocolo || null,
+        movement_id: result.movementId || row.pendencia_movement_id || null,
+        registrado_em: row.pendencia_registrado_em,
         placa: (params.placa || result.placa || '').toUpperCase(),
         comprador: params.nomeComprador || '',
         vendedor: params.nomeVendedor || '',
@@ -11637,6 +11890,46 @@ app.post('/api/admin/atpve-pedidos/:id/verificar', requireAuth, requireSuperAdmi
     res.json({ success: true, entregue: r.entregue, motivo: r.motivo || null, status: atual.rows[0].status });
   } catch (err) {
     console.error('Erro ao verificar pedido de ATPV-e no admin:', err.message);
+    res.status(500).json({ error: err.message || 'Erro interno.' });
+  }
+});
+
+// Registrar / excluir no Detran pelo admin — as mesmas ações do painel do
+// cliente, pelas MESMAS funções (registrarAtpvePendencia, excluirAtpvePendencia),
+// para o pedido não acabar em estado diferente conforme quem clicou.
+async function pendenciaAtpveDoAdmin(id) {
+  await ensureDbReady();   // colunas protocolo/registrado_em são novas — ver ensureDbReady
+  const qr = await pool.query(`SELECT id, service_id, status FROM queries WHERE id=$1`, [id]);
+  if (!qr.rows.length) return { erro: 'Pedido não encontrado.', http: 404 };
+  if (!ATPVE_ADMIN_SVCS.includes(qr.rows[0].service_id))
+    return { erro: 'Este pedido não é de ATPV-e.', http: 400 };
+  const pr = await pool.query('SELECT * FROM vistocar_pending WHERE query_id=$1', [qr.rows[0].id]);
+  if (!pr.rows.length) return { erro: 'Não há pendência aberta para este pedido (já foi entregue ou cancelado).', http: 409 };
+  return { pend: pr.rows[0] };
+}
+
+app.post('/api/admin/atpve-pedidos/:id/registrar', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const { pend, erro, http } = await pendenciaAtpveDoAdmin(req.params.id);
+    if (erro) return res.status(http).json({ error: erro });
+    const r = await registrarAtpvePendencia(pend);
+    if (!r.ok) return res.status(422).json({ error: r.erro });
+    res.json({ success: true, entregue: r.entregue });
+  } catch (err) {
+    console.error('Erro ao registrar ATPV-e no admin:', err.message);
+    res.status(500).json({ error: err.message || 'Erro interno.' });
+  }
+});
+
+app.post('/api/admin/atpve-pedidos/:id/excluir-detran', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const { pend, erro, http } = await pendenciaAtpveDoAdmin(req.params.id);
+    if (erro) return res.status(http).json({ error: erro });
+    const r = await excluirAtpvePendencia(pend);
+    if (!r.ok) return res.status(422).json({ error: r.erro });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Erro ao excluir ATPV-e no admin:', err.message);
     res.status(500).json({ error: err.message || 'Erro interno.' });
   }
 });
@@ -12740,7 +13033,13 @@ async function runVistocarPendingCheck() {
 
       const ageMs = Date.now() - new Date(row.created_at).getTime();
       if (ageMs <= ASYNC_PDF_REFUND_HOURS * 3600 * 1000) continue;   // ainda dentro do prazo
-      await cancelarPendenciaVistocar(row, 'não foi emitido dentro do prazo esperado');
+      // Cadastro de ATPV-e que expirou sem nunca ter sido registrado não é falha
+      // do Detran: ninguém apertou "Registrar". Dizer isso ao cliente é o que
+      // evita a ligação "paguei e não veio" — e ele não foi cobrado.
+      const semRegistro = VISTOCAR_ATPVE_SVCS.has(row.service_id) && !row.registrado_em;
+      await cancelarPendenciaVistocar(row, semRegistro
+        ? 'o cadastro não chegou a ser registrado no Detran dentro do prazo — é preciso cadastrar de novo e clicar em "Registrar no Detran"'
+        : 'não foi emitido dentro do prazo esperado');
       cancelled++;
     } catch (e) {
       console.error(`Erro ao checar pendência Vistocar [movementId ${row.movement_id}]:`, e.message);

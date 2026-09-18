@@ -515,15 +515,44 @@
               <div id="atpve-progress-service" class="text-sm text-gray-600"></div>
             </div>
           </div>
-          <div class="w-full bg-gray-100 rounded-full h-3 overflow-hidden">
-            <div id="atpve-progress-bar" class="h-3 bg-amber-500 rounded-full" style="width:4%; transition: width .8s ease"></div>
+          <div id="atpve-progress-barra-box">
+            <div class="w-full bg-gray-100 rounded-full h-3 overflow-hidden">
+              <div id="atpve-progress-bar" class="h-3 bg-amber-500 rounded-full" style="width:4%; transition: width .8s ease"></div>
+            </div>
+            <div class="flex justify-between items-baseline gap-3 mt-2">
+              <span id="atpve-progress-msg" class="text-xs text-amber-700">Cadastro enviado ao Detran…</span>
+              <span id="atpve-progress-time" class="text-xs text-gray-400 flex-shrink-0"></span>
+            </div>
           </div>
-          <div class="flex justify-between items-baseline gap-3 mt-2">
-            <span id="atpve-progress-msg" class="text-xs text-amber-700">Cadastro enviado ao Detran…</span>
-            <span id="atpve-progress-time" class="text-xs text-gray-400 flex-shrink-0"></span>
+
+          <!-- Cadastrado, esperando o registro ──────────────────────────────
+               O cadastro NÃO emite o ATPV-e: é o registro que manda a intenção
+               de venda para o Detran. Enquanto ele não acontece o documento não
+               existe, e o cadastro morre no prazo — por isso esta tela não tem
+               barra andando (não há nada acontecendo do outro lado) e sim a
+               decisão do cliente: registrar ou excluir. -->
+          <div id="atpve-registro-box" class="hidden">
+            <div class="p-4 bg-amber-50 border border-amber-200 rounded-xl">
+              <p class="text-sm text-amber-900 font-semibold mb-1">Cadastro criado — falta registrar no Detran</p>
+              <p class="text-xs text-amber-800">
+                Confira os dados da venda. Ao registrar, a intenção de venda é enviada ao Detran e o ATPV-e é emitido.
+                <strong>Enquanto não registrar, o documento não existe.</strong>
+              </p>
+              <div id="atpve-registro-situacao" class="text-xs text-amber-700 mt-2"></div>
+            </div>
+            <div class="grid sm:grid-cols-2 gap-2 mt-3">
+              <button id="atpve-btn-registrar" type="button" onclick="registrarAtpve()"
+                      class="btn-primary justify-center">✅ Registrar no Detran</button>
+              <button id="atpve-btn-excluir" type="button" onclick="excluirAtpve()"
+                      class="btn-secondary justify-center text-red-600 hover:bg-red-50">🗑️ Excluir cadastro</button>
+            </div>
+            <p class="text-xs text-gray-500 mt-2">
+              Dado errado? Exclua este cadastro e faça um novo — não há correção depois de registrado.
+            </p>
           </div>
+
           <div id="atpve-progress-proto" class="text-xs text-gray-500 mt-3"></div>
-          <p class="text-xs text-gray-500 mt-2">Pode fechar esta página: o PDF também chega pelo WhatsApp e fica no Histórico. Você só é cobrado quando o documento for entregue.</p>
+          <p id="atpve-progress-rodape" class="text-xs text-gray-500 mt-2">Pode fechar esta página: o PDF também chega pelo WhatsApp e fica no Histórico. Você só é cobrado quando o documento for entregue.</p>
           <div id="atpve-progress-done" class="hidden mt-4 text-center">
             <a id="atpve-progress-link" href="#" target="_blank" rel="noopener" class="btn-primary inline-flex items-center gap-2">
               📥 Baixar ATPV-e (PDF)
@@ -1301,6 +1330,16 @@ function semCobranca(q) {
   return !q.cobrada && (q.status === 'aguardando_pdf' || q.status === 'cancelado');
 }
 
+// ATPV-e parado em 'aguardando_pdf' quase sempre é cadastro esperando o registro
+// no Detran — e quem precisa clicar é o cliente. Sem este atalho, quem fechou a
+// página não tem como voltar para a tela do registro e o cadastro morre no prazo.
+const ehAtpveVistocar = q => String(q.service_id || '').startsWith('atpve-vistocar-');
+const botaoVerStatusAtpve = q => `<button type="button"
+    onclick="verStatusAtpve(${q.id}, ${JSON.stringify(q.service_id).replace(/"/g, '&quot;')})"
+    class="text-xs bg-amber-500 hover:bg-amber-600 text-white px-2 py-0.5 rounded font-semibold">
+    📝 Ver status
+  </button>`;
+
 async function loadQueries() {
   try {
     const r = await fetch('/api/queries');
@@ -1563,7 +1602,7 @@ function renderRecentQueries() {
             : q.status === 'estornado'
               ? `<span class="badge-red">↩️ Estornado</span>`
             : q.status === 'aguardando_pdf'
-              ? `<span class="badge-amber">⏳ Aguardando emissão</span>`
+              ? (ehAtpveVistocar(q) ? botaoVerStatusAtpve(q) : `<span class="badge-amber">⏳ Aguardando emissão</span>`)
             : q.status === 'cancelado'
               ? `<span class="badge-red">❌ Não emitido</span>`
             : q.result_type === 'json' && q.service_id
@@ -1638,7 +1677,7 @@ function renderHistoryTable() {
             : q.status === 'estornado'
               ? `<span class="badge-red">↩️ Estornado</span>`
             : q.status === 'aguardando_pdf'
-              ? `<span class="badge-amber">⏳ Aguardando emissão</span>`
+              ? (ehAtpveVistocar(q) ? botaoVerStatusAtpve(q) : `<span class="badge-amber">⏳ Aguardando emissão</span>`)
             : q.status === 'cancelado'
               ? `<span class="badge-red">❌ Não emitido</span>`
             : q.result_type === 'json' && q.service_id
@@ -4602,90 +4641,244 @@ function atpveTempoTexto(segundos) {
   return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
 }
 
+// Pedido em acompanhamento nesta tela. Fica em módulo porque os botões de
+// registrar e excluir são onclick do HTML e precisam saber de qual pedido se
+// trata — e porque registrar troca o estado da própria tela, sem recarregar.
+let atpveAtual = null;   // { queryId, svc, inicio }
+
+const atpveEl = id => document.getElementById(id);
+
+// Alterna entre as duas caras da tela: "cadastrado, falta registrar" (decisão do
+// cliente, sem barra, porque do outro lado não está acontecendo nada) e
+// "emitindo" (espera de verdade, com a barra andando).
+function atpveModo(modo) {
+  atpveEl('atpve-progress-barra-box').classList.toggle('hidden', modo !== 'emissao');
+  atpveEl('atpve-registro-box').classList.toggle('hidden', modo !== 'registro');
+  atpveEl('atpve-progress-rodape').classList.toggle('hidden', modo !== 'emissao');
+  if (modo === 'consultando') {
+    atpveEl('atpve-progress-icon').textContent = '🔎';
+    atpveEl('atpve-progress-icon').className = 'w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center text-xl';
+    atpveEl('atpve-progress-title').textContent = 'Consultando a situação…';
+    atpveEl('atpve-progress-title').className = 'font-bold text-gray-700';
+  } else if (modo === 'registro') {
+    atpveEl('atpve-progress-icon').textContent = '📝';
+    atpveEl('atpve-progress-icon').className = 'w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center text-xl';
+    atpveEl('atpve-progress-title').textContent = 'ATPV-e cadastrado';
+    atpveEl('atpve-progress-title').className = 'font-bold text-amber-800';
+  } else if (modo === 'emissao') {
+    atpveEl('atpve-progress-icon').textContent = '⏳';
+    atpveEl('atpve-progress-icon').className = 'w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center text-xl';
+    atpveEl('atpve-progress-title').textContent = 'Emitindo o ATPV-e';
+    atpveEl('atpve-progress-title').className = 'font-bold text-amber-800';
+  }
+}
+
+function atpveSituacaoTexto(d) {
+  const partes = [];
+  if (d.situacaoDescricao || d.situacaoCodigo)
+    partes.push(`Situação: <strong>${escapeHtml([d.situacaoCodigo, d.situacaoDescricao].filter(Boolean).join(' · '))}</strong>`);
+  if (d.motivoSituacao) partes.push(escapeHtml(d.motivoSituacao));
+  return partes.join(' — ');
+}
+
+// Desenha a barra pelo tempo decorrido. O relógio conta do REGISTRO, não do
+// cadastro: o tempo que o cliente levou para conferir os dados não é demora do
+// Detran, e contá-lo faria a barra já nascer no fim.
+function desenharAtpveBarra() {
+  if (!atpveAtual) return;
+  const uf = (atpveAtual.svc?.uf || '').toUpperCase();
+  const t = Math.round((Date.now() - atpveAtual.inicio) / 1000);
+  // 4% de saída, tendendo a 90%: metade do caminho em ~4 min, que é a faixa em
+  // que a maioria sai. Passou disso, a barra quase não anda mais — de propósito.
+  const pct = 4 + 86 * (1 - Math.exp(-t / 240));
+  atpveEl('atpve-progress-bar').style.width = `${pct.toFixed(1)}%`;
+  atpveEl('atpve-progress-time').textContent = atpveTempoTexto(t);
+  atpveEl('atpve-progress-msg').textContent =
+    t < 20  ? `Registro enviado ao Detran${uf ? '-' + uf : ''}…` :
+    t < 120 ? 'O Detran está processando a intenção de venda…' :
+    t < 600 ? 'Aguardando a emissão do ATPV-e…' :
+              'A emissão está demorando mais que o normal. Pode fechar a página — avisamos pelo WhatsApp.';
+}
+
 function showAtpveProgress(data, svc) {
   pararAtpveProgress();
-  document.getElementById('query-form-wrap').classList.add('hidden');
-  document.getElementById('query-result-wrap').classList.add('hidden');
-  document.getElementById('atpve-progress-wrap').classList.remove('hidden');
-  document.getElementById('atpve-progress-done').classList.add('hidden');
-  document.getElementById('atpve-progress-service').textContent = svc.name;
+  atpveEl('query-form-wrap').classList.add('hidden');
+  atpveEl('query-result-wrap').classList.add('hidden');
+  atpveEl('atpve-progress-wrap').classList.remove('hidden');
+  atpveEl('atpve-progress-done').classList.add('hidden');
+  atpveEl('atpve-progress-service').textContent = svc.name;
+  atpveEl('atpve-registro-situacao').innerHTML = '';
+  atpveEl('atpve-btn-registrar').disabled = false;
+  atpveEl('atpve-btn-registrar').textContent = '✅ Registrar no Detran';
+  atpveEl('atpve-btn-excluir').disabled = false;
+  atpveEl('atpve-btn-excluir').textContent = '🗑️ Excluir cadastro';
 
   const protocolo = data?.result?.protocolo || '';
-  document.getElementById('atpve-progress-proto').innerHTML = protocolo
+  atpveEl('atpve-progress-proto').innerHTML = protocolo
     ? `Protocolo: <strong>${escapeHtml(String(protocolo))}</strong>`
     : '';
 
-  const uf = (svc.uf || '').toUpperCase();
-  const inicio = Date.now();
-  const bar   = document.getElementById('atpve-progress-bar');
-  const msgEl = document.getElementById('atpve-progress-msg');
-  const timeEl = document.getElementById('atpve-progress-time');
+  const bar   = atpveEl('atpve-progress-bar');
+  const msgEl = atpveEl('atpve-progress-msg');
+  bar.className = 'h-3 bg-amber-500 rounded-full';
+  bar.style.width = '4%';
+  msgEl.className = 'text-xs text-amber-700';
 
-  const desenhar = () => {
-    const t = Math.round((Date.now() - inicio) / 1000);
-    // 4% de saída, tendendo a 90%: metade do caminho em ~4 min, que é a faixa em
-    // que a maioria sai. Passou disso, a barra quase não anda mais — de propósito.
-    const pct = 4 + 86 * (1 - Math.exp(-t / 240));
-    bar.style.width = `${pct.toFixed(1)}%`;
-    timeEl.textContent = atpveTempoTexto(t);
-    msgEl.textContent =
-      t < 20  ? `Cadastro enviado ao Detran${uf ? '-' + uf : ''}…` :
-      t < 120 ? 'O Detran está processando a intenção de venda…' :
-      t < 600 ? 'Aguardando a emissão do ATPV-e…' :
-                'A emissão está demorando mais que o normal. Pode fechar a página — avisamos pelo WhatsApp.';
-  };
-  desenhar();
-  atpveProgressTick = setInterval(desenhar, 1000);
+  atpveAtual = { queryId: data.queryId, svc, inicio: Date.now(), doHistorico: !!data.consultando };
+  atpveModo(data.consultando ? 'consultando' : (data.aguardandoRegistro ? 'registro' : 'emissao'));
+  // O relógio só corre no modo emissão: nos outros dois não há nada andando do
+  // lado do Detran, e um cronômetro subindo faria parecer que há.
+  if (!data.consultando && !data.aguardandoRegistro) {
+    desenharAtpveBarra();
+    atpveProgressTick = setInterval(desenharAtpveBarra, 1000);
+  }
 
-  const queryId = data.queryId;
-  if (!queryId) return;   // sem id não há o que acompanhar; o WhatsApp entrega
+  if (!atpveAtual.queryId) return;   // sem id não há o que acompanhar; o WhatsApp entrega
+  // Enquanto o cadastro espera o registro não há o que buscar de 8 em 8
+  // segundos: a pergunta fica lenta, só para perceber um registro feito fora
+  // daqui (pelo suporte ou pelo painel da Vistocar).
+  atpveProgressTimer = setTimeout(consultarAtpveStatus,
+    data.consultando ? 300 : (data.aguardandoRegistro ? 20000 : 6000));
+}
 
-  const consultar = async () => {
-    try {
-      const r = await fetch(`/api/queries/${queryId}/atpve-status`);
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'falha ao consultar o status');
+async function consultarAtpveStatus() {
+  if (!atpveAtual?.queryId) return;
+  let aguardandoRegistro = false;
+  try {
+    const r = await fetch(`/api/queries/${atpveAtual.queryId}/atpve-status`);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'falha ao consultar o status');
 
-      if (d.situacao === 'pronto') {
-        pararAtpveProgress();
-        bar.style.width = '100%';
-        bar.className = 'h-3 bg-green-500 rounded-full';
-        document.getElementById('atpve-progress-icon').textContent = '✅';
-        document.getElementById('atpve-progress-icon').className = 'w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-xl';
-        document.getElementById('atpve-progress-title').textContent = 'ATPV-e emitido!';
-        document.getElementById('atpve-progress-title').className = 'font-bold text-green-800';
-        msgEl.textContent = 'Documento pronto.';
-        msgEl.className = 'text-xs text-green-700';
-        const link = document.getElementById('atpve-progress-link');
-        link.href = `/api/pdf/${d.token}`;
-        document.getElementById('atpve-progress-done').classList.remove('hidden');
-        window.open(`/api/pdf/${d.token}`, '_blank');
-        toast('ATPV-e emitido com sucesso!');
-        await Promise.all([loadStats(), loadQueries()]);
-        return;
-      }
-      if (d.situacao === 'cancelado') {
-        pararAtpveProgress();
-        bar.style.width = '100%';
-        bar.className = 'h-3 bg-red-400 rounded-full';
-        document.getElementById('atpve-progress-icon').textContent = '⚠️';
-        document.getElementById('atpve-progress-icon').className = 'w-10 h-10 bg-red-100 rounded-full flex items-center justify-center text-xl';
-        document.getElementById('atpve-progress-title').textContent = 'Emissão não concluída';
-        document.getElementById('atpve-progress-title').className = 'font-bold text-red-700';
-        msgEl.textContent = d.mensagem || 'O documento não pôde ser emitido. Você não foi cobrado.';
-        msgEl.className = 'text-xs text-red-600';
-        await loadQueries();
-        return;
-      }
-    } catch (e) {
-      // Falha de rede não encerra o acompanhamento: tenta de novo na próxima volta.
+    if (d.situacao === 'pronto') {
+      pararAtpveProgress();
+      atpveModo('emissao');
+      const bar = atpveEl('atpve-progress-bar');
+      bar.style.width = '100%';
+      bar.className = 'h-3 bg-green-500 rounded-full';
+      atpveEl('atpve-progress-icon').textContent = '✅';
+      atpveEl('atpve-progress-icon').className = 'w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-xl';
+      atpveEl('atpve-progress-title').textContent = 'ATPV-e emitido!';
+      atpveEl('atpve-progress-title').className = 'font-bold text-green-800';
+      atpveEl('atpve-progress-msg').textContent = 'Documento pronto.';
+      atpveEl('atpve-progress-msg').className = 'text-xs text-green-700';
+      atpveEl('atpve-progress-link').href = `/api/pdf/${d.token}`;
+      atpveEl('atpve-progress-done').classList.remove('hidden');
+      window.open(`/api/pdf/${d.token}`, '_blank');
+      toast('ATPV-e emitido com sucesso!');
+      await Promise.all([loadStats(), loadQueries()]);
+      return;
     }
-    const t = (Date.now() - inicio) / 1000;
-    // Enquanto é provável que saia, pergunta de 8 em 8 segundos; depois de 20
-    // minutos afrouxa para 1 minuto — a essa altura quem entrega é o WhatsApp.
-    atpveProgressTimer = setTimeout(consultar, t < 1200 ? 8000 : 60000);
-  };
-  atpveProgressTimer = setTimeout(consultar, 6000);
+    if (d.situacao === 'cancelado') {
+      mostrarAtpveCancelado(d.mensagem);
+      await loadQueries();
+      return;
+    }
+    if (d.protocolo)
+      atpveEl('atpve-progress-proto').innerHTML = `Protocolo: <strong>${escapeHtml(String(d.protocolo))}</strong>`;
+    if (d.situacao === 'aguardando_registro') {
+      aguardandoRegistro = true;
+      pararAtpveProgress();   // nada andando: o passo seguinte é um clique, não uma espera
+      atpveModo('registro');
+      atpveEl('atpve-registro-situacao').innerHTML = atpveSituacaoTexto(d);
+    } else {
+      // Já registrado e emitindo. Quando a tela foi aberta pelo histórico não há
+      // relógio local para contar, então vale o tempo que o servidor informa.
+      if (!atpveProgressTick) {
+        if (atpveAtual.doHistorico && Number.isFinite(d.decorridoSegundos))
+          atpveAtual.inicio = Date.now() - d.decorridoSegundos * 1000;
+        atpveModo('emissao');
+        desenharAtpveBarra();
+        atpveProgressTick = setInterval(desenharAtpveBarra, 1000);
+      } else {
+        atpveModo('emissao');
+      }
+    }
+  } catch (e) {
+    // Falha de rede não encerra o acompanhamento: tenta de novo na próxima volta.
+  }
+  const t = (Date.now() - atpveAtual.inicio) / 1000;
+  // Enquanto é provável que saia, pergunta de 8 em 8 segundos; depois de 20
+  // minutos afrouxa para 1 minuto — a essa altura quem entrega é o WhatsApp.
+  atpveProgressTimer = setTimeout(consultarAtpveStatus,
+    aguardandoRegistro ? 30000 : (t < 1200 ? 8000 : 60000));
+}
+
+function mostrarAtpveCancelado(mensagem) {
+  pararAtpveProgress();
+  atpveModo('emissao');
+  const bar = atpveEl('atpve-progress-bar');
+  bar.style.width = '100%';
+  bar.className = 'h-3 bg-red-400 rounded-full';
+  atpveEl('atpve-progress-icon').textContent = '⚠️';
+  atpveEl('atpve-progress-icon').className = 'w-10 h-10 bg-red-100 rounded-full flex items-center justify-center text-xl';
+  atpveEl('atpve-progress-title').textContent = 'Emissão não concluída';
+  atpveEl('atpve-progress-title').className = 'font-bold text-red-700';
+  atpveEl('atpve-progress-msg').textContent = mensagem || 'O documento não pôde ser emitido. Você não foi cobrado.';
+  atpveEl('atpve-progress-msg').className = 'text-xs text-red-600';
+  atpveEl('atpve-progress-rodape').classList.add('hidden');
+}
+
+// Registrar é o passo que faz o ATPV-e existir: daqui em diante é ato no Detran
+// e não há correção, só exclusão — e só enquanto a situação permitir.
+async function registrarAtpve() {
+  if (!atpveAtual?.queryId) return;
+  const btn = atpveEl('atpve-btn-registrar'), btnX = atpveEl('atpve-btn-excluir');
+  btn.disabled = btnX.disabled = true;
+  btn.textContent = '⏳ Registrando…';
+  try {
+    const r = await fetch(`/api/queries/${atpveAtual.queryId}/atpve-registrar`, { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Não foi possível registrar o ATPV-e.');
+    toast(d.mensagem || 'ATPV-e registrado no Detran!');
+    pararAtpveProgress();
+    atpveAtual.inicio = Date.now();
+    atpveAtual.doHistorico = false;   // daqui pra frente o relogio e o do registro
+    atpveModo('emissao');
+    desenharAtpveBarra();
+    atpveProgressTick = setInterval(desenharAtpveBarra, 1000);
+    atpveProgressTimer = setTimeout(consultarAtpveStatus, 3000);
+    await loadQueries();
+  } catch (e) {
+    toast(e.message, 'error');
+    btn.disabled = btnX.disabled = false;
+    btn.textContent = '✅ Registrar no Detran';
+  }
+}
+
+// Quem decide se a exclusão é possível é a API da Vistocar (a situação do
+// protocolo manda), então o botão é sempre oferecido e a recusa dela vira a
+// mensagem da tela — em vez de a gente esconder um botão que funcionaria.
+async function excluirAtpve() {
+  if (!atpveAtual?.queryId) return;
+  if (!confirm('Excluir este cadastro de ATPV-e? O documento não será emitido e você não será cobrado.')) return;
+  const btn = atpveEl('atpve-btn-registrar'), btnX = atpveEl('atpve-btn-excluir');
+  btn.disabled = btnX.disabled = true;
+  btnX.textContent = '⏳ Excluindo…';
+  try {
+    const r = await fetch(`/api/queries/${atpveAtual.queryId}/atpve-excluir`, { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Não foi possível excluir o cadastro.');
+    toast(d.mensagem || 'Cadastro excluído.');
+    mostrarAtpveCancelado('Cadastro excluído a seu pedido. Você não foi cobrado.');
+    await loadQueries();
+  } catch (e) {
+    toast(e.message, 'error');
+    btn.disabled = btnX.disabled = false;
+    btnX.textContent = '🗑️ Excluir cadastro';
+  }
+}
+
+// Reabre o acompanhamento de um ATPV-e do histórico — é por aqui que quem fechou
+// a página volta para registrar o cadastro que ficou pendente.
+function verStatusAtpve(queryId, serviceId) {
+  const svc = (allServices || []).find(s => s.id === serviceId) || { name: 'ATPV-e', uf: '' };
+  quickSelect(serviceId);
+  // Vindo do histórico não se sabe em que pé está o pedido: abrir na barra de
+  // emissão anunciaria um trabalho que talvez não esteja acontecendo (é o caso
+  // do cadastro que espera registro). A tela fica neutra até a primeira
+  // resposta, que vem logo — ver o 'consultando' em showAtpveProgress.
+  showAtpveProgress({ queryId, result: {}, consultando: true }, svc);
+  atpveEl('atpve-progress-wrap').scrollIntoView({ behavior: 'smooth' });
 }
 
 // ── Acompanhamento da Assinatura Digital ────────────────────────────────────

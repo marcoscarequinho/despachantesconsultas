@@ -1073,6 +1073,13 @@ const atpveDiasDeVida = p => (Date.now() - new Date(p.created_at)) / 86400000;
 const atpvePodeExcluir = p =>
   p.status !== 'aguardando_pdf' && atpveDiasDeVida(p) >= atpveExclusaoDias;
 
+// Registrar (e excluir no Detran) só faz sentido em pedido aberto e com o
+// protocolo guardado — pedido anterior a 18/09/2026 só tem o movementId, e com
+// ele a Vistocar responde "Protocolo não encontrado". Esse caso aparece na
+// coluna do protocolo, para o motivo de o botão não estar ali ficar visível.
+const atpvePodeRegistrar = p =>
+  p.status === 'aguardando_pdf' && !!p.protocolo && !p.registrado_em;
+
 function renderAtpvePedidos() {
   const busca  = (document.getElementById('atpve-search').value || '').toLowerCase().trim();
   const filtro = document.getElementById('atpve-filtro').value;
@@ -1097,6 +1104,10 @@ function renderAtpvePedidos() {
     if (p.status === 'success')   return '<span class="badge bg-green-100 text-green-700">✅ Entregue</span>';
     if (p.status === 'cancelado') return '<span class="badge bg-gray-100 text-gray-600">Cancelado</span>';
     if (atpveAtrasado(p))         return '<span class="badge bg-red-100 text-red-700">⚠️ Atrasado</span>';
+    // Cadastrado sem registro não é "aguardando o Detran": é pedido parado
+    // esperando alguém apertar Registrar. Confundir os dois era o que fazia o
+    // pedido morrer no prazo sem ninguém perceber.
+    if (atpvePodeRegistrar(p))    return '<span class="badge bg-orange-100 text-orange-800">📝 Falta registrar</span>';
     return '<span class="badge bg-amber-100 text-amber-800">⏳ Aguardando</span>';
   };
 
@@ -1118,7 +1129,10 @@ function renderAtpvePedidos() {
         <div class="text-gray-400">${escAtpve(p.data_venda || '')} ${p.valor_venda ? '· ' + fmt(p.valor_venda) : ''}</div>
       </td>
       <td class="px-4 py-3 align-top hidden md:table-cell">
-        <div class="text-xs font-mono text-gray-600">${escAtpve(p.protocolo || '—')}</div>
+        <div class="text-xs font-mono text-gray-600">${escAtpve(p.protocolo || p.movement_id || '—')}</div>
+        ${p.protocolo && p.movement_id ? `<div class="text-xs text-gray-400">mov. ${escAtpve(p.movement_id)}</div>` : ''}
+        ${p.registrado_em ? `<div class="text-xs text-blue-600">registrado em ${fmtDate(p.registrado_em)}</div>` : ''}
+        ${p.status === 'aguardando_pdf' && !p.protocolo ? `<div class="text-xs text-red-500">sem protocolo (pedido antigo)</div>` : ''}
         ${p.whatsapp_sent_at ? `<div class="text-xs text-green-600">zap em ${fmtDate(p.whatsapp_sent_at)}</div>` : ''}
       </td>
       <td class="px-4 py-3 align-top text-center">
@@ -1126,6 +1140,9 @@ function renderAtpvePedidos() {
         <div class="text-xs text-gray-400 mt-1">${p.cobrada ? fmt(p.amount) : 'sem cobrança'}</div>
       </td>
       <td class="px-4 py-3 align-top text-right whitespace-nowrap">
+        ${atpvePodeRegistrar(p) ? `
+          <button onclick="registrarAtpveDetran(${p.id})" class="btn-primary text-xs mb-1 bg-orange-600 hover:bg-orange-700">📝 Registrar no Detran</button>
+          <button onclick="excluirAtpveDetran(${p.id})" class="btn-secondary text-xs mb-1 text-red-600 hover:bg-red-50">🗑️ Excluir no Detran</button>` : ''}
         ${p.status === 'aguardando_pdf' ? `
           <button onclick="verificarAtpve(${p.id})" class="btn-primary text-xs mb-1">⚡ Verificar agora</button>
           <button onclick="cancelarAtpve(${p.id})" class="btn-secondary text-xs mb-1">Cancelar</button>` : ''}
@@ -1140,6 +1157,34 @@ function renderAtpvePedidos() {
 
   document.getElementById('atpve-count').textContent =
     `${lista.length} de ${allAtpvePedidos.length} pedidos`;
+}
+
+// Registra o cadastro no Detran pelo cliente — é o passo que faz o ATPV-e
+// existir. Passa pela mesma função que o botão do painel do cliente usa.
+async function registrarAtpveDetran(id) {
+  const p = allAtpvePedidos.find(x => x.id === id);
+  if (!confirm(`Registrar no Detran o ATPV-e da placa ${p?.placa || '—'} (cliente ${p?.user?.name || '—'})?\n\nDepois de registrado não há correção, só exclusão — e só enquanto a situação permitir.`)) return;
+  try {
+    const r = await fetch(`/api/admin/atpve-pedidos/${id}/registrar`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || 'Erro ao registrar.', 'error'); return; }
+    toast(d.entregue ? 'Registrado e documento entregue ao cliente!' : 'Registrado no Detran. O documento sai em seguida.');
+    await loadAtpvePedidos();
+  } catch { toast('Erro de conexão.', 'error'); }
+}
+
+// Cancela o cadastro no Detran. Diferente do "Cancelar", que só encerra a
+// pendência do nosso lado: aqui o cadastro deixa de existir lá também.
+async function excluirAtpveDetran(id) {
+  const p = allAtpvePedidos.find(x => x.id === id);
+  if (!confirm(`Excluir NO DETRAN o cadastro da placa ${p?.placa || '—'}?\n\nO documento não será emitido e o cliente não é cobrado.`)) return;
+  try {
+    const r = await fetch(`/api/admin/atpve-pedidos/${id}/excluir-detran`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || 'Erro ao excluir.', 'error'); return; }
+    toast('Cadastro excluído no Detran.');
+    await loadAtpvePedidos();
+  } catch { toast('Erro de conexão.', 'error'); }
 }
 
 // Busca o documento na Vistocar agora — o mesmo que o cron faz de 15 em 15
