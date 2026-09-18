@@ -1222,9 +1222,14 @@ const SERVICES_V2 = [
   { id:'dc-orgaos-situacao-cnpj',   name:'Situação do CNPJ na Receita Federal', group:'Orgãos', basePrice:0.391, inputType:'dc_cnpj',           icon:'🏢', dcPath:'/empresas/situacao' },
   { id:'dc-orgaos-mandados-cnj',    name:'Mandados de Prisão (CNJ)',       group:'Orgãos', basePrice:0.382, inputType:'dc_cpf',                icon:'🏢', dcPath:'/orgaos/mandados_cnj' },
 
-  // ── Comunicação de Venda — preços com o mesmo MARKUP (40%) do resto do sistema ──
-  { id:'dc-comunicado-venda',           name:'Comunicação de Venda',           group:'Comunicação de Venda', basePrice:39.063, inputType:'dc_comunicado_venda',           icon:'📤', dcPath:'/veiculos/comunicado_venda_v2' },
-  { id:'dc-comunicado-venda-cancelar',  name:'Cancelar Comunicação de Venda',  group:'Comunicação de Venda', basePrice:0.000,  inputType:'dc_cancelar_comunicado_venda',  icon:'📤', dcPath:'/veiculos/cancelar_comunicado_venda_v2' },
+  // ── Comunicação de Venda saiu da Opção 2 em 18/09/2026 ───────────────────────
+  // O grupo inteiro (emissão pela Datacube em /veiculos/comunicado_venda_v2 e o
+  // cancelamento em /veiculos/cancelar_comunicado_venda_v2) foi retirado do
+  // catálogo por decisão do dono. Sem entrada aqui o serviço some da aba e
+  // /api/query-v2 recusa o id, que é o que basta para não ser mais vendido.
+  // Os formulários do painel (dc_comunicado_venda, dc_cancelar_comunicado_venda)
+  // e os case do processCatalogQueryV2 ficaram de pé de propósito: voltar a
+  // oferecer é repor estas duas linhas, sem mexer em mais nada.
 
   // ── CRLVe — em teste, visível apenas para admin (ver adminOnly em /api/services-v2 e /api/query-v2) ──
   // Endpoint assíncrono na Datacube: se a resposta ainda não trouxer o PDF pronto
