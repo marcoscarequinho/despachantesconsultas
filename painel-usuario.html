@@ -2810,6 +2810,11 @@ function selectService(svc) {
     ? 'Indisponível'
     : queryActionLabel(svc.inputType);
   document.getElementById('query-form-wrap').scrollIntoView({ behavior:'smooth', block:'nearest' });
+  // ATPV-e: as instruções abrem junto do formulário (popup
+  // #atpve-instrucoes-modal). O gatilho é o inputType, então vale para o RJ, o
+  // MG e qualquer UF que entre depois — os três anexos precisam estar em mãos
+  // ANTES de começar a preencher, senão o trabalho se perde no meio.
+  if (svc.inputType === 'atpve_vistocar') abrirAtpveInstrucoes();
 }
 
 // Texto do botão de envio do formulário de "Nova Consulta" — a maioria dos
@@ -6581,6 +6586,162 @@ async function logout() {
 init();
 </script>
 
+<!-- ── POPUP: como emitir o ATPV-e (RJ e MG) ─────────────────────────────────
+     Abre toda vez que o formulário de ATPV-e é aberto (ver selectService), e
+     não uma vez só: são três uploads obrigatórios, e quem descobre isso no
+     meio do preenchimento perde o trabalho feito. O texto também diz onde
+     conseguir o comprovante de residência, porque é o arquivo que o
+     despachante não tem em mãos. -->
+<div id="atpve-instrucoes-modal" class="fixed inset-0 z-[9999] hidden items-start justify-center p-4 overflow-y-auto"
+     style="background:rgba(2,6,23,.72);backdrop-filter:blur(5px);-webkit-overflow-scrolling:touch;overscroll-behavior:contain;"
+     onclick="if(event.target===this) fecharAtpveInstrucoes()">
+  <div class="atpve-card relative w-full max-w-lg rounded-2xl overflow-hidden shadow-2xl my-6">
+    <div class="absolute inset-0" style="background:linear-gradient(150deg,#0b1220 0%,#12294a 45%,#0d3b53 100%);"></div>
+    <!-- fita de cores que corre no topo: é o que faz o aviso parecer novo toda vez -->
+    <div class="absolute top-0 left-0 w-full h-1.5 atpve-fita"
+         style="background:linear-gradient(90deg,#f97316,#facc15,#22d3ee,#a855f7,#f97316);background-size:200% 100%;"></div>
+
+    <button onclick="fecharAtpveInstrucoes()" aria-label="Fechar"
+            class="absolute top-3 right-3 z-10 w-8 h-8 rounded-full text-xl leading-none transition-transform hover:scale-110"
+            style="background:rgba(255,255,255,.12);color:#cbd5e1;">&times;</button>
+
+    <div class="relative p-6 space-y-4 atpve-stagger">
+      <div class="text-center">
+        <div class="flex justify-center mb-3">
+          <div class="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl shadow-lg atpve-icone"
+               style="background:linear-gradient(135deg,#0ea5e9,#6366f1);">📄</div>
+        </div>
+        <div class="text-[11px] font-bold tracking-[.2em] uppercase" style="color:#7dd3fc;">Intenção de Venda · RJ e MG</div>
+        <h2 class="text-2xl font-black text-white leading-tight mt-1">Antes de emitir o ATPV-e</h2>
+        <p class="text-sm mt-1" style="color:#94a3b8;">Separe os arquivos agora — no meio do formulário o trabalho se perde.</p>
+      </div>
+
+      <!-- Os três anexos, em cartões: é a informação que o despachante precisa
+           levar embora daqui, então ela vem antes de qualquer explicação. -->
+      <div>
+        <div class="text-xs font-bold uppercase tracking-wider mb-2" style="color:#fbbf24;">⚠️ 3 arquivos obrigatórios</div>
+        <div class="grid grid-cols-3 gap-2">
+          <div class="atpve-anexo rounded-xl p-3 text-center" style="background:rgba(56,189,248,.12);border:1px solid rgba(56,189,248,.35);">
+            <div class="text-2xl mb-1">🚗</div>
+            <div class="text-[11px] font-bold text-white leading-tight">CRLV-e</div>
+            <div class="text-[10px] mt-0.5" style="color:#7dd3fc;">em PDF</div>
+          </div>
+          <div class="atpve-anexo rounded-xl p-3 text-center" style="background:rgba(168,85,247,.12);border:1px solid rgba(168,85,247,.35);">
+            <div class="text-2xl mb-1">🏠</div>
+            <div class="text-[11px] font-bold text-white leading-tight">Comprovante</div>
+            <div class="text-[10px] mt-0.5" style="color:#d8b4fe;">do vendedor</div>
+          </div>
+          <div class="atpve-anexo rounded-xl p-3 text-center" style="background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.35);">
+            <div class="text-2xl mb-1">🏠</div>
+            <div class="text-[11px] font-bold text-white leading-tight">Comprovante</div>
+            <div class="text-[10px] mt-0.5" style="color:#86efac;">do comprador</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rounded-xl p-3 text-sm" style="background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.35);color:#d1fae5;">
+        <span class="font-bold text-white">🧾 Não tem o comprovante?</span>
+        Na aba <strong class="text-white">Coisas de Despachantes</strong> tem o card que
+        <strong class="text-white">gera o comprovante de residência só com o CPF</strong>.
+      </div>
+
+      <div class="rounded-xl p-3 text-sm" style="background:rgba(168,85,247,.12);border:1px solid rgba(168,85,247,.35);color:#ede9fe;">
+        <span class="font-bold text-white">✍️ Precisa estar assinado?</span>
+        Temos enviado <strong class="text-white">sem assinar</strong> e o sistema tem aceitado. Na dúvida, use a
+        <strong class="text-white">Assinatura Digital</strong>, no mesmo card: preencha os dados com o e-mail do
+        comprador ou do vendedor, a pessoa recebe no e-mail e assina — ao finalizar, o arquivo assinado já fica
+        pronto aqui no sistema.
+      </div>
+
+      <!-- Passo a passo. A barrinha que anda sozinha no passo 3 é de propósito:
+           mostra o que vai aparecer na tela e por que não se deve fechar a página. -->
+      <div class="rounded-xl p-4" style="background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);">
+        <div class="text-xs font-bold uppercase tracking-wider mb-3" style="color:#7dd3fc;">Como emitir, passo a passo</div>
+        <ol class="space-y-2.5 text-sm" style="color:#cbd5e1;">
+          <li class="flex gap-3">
+            <span class="atpve-num" style="background:linear-gradient(135deg,#0ea5e9,#2563eb);">1</span>
+            <span>Suba os <strong class="text-white">três arquivos</strong> no formulário.</span>
+          </li>
+          <li class="flex gap-3">
+            <span class="atpve-num" style="background:linear-gradient(135deg,#6366f1,#a855f7);">2</span>
+            <span>Clique em <strong class="text-white">Emitir ATPV-e</strong>.</span>
+          </li>
+          <li class="flex gap-3">
+            <span class="atpve-num" style="background:linear-gradient(135deg,#a855f7,#ec4899);">3</span>
+            <span>
+              Abre uma <strong class="text-white">barra de progresso</strong> — deixe esta página aberta.
+              <span class="block mt-1.5 h-1.5 w-full rounded-full overflow-hidden" style="background:rgba(255,255,255,.12);">
+                <span class="block h-full rounded-full atpve-barrinha" style="background:linear-gradient(90deg,#f59e0b,#22d3ee);"></span>
+              </span>
+            </span>
+          </li>
+          <li class="flex gap-3">
+            <span class="atpve-num" style="background:linear-gradient(135deg,#f97316,#f59e0b);">4</span>
+            <span>Se aparecer o botão <strong class="text-white">Registrar no Detran</strong>, confira os dados e clique: é o registro que manda a intenção de venda para emissão.</span>
+          </li>
+          <li class="flex gap-3">
+            <span class="atpve-num" style="background:linear-gradient(135deg,#22c55e,#16a34a);">5</span>
+            <span>No fim da barra o <strong class="text-white">PDF é gerado</strong> — e também chega no seu <strong class="text-white">WhatsApp</strong>.</span>
+          </li>
+        </ol>
+      </div>
+
+      <div class="text-center text-xs" style="color:#94a3b8;">💰 Você só é cobrado quando o documento é entregue.</div>
+
+      <button onclick="fecharAtpveInstrucoes()"
+              class="w-full py-3.5 rounded-xl font-black text-base transition-all hover:scale-[1.02] active:scale-95"
+              style="background:linear-gradient(135deg,#f97316,#ea580c);color:white;box-shadow:0 8px 24px rgba(249,115,22,.45);">
+        Entendi, vamos lá 🚀
+      </button>
+    </div>
+  </div>
+</div>
+
+<style>
+/* As animações são presas ao .flex (a classe que abre o modal): enquanto ele
+   está display:none elas não rodam, então reabrir o popup toca tudo de novo,
+   sem precisar recriar o elemento. */
+@keyframes atpvePopIn  { from { opacity:0; transform:scale(.88) translateY(26px); } to { opacity:1; transform:none; } }
+@keyframes atpveSobe   { from { opacity:0; transform:translateY(14px); }            to { opacity:1; transform:none; } }
+@keyframes atpveFita   { to { background-position:200% 50%; } }
+@keyframes atpveBrilho { 0%,100% { box-shadow:0 0 0 0 rgba(56,189,248,.5); } 50% { box-shadow:0 0 0 14px rgba(56,189,248,0); } }
+@keyframes atpveFlutua { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-5px); } }
+@keyframes atpveEnche  { 0% { width:4%; } 70% { width:90%; } 100% { width:90%; } }
+
+#atpve-instrucoes-modal.flex .atpve-card        { animation:atpvePopIn .45s cubic-bezier(.175,.885,.32,1.275) both; }
+#atpve-instrucoes-modal.flex .atpve-fita        { animation:atpveFita 3s linear infinite; }
+#atpve-instrucoes-modal.flex .atpve-icone       { animation:atpveBrilho 2.4s ease-in-out infinite, atpveFlutua 3.2s ease-in-out infinite; }
+#atpve-instrucoes-modal.flex .atpve-barrinha    { animation:atpveEnche 2.6s ease-out infinite; }
+#atpve-instrucoes-modal.flex .atpve-stagger > * { animation:atpveSobe .45s ease both; }
+#atpve-instrucoes-modal.flex .atpve-stagger > *:nth-child(1) { animation-delay:.10s; }
+#atpve-instrucoes-modal.flex .atpve-stagger > *:nth-child(2) { animation-delay:.18s; }
+#atpve-instrucoes-modal.flex .atpve-stagger > *:nth-child(3) { animation-delay:.26s; }
+#atpve-instrucoes-modal.flex .atpve-stagger > *:nth-child(4) { animation-delay:.34s; }
+#atpve-instrucoes-modal.flex .atpve-stagger > *:nth-child(5) { animation-delay:.42s; }
+#atpve-instrucoes-modal.flex .atpve-stagger > *:nth-child(6) { animation-delay:.50s; }
+#atpve-instrucoes-modal.flex .atpve-stagger > *:nth-child(7) { animation-delay:.58s; }
+
+#atpve-instrucoes-modal .atpve-anexo { transition:transform .2s, box-shadow .2s; }
+#atpve-instrucoes-modal .atpve-anexo:hover { transform:translateY(-3px); box-shadow:0 8px 20px rgba(0,0,0,.35); }
+#atpve-instrucoes-modal .atpve-num {
+  flex:0 0 auto; width:26px; height:26px; border-radius:9999px; color:#fff;
+  font-size:13px; font-weight:800; display:flex; align-items:center; justify-content:center;
+  box-shadow:0 3px 10px rgba(0,0,0,.35);
+}
+
+/* Quem pediu menos movimento no sistema não recebe nenhum: o popup continua
+   inteiro, só que parado. */
+@media (prefers-reduced-motion: reduce) {
+  #atpve-instrucoes-modal.flex .atpve-card,
+  #atpve-instrucoes-modal.flex .atpve-fita,
+  #atpve-instrucoes-modal.flex .atpve-icone,
+  #atpve-instrucoes-modal.flex .atpve-barrinha,
+  #atpve-instrucoes-modal.flex .atpve-stagger > * { animation:none; }
+  #atpve-instrucoes-modal.flex .atpve-barrinha { width:90%; }
+}
+</style>
+
+
 <!-- ── POPUP NOVIDADE: REEMISSÃO CRLV RJ ───────────────────────────────────── -->
 <div id="popup-crlv-reemissao" class="fixed inset-0 z-[9999]" style="background:rgba(0,0,0,.6);backdrop-filter:blur(4px);">
   <div class="w-full h-full overflow-y-auto flex items-start justify-center p-4" style="-webkit-overflow-scrolling:touch;overscroll-behavior:contain;">
@@ -6638,6 +6799,27 @@ init();
 </style>
 
 <script>
+// ── Popup de instruções do ATPV-e ───────────────────────────────────────────
+// Chamado por selectService sempre que um ATPV-e é aberto (RJ, MG ou qualquer
+// UF que entre depois — o gatilho é o inputType, não o id do serviço).
+function abrirAtpveInstrucoes() {
+  const m = document.getElementById('atpve-instrucoes-modal');
+  if (!m) return;
+  m.classList.remove('hidden');
+  m.classList.add('flex');
+}
+
+function fecharAtpveInstrucoes() {
+  const m = document.getElementById('atpve-instrucoes-modal');
+  if (!m) return;
+  m.classList.add('hidden');
+  m.classList.remove('flex');
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') fecharAtpveInstrucoes();
+});
+
 function fecharPopupCrlvReemissao() {
   const el = document.getElementById('popup-crlv-reemissao');
   if (!el) return;
