@@ -61,6 +61,18 @@ const ASSINATURA_SERVICE_IDS = [
 // Não há carência: a assinatura vale para todos os usuários, antigos e novos.
 // Sem assinatura vigente, nenhum serviço do grupo roda — inclusive para quem já
 // emitia os três documentos quando eram abertos.
+// ── Pós-pago (fatura mensal) ─────────────────────────────────────────────────
+// Cliente pós-pago consulta sem saldo: cada consulta entra na fatura do ciclo
+// em vez de sair de users.credits (ver debitarConsulta). O vencimento é SEMPRE
+// dia 30 — quando o admin liga o pós-pago no meio do mês, o primeiro ciclo é
+// mais curto (pro rata natural: a fatura é o que foi consumido até o dia 30, e
+// só isso). Mês com menos de 30 dias vence no último dia (fevereiro).
+const POS_PAGO_DIA_VENCIMENTO = 30;
+// Dias de tolerância depois do vencimento antes de bloquear novas consultas.
+// Sem bloqueio nenhum o pós-pago vira crédito sem teto; bloquear no minuto
+// seguinte ao vencimento derrubaria o cliente que paga no dia. Três dias é o
+// meio-termo — mude aqui, é o único lugar.
+const POS_PAGO_CARENCIA_DIAS = 3;
 // Preço de tabela de um serviço do catálogo: basePrice + markup (ou basePrice
 // puro quando noMarkup), e 0 quando o serviço está num grupo gratuito.
 const catalogPrice = s =>
@@ -1678,6 +1690,39 @@ async function initDB() {
       UNIQUE(user_id, service_id)
     );
   `);
+  // ── Pós-pago ───────────────────────────────────────────────────────────────
+  // Marca no usuário + fatura por ciclo. O saldo (users.credits) NÃO é usado no
+  // pós-pago: fica parado em zero e o consumo vai para a fatura aberta, para o
+  // cliente nunca pagar duas vezes a mesma consulta (uma no saldo, outra na
+  // fatura). Teto NULL = sem limite de consumo no ciclo.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS pos_pago BOOLEAN NOT NULL DEFAULT false`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS pos_pago_limite NUMERIC(10,2)`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS pos_pago_desde TIMESTAMPTZ`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS faturas (
+      id             SERIAL PRIMARY KEY,
+      user_id        INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      status         VARCHAR(20) NOT NULL DEFAULT 'ABERTA'
+                     CHECK (status IN ('ABERTA','FECHADA','PAGA','CANCELADA')),
+      valor          NUMERIC(10,2) NOT NULL DEFAULT 0.00,
+      periodo_inicio TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      vencimento     TIMESTAMPTZ NOT NULL,
+      fechada_em     TIMESTAMPTZ,
+      paga_em        TIMESTAMPTZ,
+      gateway_id     VARCHAR(100),
+      origem_baixa   VARCHAR(20),
+      created_at     TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  // Uma fatura aberta por cliente é invariante do desenho todo: é nela que
+  // debitarConsulta soma, e é ela que a virada de ciclo fecha. O índice parcial
+  // faz o banco recusar uma segunda, em vez de o dinheiro se dividir em duas
+  // faturas sem ninguém perceber.
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_faturas_uma_aberta
+      ON faturas (user_id) WHERE status='ABERTA'
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_faturas_user ON faturas (user_id, created_at DESC)`);
   console.log('✅ Tabelas prontas');
 }
 
@@ -2366,11 +2411,20 @@ app.get('/api/user/stats', requireAuth, async (req, res) => {
         [req.user.id]
       ),
     ]);
+    // Cliente pós-pago não tem saldo — o card "Saldo" da Visão Geral vira
+    // "Fatura em aberto" e o menu ganha a aba Minha Fatura. Quem é pré-pago
+    // recebe pos_pago:false e a tela não muda em nada.
+    const pp = await resumoPosPago(req.user.id);
     res.json({
       credits:       parseFloat(userRow.rows[0].credits),
       month_spent:   parseFloat(monthRow.rows[0].total),
       total_spent:   parseFloat(totalRow.rows[0].total),
       total_queries: parseInt(countRow.rows[0].total),
+      pos_pago:      !!pp.posPago,
+      fatura_aberto: pp.posPago ? pp.emAberto : null,
+      fatura_devido: pp.posPago ? pp.devido : null,
+      fatura_vence:  pp.posPago && pp.fatura ? pp.fatura.vencimento : null,
+      fatura_vencida: pp.posPago ? pp.bloqueado : false,
     });
   } catch (err) {
     console.error('Erro em user/stats:', err.message);
@@ -5404,6 +5458,212 @@ function buildComunicacaoVendaPdfBuffer(service, data, params) {
   });
 }
 
+// ── Pós-pago: ciclo, fatura e débito ─────────────────────────────────────────
+// Desenho em uma frase: o cliente pós-pago não tem saldo, tem fatura. Cada
+// consulta soma em faturas.valor da fatura ABERTA (uma por cliente, garantida
+// por índice) e users.credits nem é tocado — é isso que evita cobrar a mesma
+// consulta duas vezes, no saldo e na fatura.
+//
+// O vencimento é sempre dia 30 (POS_PAGO_DIA_VENCIMENTO). A "pro rata" do
+// primeiro ciclo é automática porque a fatura é consumo, não mensalidade: quem
+// entra dia 12 paga no dia 30 o que consumiu de 12 a 30, e só.
+//
+// Não há cron para virar o ciclo: a virada é preguiçosa (garantirCicloPosPago),
+// disparada por quem toca a conta — a consulta, a tela de fatura do cliente e a
+// lista do admin. Idempotente, então rodar duas vezes junto não cria dois
+// ciclos (o índice parcial de fatura aberta é a última linha de defesa).
+
+// Brasília é UTC-3 o ano inteiro (sem horário de verão desde 2019) e o servidor
+// roda em UTC na Vercel — sem esse deslocamento, "dia 30 às 23:59" viraria dia
+// 30 às 20:59 para o cliente, e a virada aconteceria com o dia ainda correndo.
+const TZ_BR_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+// Último instante do dia 30 (ou do último dia do mês, quando ele tem menos de
+// 30 dias) seguinte a "apartirDe". Ligar o pós-pago NO dia 30 joga o vencimento
+// para o mês seguinte: fatura que nasce e vence no mesmo dia não dá ao cliente
+// nenhum dia de uso.
+function proximoVencimentoPosPago(apartirDe = new Date()) {
+  const base = new Date(apartirDe.getTime() - TZ_BR_OFFSET_MS);
+  let ano = base.getUTCFullYear();
+  let mes = base.getUTCMonth();
+  const diaDoMes = (a, m) =>
+    Math.min(POS_PAGO_DIA_VENCIMENTO, new Date(Date.UTC(a, m + 1, 0)).getUTCDate());
+  let dia = diaDoMes(ano, mes);
+  if (base.getUTCDate() >= dia) {
+    mes += 1;
+    if (mes > 11) { mes = 0; ano += 1; }
+    dia = diaDoMes(ano, mes);
+  }
+  return new Date(Date.UTC(ano, mes, dia, 23, 59, 59) + TZ_BR_OFFSET_MS);
+}
+
+// Abre a fatura do ciclo corrente se não houver nenhuma. O ON CONFLICT casa com
+// idx_faturas_uma_aberta: duas consultas simultâneas do mesmo cliente não abrem
+// duas faturas.
+async function garantirFaturaAberta(userId, inicio = new Date()) {
+  const existente = await pool.query(
+    `SELECT * FROM faturas WHERE user_id=$1 AND status='ABERTA'`, [userId]
+  );
+  if (existente.rows.length) return existente.rows[0];
+  await pool.query(
+    `INSERT INTO faturas (user_id, periodo_inicio, vencimento)
+     VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+    [userId, inicio, proximoVencimentoPosPago(inicio)]
+  );
+  const r = await pool.query(
+    `SELECT * FROM faturas WHERE user_id=$1 AND status='ABERTA'`, [userId]
+  );
+  return r.rows[0] || null;
+}
+
+// Virada de ciclo: passado o vencimento, a fatura aberta é fechada (valor
+// congelado) e a do ciclo seguinte é aberta começando no próprio vencimento.
+// Fatura fechada com valor zero já nasce quitada — não faz sentido cobrar R$ 0
+// nem bloquear o cliente por ela.
+async function garantirCicloPosPago(userId) {
+  let aberta = await garantirFaturaAberta(userId);
+  // Conta parada por meses (ninguém consultou, ninguém abriu a tela) tem mais
+  // de um ciclo atrasado: o laço vira um de cada vez até chegar no ciclo de
+  // hoje. O teto de 60 é só para uma data maluca no banco não travar a rota.
+  for (let i = 0; aberta && new Date(aberta.vencimento) <= new Date() && i < 60; i++) {
+    // Ciclo sem consumo nasce quitado: não há o que cobrar nem por que
+    // bloquear o cliente. Os três campos vêm calculados daqui em vez de um
+    // CASE sobre o mesmo parâmetro — o Postgres recusa deduzir dois tipos para
+    // o mesmo $n ("inconsistent types deduced for parameter").
+    const zerada = parseFloat(aberta.valor) <= 0;
+    await pool.query(
+      `UPDATE faturas SET status=$2, fechada_em=NOW(), paga_em=$3, origem_baixa=$4
+         WHERE id=$1 AND status='ABERTA'`,
+      [aberta.id, zerada ? 'PAGA' : 'FECHADA', zerada ? new Date() : null, zerada ? 'SEM_CONSUMO' : null]
+    );
+    aberta = await garantirFaturaAberta(userId, new Date(aberta.vencimento));
+  }
+  return aberta;
+}
+
+// Situação financeira do pós-pago, num lugar só — usada pelo porteiro da
+// consulta, pela tela do cliente e pela lista do admin.
+async function resumoPosPago(userId) {
+  const ur = await pool.query(
+    'SELECT pos_pago, pos_pago_limite, pos_pago_desde FROM users WHERE id=$1', [userId]
+  );
+  const u = ur.rows[0];
+  if (!u || !u.pos_pago) return { posPago: false };
+
+  const aberta = await garantirCicloPosPago(userId);
+  const pend = await pool.query(
+    `SELECT id, valor, vencimento, fechada_em FROM faturas
+      WHERE user_id=$1 AND status='FECHADA' ORDER BY vencimento ASC`, [userId]
+  );
+  const vencidas = pend.rows.filter(f =>
+    new Date(f.vencimento).getTime() + POS_PAGO_CARENCIA_DIAS * 86400000 < Date.now()
+  );
+  const limite = u.pos_pago_limite === null ? null : parseFloat(u.pos_pago_limite);
+  const emAberto = aberta ? parseFloat(aberta.valor) : 0;
+  const fechadoEmAberto = pend.rows.reduce((s, f) => s + parseFloat(f.valor), 0);
+  return {
+    posPago: true,
+    desde: u.pos_pago_desde,
+    limite,
+    fatura: aberta,
+    emAberto,
+    fechadas: pend.rows,
+    fechadoEmAberto,
+    devido: parseFloat((emAberto + fechadoEmAberto).toFixed(2)),
+    vencidas,
+    bloqueado: vencidas.length > 0,
+  };
+}
+
+// Porteiro do pagamento da consulta, nos dois modelos. Devolve null quando pode
+// seguir, ou { status, body } pronto para o res. O pré-pago segue exatamente
+// como sempre foi (saldo < preço barra); o pós-pago não tem saldo a conferir —
+// o que barra é fatura vencida além da carência e o teto do ciclo.
+async function bloqueioPagamentoConsulta(userId, user, price) {
+  if (!user.pos_pago) {
+    if (parseFloat(user.credits) < price) {
+      return { status: 400, body: {
+        error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}`,
+      } };
+    }
+    return null;
+  }
+  const resumo = await resumoPosPago(userId);
+  if (resumo.bloqueado) {
+    const venc = new Date(resumo.vencidas[0].vencimento).toLocaleDateString('pt-BR');
+    return { status: 402, body: {
+      code: 'FATURA_VENCIDA',
+      error: `Sua fatura venceu em ${venc} e ainda consta em aberto. Pague em "Minha Fatura" para voltar a consultar.`,
+    } };
+  }
+  if (resumo.limite !== null && resumo.emAberto + price > resumo.limite) {
+    return { status: 402, body: {
+      code: 'LIMITE_POS_PAGO',
+      error: `Esta consulta passa do seu limite de R$ ${resumo.limite.toFixed(2).replace('.', ',')} por ciclo (já usados R$ ${resumo.emAberto.toFixed(2).replace('.', ',')}). Pague a fatura em aberto ou fale com o suporte para ampliar o limite.`,
+    } };
+  }
+  return null;
+}
+
+// Débito de uma consulta. Ponto ÚNICO: todo lugar que cobrava com
+// "UPDATE users SET credits = credits - ..." passa por aqui, senão o pós-pago
+// consumiria saldo que ele não tem e a fatura sairia zerada.
+async function debitarConsulta(userId, amount) {
+  const valor = parseFloat(amount);
+  if (!(valor > 0)) return;
+  const ur = await pool.query('SELECT pos_pago FROM users WHERE id=$1', [userId]);
+  if (!ur.rows[0]?.pos_pago) {
+    await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [valor, userId]);
+    return;
+  }
+  const fatura = await garantirCicloPosPago(userId);
+  if (!fatura) {
+    // Não deveria acontecer (garantirFaturaAberta cria a fatura), mas ficar sem
+    // cobrar é pior que cobrar do saldo: o consumo não pode evaporar.
+    console.error(`[pos-pago] usuário ${userId} sem fatura aberta — débito de R$ ${valor} foi para o saldo.`);
+    await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [valor, userId]);
+    return;
+  }
+  await pool.query('UPDATE faturas SET valor = valor + $1 WHERE id=$2', [valor, fatura.id]);
+}
+
+// Estorno de uma consulta — o espelho do débito. No pós-pago devolve para a
+// fatura (nunca abaixo de zero, para um estorno de consulta de ciclo anterior
+// não virar crédito na fatura nova).
+async function estornarConsulta(userId, amount) {
+  const valor = parseFloat(amount);
+  if (!(valor > 0)) return;
+  const ur = await pool.query('SELECT pos_pago FROM users WHERE id=$1', [userId]);
+  if (!ur.rows[0]?.pos_pago) {
+    await pool.query('UPDATE users SET credits = credits + $1 WHERE id=$2', [valor, userId]);
+    return;
+  }
+  const fatura = await garantirCicloPosPago(userId);
+  if (!fatura) {
+    await pool.query('UPDATE users SET credits = credits + $1 WHERE id=$2', [valor, userId]);
+    return;
+  }
+  await pool.query(
+    'UPDATE faturas SET valor = GREATEST(0, valor - $1) WHERE id=$2', [valor, fatura.id]
+  );
+}
+
+// Fecha a fatura aberta ANTES do vencimento para gerar a cobrança: congela o
+// valor, para o PIX não ficar defasado se o cliente consultar mais enquanto o
+// QR está na tela, e já abre o ciclo seguinte. O vencimento original é mantido
+// — pagar adiantado não muda o dia 30.
+async function fecharFaturaParaCobranca(userId) {
+  const aberta = await garantirCicloPosPago(userId);
+  if (!aberta || parseFloat(aberta.valor) <= 0) return null;
+  const upd = await pool.query(
+    `UPDATE faturas SET status='FECHADA', fechada_em=NOW()
+      WHERE id=$1 AND status='ABERTA' RETURNING *`,
+    [aberta.id]
+  );
+  await garantirFaturaAberta(userId, new Date());
+  return upd.rows[0] || null;
+}
+
 // Fecha uma consulta assíncrona cujo documento acabou de chegar: tira do
 // 'aguardando_pdf' e debita se ainda não tiver sido cobrada. Claim atômico —
 // dois caminhos concorrentes (cron e clique do usuário, webhook duplicado) não
@@ -5423,7 +5683,7 @@ async function finalizePendingQuery(queryId, userId, descricao) {
   // Já cobrada no cadastro (ATPV-e): fechou agora, mas não há débito a fazer.
   if (claimed.rows[0].transaction_id) return true;
   const amount = parseFloat(claimed.rows[0].amount);
-  await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [amount, userId]);
+  await debitarConsulta(userId, amount);
   const txRow = await pool.query(
     `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
     [userId, amount, descricao]
@@ -5706,11 +5966,11 @@ app.get('/api/queries/:id/comunicacao-venda-motivos', requireAuth, async (req, r
 
     const svc = SERVICES.find(s => s.id === 'motivos-cancelamento');
     const price = await getUserServicePrice(req.user.id, svc);
-    const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.user.id]);
+    const ur = await pool.query('SELECT id, credits, active, pos_pago, pos_pago_limite FROM users WHERE id=$1', [req.user.id]);
     const user = ur.rows[0];
     if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
-    if (parseFloat(user.credits) < price)
-      return res.status(400).json({ error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}` });
+    const bloqueio = await bloqueioPagamentoConsulta(user.id, user, price);
+    if (bloqueio) return res.status(bloqueio.status).json(bloqueio.body);
 
     const upRes = await fetch(`${PORTAL_BASE_URL}/motivos-cancelamento/${protocolo}`, {
       headers: { 'chaveAcesso': PORTAL_DESP_KEY },
@@ -5719,7 +5979,7 @@ app.get('/api/queries/:id/comunicacao-venda-motivos', requireAuth, async (req, r
     if (!upRes.ok || !Array.isArray(upData?.motivos))
       return res.status(502).json({ error: upData?.error || 'Erro ao buscar motivos de cancelamento.' });
 
-    await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
+    await debitarConsulta(req.user.id, price);
     await pool.query(
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3)`,
       [req.user.id, price, 'Consulta: Motivos de Cancelamento']
@@ -5757,11 +6017,11 @@ app.post('/api/queries/:id/comunicacao-venda-cancelar', requireAuth, async (req,
 
     const svc = SERVICES.find(s => s.id === 'cancelar-comunicacao-venda');
     const price = await getUserServicePrice(req.user.id, svc);
-    const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.user.id]);
+    const ur = await pool.query('SELECT id, credits, active, pos_pago, pos_pago_limite FROM users WHERE id=$1', [req.user.id]);
     const user = ur.rows[0];
     if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
-    if (parseFloat(user.credits) < price)
-      return res.status(400).json({ error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}` });
+    const bloqueio = await bloqueioPagamentoConsulta(user.id, user, price);
+    if (bloqueio) return res.status(bloqueio.status).json(bloqueio.body);
 
     const upRes = await fetch(`${PORTAL_BASE_URL}/cancelar-comunicacao-venda`, {
       method: 'POST',
@@ -5803,7 +6063,7 @@ app.post('/api/queries/:id/comunicacao-venda-cancelar', requireAuth, async (req,
       console.error(`Erro ao regerar PDF cancelado da comunicação de venda [query ${qr.rows[0].id}]:`, e.message);
     }
 
-    await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
+    await debitarConsulta(req.user.id, price);
     await pool.query(
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3)`,
       [req.user.id, price, 'Consulta: Cancelar Comunicação Venda']
@@ -5843,7 +6103,7 @@ async function refundQuery(queryId, userId, amount, reason) {
     [queryId]
   );
   if (!marked.rows.length) return false;
-  await pool.query('UPDATE users SET credits = credits + $1 WHERE id=$2', [amount, userId]);
+  await estornarConsulta(userId, amount);
   await pool.query(
     `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'refund',$2,$3)`,
     [userId, amount, `Estorno: ${reason}`]
@@ -5939,14 +6199,12 @@ async function processCatalogQuery(userId, serviceId, params, res) {
 
   try {
     const ur = await pool.query(
-      'SELECT credits, active, phone, name, email FROM users WHERE id=$1', [userId]
+      'SELECT id, credits, active, phone, name, email, pos_pago, pos_pago_limite FROM users WHERE id=$1', [userId]
     );
     const user = ur.rows[0];
     if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
-    if (parseFloat(user.credits) < price)
-      return res.status(400).json({
-        error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}`,
-      });
+    const bloqueio = await bloqueioPagamentoConsulta(user.id, user, price);
+    if (bloqueio) return res.status(bloqueio.status).json(bloqueio.body);
 
     // ── Paywall da aba "Coisas de Despachantes" ──
     // Estes serviços não debitam crédito, mas exigem assinatura vigente. A
@@ -6047,7 +6305,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
 
     // ── Serviços manuais (upload de arquivo pelo super admin — resultado não vem na hora) ──
     if (MANUAL_SERVICE_IDS.includes(serviceId)) {
-      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]);
+      await debitarConsulta(userId, price);
       const txRow = await pool.query(
         `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
         [userId, price, `Consulta: ${service.name}`]
@@ -6098,7 +6356,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         return res.status(500).json({ error: 'Erro ao gerar a declaração.' });
       }
 
-      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]);
+      await debitarConsulta(userId, price);
       const txRow = await pool.query(
         `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
         [userId, price, `Consulta: ${service.name}`]
@@ -6169,7 +6427,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         return res.status(500).json({ error: 'Erro ao gerar o contrato.' });
       }
 
-      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]);
+      await debitarConsulta(userId, price);
       const txRow = await pool.query(
         `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
         [userId, price, `Consulta: ${service.name}`]
@@ -6238,7 +6496,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         return res.status(500).json({ error: 'Erro ao gerar a procuração.' });
       }
 
-      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]);
+      await debitarConsulta(userId, price);
       const txRow = await pool.query(
         `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
         [userId, price, `Consulta: ${service.name}`]
@@ -6298,7 +6556,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         return res.status(500).json({ error: 'Erro ao gerar a nota de prestação de serviços.' });
       }
 
-      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]);
+      await debitarConsulta(userId, price);
       const txRow = await pool.query(
         `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
         [userId, price, `Consulta: ${service.name}`]
@@ -6438,7 +6696,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         carteirinhaVerso:  params?.carteirinhaVerso  ? '[digitalização anexada]' : undefined,
       };
 
-      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]);
+      await debitarConsulta(userId, price);
       const txRow = await pool.query(
         `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
         [userId, price, `Consulta: ${service.name}`]
@@ -6703,7 +6961,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       }
       const pdfBuf = Buffer.from(pdfBase64, 'base64');
 
-      await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]);
+      await debitarConsulta(userId, price);
       const txRow = await pool.query(
         `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
         [userId, price, `Consulta: ${service.name}`]
@@ -7692,9 +7950,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     }
 
     // ── Debita créditos somente após validar resposta ─────────────────────────
-    await pool.query(
-      'UPDATE users SET credits = credits - $1 WHERE id=$2', [price, userId]
-    );
+    await debitarConsulta(userId, price);
     const txRow = await pool.query(
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
       [userId, price, `Consulta: ${service.name}`]
@@ -8027,13 +8283,11 @@ app.post('/api/query-v2', requireAuth, async (req, res) => {
   const price = parseFloat((service.basePrice * (service.noMarkup ? 1 : MARKUP)).toFixed(2));
 
   try {
-    const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.user.id]);
+    const ur = await pool.query('SELECT id, credits, active, pos_pago, pos_pago_limite FROM users WHERE id=$1', [req.user.id]);
     const user = ur.rows[0];
     if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
-    if (parseFloat(user.credits) < price)
-      return res.status(400).json({
-        error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}`,
-      });
+    const bloqueio = await bloqueioPagamentoConsulta(user.id, user, price);
+    if (bloqueio) return res.status(bloqueio.status).json(bloqueio.body);
 
     const form = new URLSearchParams({ auth_token: DATACUBE_TOKEN });
 
@@ -8417,7 +8671,7 @@ app.post('/api/query-v2', requireAuth, async (req, res) => {
       }
     }
 
-    await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
+    await debitarConsulta(req.user.id, price);
     const txRow = await pool.query(
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
       [req.user.id, price, `Consulta: ${service.name} (Opção 2)`]
@@ -8462,13 +8716,11 @@ app.post('/api/query-v3', requireAuth, async (req, res) => {
   const price = parseFloat((service.basePrice * INFOSIMPLES_MARKUP).toFixed(2));
 
   try {
-    const ur = await pool.query('SELECT credits, active FROM users WHERE id=$1', [req.user.id]);
+    const ur = await pool.query('SELECT id, credits, active, pos_pago, pos_pago_limite FROM users WHERE id=$1', [req.user.id]);
     const user = ur.rows[0];
     if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
-    if (parseFloat(user.credits) < price)
-      return res.status(400).json({
-        error: `Saldo insuficiente. Necessário: R$ ${price.toFixed(2).replace('.', ',')}`,
-      });
+    const bloqueio = await bloqueioPagamentoConsulta(user.id, user, price);
+    if (bloqueio) return res.status(bloqueio.status).json(bloqueio.body);
 
     for (const p of service.params) {
       const v = (params?.[p.name] ?? '').toString().trim();
@@ -8499,7 +8751,7 @@ app.post('/api/query-v3', requireAuth, async (req, res) => {
     const result = Array.isArray(apiData.data) ? (apiData.data[0] ?? {}) : (apiData.data ?? {});
     const label = `${service.group} — ${service.name}`;
 
-    await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [price, req.user.id]);
+    await debitarConsulta(req.user.id, price);
     const txRow = await pool.query(
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
       [req.user.id, price, `Consulta: ${label} (Infosimples)`]
@@ -9609,6 +9861,125 @@ app.post('/api/assinatura/pix', requireAuth, async (req, res) => {
   }
 });
 
+// ── GET /api/pos-pago/resumo ─────────────────────────────────────────────────
+// Tudo que a aba "Minha Fatura" do painel mostra: o ciclo corrente, as faturas
+// fechadas esperando pagamento e as consultas que compõem o ciclo. A virada de
+// ciclo acontece aqui dentro (resumoPosPago → garantirCicloPosPago), então
+// abrir a tela já mostra a situação do dia, sem depender de cron.
+app.get('/api/pos-pago/resumo', requireAuth, async (req, res) => {
+  try {
+    const pp = await resumoPosPago(req.user.id);
+    if (!pp.posPago) return res.json({ posPago: false });
+
+    const itens = pp.fatura ? await pool.query(
+      `SELECT id, service_id, amount, created_at, status FROM queries
+        WHERE user_id=$1 AND created_at >= $2 AND amount > 0 AND status <> 'estornado'
+        ORDER BY created_at DESC LIMIT 200`,
+      [req.user.id, pp.fatura.periodo_inicio]
+    ) : { rows: [] };
+
+    res.json({
+      posPago: true,
+      desde: pp.desde,
+      limite: pp.limite,
+      carenciaDias: POS_PAGO_CARENCIA_DIAS,
+      diaVencimento: POS_PAGO_DIA_VENCIMENTO,
+      emAberto: pp.emAberto,
+      devido: pp.devido,
+      bloqueado: pp.bloqueado,
+      fatura: pp.fatura && {
+        id: pp.fatura.id,
+        valor: parseFloat(pp.fatura.valor),
+        periodo_inicio: pp.fatura.periodo_inicio,
+        vencimento: pp.fatura.vencimento,
+      },
+      fechadas: pp.fechadas.map(f => ({
+        id: f.id, valor: parseFloat(f.valor), vencimento: f.vencimento,
+        vencida: new Date(f.vencimento) < new Date(),
+      })),
+      itens: itens.rows.map(q => ({
+        id: q.id,
+        servico: (SERVICES.find(s => s.id === q.service_id) || {}).name || q.service_id,
+        valor: parseFloat(q.amount),
+        data: q.created_at,
+      })),
+    });
+  } catch (e) {
+    console.error('Erro no resumo do pós-pago:', e.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── POST /api/pos-pago/pix ───────────────────────────────────────────────────
+// Cobrança PIX da fatura. O valor NUNCA vem do corpo: é a soma das faturas em
+// aberto no servidor. Antes de gerar o QR, a fatura do ciclo corrente é fechada
+// (fecharFaturaParaCobranca) — assim o valor fica congelado e uma consulta
+// feita com o QR na tela entra no ciclo seguinte, em vez de ficar sem cobrança.
+// Pagar adiantado não muda o dia 30: o vencimento da fatura nova é o mesmo de
+// sempre. A confirmação reaproveita /api/pix/status/:id, o webhook e o cron.
+app.post('/api/pos-pago/pix', requireAuth, async (req, res) => {
+  try {
+    const ur = await pool.query(
+      'SELECT id, name, email, cpf_cnpj, active, pos_pago FROM users WHERE id=$1', [req.user.id]
+    );
+    const user = ur.rows[0];
+    if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+    if (!user.pos_pago) return res.status(400).json({ error: 'Sua conta não é pós-paga.' });
+
+    await fecharFaturaParaCobranca(req.user.id);
+    const pend = await pool.query(
+      `SELECT id, valor FROM faturas WHERE user_id=$1 AND status='FECHADA' ORDER BY vencimento ASC`,
+      [req.user.id]
+    );
+    const total = parseFloat(pend.rows.reduce((s, f) => s + parseFloat(f.valor), 0).toFixed(2));
+    if (!pend.rows.length || total <= 0)
+      return res.status(400).json({ error: 'Não há nada a pagar neste momento.' });
+
+    const doc = (user.cpf_cnpj || '').replace(/\D/g, '');
+    const nameParts = (user.name || 'Cliente').trim().split(/\s+/);
+    const payment = await mpReq('POST', '/v1/payments', {
+      transaction_amount: total,
+      description: `Fatura MC Despachadoria — ${user.name}`,
+      payment_method_id: 'pix',
+      payer: {
+        email: user.email,
+        first_name: nameParts[0],
+        last_name: nameParts.slice(1).join(' ') || nameParts[0],
+        identification: { type: doc.length > 11 ? 'CNPJ' : 'CPF', number: doc },
+      },
+    }, { 'X-Idempotency-Key': crypto.randomUUID() });
+
+    const txData = payment.point_of_interaction?.transaction_data || {};
+    if (!txData.qr_code) throw new Error('Mercado Pago não retornou o QR Code PIX.');
+
+    await pool.query(
+      `INSERT INTO pix_payments (user_id, gateway_id, value, status, purpose)
+       VALUES ($1,$2,$3,'PENDING','FATURA') ON CONFLICT (gateway_id) DO NOTHING`,
+      [req.user.id, String(payment.id), total]
+    );
+    // Carimba o PIX nas faturas cobradas: é por ele que a baixa acha quais
+    // quitar quando o pagamento aprova. QR abandonado só deixa o carimbo velho
+    // para trás — a próxima tentativa sobrescreve, e a baixa tem um plano B
+    // (ver o purpose FATURA em creditPixPaymentIfApproved).
+    await pool.query(
+      `UPDATE faturas SET gateway_id=$1 WHERE id = ANY($2::int[])`,
+      [String(payment.id), pend.rows.map(f => f.id)]
+    );
+
+    res.json({
+      paymentId: payment.id,
+      qrCode: txData.qr_code_base64,
+      pixCopiaECola: txData.qr_code,
+      expirationDate: payment.date_of_expiration,
+      value: total,
+    });
+  } catch (err) {
+    console.error('Erro ao criar PIX da fatura:', err.message);
+    await alertAdminPixFalha(err, 'Fatura pós-pago (/api/pos-pago/pix)');
+    res.status(500).json({ error: mpErroAmigavel(err, 'Erro ao criar a cobrança PIX da fatura.') });
+  }
+});
+
 // ── GET /api/admin/assinantes ────────────────────────────────────────────────
 // Lista de quem assina "Coisas de Despachantes". Cada pagamento cria uma linha
 // nova em subscriptions (um período), então aqui interessa UMA linha por
@@ -9702,6 +10073,50 @@ async function creditPixPaymentIfApproved(gatewayId) {
       // registrado em pix_payments e o período em subscriptions.
       await client.query('COMMIT');
       return { credited: true, status: 'approved', value: parseFloat(p.value), purpose: 'ASSINATURA' };
+    }
+
+    // Pagamento de fatura do pós-pago: não credita saldo — dá baixa nas faturas
+    // que aquele PIX cobrou. O caminho normal é pelo gateway_id carimbado na
+    // geração do QR. O plano B existe para o QR abandonado e pago depois, cujo
+    // carimbo já foi sobrescrito por uma cobrança nova: nesse caso quita as
+    // faturas fechadas mais antigas até o valor pago acabar, que é exatamente o
+    // que o cliente comprou. Sem ele, o dinheiro entraria e a fatura seguiria
+    // em aberto, bloqueando quem já pagou.
+    if (p.purpose === 'FATURA') {
+      const porCarimbo = await client.query(
+        `UPDATE faturas SET status='PAGA', paga_em=NOW(), origem_baixa='PIX'
+          WHERE gateway_id=$1 AND status='FECHADA' RETURNING id`,
+        [gatewayId]
+      );
+      if (!porCarimbo.rows.length) {
+        const abertas = await client.query(
+          `SELECT id, valor FROM faturas WHERE user_id=$1 AND status='FECHADA'
+            ORDER BY vencimento ASC`,
+          [p.user_id]
+        );
+        let resta = parseFloat(p.value);
+        const quitar = [];
+        for (const f of abertas.rows) {
+          const v = parseFloat(f.valor);
+          if (v > resta + 0.001) break;
+          resta -= v;
+          quitar.push(f.id);
+        }
+        if (quitar.length) {
+          await client.query(
+            `UPDATE faturas SET status='PAGA', paga_em=NOW(), origem_baixa='PIX', gateway_id=$2
+              WHERE id = ANY($1::int[])`,
+            [quitar, gatewayId]
+          );
+        } else {
+          console.error(`[pos-pago] PIX ${gatewayId} aprovado (R$ ${p.value}) sem fatura correspondente para baixar.`);
+        }
+      }
+      // Como na assinatura, de propósito não grava em transactions: aquele
+      // extrato é o do saldo pré-pago, e a fatura não movimenta saldo. O
+      // pagamento fica em pix_payments e a baixa na própria fatura.
+      await client.query('COMMIT');
+      return { credited: true, status: 'approved', value: parseFloat(p.value), purpose: 'FATURA' };
     }
 
     await client.query('UPDATE users SET credits = credits + $1 WHERE id=$2', [p.value, p.user_id]);
@@ -11339,6 +11754,7 @@ app.get('/api/admin/users', requireAuth, requireSuperAdmin, async (req, res) => 
     // por linha.
     const r = await pool.query(
       `SELECT u.id,u.name,u.email,u.cpf_cnpj,u.phone,u.role,u.credits,u.active,u.created_at,u.affiliate_code,
+              u.pos_pago, u.pos_pago_limite,
               s.expires_at AS assinatura_expira_em,
               s.origem     AS assinatura_origem,
               s.cota       AS assinatura_cota,
@@ -11431,11 +11847,200 @@ app.delete('/api/admin/users/:id/assinatura', requireAuth, requireSuperAdmin, as
   }
 });
 
+// ── ADMIN: POST /api/admin/users/:id/pos-pago ────────────────────────────────
+// Liga ou desliga o pós-pago do cliente. Ligar abre a primeira fatura na hora,
+// com vencimento no próximo dia 30 — é aí que a "pro rata" acontece: o ciclo
+// nasce mais curto e a fatura cobra só o que for consultado até lá.
+// Desligar NÃO apaga fatura: o que já foi consumido continua devido (fica
+// FECHADA para o admin cobrar), senão desligar viraria perdão de dívida sem
+// querer. Só a fatura zerada é cancelada, porque não há o que cobrar nela.
+app.post('/api/admin/users/:id/pos-pago', requireAuth, requireSuperAdmin, async (req, res) => {
+  const userId = parseInt(req.params.id, 10);
+  const { ativo, limite } = req.body || {};
+  let limiteFinal = null;
+  if (limite !== '' && limite !== null && limite !== undefined) {
+    limiteFinal = parseFloat(String(limite).replace(',', '.'));
+    if (!(limiteFinal > 0))
+      return res.status(400).json({ error: 'Limite inválido. Informe um valor maior que zero ou deixe vazio para sem limite.' });
+  }
+  try {
+    const u = await pool.query('SELECT id, name, pos_pago FROM users WHERE id=$1', [userId]);
+    if (!u.rows.length) return res.status(404).json({ error: 'Usuário não encontrado.' });
+
+    if (ativo) {
+      await pool.query(
+        `UPDATE users SET pos_pago=true, pos_pago_limite=$2,
+                pos_pago_desde=COALESCE(pos_pago_desde, NOW()) WHERE id=$1`,
+        [userId, limiteFinal]
+      );
+      const fatura = await garantirFaturaAberta(userId);
+      console.log(`[admin] pós-pago ligado para user ${userId} (limite ${limiteFinal ?? 'sem limite'}, vence ${fatura?.vencimento})`);
+      return res.json({ success: true, posPago: true, fatura });
+    }
+
+    await pool.query('UPDATE users SET pos_pago=false, pos_pago_limite=NULL WHERE id=$1', [userId]);
+    await pool.query(
+      `UPDATE faturas SET status = CASE WHEN valor > 0 THEN 'FECHADA' ELSE 'CANCELADA' END,
+              fechada_em=NOW()
+        WHERE user_id=$1 AND status='ABERTA'`,
+      [userId]
+    );
+    console.log(`[admin] pós-pago desligado para user ${userId}`);
+    res.json({ success: true, posPago: false });
+  } catch (err) {
+    console.error('Erro ao mudar o pós-pago:', err.message);
+    res.status(500).json({ error: 'Erro ao alterar o pós-pago do usuário.' });
+  }
+});
+
+// ── ADMIN: GET /api/admin/pos-pago ───────────────────────────────────────────
+// A página "Pós-pago": um cliente por linha, com o ciclo corrente, o que está
+// fechado esperando pagamento e desde quando. A virada de ciclo de cada um
+// acontece na leitura (garantirCicloPosPago) — abrir a página põe todo mundo
+// em dia, que é o que faz o bloqueio por atraso valer sem cron.
+app.get('/api/admin/pos-pago', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const ids = await pool.query('SELECT id FROM users WHERE pos_pago=true ORDER BY id');
+    for (const row of ids.rows) {
+      try { await garantirCicloPosPago(row.id); }
+      catch (e) { console.error(`[pos-pago] virada do ciclo falhou para user ${row.id}: ${e.message}`); }
+    }
+    const r = await pool.query(
+      `SELECT u.id, u.name, u.email, u.phone, u.cpf_cnpj, u.active, u.pos_pago_limite, u.pos_pago_desde,
+              a.id AS fatura_id, a.valor AS fatura_valor, a.vencimento AS fatura_vencimento,
+              a.periodo_inicio AS fatura_inicio,
+              COALESCE(f.total, 0)  AS fechado_total,
+              COALESCE(f.qtd, 0)    AS fechado_qtd,
+              f.mais_antigo         AS fechado_vencimento
+         FROM users u
+         LEFT JOIN LATERAL (
+           SELECT id, valor, vencimento, periodo_inicio FROM faturas
+            WHERE user_id=u.id AND status='ABERTA' LIMIT 1
+         ) a ON true
+         LEFT JOIN LATERAL (
+           SELECT SUM(valor) AS total, COUNT(*) AS qtd, MIN(vencimento) AS mais_antigo
+             FROM faturas WHERE user_id=u.id AND status='FECHADA'
+         ) f ON true
+        WHERE u.pos_pago = true
+        ORDER BY COALESCE(f.total,0) DESC, u.name ASC`
+    );
+    const carenciaMs = POS_PAGO_CARENCIA_DIAS * 86400000;
+    res.json({
+      carenciaDias: POS_PAGO_CARENCIA_DIAS,
+      diaVencimento: POS_PAGO_DIA_VENCIMENTO,
+      clientes: r.rows.map(c => ({
+        ...c,
+        pos_pago_limite: c.pos_pago_limite === null ? null : parseFloat(c.pos_pago_limite),
+        fatura_valor:    c.fatura_valor === null ? 0 : parseFloat(c.fatura_valor),
+        fechado_total:   parseFloat(c.fechado_total),
+        fechado_qtd:     parseInt(c.fechado_qtd, 10),
+        // Bloqueado é o mesmo critério do porteiro da consulta: fatura fechada
+        // com o vencimento passado da carência.
+        bloqueado: !!c.fechado_vencimento &&
+          new Date(c.fechado_vencimento).getTime() + carenciaMs < Date.now(),
+      })),
+    });
+  } catch (err) {
+    console.error('Erro ao listar pós-pago:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── ADMIN: GET /api/admin/pos-pago/:id/faturas ───────────────────────────────
+// Histórico de faturas de um cliente, com as consultas do ciclo corrente.
+app.get('/api/admin/pos-pago/:id/faturas', requireAuth, requireSuperAdmin, async (req, res) => {
+  const userId = parseInt(req.params.id, 10);
+  try {
+    await garantirCicloPosPago(userId).catch(() => null);
+    const [u, f] = await Promise.all([
+      pool.query('SELECT id, name, email, phone, pos_pago, pos_pago_limite, pos_pago_desde FROM users WHERE id=$1', [userId]),
+      pool.query(
+        `SELECT id, status, valor, periodo_inicio, vencimento, fechada_em, paga_em, origem_baixa, gateway_id
+           FROM faturas WHERE user_id=$1 ORDER BY periodo_inicio DESC LIMIT 60`, [userId]
+      ),
+    ]);
+    if (!u.rows.length) return res.status(404).json({ error: 'Usuário não encontrado.' });
+    const aberta = f.rows.find(x => x.status === 'ABERTA');
+    const itens = aberta ? await pool.query(
+      `SELECT id, service_id, amount, created_at FROM queries
+        WHERE user_id=$1 AND created_at >= $2 AND amount > 0 AND status <> 'estornado'
+        ORDER BY created_at DESC LIMIT 200`,
+      [userId, aberta.periodo_inicio]
+    ) : { rows: [] };
+    res.json({
+      usuario: u.rows[0],
+      faturas: f.rows.map(x => ({ ...x, valor: parseFloat(x.valor) })),
+      itens: itens.rows.map(q => ({
+        id: q.id,
+        servico: (SERVICES.find(s => s.id === q.service_id) || {}).name || q.service_id,
+        valor: parseFloat(q.amount),
+        data: q.created_at,
+      })),
+    });
+  } catch (err) {
+    console.error('Erro ao listar faturas:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── ADMIN: POST /api/admin/faturas/:id/pagar ─────────────────────────────────
+// Baixa manual: o cliente pagou por fora (PIX na conta, dinheiro, transferência)
+// e o admin marca a fatura como paga. origem_baixa='MANUAL' separa isso do que
+// entrou pelo Mercado Pago, para a conciliação não confundir os dois.
+// Fatura ainda ABERTA é fechada antes de quitar (congela o valor) e o ciclo
+// seguinte abre na hora — senão o cliente ficaria sem fatura corrente.
+app.post('/api/admin/faturas/:id/pagar', requireAuth, requireSuperAdmin, async (req, res) => {
+  const faturaId = parseInt(req.params.id, 10);
+  try {
+    const f = await pool.query('SELECT * FROM faturas WHERE id=$1', [faturaId]);
+    if (!f.rows.length) return res.status(404).json({ error: 'Fatura não encontrada.' });
+    const fatura = f.rows[0];
+    if (fatura.status === 'PAGA') return res.status(400).json({ error: 'Esta fatura já está paga.' });
+    if (fatura.status === 'CANCELADA') return res.status(400).json({ error: 'Esta fatura foi cancelada.' });
+
+    const upd = await pool.query(
+      `UPDATE faturas SET status='PAGA', paga_em=NOW(), origem_baixa='MANUAL',
+              fechada_em=COALESCE(fechada_em, NOW())
+        WHERE id=$1 AND status IN ('ABERTA','FECHADA') RETURNING *`,
+      [faturaId]
+    );
+    if (!upd.rows.length) return res.status(409).json({ error: 'A fatura mudou de situação — recarregue a página.' });
+    if (fatura.status === 'ABERTA') await garantirFaturaAberta(fatura.user_id);
+    console.log(`[admin] fatura ${faturaId} baixada na mão (R$ ${fatura.valor})`);
+    res.json({ success: true, fatura: upd.rows[0] });
+  } catch (err) {
+    console.error('Erro ao dar baixa na fatura:', err.message);
+    res.status(500).json({ error: 'Erro ao marcar a fatura como paga.' });
+  }
+});
+
+// ── ADMIN: POST /api/admin/faturas/:id/fechar ────────────────────────────────
+// Fecha o ciclo antes do dia 30 (cliente pediu a fatura agora, ou o admin vai
+// cobrar por fora). Congela o valor e abre o ciclo seguinte; o vencimento do
+// ciclo novo continua sendo o próximo dia 30.
+app.post('/api/admin/faturas/:id/fechar', requireAuth, requireSuperAdmin, async (req, res) => {
+  const faturaId = parseInt(req.params.id, 10);
+  try {
+    const upd = await pool.query(
+      `UPDATE faturas SET status='FECHADA', fechada_em=NOW()
+        WHERE id=$1 AND status='ABERTA' AND valor > 0 RETURNING *`,
+      [faturaId]
+    );
+    if (!upd.rows.length)
+      return res.status(400).json({ error: 'Só dá para fechar uma fatura aberta com valor maior que zero.' });
+    await garantirFaturaAberta(upd.rows[0].user_id);
+    res.json({ success: true, fatura: upd.rows[0] });
+  } catch (err) {
+    console.error('Erro ao fechar fatura:', err.message);
+    res.status(500).json({ error: 'Erro ao fechar a fatura.' });
+  }
+});
+
 // ── ADMIN: GET /api/admin/users/:id ──────────────────────────────────────────
 app.get('/api/admin/users/:id', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     const [u, q, t] = await Promise.all([
-      pool.query('SELECT id,name,email,cpf_cnpj,phone,role,credits,active,created_at,affiliate_code FROM users WHERE id=$1', [req.params.id]),
+      pool.query('SELECT id,name,email,cpf_cnpj,phone,role,credits,active,created_at,affiliate_code,pos_pago,pos_pago_limite FROM users WHERE id=$1', [req.params.id]),
       pool.query('SELECT COUNT(*) AS total, COALESCE(SUM(amount),0) AS spent FROM queries WHERE user_id=$1', [req.params.id]),
       pool.query("SELECT COUNT(*) AS total, COALESCE(SUM(amount),0) AS deposited FROM transactions WHERE user_id=$1 AND type='deposit'", [req.params.id]),
     ]);

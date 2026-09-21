@@ -140,6 +140,13 @@
       </svg>
       <span style="color:#a5b4fc;font-weight:bold">Infosimples Nova Consulta</span>
     </div>
+    <div id="nav-fatura" class="nav-item hidden" data-section="fatura" onclick="showSection('fatura')">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M9 14h6m-6-4h6m2 9H7a2 2 0 01-2-2V7a2 2 0 012-2h10a2 2 0 012 2v10a2 2 0 01-2 2z"/>
+      </svg>
+      <span style="color:#fca5a5;font-weight:bold">Minha Fatura</span>
+    </div>
     <a href="/recarga-pix"
       class="nav-item"
       style="color:#86efac;border:1px solid rgba(34,197,94,.4);background:rgba(20,83,45,.35);">
@@ -932,6 +939,78 @@
     </section>
 
     <!-- ── HISTÓRICO ───────────────────────────────────────────────────── -->
+    <!-- ── MINHA FATURA (pós-pago) ─────────────────────────────────────────
+         Só existe para quem o admin pôs no pós-pago: a conta não tem saldo, o
+         consumo entra na fatura do ciclo e o vencimento é sempre dia 30. O
+         botão Pagar gera o PIX do que está devido — ele FECHA o ciclo antes de
+         gerar o QR, para o valor não mudar com o cliente consultando. -->
+    <section id="section-fatura" class="dash-section hidden space-y-5">
+
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-xl font-bold text-gray-800">Minha Fatura</h2>
+          <p class="text-sm text-gray-500">Sua conta é <strong>pós-paga</strong>: você consulta agora e paga por fatura, com vencimento todo dia 30.</p>
+        </div>
+        <button onclick="loadFatura()" class="text-sm text-blue-600 hover:text-orange-500 font-semibold">🔄 Atualizar</button>
+      </div>
+
+      <div id="fatura-alerta" class="hidden rounded-lg px-4 py-3 text-sm"></div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="stat-card border-l-blue-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Ciclo em andamento</div>
+          <div id="fatura-ciclo-valor" class="text-2xl font-bold text-gray-800">R$ 0,00</div>
+          <div id="fatura-ciclo-venc" class="text-xs text-gray-400 mt-1">—</div>
+        </div>
+        <div class="stat-card border-l-red-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">A pagar agora</div>
+          <div id="fatura-devido" class="text-2xl font-bold text-gray-800">R$ 0,00</div>
+          <div class="text-xs text-gray-400 mt-1">faturas fechadas em aberto</div>
+        </div>
+        <div class="stat-card border-l-green-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Limite do ciclo</div>
+          <div id="fatura-limite" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-1">teto de consumo até o vencimento</div>
+        </div>
+      </div>
+
+      <!-- Pagamento -->
+      <div class="card p-5 space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <h3 class="font-bold text-gray-800">Pagamento</h3>
+            <p id="fatura-pagar-texto" class="text-sm text-gray-500">Total a pagar: <strong id="fatura-total-pagar">R$ 0,00</strong></p>
+          </div>
+          <button id="fatura-pagar-btn" onclick="gerarPixFatura()" class="btn-primary justify-center">💸 Pagar com PIX</button>
+        </div>
+        <p id="fatura-erro" class="hidden text-sm text-red-600"></p>
+
+        <div id="fatura-pix" class="hidden border-t border-gray-100 pt-4">
+          <div class="flex flex-col sm:flex-row gap-5 items-center">
+            <img id="fatura-qr" alt="QR Code PIX" class="w-44 h-44 border border-gray-200 rounded-lg bg-white">
+            <div class="flex-1 w-full space-y-2">
+              <label class="text-xs font-semibold text-gray-600">PIX copia e cola</label>
+              <textarea id="fatura-copia-cola" readonly rows="3" class="input-field text-xs font-mono"></textarea>
+              <button onclick="copiarPixFatura()" class="btn-secondary w-full justify-center">📋 Copiar código</button>
+              <p id="fatura-pix-status" class="text-sm text-gray-500">Aguardando o pagamento...</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Faturas fechadas -->
+      <div id="fatura-fechadas-card" class="card p-5 hidden">
+        <h3 class="font-bold text-gray-800 mb-3">Faturas aguardando pagamento</h3>
+        <div id="fatura-fechadas"></div>
+      </div>
+
+      <!-- Consultas do ciclo -->
+      <div class="card p-5">
+        <h3 class="font-bold text-gray-800 mb-3">Consultas deste ciclo</h3>
+        <div id="fatura-itens" class="text-sm"></div>
+      </div>
+    </section>
+
     <section id="section-history" class="dash-section hidden space-y-5">
 
       <div class="flex items-center justify-between">
@@ -1182,6 +1261,7 @@ const sectionTitles = {
   extras:   'Consultas Extras',
   query2:   'Opção 2 Nova Consulta',
   query3:   'Infosimples Nova Consulta',
+  fatura:   'Minha Fatura',
   history:  'Histórico',
   prices:   'Tabela de Preços',
   profile:  'Perfil',
@@ -1255,6 +1335,7 @@ function showSection(id) {
     document.getElementById('sidebar').classList.remove('open');
     document.getElementById('overlay').classList.add('hidden');
   }
+  if (id === 'fatura')    loadFatura();
   if (id === 'history')   renderHistoryTable();
   if (id === 'prices')    renderPrices();
   if (id === 'apidocs')   renderApiDocs();
@@ -1317,7 +1398,166 @@ async function loadStats() {
     document.getElementById('query2-credits').textContent     = fmt(d.credits);
     document.getElementById('query3-credits').textContent     = fmt(d.credits);
     document.getElementById('header-credits').textContent     = fmt(d.credits);
+    aplicarPosPagoNaTela(d);
   } catch {}
+}
+
+// ── Pós-pago ───────────────────────────────────────────────────────────────────
+// A conta pós-paga não tem saldo: o cliente consulta agora e paga por fatura,
+// sempre com vencimento dia 30. Quem é pré-pago não vê nada disso — as telas
+// ficam exatamente como eram.
+let posPagoAtivo = false, faturaPollTimer = null;
+
+// Mostrar "Saldo: R$ 0,00" para quem é pós-pago faria o cliente achar que a
+// conta está sem crédito e ir recarregar. Os mesmos cartões passam a mostrar o
+// que já corre na fatura do ciclo.
+function aplicarPosPagoNaTela(d) {
+  posPagoAtivo = !!d.pos_pago;
+  const nav = document.getElementById('nav-fatura');
+  if (nav) nav.classList.toggle('hidden', !posPagoAtivo);
+  if (!posPagoAtivo) return;
+
+  const emAberto = fmt(d.fatura_aberto || 0);
+  ['stat-credits', 'query-credits', 'despachantes-credits', 'extras-credits',
+   'query2-credits', 'query3-credits', 'header-credits'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = emAberto;
+  });
+  const card = document.getElementById('stat-credits')?.parentElement;
+  if (card) {
+    const titulo  = card.querySelector('.uppercase');
+    const legenda = card.querySelector('.text-xs.text-gray-400');
+    if (titulo)  titulo.textContent = 'Fatura';
+    if (legenda) legenda.textContent = d.fatura_vence
+      ? 'Ciclo atual — vence ' + new Date(d.fatura_vence).toLocaleDateString('pt-BR')
+      : 'Consumo do ciclo atual';
+  }
+}
+
+async function loadFatura() {
+  const alerta = document.getElementById('fatura-alerta');
+  try {
+    const r = await fetch('/api/pos-pago/resumo');
+    const d = await r.json();
+    if (!r.ok || !d.posPago) {
+      alerta.className = 'rounded-lg px-4 py-3 text-sm bg-gray-50 border border-gray-200 text-gray-600';
+      alerta.textContent = 'Sua conta não é pós-paga — você usa créditos pré-pagos.';
+      alerta.classList.remove('hidden');
+      return;
+    }
+
+    // "A pagar agora" é só o que já fechou; o ciclo corrente aparece à parte,
+    // senão o cliente leria como dívida vencida algo que ainda nem venceu.
+    const aPagar = parseFloat((d.devido - d.emAberto).toFixed(2));
+    document.getElementById('fatura-ciclo-valor').textContent = fmt(d.emAberto);
+    document.getElementById('fatura-ciclo-venc').textContent  = d.fatura
+      ? 'Vence em ' + new Date(d.fatura.vencimento).toLocaleDateString('pt-BR')
+      : '—';
+    document.getElementById('fatura-devido').textContent = fmt(aPagar);
+    document.getElementById('fatura-limite').textContent = d.limite === null ? 'Sem limite' : fmt(d.limite);
+    document.getElementById('fatura-total-pagar').textContent = fmt(d.devido);
+    document.getElementById('fatura-pagar-texto').innerHTML = aPagar > 0
+      ? 'Fechado aguardando pagamento: <strong>' + fmt(aPagar) + '</strong> · com o ciclo atual: <strong>' + fmt(d.devido) + '</strong>'
+      : 'Total a pagar: <strong>' + fmt(d.devido) + '</strong> — adiantando o ciclo atual.';
+    const btn = document.getElementById('fatura-pagar-btn');
+    btn.disabled = !(d.devido > 0);
+    btn.classList.toggle('opacity-50', !(d.devido > 0));
+
+    if (d.bloqueado) {
+      alerta.className = 'rounded-lg px-4 py-3 text-sm bg-red-50 border border-red-200 text-red-800';
+      alerta.innerHTML = '<strong>Consultas bloqueadas.</strong> Há fatura vencida em aberto — pagando abaixo, sua conta é liberada na hora.';
+      alerta.classList.remove('hidden');
+    } else if (aPagar > 0) {
+      alerta.className = 'rounded-lg px-4 py-3 text-sm bg-amber-50 border border-amber-200 text-amber-800';
+      alerta.innerHTML = '<strong>Fatura fechada aguardando pagamento.</strong> Passados ' + d.carenciaDias + ' dias do vencimento, as consultas são bloqueadas até a quitação.';
+      alerta.classList.remove('hidden');
+    } else {
+      alerta.classList.add('hidden');
+    }
+
+    const fechadasCard = document.getElementById('fatura-fechadas-card');
+    fechadasCard.classList.toggle('hidden', !d.fechadas.length);
+    document.getElementById('fatura-fechadas').innerHTML = d.fechadas.map(f =>
+      '<div class="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">' +
+        '<span class="text-sm text-gray-600">Vencimento ' + new Date(f.vencimento).toLocaleDateString('pt-BR') +
+          (f.vencida ? ' <span class="text-red-600 font-semibold">· vencida</span>' : '') + '</span>' +
+        '<span class="font-semibold text-sm">' + fmt(f.valor) + '</span>' +
+      '</div>').join('');
+
+    document.getElementById('fatura-itens').innerHTML = !d.itens.length
+      ? '<p class="text-sm text-gray-400">Nenhuma consulta neste ciclo ainda.</p>'
+      : '<ul class="divide-y divide-gray-50">' + d.itens.map(i =>
+          '<li class="flex items-center justify-between py-2">' +
+            '<span class="text-gray-600">' + i.servico +
+              ' <span class="text-gray-400 text-xs">· ' + fmtDate(i.data) + '</span></span>' +
+            '<span class="font-semibold">' + fmt(i.valor) + '</span>' +
+          '</li>').join('') + '</ul>';
+  } catch {
+    alerta.className = 'rounded-lg px-4 py-3 text-sm bg-red-50 border border-red-200 text-red-800';
+    alerta.textContent = 'Erro de conexão ao carregar a fatura.';
+    alerta.classList.remove('hidden');
+  }
+}
+
+async function gerarPixFatura() {
+  const btn = document.getElementById('fatura-pagar-btn');
+  const erro = document.getElementById('fatura-erro');
+  btn.disabled = true;
+  btn.textContent = 'Gerando PIX...';
+  erro.classList.add('hidden');
+  try {
+    const r = await fetch('/api/pos-pago/pix', { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) {
+      erro.textContent = d.error || 'Erro ao gerar a cobrança PIX.';
+      erro.classList.remove('hidden');
+      btn.disabled = false;
+      btn.textContent = '💸 Pagar com PIX';
+      return;
+    }
+    document.getElementById('fatura-qr').src = 'data:image/png;base64,' + d.qrCode;
+    document.getElementById('fatura-copia-cola').value = d.pixCopiaECola;
+    document.getElementById('fatura-pix').classList.remove('hidden');
+    document.getElementById('fatura-pix-status').textContent =
+      'Aguardando o pagamento de ' + fmt(d.value) + '...';
+    btn.textContent = '💸 Pagar com PIX';
+    iniciarPollingFatura(d.paymentId);
+    // O ciclo foi fechado para gerar a cobrança: a tela precisa refletir isso.
+    loadFatura();
+  } catch {
+    erro.textContent = 'Erro de conexão. Tente novamente.';
+    erro.classList.remove('hidden');
+    btn.disabled = false;
+    btn.textContent = '💸 Pagar com PIX';
+  }
+}
+
+// Mesmo /api/pix/status da recarga e da assinatura: como a linha nasceu com
+// purpose='FATURA', o servidor dá baixa na fatura em vez de creditar saldo. Se
+// o cliente fechar a página antes, o webhook e o cron de conciliação cobrem.
+function iniciarPollingFatura(paymentId) {
+  if (faturaPollTimer) clearInterval(faturaPollTimer);
+  faturaPollTimer = setInterval(async () => {
+    try {
+      const r = await fetch('/api/pix/status/' + paymentId);
+      const d = await r.json();
+      if (d.credited) {
+        clearInterval(faturaPollTimer);
+        faturaPollTimer = null;
+        document.getElementById('fatura-pix-status').innerHTML = '✅ <span class="text-green-600">Pagamento confirmado!</span>';
+        toast('Fatura paga! Sua conta está liberada.');
+        await Promise.all([loadFatura(), loadStats()]);
+      }
+    } catch { /* tenta de novo no próximo tick */ }
+  }, 4000);
+}
+
+function copiarPixFatura() {
+  const ta = document.getElementById('fatura-copia-cola');
+  ta.select();
+  navigator.clipboard.writeText(ta.value)
+    .then(() => toast('Código PIX copiado!'))
+    .catch(() => toast('Não consegui copiar — selecione e copie manualmente.'));
 }
 
 // ── Consultas ──────────────────────────────────────────────────────────────────
