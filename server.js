@@ -121,6 +121,11 @@ const DESPBRASIL_SVCS = {
   // A entrada fica porque fetchCodigoSegurancaPdfDespbrasil ainda a lê para
   // montar o fallback do consultar-Numero-ATPVE, quando a Vistocar falha.
   'security-code-vistocar':     { servico: 'codigo_seguranca', extra: { versao: 'v1' } },
+  // Consulta Código Segurança CRV (PDF) do catálogo (grupo CRV). Mesmo serviço
+  // da entrada acima, mas na versão v2 — que é a que responde hoje (conferida
+  // contra a API real em 21/09/2026). A entrada 'security-code-vistocar' segue
+  // aqui só por causa do fallback do consultar-Numero-ATPVE, que a lê direto.
+  'codigo-seguranca-crv':       { servico: 'codigo_seguranca', extra: { versao: 'v2' } },
   // O 'numero-crv-digital' saiu daqui em 15/09/2026: passou para a Vistocar
   // (VISTOCAR_ENDPOINTS → apiclient/security-code-crv). Ele vinha pelo
   // "consulta_generica", com o produto em nome_servico. Tinha que sair do mapa,
@@ -969,14 +974,14 @@ const SERVICES = [
   { id:'crlv-agendado-status', name:'CRLV Agendado — Ver Status',          group:'CRLV-e Agendado', basePrice:0.00,   inputType:'pedido_id_get',       icon:'🔄' },
   // ── CRV ──
   { id:'valida-crv',         name:'Valida CRV',                 group:'CRV', basePrice:0.00,  inputType:'valida_crv', icon:'✅' },
-  // O "Consulta 2 Código Segurança CRV (PDF)" (security-code-vistocar, pela
-  // despbrasil) saiu do catálogo em 10/09/2026: o serviço "codigo_seguranca"
-  // deles responde "Não foi possível consultar o código de segurança no
-  // momento" para qualquer placa, em v1 e v2 — conferido com duas placas, e com
-  // outro serviço da MESMA chave funcionando, o que descarta chave e placa.
-  // A despbrasil continua como fonte de fallback do consultar-Numero-ATPVE
-  // (ver fetchCodigoSegurancaCrvFields), por isso a entrada segue em
-  // DESPBRASIL_SVCS mesmo sem serviço no catálogo.
+  // API despbrasil (serviço "codigo_seguranca", versão v2 — ver DESPBRASIL_SVCS).
+  // Este serviço já esteve no catálogo como "Consulta 2 Código Segurança CRV
+  // (PDF)" e saiu em 10/09/2026, quando a rota deles respondia "Não foi possível
+  // consultar o código de segurança no momento" para qualquer placa, em v1 e v2.
+  // Voltou em 21/09/2026, com a v2 conferida contra a API real (placa DDB2H98):
+  // devolve o cartão da CDT com camada de texto, a R$ 4,00 de custo.
+  // R$ 8,50 FIXO (noMarkup) por decisão do dono — não é custo mais markup.
+  { id:'codigo-seguranca-crv', name:'Consulta Código Segurança CRV (PDF)', group:'CRV', basePrice:8.50, noMarkup:true, inputType:'placa', icon:'🔐' },
   // API Vistocar (vistocarconsulta.com.br) — segunda fonte para Código de Segurança
   // CRV, resposta em JSON com PDF pronto em base64 (ver VISTOCAR_ENDPOINTS).
   { id:'security-code-vistocar-2', name:'Consulta 3 Código Segurança CRV (PDF)', group:'CRV', basePrice:8.10, noMarkup:true, inputType:'placa', icon:'🔐' },
