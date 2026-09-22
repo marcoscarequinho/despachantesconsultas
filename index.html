@@ -146,7 +146,7 @@
                     <li><a href="#faq" class="hover:text-orange-500">FAQ</a></li>
                     <li><a href="#contato" class="hover:text-orange-500">Contato</a></li>
                     <li id="nav-pix-menu" class="hidden">
-                        <a href="/recarga-pix" class="font-semibold text-green-600 hover:text-orange-500">💸 Recarregar PIX</a>
+                        <a id="nav-pix-link" href="/recarga-pix" class="font-semibold text-green-600 hover:text-orange-500">💸 Recarregar PIX</a>
                     </li>
                     <!-- Mobile: crédito + botões auth -->
                     <li class="md:hidden border-t border-gray-200 mt-3 pt-3 space-y-2">
@@ -316,7 +316,7 @@
                             ⚠️ Cadastro com dados reais obrigatório. Créditos não expiram.
                         </p>
                         <a href="/cadastrar" class="btn-primary text-sm whitespace-nowrap guests-only">Criar Conta Grátis</a>
-                        <a href="/recarga-pix" class="btn-primary text-sm whitespace-nowrap hidden logged-only">💸 Recarregar PIX</a>
+                        <a id="price-recarga" href="/recarga-pix" class="btn-primary text-sm whitespace-nowrap hidden logged-only">💸 Recarregar PIX</a>
                     </div>
                 </div>
             </div>
@@ -594,8 +594,25 @@
                 if (!res.ok) return; // não logado — exibe estado padrão
                 const user = await res.json();
 
-                const credits = parseFloat(user.credits || 0);
-                const fmt = 'R$ ' + credits.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+                // Cliente pós-pago não tem saldo, tem fatura. Deixar o selo em
+                // "R$ 0,00 Crédito" fazia ele achar que a conta secou e ir
+                // recarregar — e o atalho ao lado o mandava para a Recarga PIX,
+                // que o servidor recusa (RECARGA_POS_PAGO_MSG). O valor da
+                // fatura vem do /api/user/stats, chamado só nesse caso.
+                const posPago = !!user.pos_pago;
+                let valor = parseFloat(user.credits || 0);
+                let vence = null;
+                if (posPago) {
+                    try {
+                        const st = await fetch('/api/user/stats');
+                        if (st.ok) {
+                            const d = await st.json();
+                            valor = parseFloat(d.fatura_aberto || 0);
+                            vence = d.fatura_vence;
+                        }
+                    } catch { /* fica em 0,00 — o painel mostra o valor certo */ }
+                }
+                const fmt = 'R$ ' + valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
 
                 // ── Desktop ──
                 document.getElementById('nav-credits-value').textContent = fmt;
@@ -621,8 +638,45 @@
                 // ── Sair ──
                 document.getElementById('nav-sair').classList.remove('hidden');
                 document.getElementById('nav-sair-mobile').classList.remove('hidden');
+
+                // ── Pós-pago: o selo muda de STATUS, não só de número ──
+                if (posPago) aplicarPosPagoNoNav(vence);
             } catch { /* sem servidor ou não logado */ }
         })();
+
+        // Mesma troca do painel: verde/laranja é cor de saldo a favor, e fatura
+        // é conta a pagar. Estilo inline porque as classes de âmbar não estão
+        // no HTML e o Tailwind do CDN não geraria a regra em tempo de execução.
+        function aplicarPosPagoNoNav(vence) {
+            const titulo = 'Fatura do ciclo atual — ' + (vence
+                ? 'vence ' + new Date(vence).toLocaleDateString('pt-BR')
+                : 'vencimento dia 30');
+
+            ['nav-credits', 'nav-credits-mobile'].forEach(id => {
+                const caixa = document.getElementById(id);
+                if (!caixa) return;
+                caixa.style.background = '#fffbeb';
+                caixa.style.borderColor = '#fde68a';
+                caixa.title = titulo;
+                const rotulo = caixa.querySelector('span:last-child');
+                if (rotulo) { rotulo.textContent = 'Fatura'; rotulo.style.color = '#b45309'; }
+                const icone = caixa.querySelector('svg');
+                if (icone) icone.style.color = '#b45309';
+            });
+            ['nav-credits-value', 'nav-credits-value-mobile'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.style.color = '#b45309';
+            });
+
+            // Recarregar não existe no pós-pago: o consumo vai todo para a
+            // fatura (debitarConsulta) e o crédito comprado ficaria parado.
+            [document.getElementById('nav-pix-link'),
+             document.getElementById('price-recarga')].forEach(el => {
+                if (!el) return;
+                el.href = '/painel';
+                el.textContent = '🧾 Conta Pós-paga';
+            });
+        }
 
         async function fazerLogout() {
             await fetch('/api/auth/logout', { method: 'POST' });
