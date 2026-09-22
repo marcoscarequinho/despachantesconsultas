@@ -20,6 +20,11 @@
     .nav-item { display:flex;align-items:center;gap:.75rem;padding:.7rem 1.25rem;border-radius:.5rem;cursor:pointer;transition:all .2s;color:rgba(255,255,255,.75);font-size:.9rem; }
     .nav-item:hover { background:rgba(255,255,255,.1);color:white; }
     .nav-item.active { background:rgba(255,255,255,.15);color:white;border-left:3px solid var(--accent);padding-left:calc(1.25rem - 3px); }
+    /* Destaque verde da entrada de pagamento (Recarga PIX no pré-pago, Conta
+       Pós-paga no pós-pago). É classe e não style inline porque o inline
+       venceria o border-left de .nav-item.active e a aba aberta ficaria sem
+       marcação nenhuma. */
+    .nav-destaque { color:#86efac;border:1px solid rgba(34,197,94,.4);background:rgba(20,83,45,.35); }
     .card { background:white;border-radius:.75rem;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:1.5rem; }
     .stat-card { background:white;border-radius:.75rem;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:1.25rem;border-left:4px solid transparent; }
     .badge-green { display:inline-flex;align-items:center;padding:.2rem .6rem;border-radius:9999px;font-size:.75rem;font-weight:600;background:#dcfce7;color:#166534; }
@@ -140,16 +145,17 @@
       </svg>
       <span style="color:#a5b4fc;font-weight:bold">Infosimples Nova Consulta</span>
     </div>
-    <div id="nav-fatura" class="nav-item hidden" data-section="fatura" onclick="showSection('fatura')">
+    <!-- Pós-pago: este item toma o LUGAR do "Recarregar PIX" (escondido em
+         aplicarPosPagoNaTela) — daí o mesmo destaque verde. Manter os dois seria
+         oferecer duas formas de pagar para quem só tem uma. -->
+    <div id="nav-fatura" class="nav-item nav-destaque hidden" data-section="fatura" onclick="showSection('fatura')">
       <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
           d="M9 14h6m-6-4h6m2 9H7a2 2 0 01-2-2V7a2 2 0 012-2h10a2 2 0 012 2v10a2 2 0 01-2 2z"/>
       </svg>
-      <span style="color:#fca5a5;font-weight:bold">Minha Fatura</span>
+      <span style="font-weight:bold">🧾 Conta Pós-paga</span>
     </div>
-    <a href="/recarga-pix"
-      class="nav-item"
-      style="color:#86efac;border:1px solid rgba(34,197,94,.4);background:rgba(20,83,45,.35);">
+    <a id="nav-recarga" href="/recarga-pix" class="nav-item nav-destaque">
       <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
           d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
@@ -223,14 +229,14 @@
     </div>
     <div class="flex items-center gap-3">
       <a href="/" class="btn-ghost text-xs hidden sm:inline-flex">← Site</a>
-      <a href="/recarga-pix" class="btn-primary text-xs">💸 Recarga PIX</a>
+      <a id="topbar-recarga" href="/recarga-pix" class="btn-primary text-xs">💸 Recarga PIX</a>
       <div class="flex items-center gap-2">
         <div id="topbar-avatar"
           class="w-8 h-8 bg-orange-500 rounded-full flex items-center justify-center text-white font-bold text-xs">?</div>
         <span id="topbar-name" class="text-sm font-medium text-gray-700 hidden sm:block"></span>
       </div>
-      <div class="flex items-center gap-1 bg-green-50 border border-green-200 rounded-lg px-3 py-1">
-        <span class="text-xs text-green-700 font-semibold">Saldo:</span>
+      <div id="header-credits-box" class="flex items-center gap-1 bg-green-50 border border-green-200 rounded-lg px-3 py-1">
+        <span id="header-credits-label" class="text-xs text-green-700 font-semibold">Saldo:</span>
         <span id="header-credits" class="text-xs font-bold text-green-700">R$ 0,00</span>
       </div>
     </div>
@@ -358,7 +364,7 @@
         <div class="text-sm text-amber-800 leading-relaxed">
           <strong>Obs.:</strong> As consultas de débitos de <strong>R$ 1,50</strong> podem apresentar instabilidade — se nada retornar, a de <strong>R$ 3,00</strong> é a opção garantida, que está na: "opção 2 Nova Consulta"
           De qualquer forma, se alguma API estiver fora do ar, aguarde e tente mais tarde ou reporte pelo WhatsApp do suporte.
-          <strong>Nenhuma consulta será cobrada se não for emitida — seus créditos permanecem os mesmos para usar quando quiser.</strong>
+          <strong>Nenhuma consulta será cobrada se não for emitida — o que não sai não entra na sua conta.</strong>
         </div>
       </div>
 
@@ -939,7 +945,7 @@
     </section>
 
     <!-- ── HISTÓRICO ───────────────────────────────────────────────────── -->
-    <!-- ── MINHA FATURA (pós-pago) ─────────────────────────────────────────
+    <!-- ── CONTA PÓS-PAGA ──────────────────────────────────────────────────
          Só existe para quem o admin pôs no pós-pago: a conta não tem saldo, o
          consumo entra na fatura do ciclo e o vencimento é sempre dia 30. O
          botão Pagar gera o PIX do que está devido — ele FECHA o ciclo antes de
@@ -948,13 +954,15 @@
 
       <div class="flex items-center justify-between">
         <div>
-          <h2 class="text-xl font-bold text-gray-800">Minha Fatura</h2>
-          <p class="text-sm text-gray-500">Sua conta é <strong>pós-paga</strong>: você consulta agora e paga por fatura, com vencimento todo dia 30.</p>
+          <h2 class="text-xl font-bold text-gray-800">Conta Pós-paga</h2>
+          <p class="text-sm text-gray-500">Sua conta é <strong>pós-paga</strong>: você consulta agora, sem precisar de saldo, e paga por fatura com vencimento todo dia 30.</p>
         </div>
         <button onclick="loadFatura()" class="text-sm text-blue-600 hover:text-orange-500 font-semibold">🔄 Atualizar</button>
       </div>
 
       <div id="fatura-alerta" class="hidden rounded-lg px-4 py-3 text-sm"></div>
+      <div id="fatura-credito-parado"
+        class="hidden rounded-lg px-4 py-3 text-sm bg-blue-50 border border-blue-200 text-blue-800"></div>
 
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div class="stat-card border-l-blue-500">
@@ -1261,7 +1269,7 @@ const sectionTitles = {
   extras:   'Consultas Extras',
   query2:   'Opção 2 Nova Consulta',
   query3:   'Infosimples Nova Consulta',
-  fatura:   'Minha Fatura',
+  fatura:   'Conta Pós-paga',
   history:  'Histórico',
   prices:   'Tabela de Preços',
   profile:  'Perfil',
@@ -1408,9 +1416,12 @@ async function loadStats() {
 // ficam exatamente como eram.
 let posPagoAtivo = false, faturaPollTimer = null;
 
-// Mostrar "Saldo: R$ 0,00" para quem é pós-pago faria o cliente achar que a
-// conta está sem crédito e ir recarregar. Os mesmos cartões passam a mostrar o
-// que já corre na fatura do ciclo.
+// A tela inteira muda de STATUS, não só de número. Trocar o valor e deixar o
+// rótulo "Saldo" era o pior dos dois mundos: "Saldo: R$ 0,00" faz o cliente
+// achar que a conta secou e sair recarregando, e "Saldo: R$ 120,00" com o valor
+// da fatura faz o número a PAGAR parecer dinheiro a favor. Por isso o rótulo
+// vira "Fatura", a cor deixa de ser verde de saldo e a entrada "Recarga PIX" dá
+// lugar à "Conta Pós-paga" — uma forma de pagamento só, que é o que ele tem.
 function aplicarPosPagoNaTela(d) {
   posPagoAtivo = !!d.pos_pago;
   const nav = document.getElementById('nav-fatura');
@@ -1418,11 +1429,24 @@ function aplicarPosPagoNaTela(d) {
   if (!posPagoAtivo) return;
 
   const emAberto = fmt(d.fatura_aberto || 0);
-  ['stat-credits', 'query-credits', 'despachantes-credits', 'extras-credits',
-   'query2-credits', 'query3-credits', 'header-credits'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.textContent = emAberto;
-  });
+  const vence = d.fatura_vence
+    ? 'vence ' + new Date(d.fatura_vence).toLocaleDateString('pt-BR')
+    : 'vencimento dia 30';
+
+  // Recarga some das duas pontas (menu e topo). Recarregar no pós-pago deixaria
+  // o dinheiro parado — o consumo desse cliente vai todo para a fatura —, e o
+  // servidor recusa a rota de qualquer jeito (RECARGA_POS_PAGO_MSG).
+  document.getElementById('nav-recarga')?.classList.add('hidden');
+  const topo = document.getElementById('topbar-recarga');
+  if (topo) {
+    topo.removeAttribute('href');
+    topo.style.cursor = 'pointer';
+    topo.onclick = () => showSection('fatura');
+    topo.textContent = '🧾 Conta Pós-paga';
+  }
+
+  // Cartão "Saldo" da Visão Geral.
+  document.getElementById('stat-credits').textContent = emAberto;
   const card = document.getElementById('stat-credits')?.parentElement;
   if (card) {
     const titulo  = card.querySelector('.uppercase');
@@ -1431,6 +1455,49 @@ function aplicarPosPagoNaTela(d) {
     if (legenda) legenda.textContent = d.fatura_vence
       ? 'Ciclo atual — vence ' + new Date(d.fatura_vence).toLocaleDateString('pt-BR')
       : 'Consumo do ciclo atual';
+  }
+
+  // Cartões "Saldo disponível" das abas de consulta.
+  ['query-credits', 'despachantes-credits', 'extras-credits',
+   'query2-credits', 'query3-credits'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = emAberto;
+    const rotulo = el.previousElementSibling;
+    if (rotulo) rotulo.textContent = 'Fatura deste ciclo';
+    const cartao = el.parentElement?.parentElement;
+    if (cartao) {
+      const icone = cartao.firstElementChild;
+      if (icone) icone.textContent = '🧾';
+      const nota = cartao.querySelector('.ml-auto');
+      if (nota) nota.textContent = 'Conta pós-paga — ' + vence;
+    }
+  });
+
+  // Selo do topo: verde é cor de saldo a favor; a fatura é conta a pagar.
+  // Estilo inline de propósito — classe Tailwind criada em tempo de execução
+  // depende do observador do CDN, e este selo não pode ficar sem cor.
+  document.getElementById('header-credits').textContent = emAberto;
+  const caixaTopo  = document.getElementById('header-credits-box');
+  const rotuloTopo = document.getElementById('header-credits-label');
+  if (rotuloTopo) { rotuloTopo.textContent = 'Fatura:'; rotuloTopo.style.color = '#b45309'; }
+  if (caixaTopo) {
+    caixaTopo.style.background  = '#fffbeb';
+    caixaTopo.style.borderColor = '#fde68a';
+  }
+  document.getElementById('header-credits').style.color = '#b45309';
+
+  // Crédito pré-pago que sobrou de antes da virada não some, mas também não é
+  // gasto pelas consultas (debitarConsulta manda tudo para a fatura). Dizer
+  // isso em voz alta é melhor do que o cliente descobrir sozinho que o saldo
+  // dele parou de andar.
+  const parado = document.getElementById('fatura-credito-parado');
+  if (parado) {
+    const sobra = parseFloat(d.credits || 0);
+    parado.classList.toggle('hidden', !(sobra > 0));
+    if (sobra > 0) parado.innerHTML =
+      '<strong>Você ainda tem ' + fmt(sobra) + ' de crédito pré-pago.</strong> ' +
+      'Ele não é usado nas consultas da conta pós-paga — fale com o suporte para abater da fatura.';
   }
 }
 

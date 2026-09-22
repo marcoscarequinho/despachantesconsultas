@@ -2162,7 +2162,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
 app.get('/api/auth/me', requireAuth, async (req, res) => {
   try {
     const r = await pool.query(
-      'SELECT id, name, email, phone, role, credits, affiliate_code, cpf_cnpj FROM users WHERE id=$1',
+      'SELECT id, name, email, phone, role, credits, affiliate_code, cpf_cnpj, pos_pago FROM users WHERE id=$1',
       [req.user.id]
     );
     if (r.rows.length === 0) return res.status(404).json({ error: 'Usuário não encontrado.' });
@@ -2412,8 +2412,8 @@ app.get('/api/user/stats', requireAuth, async (req, res) => {
       ),
     ]);
     // Cliente pós-pago não tem saldo — o card "Saldo" da Visão Geral vira
-    // "Fatura em aberto" e o menu ganha a aba Minha Fatura. Quem é pré-pago
-    // recebe pos_pago:false e a tela não muda em nada.
+    // "Fatura em aberto" e o menu troca a Recarga PIX pela Conta Pós-paga. Quem
+    // é pré-pago recebe pos_pago:false e a tela não muda em nada.
     const pp = await resumoPosPago(req.user.id);
     res.json({
       credits:       parseFloat(userRow.rows[0].credits),
@@ -5593,7 +5593,7 @@ async function bloqueioPagamentoConsulta(userId, user, price) {
     const venc = new Date(resumo.vencidas[0].vencimento).toLocaleDateString('pt-BR');
     return { status: 402, body: {
       code: 'FATURA_VENCIDA',
-      error: `Sua fatura venceu em ${venc} e ainda consta em aberto. Pague em "Minha Fatura" para voltar a consultar.`,
+      error: `Sua fatura venceu em ${venc} e ainda consta em aberto. Pague em "Conta Pós-paga" para voltar a consultar.`,
     } };
   }
   if (resumo.limite !== null && resumo.emAberto + price > resumo.limite) {
@@ -5604,6 +5604,15 @@ async function bloqueioPagamentoConsulta(userId, user, price) {
   }
   return null;
 }
+
+// Recarga de crédito no pós-pago é dinheiro parado: o consumo desse cliente vai
+// todo para a fatura e NUNCA sai de users.credits (ver debitarConsulta). Por
+// isso o painel troca a "Recarga PIX" pela "Conta Pós-paga" e as rotas de
+// recarga recusam — quem depositasse pagaria duas vezes, uma no crédito que não
+// se gasta e outra na fatura do dia 30.
+const RECARGA_POS_PAGO_MSG =
+  'Sua conta é pós-paga: as consultas entram na fatura com vencimento dia 30, não em créditos. ' +
+  'Recarregar deixaria o dinheiro parado — pague a fatura em "Conta Pós-paga", no painel.';
 
 // Débito de uma consulta. Ponto ÚNICO: todo lugar que cobrava com
 // "UPDATE users SET credits = credits - ..." passa por aqui, senão o pós-pago
@@ -9618,9 +9627,11 @@ app.post('/api/cartao/recarga', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'Valor inválido. Mínimo R$ 5,00, máximo R$ 10.000,00.' });
 
   try {
-    const cartao = await validarCartao(req.body);
-    const ur = await pool.query('SELECT id, name, email, cpf_cnpj FROM users WHERE id=$1', [req.user.id]);
+    const ur = await pool.query('SELECT id, name, email, cpf_cnpj, pos_pago FROM users WHERE id=$1', [req.user.id]);
     const user = ur.rows[0];
+    if (user.pos_pago) return res.status(400).json({ error: RECARGA_POS_PAGO_MSG });
+
+    const cartao = await validarCartao(req.body);
     const valorCobrado = valorComAcrescimoCartao(value, cartao.tipo);
 
     const pagamento = await criarPagamentoCartao({
@@ -9717,10 +9728,12 @@ app.post('/api/pix/criar', requireAuth, async (req, res) => {
 
   try {
     const ur = await pool.query(
-      'SELECT id, name, email, cpf_cnpj FROM users WHERE id=$1',
+      'SELECT id, name, email, cpf_cnpj, pos_pago FROM users WHERE id=$1',
       [req.user.id]
     );
     const user = ur.rows[0];
+    if (user.pos_pago) return res.status(400).json({ error: RECARGA_POS_PAGO_MSG });
+
     const doc = (user.cpf_cnpj || '').replace(/\D/g, '');
     const docType = doc.length > 11 ? 'CNPJ' : 'CPF';
     const nameParts = (user.name || 'Cliente').trim().split(/\s+/);
@@ -9862,7 +9875,7 @@ app.post('/api/assinatura/pix', requireAuth, async (req, res) => {
 });
 
 // ── GET /api/pos-pago/resumo ─────────────────────────────────────────────────
-// Tudo que a aba "Minha Fatura" do painel mostra: o ciclo corrente, as faturas
+// Tudo que a aba "Conta Pós-paga" do painel mostra: o ciclo corrente, as faturas
 // fechadas esperando pagamento e as consultas que compõem o ciclo. A virada de
 // ciclo acontece aqui dentro (resumoPosPago → garantirCicloPosPago), então
 // abrir a tela já mostra a situação do dia, sem depender de cron.
