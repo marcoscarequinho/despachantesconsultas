@@ -27,8 +27,14 @@ const isFreeService = s => FREE_SERVICE_GROUPS.includes(s.group);
 // ── Assinatura "Consulta placas" ─────────────────────────────────────────────
 // Os serviços do grupo acima continuam sem debitar crédito, mas deixaram de ser
 // abertos: só ficam liberados para quem tem assinatura ativa. O modelo é
-// pré-pago e NÃO renova sozinho — cada período de 30 dias exige um novo PIX
+// pré-pago e NÃO renova sozinho — cada período exige um novo PIX
 // (ver POST /api/assinatura/pix e o cron /api/cron/assinaturas-expirar).
+//
+// Desde 22/09/2026 o período não é mais "30 dias contados do pagamento": ele
+// vence sempre no dia 30, como a fatura do pós-pago, e por isso o preço e as
+// cotas são pró-rata (ver cicloAssinatura, mais abaixo). Os dois valores aqui
+// passaram a ser a REFERÊNCIA do mês cheio — R$ 30,00 por 30 dias é o que dá
+// R$ 1,00 por dia —, não o que é cobrado em toda compra.
 const ASSINATURA_PLACAS_PRICE = 30.00;
 const ASSINATURA_PLACAS_DIAS  = 30;
 // Cota de consultas de placa por período. Só a "Veicular Completa"
@@ -49,11 +55,17 @@ const ASSINATURA_CRV_SERVICE_ID = 'assinatura-codigo-seguranca-crv';
 // dentro dos R$ 30,00 do plano sem virar prejuízo.
 const ASSINATURA_DIGITAL_COTA = 5;
 const ASSINATURA_DIGITAL_SERVICE_ID = 'assinatura-digital';
+// Verificar CRLV + Data CRV — quarta cota própria. Mesma razão das duas acima:
+// cada consulta custa na despbrasil (R$ 1,90), então não pode dividir as 50 de
+// placa. Teto de 5 por período, definido pelo dono junto com o serviço.
+const ASSINATURA_VERIFICAR_CRLV_COTA = 5;
+const ASSINATURA_VERIFICAR_CRLV_SERVICE_ID = 'assinatura-verificar-crlv-data-crv';
 // Serviços que exigem assinatura ativa (todo o grupo "Para os Despachantes").
 const ASSINATURA_SERVICE_IDS = [
   ASSINATURA_PLACAS_SERVICE_ID,
   ASSINATURA_CRV_SERVICE_ID,
   ASSINATURA_DIGITAL_SERVICE_ID,
+  ASSINATURA_VERIFICAR_CRLV_SERVICE_ID,
   'declaracao-residencia-detran-rj',
   'nota-prestacao-servicos-despachante',
   'gerar-asd',
@@ -145,6 +157,10 @@ const DESPBRASIL_SVCS = {
   // sairia com a chaveAcesso da despbrasil (o else-if dela vem antes) e a
   // resposta passaria pelo tratamento errado.
   'verificar-crlv':    { servico: 'verificar_crlv' },
+  // Mesmo serviço da linha acima, id próprio: o "Verificar CRLV + Data CRV" do
+  // grupo CRV monta um relatório diferente do mesmo JSON (ver
+  // buildVerificarCrlvDataCrvPdfBuffer) e tem preço próprio.
+  'verificar-crlv-data-crv': { servico: 'verificar_crlv' },
   'consulta-renavam':  { servico: 'consulta_renavam' },
   'consultar-Numero-ATPVE': { servico: 'numero_atpve' },
 };
@@ -339,6 +355,29 @@ const VISTOCAR_ENDPOINTS = {
   'atpve-vistocar-rj': 'atpve-rj',
   'atpve-vistocar-mg': 'atpve-mg',
 };
+
+// ── Nome dos arquivos que vêm da Vistocar ────────────────────────────────────
+// Todo PDF entregue por eles sai como "mcdespachadoria-<consulta>-<placa>.pdf".
+// Antes o nome era o id interno do serviço ("security-code-vistocar-2-ABC1D23"),
+// que não diz nada para o cliente que salva o documento no celular. Os nomes
+// longos são abreviados na mão, um por serviço: o WhatsApp corta o nome do
+// arquivo na bolha, e "codigo-de-seguranca-do-crv" já estouraria sozinho.
+// Serviço fora deste mapa devolve null e mantém o nome que já tinha.
+const VISTOCAR_ARQUIVO_NOMES = {
+  'security-code-vistocar-2':        'cod-seguranca-crv',
+  'assinatura-codigo-seguranca-crv': 'cod-seguranca-crv',
+  'numero-crv-digital':              'numero-crv',
+  'vistocar-debitos-cod-barra':      'debitos',
+  'atpve-vistocar-rj':               'atpve-rj',
+  'atpve-vistocar-mg':               'atpve-mg',
+};
+const MC_ARQUIVO_PREFIXO = 'mcdespachadoria';
+function nomeArquivoVistocar(serviceId, sufixo) {
+  const curto = VISTOCAR_ARQUIVO_NOMES[serviceId];
+  if (!curto) return null;
+  const fim = String(sufixo ?? '').replace(/[^A-Za-z0-9-]/g, '').toUpperCase();
+  return `${MC_ARQUIVO_PREFIXO}-${curto}${fim ? '-' + fim : ''}.pdf`;
+}
 
 // ATPV-e (Intenção de Venda) pela Vistocar — o único grupo do VISTOCAR_ENDPOINTS
 // que NÃO manda { plate }: o corpo é o cadastro inteiro da venda (vendedor,
@@ -922,6 +961,15 @@ const SERVICES = [
   // Declaração e da ASD, cada envio custa dinheiro na Assinafy
   // (ver ASSINATURA_DIGITAL_COTA).
   { id:'assinatura-digital', name:'Assinatura Digital', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'assinatura_digital', icon:'✍️' },
+  // Verificar CRLV + Data CRV incluído na assinatura — mesmo desenho do Código
+  // de Segurança CRV acima: usa a MESMA API do serviço pago do grupo CRV
+  // (despbrasil verificar_crlv), mas como serviço separado, para o
+  // verificar-crlv-data-crv seguir cobrando crédito na aba Nova Consulta.
+  // Não debita nada: quem paga é a assinatura, com cota própria
+  // (ver ASSINATURA_VERIFICAR_CRLV_COTA e o bloco deste serviceId em
+  // processCatalogQuery).
+  { id:'assinatura-verificar-crlv-data-crv', name:'Verificar CRLV + Data CRV', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'placa', icon:'📅',
+    slowNote:`Situação do CRLV, último licenciamento e a data de emissão do CRV, em PDF. Incluído na Assinatura Coisas de Despachantes, com cota própria de ${ASSINATURA_VERIFICAR_CRLV_COTA} consultas por período.` },
   // ── CRLV-e Rio de Janeiro (destaque no topo da Nova Consulta) ──
   // Saem da API portaldespachantes.online (consultar-crlv-rj e -rj2, ver
   // PORTAL_PLACA_MAP): mesmo contrato — POST { placa }, header chaveAcesso e o
@@ -997,6 +1045,13 @@ const SERVICES = [
   // API Vistocar (vistocarconsulta.com.br) — segunda fonte para Código de Segurança
   // CRV, resposta em JSON com PDF pronto em base64 (ver VISTOCAR_ENDPOINTS).
   { id:'security-code-vistocar-2', name:'Consulta 3 Código Segurança CRV (PDF)', group:'CRV', basePrice:8.10, noMarkup:true, inputType:'placa', icon:'🔐' },
+  // API despbrasil (serviço "verificar_crlv", o MESMO do "Verificar CRLV e
+  // Último Licenciamento" do grupo Consultas Básicas — ver DESPBRASIL_SVCS).
+  // Id separado de propósito: aquele serviço segue intocado a R$ 3,00, e este
+  // entrega outro relatório do mesmo JSON, com a data de emissão do CRV e os
+  // indicadores em destaque (buildVerificarCrlvDataCrvPdfBuffer).
+  // R$ 5,00 FIXO (noMarkup) por decisão do dono — custo de R$ 1,90 na despbrasil.
+  { id:'verificar-crlv-data-crv', name:'Verificar CRLV + Data CRV', group:'CRV', basePrice:5.00, noMarkup:true, inputType:'placa', icon:'📅' },
   // API Vistocar desde 15/09/2026 (apiclient/security-code-crv); antes vinha da
   // despbrasil, pelo "consulta_generica".
   //
@@ -1479,6 +1534,25 @@ async function initDB() {
     `UPDATE subscriptions SET cota_assinatura=$1 WHERE cota_assinatura IS NULL AND origem='PIX'`,
     [ASSINATURA_DIGITAL_COTA]
   );
+  // Cota do Verificar CRLV + Data CRV — mesma mecânica das duas acima (coluna
+  // própria + backfill nas assinaturas por PIX já vigentes), para o serviço
+  // novo valer de imediato para quem já assina, sem esperar renovar.
+  await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS cota_verificar_crlv INTEGER`);
+  await pool.query(`
+    ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS queries_used_verificar_crlv INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(
+    `UPDATE subscriptions SET cota_verificar_crlv=$1 WHERE cota_verificar_crlv IS NULL AND origem='PIX'`,
+    [ASSINATURA_VERIFICAR_CRLV_COTA]
+  );
+  // Período que o cliente comprou na Assinatura Coisas de Despachantes. Fica no
+  // pagamento porque o preço é pró-rata: o QR mostra o valor de N dias até o dia
+  // 30, e a baixa (que pode acontecer horas depois) tem que abrir exatamente o
+  // período que foi cobrado, e não recalcular e entregar outro. Pagamento antigo
+  // tem as duas colunas NULL e cai no comportamento anterior (30 dias corridos,
+  // cotas cheias).
+  await pool.query(`ALTER TABLE pix_payments ADD COLUMN IF NOT EXISTS periodo_fim TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE pix_payments ADD COLUMN IF NOT EXISTS periodo_dias INTEGER`);
   // Pedidos de assinatura em andamento: a Assinafy devolve o documento assinado
   // só depois que o signatário assina — pode ser em minutos ou dias. Guardamos o
   // id do documento para buscar o resultado depois (cron/painel), do mesmo jeito
@@ -2530,14 +2604,19 @@ app.get('/api/queries/:id/result', requireAuth, async (req, res) => {
 app.get('/api/pdf/:token', requireAuth, async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT pdf_data FROM pdf_cache
-       WHERE token=$1 AND user_id=$2 AND expires_at > NOW()`,
+      `SELECT c.pdf_data, q.service_id, q.params
+         FROM pdf_cache c LEFT JOIN queries q ON q.id = c.query_id
+        WHERE c.token=$1 AND c.user_id=$2 AND c.expires_at > NOW()`,
       [req.params.token, req.user.id]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'PDF não encontrado ou expirado.' });
     const buf = Buffer.from(r.rows[0].pdf_data, 'base64');
+    let placaCache = '';
+    try { placaCache = (JSON.parse(r.rows[0].params || '{}').placa || '').toUpperCase(); } catch {}
+    const nomeArquivo = nomeArquivoVistocar(r.rows[0].service_id, placaCache)
+      || `consulta-${req.params.token.slice(0,8)}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="consulta-${req.params.token.slice(0,8)}.pdf"`);
+    res.setHeader('Content-Disposition', `inline; filename="${nomeArquivo}"`);
     return res.send(buf);
   } catch (err) {
     res.status(500).json({ error: 'Erro interno.' });
@@ -4006,6 +4085,96 @@ function buildVerificarCrlvPdfBuffer(service, data, params) {
       if (pairs.length) pdfFieldGrid(doc, pairs);
       else pdfEmptyNotice(doc, 'Nenhum dado retornado para essa placa.');
       doc.moveDown(0.4);
+
+      pdfReportFooter(doc, now);
+
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+// ── Geração de PDF — Verificar CRLV + Data CRV ───────────────────────────────
+// Mesmo endpoint do "Verificar CRLV e Último Licenciamento" (despbrasil
+// verificar_crlv), relatório diferente: as datas que dão nome ao serviço saem
+// em bloco próprio no topo e os "indicadores" viram uma seção legível. Os
+// indicadores NÃO aparecem no relatório do serviço antigo porque itemToPairs
+// descarta campo aninhado de propósito — aqui eles são o segundo motivo da
+// consulta, então são desenhados um a um.
+// A despbrasil nem sempre manda as datas (veículo velho sem licenciamento volta
+// só com os dados do veículo, conferido com a API real em 22/09/2026): a linha
+// sai com "Nada consta" em vez de sumir, senão o relatório do serviço que
+// promete a data do CRV ficaria sem dizer que a base não tem essa data.
+const VERIFICAR_CRLV_DATAS = [
+  ['dataEmissaoCrv',         'Data de emissão do CRV'],
+  ['dataEmissaoCRLV',        'Data de emissão do CRLV'],
+  ['anoUltimoLicenciamento', 'Último licenciamento'],
+];
+const VERIFICAR_CRLV_INDICADORES = {
+  multa_renainf:     'Multa RENAINF',
+  roubo_furto:       'Roubo/Furto',
+  leilao:            'Leilão',
+  renajud:           'RENAJUD',
+  comunicacao_venda: 'Comunicação de Venda',
+  alarme:            'Alarme',
+  restricao_rfb:     'Restrição RFB',
+  pendencia_emissao: 'Pendência de emissão',
+};
+// Data ISO da despbrasil ("2025-03-15") em dd/mm/aaaa. Sem passar por Date de
+// propósito: "2025-03-15" é lido como UTC e, no fuso do Brasil, voltaria 14/03.
+function dataBRSimples(v) {
+  const t = String(v ?? '').trim();
+  const m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : t;
+}
+
+function buildVerificarCrlvDataCrvPdfBuffer(service, data, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+      const dados = data || {};
+
+      pdfReportHeader(doc, 'VERIFICAR CRLV + DATA CRV', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Placa', maskPlacaDisplay(params?.placa)]]);
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'DATAS DO DOCUMENTO');
+      pdfFieldGrid(doc, VERIFICAR_CRLV_DATAS.map(([chave, rotulo]) => {
+        const v = dados[chave];
+        return [rotulo, (v === null || v === undefined || v === '') ? 'Nada consta' : dataBRSimples(v)];
+      }));
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'DADOS DO VEÍCULO');
+      const jaMostrados = new Set(VERIFICAR_CRLV_DATAS.map(([chave]) => chave));
+      const veiculo = Object.fromEntries(
+        Object.entries(dados).filter(([k]) => !jaMostrados.has(k))
+      );
+      const pares = itemToPairs(veiculo);
+      if (pares.length) pdfFieldGrid(doc, pares);
+      else pdfEmptyNotice(doc, 'Nenhum dado retornado para essa placa.');
+      doc.moveDown(0.4);
+
+      // Indicadores só saem quando a base os manda: desenhar "Não" em tudo
+      // quando a consulta não trouxe o bloco seria afirmar que está limpo.
+      const ind = dados.indicadores;
+      if (ind && typeof ind === 'object' && Object.keys(ind).length) {
+        pdfBar(doc, 'INDICADORES');
+        pdfFieldGrid(doc, Object.entries(ind).map(([k, v]) => [
+          VERIFICAR_CRLV_INDICADORES[k] || humanizeKey(k),
+          typeof v === 'boolean' ? (v ? 'Sim' : 'Não')
+            : (v === null || v === undefined || v === '') ? 'Nada consta' : String(v),
+        ]));
+        doc.moveDown(0.4);
+      }
 
       pdfReportFooter(doc, now);
 
@@ -5497,6 +5666,75 @@ function proximoVencimentoPosPago(apartirDe = new Date()) {
   return new Date(Date.UTC(ano, mes, dia, 23, 59, 59) + TZ_BR_OFFSET_MS);
 }
 
+// ── Ciclo da Assinatura Coisas de Despachantes ───────────────────────────────
+// Desde 22/09/2026 a assinatura deixou de ser "30 dias contados do pagamento" e
+// passou a acompanhar o calendário: todo período termina no dia 30, o MESMO
+// vencimento do pós-pago (proximoVencimentoPosPago), para quem tem as duas
+// coisas pagar tudo no mesmo dia.
+//
+// A consequência é que o primeiro período — e o de quem renova no meio do mês —
+// é PARCIAL, e por isso o preço é pró-rata: R$ 1,00 por dia
+// (ASSINATURA_PLACAS_PRICE / ASSINATURA_PLACAS_DIAS). Cobrar o mês inteiro por
+// oito dias de uso seria vender o que não se entrega.
+//
+// As cotas do período acompanham o preço pela mesma razão, e por uma a mais:
+// cada consulta de placa custa dinheiro na Datacube, então um período de três
+// dias com as 50 consultas cheias sairia por R$ 3,00 e daria prejuízo. Quem
+// paga um terço do mês leva um terço da cota, arredondando para cima e nunca
+// menos de 1 — período pago sem nenhuma consulta não é período.
+//
+// O início NÃO é sempre "agora": quem renova antes de vencer continua começando
+// o período novo no fim do atual (não perde os dias que faltavam). O que mudou
+// é onde o período termina.
+function cicloAssinatura(inicio = new Date()) {
+  const fim = proximoVencimentoPosPago(inicio);
+  const dias = Math.max(1, Math.ceil((fim.getTime() - inicio.getTime()) / 86400000));
+  return { inicio, fim, dias };
+}
+
+function fmtDataCicloBR(d) {
+  const t = new Date(new Date(d).getTime() - TZ_BR_OFFSET_MS);
+  const dia = String(t.getUTCDate()).padStart(2, '0');
+  const mes = String(t.getUTCMonth() + 1).padStart(2, '0');
+  return `${dia}/${mes}/${t.getUTCFullYear()}`;
+}
+
+// Preço do período, limitado ao valor cheio do plano: o ciclo pode ter 31 dias
+// (mês cheio + a sobra do dia 30), e ninguém paga mais que a mensalidade.
+function precoAssinaturaProRata(dias) {
+  const bruto = (ASSINATURA_PLACAS_PRICE / ASSINATURA_PLACAS_DIAS) * dias;
+  return Math.round(Math.min(ASSINATURA_PLACAS_PRICE, bruto) * 100) / 100;
+}
+
+function cotaProRata(cotaCheia, dias) {
+  if (dias >= ASSINATURA_PLACAS_DIAS) return cotaCheia;
+  return Math.max(1, Math.ceil((cotaCheia * dias) / ASSINATURA_PLACAS_DIAS));
+}
+
+// As quatro cotas do período, já proporcionais aos dias comprados.
+function cotasAssinaturaProRata(dias) {
+  return {
+    placas:        cotaProRata(ASSINATURA_PLACAS_COTA, dias),
+    crv:           cotaProRata(ASSINATURA_CRV_COTA, dias),
+    assinatura:    cotaProRata(ASSINATURA_DIGITAL_COTA, dias),
+    verificarCrlv: cotaProRata(ASSINATURA_VERIFICAR_CRLV_COTA, dias),
+  };
+}
+
+// Início do próximo período do cliente: agora, ou o fim do período vigente
+// quando ele renova antes de vencer. Assinatura sem data limite (cortesia do
+// admin) não tem "próximo período" — quem chama trata o null.
+async function proximoCicloAssinatura(userId) {
+  const r = await pool.query(
+    `SELECT MAX(expires_at) AS fim FROM subscriptions
+      WHERE user_id=$1 AND expires_at > NOW()`,
+    [userId]
+  );
+  const fimAtual = r.rows[0]?.fim ? new Date(r.rows[0].fim) : null;
+  const inicio = fimAtual && fimAtual > new Date() ? fimAtual : new Date();
+  return cicloAssinatura(inicio);
+}
+
 // Abre a fatura do ciclo corrente se não houver nenhuma. O ON CONFLICT casa com
 // idx_faturas_uma_aberta: duas consultas simultâneas do mesmo cliente não abrem
 // duas faturas.
@@ -6136,7 +6374,8 @@ async function refundQuery(queryId, userId, amount, reason) {
 async function getAssinaturaVigente(userId) {
   const r = await pool.query(
     `SELECT id, expires_at, queries_used, cota, queries_used_crv, cota_crv,
-            queries_used_assinatura, cota_assinatura, origem FROM subscriptions
+            queries_used_assinatura, cota_assinatura,
+            queries_used_verificar_crlv, cota_verificar_crlv, origem FROM subscriptions
      WHERE user_id=$1 AND (expires_at IS NULL OR expires_at > NOW())
      ORDER BY expires_at DESC NULLS FIRST LIMIT 1`,
     [userId]
@@ -6187,6 +6426,16 @@ async function assinaturaGateDespachantes(userId, serviceId) {
       ok: false,
       code: 'COTA_ESGOTADA',
       error: `Você já usou os ${assinatura.cota_assinatura} envios de Assinatura Digital deste período da assinatura. A cota é renovada ao pagar um novo período.`,
+    };
+  }
+  // Cota do Verificar CRLV + Data CRV, independente das outras três.
+  if (serviceId === ASSINATURA_VERIFICAR_CRLV_SERVICE_ID &&
+      assinatura.cota_verificar_crlv !== null &&
+      assinatura.queries_used_verificar_crlv >= assinatura.cota_verificar_crlv) {
+    return {
+      ok: false,
+      code: 'COTA_ESGOTADA',
+      error: `Você já usou as ${assinatura.cota_verificar_crlv} consultas de Verificar CRLV + Data CRV deste período da assinatura. A cota é renovada ao pagar um novo período.`,
     };
   }
   return { ok: true, assinatura };
@@ -6891,7 +7140,84 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
 
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="codigo-seguranca-crv-${placa}.pdf"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArquivoVistocar(serviceId, placa)}"`);
+      return res.send(pdfBuf);
+    }
+
+    // ── Verificar CRLV + Data CRV incluído na assinatura ──
+    // Mesma API do serviço pago do grupo CRV (despbrasil verificar_crlv, JSON
+    // com os dados em "dados"), mas serviço à parte: o verificar-crlv-data-crv
+    // segue cobrando crédito na aba Nova Consulta e este aqui não debita nada —
+    // quem paga é a assinatura, com cota própria (ASSINATURA_VERIFICAR_CRLV_COTA),
+    // separada das de placa, CRV e Assinatura Digital.
+    if (serviceId === ASSINATURA_VERIFICAR_CRLV_SERVICE_ID) {
+      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (placa.length !== 7)
+        return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+
+      let parsed;
+      try {
+        const dRes = await fetch(DESPBRASIL_BASE_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'chaveAcesso': DESPBRASIL_KEY },
+          body: JSON.stringify({ servico: DESPBRASIL_SVCS['verificar-crlv-data-crv'].servico, placa }),
+        });
+        parsed = await dRes.json().catch(() => null);
+        if (!dRes.ok) {
+          const msg = parsed ? extractApiErrorMsg(parsed) : `Erro HTTP ${dRes.status}.`;
+          console.error(`[${serviceId}] erro na despbrasil: ${msg}`);
+          return res.status(422).json({ error: `${msg} Nada foi descontado da sua cota.` });
+        }
+      } catch (e) {
+        console.error(`[${serviceId}] falha ao consultar a despbrasil:`, e.message);
+        return res.status(502).json({ error: 'Erro ao consultar a API. Tente novamente.' });
+      }
+
+      if (!parsed?.sucesso || !parsed?.dados) {
+        const errMsg = parsed?.erro || parsed?.mensagem || parsed?.message
+          || 'Nenhum resultado encontrado para essa placa. Nada foi descontado da sua cota.';
+        console.error(`[${serviceId}] resposta inesperada da despbrasil: ${JSON.stringify(parsed)}`);
+        return res.status(422).json({ error: errMsg });
+      }
+
+      let pdfBuf;
+      try {
+        pdfBuf = await buildVerificarCrlvDataCrvPdfBuffer(service, parsed.dados, { placa });
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório. Nada foi descontado da sua cota.' });
+      }
+
+      // Cota só é consumida com o PDF em mãos, e de forma atômica (o WHERE
+      // impede duas consultas simultâneas de furarem o teto do período).
+      const cota = await pool.query(
+        `UPDATE subscriptions SET queries_used_verificar_crlv = queries_used_verificar_crlv + 1
+         WHERE id=$1 AND (cota_verificar_crlv IS NULL OR queries_used_verificar_crlv < cota_verificar_crlv)
+         RETURNING queries_used_verificar_crlv`,
+        [gate.assinatura.id]
+      );
+      if (!cota.rows.length)
+        return res.status(402).json({
+          error: `Você já usou as ${gate.assinatura.cota_verificar_crlv} consultas de Verificar CRLV + Data CRV deste período da assinatura.`,
+          code: 'COTA_ESGOTADA',
+        });
+
+      // amount 0 e sem transaction_id: quem paga esta consulta é a assinatura.
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
+         VALUES ($1,$2,$3,$4,'success',0,'pdf',$5) RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify({ placa }), JSON.stringify(parsed.dados)]
+      );
+
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), expiresAt]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="verificar-crlv-data-crv-${placa}.pdf"`);
       return res.send(pdfBuf);
     }
 
@@ -7673,6 +7999,20 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
         return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
       }
+    } else if (serviceId === 'verificar-crlv-data-crv') {
+      let parsed;
+      try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
+      if (!parsed?.sucesso || !parsed?.dados) {
+        const errMsg = parsed?.erro || parsed?.mensagem || parsed?.message || 'Nenhum resultado encontrado para essa consulta.';
+        console.error(`[${serviceId}] resposta inesperada da despbrasil: ${JSON.stringify(parsed)}`);
+        return res.status(422).json({ error: errMsg });
+      }
+      try {
+        despbrasilJsonPdfBuf = await buildVerificarCrlvDataCrvPdfBuffer(service, parsed.dados, params);
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+      }
     } else if (serviceId === 'consulta-renavam') {
       let parsed;
       try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
@@ -8024,7 +8364,8 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         if (VISTOCAR_ENDPOINTS[serviceId] && user.phone) {
           const placa = (params?.placa || '').toUpperCase();
           const caption = `✅ *${service.name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
-          const fileName = `${serviceId}-${placa || 'doc'}.pdf`;
+          const fileName = nomeArquivoVistocar(serviceId, placa || 'doc')
+            || `${serviceId}-${placa || 'doc'}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
         }
         // Envia PDF via WhatsApp para Localização CPF (e V3)
@@ -8034,7 +8375,10 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
         }
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="${serviceId}-${Date.now()}.pdf"`);
+        // Serviço da Vistocar sai com o nome da casa; o resto segue como estava.
+        const nomeArquivo = nomeArquivoVistocar(serviceId, params?.placa)
+          || `${serviceId}-${Date.now()}.pdf`;
+        res.setHeader('Content-Disposition', `attachment; filename="${nomeArquivo}"`);
         return res.send(pdfToSend);
       }
       return res.json({ success: true, result: { status: 'Relatório gerado com sucesso' }, charged: price, html_token: token });
@@ -9681,10 +10025,12 @@ app.post('/api/cartao/assinatura', requireAuth, async (req, res) => {
     const user = ur.rows[0];
     if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
 
-    const valorCobrado = valorComAcrescimoCartao(ASSINATURA_PLACAS_PRICE, cartao.tipo);
+    const ciclo = await proximoCicloAssinatura(req.user.id);
+    const valorAssinatura = precoAssinaturaProRata(ciclo.dias);
+    const valorCobrado = valorComAcrescimoCartao(valorAssinatura, cartao.tipo);
     const pagamento = await criarPagamentoCartao({
       valorCobrado,
-      descricao: `Assinatura Coisas de Despachantes (${ASSINATURA_PLACAS_DIAS} dias) — ${user.name}`,
+      descricao: `Assinatura Coisas de Despachantes (${ciclo.dias} dias, até ${fmtDataCicloBR(ciclo.fim)}) — ${user.name}`,
       cartao,
       payer: payerCartao({
         email: user.email,
@@ -9698,15 +10044,18 @@ app.post('/api/cartao/assinatura', requireAuth, async (req, res) => {
       return res.status(402).json({ error: cartaoRecusaMsg(pagamento), statusDetail: pagamento.status_detail });
 
     await pool.query(
-      `INSERT INTO pix_payments (user_id, gateway_id, value, status, purpose, method, charged_value)
-       VALUES ($1,$2,$3,'PENDING','ASSINATURA',$4,$5) ON CONFLICT (gateway_id) DO NOTHING`,
-      [req.user.id, String(pagamento.id), ASSINATURA_PLACAS_PRICE, metodoDaTabela(cartao.tipo), valorCobrado]
+      `INSERT INTO pix_payments (user_id, gateway_id, value, status, purpose, method, charged_value,
+                                 periodo_fim, periodo_dias)
+       VALUES ($1,$2,$3,'PENDING','ASSINATURA',$4,$5,$6,$7) ON CONFLICT (gateway_id) DO NOTHING`,
+      [req.user.id, String(pagamento.id), valorAssinatura, metodoDaTabela(cartao.tipo), valorCobrado,
+       ciclo.fim, ciclo.dias]
     );
 
     const out = respostaPagamentoCartao(pagamento);
-    out.value = ASSINATURA_PLACAS_PRICE;
+    out.value = valorAssinatura;
     out.chargedValue = valorCobrado;
-    out.dias = ASSINATURA_PLACAS_DIAS;
+    out.dias = ciclo.dias;
+    out.vence = ciclo.fim;
     if (pagamento.status === 'approved') {
       const r = await creditPixPaymentIfApproved(String(pagamento.id));
       out.credited = r.credited;
@@ -9781,14 +10130,27 @@ app.post('/api/pix/criar', requireAuth, async (req, res) => {
 app.get('/api/assinatura/status', requireAuth, async (req, res) => {
   try {
     const assinatura = await getAssinaturaVigente(req.user.id);
+    // Próximo período (o que o botão "Assinar" vai cobrar): vai até o dia 30 e
+    // custa por dia; as cotas saem proporcionais ao mesmo número de dias.
+    const ciclo = await proximoCicloAssinatura(req.user.id);
+    const proximo = {
+      proximoPreco: precoAssinaturaProRata(ciclo.dias),
+      proximoDias: ciclo.dias,
+      proximoVencimento: ciclo.fim,
+      proximoCotas: cotasAssinaturaProRata(ciclo.dias),
+      precoCheio: ASSINATURA_PLACAS_PRICE,
+      diaVencimento: POS_PAGO_DIA_VENCIMENTO,
+    };
     if (!assinatura) {
       return res.json({
         ativa: false,
-        preco: ASSINATURA_PLACAS_PRICE,
-        dias: ASSINATURA_PLACAS_DIAS,
-        cota: ASSINATURA_PLACAS_COTA,
-        cotaCrv: ASSINATURA_CRV_COTA,
-        cotaAssinatura: ASSINATURA_DIGITAL_COTA,
+        preco: proximo.proximoPreco,
+        dias: proximo.proximoDias,
+        cota: proximo.proximoCotas.placas,
+        cotaCrv: proximo.proximoCotas.crv,
+        cotaAssinatura: proximo.proximoCotas.assinatura,
+        cotaVerificarCrlv: proximo.proximoCotas.verificarCrlv,
+        ...proximo,
       });
     }
     // expiraEm null = sem data limite; cota/consultasRestantes null = ilimitada.
@@ -9797,6 +10159,7 @@ app.get('/api/assinatura/status', requireAuth, async (req, res) => {
     const ilimitada = assinatura.cota === null;
     const ilimitadaCrv = assinatura.cota_crv === null;
     const ilimitadaAssin = assinatura.cota_assinatura === null;
+    const ilimitadaVerif = assinatura.cota_verificar_crlv === null;
     res.json({
       ativa: true,
       indefinida: assinatura.expires_at === null,
@@ -9808,11 +10171,15 @@ app.get('/api/assinatura/status', requireAuth, async (req, res) => {
       consultasCrvRestantes: ilimitadaCrv ? null : Math.max(0, assinatura.cota_crv - assinatura.queries_used_crv),
       assinaturasUsadas: assinatura.queries_used_assinatura,
       assinaturasRestantes: ilimitadaAssin ? null : Math.max(0, assinatura.cota_assinatura - assinatura.queries_used_assinatura),
-      preco: ASSINATURA_PLACAS_PRICE,
-      dias: ASSINATURA_PLACAS_DIAS,
+      verificarCrlvUsadas: assinatura.queries_used_verificar_crlv,
+      verificarCrlvRestantes: ilimitadaVerif ? null : Math.max(0, assinatura.cota_verificar_crlv - assinatura.queries_used_verificar_crlv),
+      preco: proximo.proximoPreco,
+      dias: proximo.proximoDias,
+      ...proximo,
       cota: assinatura.cota,
       cotaCrv: assinatura.cota_crv,
       cotaAssinatura: assinatura.cota_assinatura,
+      cotaVerificarCrlv: assinatura.cota_verificar_crlv,
     });
   } catch (err) {
     console.error('Erro em /api/assinatura/status:', err.message);
@@ -9838,9 +10205,14 @@ app.post('/api/assinatura/pix', requireAuth, async (req, res) => {
     const firstName = nameParts[0];
     const lastName  = nameParts.slice(1).join(' ') || firstName;
 
+    // O período vai até o dia 30 e o preço acompanha os dias (ver
+    // cicloAssinatura). Quem renova antes de vencer compra o ciclo seguinte.
+    const ciclo = await proximoCicloAssinatura(req.user.id);
+    const valorAssinatura = precoAssinaturaProRata(ciclo.dias);
+
     const payment = await mpReq('POST', '/v1/payments', {
-      transaction_amount: ASSINATURA_PLACAS_PRICE,
-      description: `Assinatura Coisas de Despachantes (${ASSINATURA_PLACAS_DIAS} dias) — ${user.name}`,
+      transaction_amount: valorAssinatura,
+      description: `Assinatura Coisas de Despachantes (${ciclo.dias} dias, até ${fmtDataCicloBR(ciclo.fim)}) — ${user.name}`,
       payment_method_id: 'pix',
       payer: {
         email: user.email,
@@ -9854,9 +10226,9 @@ app.post('/api/assinatura/pix', requireAuth, async (req, res) => {
     if (!txData.qr_code) throw new Error('Mercado Pago não retornou o QR Code PIX.');
 
     await pool.query(
-      `INSERT INTO pix_payments (user_id, gateway_id, value, status, purpose)
-       VALUES ($1,$2,$3,'PENDING','ASSINATURA') ON CONFLICT (gateway_id) DO NOTHING`,
-      [req.user.id, String(payment.id), ASSINATURA_PLACAS_PRICE]
+      `INSERT INTO pix_payments (user_id, gateway_id, value, status, purpose, periodo_fim, periodo_dias)
+       VALUES ($1,$2,$3,'PENDING','ASSINATURA',$4,$5) ON CONFLICT (gateway_id) DO NOTHING`,
+      [req.user.id, String(payment.id), valorAssinatura, ciclo.fim, ciclo.dias]
     );
 
     res.json({
@@ -9864,8 +10236,9 @@ app.post('/api/assinatura/pix', requireAuth, async (req, res) => {
       qrCode: txData.qr_code_base64,
       pixCopiaECola: txData.qr_code,
       expirationDate: payment.date_of_expiration,
-      value: ASSINATURA_PLACAS_PRICE,
-      dias: ASSINATURA_PLACAS_DIAS,
+      value: valorAssinatura,
+      dias: ciclo.dias,
+      vence: ciclo.fim,
     });
   } catch (err) {
     console.error('Erro ao criar PIX da assinatura:', err.message);
@@ -10054,7 +10427,8 @@ async function creditPixPaymentIfApproved(gatewayId) {
     await client.query('BEGIN');
     const upd = await client.query(
       `UPDATE pix_payments SET status='approved', credited=true
-       WHERE gateway_id=$1 AND credited=false RETURNING id, user_id, value, purpose, method`,
+       WHERE gateway_id=$1 AND credited=false
+       RETURNING id, user_id, value, purpose, method, periodo_fim, periodo_dias`,
       [gatewayId]
     );
     if (upd.rows.length === 0) {
@@ -10065,21 +10439,37 @@ async function creditPixPaymentIfApproved(gatewayId) {
     }
     const p = upd.rows[0];
 
-    // Pagamento da Assinatura Coisas de Despachantes: não credita saldo — abre um novo
-    // período de 30 dias. Se o assinante renova antes de vencer, o período novo
-    // começa no fim do atual (não perde os dias que faltavam); se já venceu,
-    // conta a partir de agora. Cada pagamento é um período próprio, com cota
-    // própria — por isso uma linha nova em vez de UPDATE no período anterior.
+    // Pagamento da Assinatura Coisas de Despachantes: não credita saldo — abre o
+    // período que foi COBRADO (periodo_fim/periodo_dias, gravados na criação da
+    // cobrança), que termina no dia 30 e pode ser parcial. Se o assinante renova
+    // antes de vencer, o período novo começa no fim do atual (não perde os dias
+    // que faltavam); se já venceu, conta a partir de agora. Cada pagamento é um
+    // período próprio, com cota própria — por isso uma linha nova em vez de
+    // UPDATE no período anterior.
     if (p.purpose === 'ASSINATURA') {
+      // QR abandonado e pago dias depois pode ter o fim do período já no
+      // passado: em vez de abrir um período nascido vencido, o cliente recebe o
+      // ciclo corrente. Pagamento anterior a 22/09/2026 não tem as colunas e
+      // cai no comportamento antigo (30 dias corridos, cotas cheias).
+      let fimPeriodo = p.periodo_fim ? new Date(p.periodo_fim) : null;
+      if (fimPeriodo && fimPeriodo.getTime() <= Date.now()) {
+        const novo = cicloAssinatura(new Date());
+        fimPeriodo = novo.fim;
+      }
+      const diasPeriodo = p.periodo_dias || ASSINATURA_PLACAS_DIAS;
+      const cotas = cotasAssinaturaProRata(diasPeriodo);
+      const fimSql = fimPeriodo ? '$3::timestamptz' : "inicio + ($3 || ' days')::interval";
       await client.query(
-        `INSERT INTO subscriptions (user_id, plan, status, starts_at, expires_at, gateway_id, origem, cota, cota_crv)
-         SELECT $1, $2, 'ACTIVE', inicio, inicio + ($3 || ' days')::interval, $4, 'PIX', $5, $6
+        `INSERT INTO subscriptions (user_id, plan, status, starts_at, expires_at, gateway_id, origem,
+                                    cota, cota_crv, cota_assinatura, cota_verificar_crlv)
+         SELECT $1, $2, 'ACTIVE', inicio, ${fimSql}, $4, 'PIX', $5, $6, $7, $8
            FROM (SELECT GREATEST(NOW(), COALESCE(
                    (SELECT MAX(expires_at) FROM subscriptions WHERE user_id=$1 AND expires_at > NOW()),
                    NOW())) AS inicio) t
          ON CONFLICT (gateway_id) DO NOTHING`,
-        [p.user_id, ASSINATURA_PLACAS_SERVICE_ID, String(ASSINATURA_PLACAS_DIAS), gatewayId,
-         ASSINATURA_PLACAS_COTA, ASSINATURA_CRV_COTA]
+        [p.user_id, ASSINATURA_PLACAS_SERVICE_ID,
+         fimPeriodo || String(ASSINATURA_PLACAS_DIAS), gatewayId,
+         cotas.placas, cotas.crv, cotas.assinatura, cotas.verificarCrlv]
       );
       // De propósito não grava em transactions: aquele extrato é o de créditos
       // pré-pagos, e a assinatura não movimenta saldo. O pagamento fica
@@ -10275,12 +10665,19 @@ async function avisarVencimentoAssinaturas() {
 
   const primeiroNome = n => (n || 'Cliente').trim().split(/\s+/)[0];
   const dataBR = d => new Date(d).toLocaleDateString('pt-BR');
+  // O valor da renovação não é mais fixo: o período novo vai do fim do atual até
+  // o dia 30, e o preço é por dia (ver cicloAssinatura). Anunciar R$ 30,00 para
+  // quem vai pagar R$ 11,00 seria espantar o cliente com um número errado.
+  const valorRenovacao = (inicio) => {
+    const ciclo = cicloAssinatura(new Date(inicio));
+    return `R$ ${precoAssinaturaProRata(ciclo.dias).toFixed(2).replace('.', ',')} (até ${fmtDataCicloBR(ciclo.fim)})`;
+  };
 
   const n5 = await enviar(faltando5, s =>
     `Olá, ${primeiroNome(s.name)}! 👋\n\n` +
     `Sua *Assinatura Coisas de Despachantes* vence em *5 dias* (${dataBR(s.expires_at)}).\n\n` +
     `Para não ficar sem acesso à consulta de placa, à Declaração de Residência, à Nota de Prestação de Serviços e à ASD, ` +
-    `renove por R$ ${ASSINATURA_PLACAS_PRICE.toFixed(2).replace('.', ',')} direto no painel, em *Coisas de Despachantes*.\n\n` +
+    `renove por ${valorRenovacao(s.expires_at)} direto no painel, em *Coisas de Despachantes*.\n\n` +
     `_MC Despachadoria Consultas_`, 'aviso_5d_em');
 
   // Já venceu x vence hoje: o cron pode pegar a assinatura no dia ou logo depois
@@ -10291,7 +10688,7 @@ async function avisarVencimentoAssinaturas() {
       (venceu
         ? `Sua *Assinatura Coisas de Despachantes* venceu em ${dataBR(s.expires_at)}. ⏰\n\n`
         : `Sua *Assinatura Coisas de Despachantes* vence hoje (${dataBR(s.expires_at)}). ⏰\n\n`) +
-      `Renove por R$ ${ASSINATURA_PLACAS_PRICE.toFixed(2).replace('.', ',')} no painel, em *Coisas de Despachantes*, ` +
+      `Renove por ${valorRenovacao(venceu ? new Date() : s.expires_at)} no painel, em *Coisas de Despachantes*, ` +
       `para continuar emitindo seus documentos sem interrupção.\n\n` +
       `_MC Despachadoria Consultas_`;
   }, 'aviso_venc_em');
@@ -10527,7 +10924,9 @@ async function entregarResultadoVistocar(pend) {
     const caption = `✅ *${nome} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
     // Mesma razão da Assinatura Digital: é whatsapp_sent_at que o admin lê para
     // saber se o cliente recebeu, e é o que decide se vale reenviar.
-    const enviado = await sendWhatsAppPdf(pend.phone, buf, `${pend.service_id}-${placa || 'doc'}.pdf`, caption)
+    const nomeArquivo = nomeArquivoVistocar(pend.service_id, placa || 'doc')
+      || `${pend.service_id}-${placa || 'doc'}.pdf`;
+    const enviado = await sendWhatsAppPdf(pend.phone, buf, nomeArquivo, caption)
       .catch(e => { console.error(`Erro ao enviar ${nome} por WhatsApp:`, e.message); return false; });
     if (enviado) await pool.query('UPDATE queries SET whatsapp_sent_at = NOW() WHERE id=$1', [pend.query_id]).catch(() => {});
   }
@@ -11828,12 +12227,16 @@ app.post('/api/admin/users/:id/assinatura', requireAuth, requireSuperAdmin, asyn
     // admin liberou sem teto, as duas ficam ilimitadas — é o sentido de "cota
     // vazia" na tela do admin, que continua com um campo só.
     const cotaCrvFinal = cotaFinal === null ? null : ASSINATURA_CRV_COTA;
+    const cotaAssinFinal = cotaFinal === null ? null : ASSINATURA_DIGITAL_COTA;
+    const cotaVerifFinal = cotaFinal === null ? null : ASSINATURA_VERIFICAR_CRLV_COTA;
     await pool.query(`DELETE FROM subscriptions WHERE user_id=$1 AND origem='CORTESIA'`, [userId]);
     const r = await pool.query(
-      `INSERT INTO subscriptions (user_id, plan, status, starts_at, expires_at, origem, cota, cota_crv)
-       VALUES ($1,$2,'ACTIVE',NOW(),$3,'CORTESIA',$4,$5)
+      `INSERT INTO subscriptions (user_id, plan, status, starts_at, expires_at, origem,
+                                  cota, cota_crv, cota_assinatura, cota_verificar_crlv)
+       VALUES ($1,$2,'ACTIVE',NOW(),$3,'CORTESIA',$4,$5,$6,$7)
        RETURNING id, expires_at, cota, cota_crv`,
-      [userId, ASSINATURA_PLACAS_SERVICE_ID, expiresAt, cotaFinal, cotaCrvFinal]
+      [userId, ASSINATURA_PLACAS_SERVICE_ID, expiresAt, cotaFinal, cotaCrvFinal,
+       cotaAssinFinal, cotaVerifFinal]
     );
     console.log(`[admin] assinatura liberada para user ${userId} (${modo}${expiresAt ? ' até ' + data : ''}, cota ${cotaFinal ?? 'ilimitada'}, cota CRV ${cotaCrvFinal ?? 'ilimitada'})`);
     res.json({ success: true, assinatura: r.rows[0] });
@@ -12281,14 +12684,18 @@ app.get('/api/admin/queries/:id/pdf', requireAuth, requireSuperAdmin, async (req
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'Consulta inválida.' });
   try {
     const r = await pool.query(
-      `SELECT pdf_data FROM pdf_cache
-        WHERE query_id=$1 AND expires_at > NOW()
-        ORDER BY created_at DESC LIMIT 1`,
+      `SELECT c.pdf_data, q.service_id, q.params
+         FROM pdf_cache c LEFT JOIN queries q ON q.id = c.query_id
+        WHERE c.query_id=$1 AND c.expires_at > NOW()
+        ORDER BY c.created_at DESC LIMIT 1`,
       [id]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'PDF não encontrado ou expirado.' });
+    let placaCache = '';
+    try { placaCache = (JSON.parse(r.rows[0].params || '{}').placa || '').toUpperCase(); } catch {}
+    const nomeArquivo = nomeArquivoVistocar(r.rows[0].service_id, placaCache) || `consulta-${id}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="consulta-${id}.pdf"`);
+    res.setHeader('Content-Disposition', `inline; filename="${nomeArquivo}"`);
     return res.send(Buffer.from(r.rows[0].pdf_data, 'base64'));
   } catch (err) {
     console.error('Erro ao abrir PDF no admin:', err.message);
@@ -12342,7 +12749,9 @@ app.post('/api/admin/manual-queries/:id/upload', requireAuth, requireSuperAdmin,
     let whatsappSent = false;
     if (query.phone) {
       const caption = `✅ *${query.service_name}* — documento pronto!\n\nSeu PDF já está disponível para download no seu painel.`;
-      whatsappSent = await sendWhatsAppPdf(query.phone, pdfBuf, `${query.service_id}-${query.id}.pdf`, caption).catch(() => false);
+      const nomeArquivo = nomeArquivoVistocar(query.service_id, query.id)
+        || `${query.service_id}-${query.id}.pdf`;
+      whatsappSent = await sendWhatsAppPdf(query.phone, pdfBuf, nomeArquivo, caption).catch(() => false);
       if (whatsappSent) {
         await pool.query(`UPDATE queries SET whatsapp_sent_at = NOW() WHERE id=$1`, [query.id]);
       }
@@ -12412,7 +12821,9 @@ app.post('/api/admin/manual-queries/:id/resend-whatsapp', requireAuth, requireSu
     const pdfBuf = Buffer.from(pr.rows[0].pdf_data, 'base64');
 
     const caption = `✅ *${query.service_name}* — documento pronto!\n\nSeu PDF já está disponível para download no seu painel.`;
-    const sent = await sendWhatsAppPdf(query.phone, pdfBuf, `${query.service_id}-${query.id}.pdf`, caption).catch(() => false);
+    const nomeArquivo = nomeArquivoVistocar(query.service_id, query.id)
+      || `${query.service_id}-${query.id}.pdf`;
+    const sent = await sendWhatsAppPdf(query.phone, pdfBuf, nomeArquivo, caption).catch(() => false);
     if (!sent) return res.status(502).json({ error: 'Falha ao reenviar pelo WhatsApp. Tente novamente.' });
 
     await pool.query(`UPDATE queries SET whatsapp_sent_at = NOW() WHERE id=$1`, [query.id]);
@@ -12586,7 +12997,9 @@ app.post('/api/admin/atpve-pedidos/:id/reenviar-whatsapp', requireAuth, requireS
     try { placa = (JSON.parse(q.params || '{}').placa || '').toUpperCase(); } catch {}
     const buf = Buffer.from(pr.rows[0].pdf_data, 'base64');
     const caption = `✅ *${q.service_name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
-    const sent = await sendWhatsAppPdf(phone, buf, `${q.service_id}-${placa || q.id}.pdf`, caption).catch(() => false);
+    const nomeArquivo = nomeArquivoVistocar(q.service_id, placa || q.id)
+      || `${q.service_id}-${placa || q.id}.pdf`;
+    const sent = await sendWhatsAppPdf(phone, buf, nomeArquivo, caption).catch(() => false);
     if (!sent) return res.status(502).json({ error: 'Falha ao reenviar pelo WhatsApp. Tente novamente.' });
 
     await pool.query(`UPDATE queries SET whatsapp_sent_at = NOW() WHERE id=$1`, [q.id]);

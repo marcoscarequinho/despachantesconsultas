@@ -75,6 +75,21 @@ Entrou em 15/09/2026 no grupo "Para os Despachantes" (`assinatura-digital`, `inp
 - **A tela de acompanhamento não tem barra que anda** (`showAssinaturaProgress`): reaproveita o painel do ATPV-e, mas com a barra parada num estado de espera. Uma curva subindo sozinha prometeria um prazo que não existe — do outro lado tem uma pessoa. O polling também é lento de propósito (20s nos primeiros 10 min, 2 min depois).
 - **Faixa própria na Visão Geral** (`#catalog-assinatura-destaque`, `renderAssinaturaDestaque`), **acima** do bloco Destaques: como card comum no meio da grade ele passaria despercebido. Só aparece quando o serviço está no resultado da busca/filtro atual, para não contradizer a busca logo acima.
 
+### Verificar CRLV + Data CRV (despbrasil)
+
+Entrou em 22/09/2026, em dois ids sobre o MESMO serviço da despbrasil (`verificar_crlv`, R$ 1,90 de custo):
+
+- **`verificar-crlv-data-crv`** — grupo **CRV** da aba "Acesse Aqui...", **R$ 5,00 fixo** (`noMarkup`), em `DESPBRASIL_SVCS` (fluxo genérico do `/api/query`).
+- **`assinatura-verificar-crlv-data-crv`** — aba "Coisas de Despachantes", **grátis para assinante**, com **cota própria de 5** por período (`ASSINATURA_VERIFICAR_CRLV_COTA`, colunas `cota_verificar_crlv`/`queries_used_verificar_crlv`), bloco próprio em `processCatalogQuery` — mesmo desenho do `assinatura-codigo-seguranca-crv`. Cota separada pelo mesmo motivo das outras: cada consulta custa na despbrasil, então não pode dividir as 50 de placa.
+
+O `verificar-crlv` (R$ 3,00, grupo Consultas Básicas) **continua intocado** — o que muda é o relatório: `buildVerificarCrlvDataCrvPdfBuffer` põe **Data de emissão do CRV, do CRLV e o último licenciamento em bloco próprio no topo** e desenha os **indicadores** (roubo/furto, leilão, RENAJUD, comunicação de venda…), que no relatório antigo **nunca apareciam** — `itemToPairs` descarta campo aninhado. Data ISO vira dd/mm/aaaa sem passar por `Date` (senão "2025-03-15" volta 14/03 no fuso do Brasil).
+
+Conferido contra a API real em 22/09/2026: a resposta **nem sempre traz as datas nem `arquivo_url`** (placa ABC1D23, veículo de 1979, voltou só com os dados do veículo e `arquivo_url: null`). Por isso o relatório é montado do JSON e a linha da data sai com "Nada consta" em vez de sumir — o serviço que promete a data do CRV tem que dizer quando a base não tem essa data. Placa que a base recusa volta 400 ("Erro ao consultar veículo"), sem cobrar.
+
+### Nome dos arquivos da Vistocar
+
+Todo PDF entregue pela Vistocar sai como **`mcdespachadoria-<consulta>-<placa>.pdf`** (`VISTOCAR_ARQUIVO_NOMES` + `nomeArquivoVistocar`, 22/09/2026): download do painel, WhatsApp, reenvio do admin e reabertura pelo histórico (`/api/pdf/:token` e `/api/admin/queries/:id/pdf`). Antes ia o id interno ("security-code-vistocar-2-ABC1D23.pdf"), que não diz nada para o cliente que salva o documento no celular. Os nomes longos são abreviados **um a um no mapa** porque o WhatsApp corta o nome na bolha do arquivo. Serviço fora do mapa devolve `null` e mantém o nome que já tinha — nada de outro fornecedor muda.
+
 ### Número do CRV Digital — Vistocar com reserva na despbrasil
 
 O `numero-crv-digital` trocou de fornecedor em 15/09/2026: passou da despbrasil (serviço `consulta_generica`) para a Vistocar, em `apiclient/security-code-crv`. **Apesar do nome, essa rota é a do NÚMERO do CRV**, não a do código de segurança (o erro dela é "Erro ao consultar o número do CRV"); o envelope é o mesmo dos outros (`success` + `paid` + `pdfBase64`), então não precisou de tratamento próprio.
@@ -149,6 +164,17 @@ Entrou em 21/09/2026. O cliente marcado pelo admin **consulta sem saldo e paga p
 - **Como a assinatura, a fatura não grava em `transactions`**: aquele extrato é o do saldo pré-pago. As consultas (débitos) continuam lá; o pagamento fica em `pix_payments` e a baixa na própria fatura (`origem_baixa`: `PIX` | `MANUAL` | `SEM_CONSUMO`).
 - **Admin**: botão 🧮 na linha do usuário liga/desliga e define o limite (`POST /api/admin/users/:id/pos-pago`), e a página **Clientes Pós-pago** (`section-pos-pago`) lista todo mundo com ciclo, a receber e situação. **Marcar como paga** (`POST /api/admin/faturas/:id/pagar`, `origem_baixa='MANUAL'`) é para quem pagou por fora. **Desligar o pós-pago não perdoa dívida**: a fatura aberta com valor vira FECHADA para o admin cobrar — só a zerada é cancelada.
 - **Comissão de revendedor não acompanha**: ela nasce de depósito (`transactions type='deposit'`), e cliente pós-pago não deposita.
+
+## Assinatura Coisas de Despachantes (vence dia 30, pró-rata)
+
+Desde 22/09/2026 a assinatura (R$ 30,00) **deixou de ser "30 dias contados do pagamento"**: o período vence sempre no **dia 30**, o mesmo dia do pós-pago (reaproveita `proximoVencimentoPosPago`), para quem tem as duas coisas pagar tudo no mesmo dia.
+
+- **Preço pró-rata**: `precoAssinaturaProRata` cobra **R$ 1,00 por dia** (`ASSINATURA_PLACAS_PRICE / ASSINATURA_PLACAS_DIAS`) até o dia 30, limitado ao valor cheio — quem assina dia 22 paga R$ 9,00. As duas constantes viraram a **referência do mês cheio**, não o valor de toda compra.
+- **Cotas também pró-rata** (`cotasAssinaturaProRata`, arredondando para cima, mínimo 1): sem isso, assinar dia 28 por R$ 3,00 daria as 50 consultas de placa, que custam dinheiro na Datacube — prejuízo. Decisão do dono, com os números na mesa.
+- **O período comprado fica gravado no pagamento** (`pix_payments.periodo_fim`/`periodo_dias`): o QR mostra o valor de N dias e a baixa, que pode acontecer horas depois, abre **exatamente** o período cobrado em vez de recalcular. Pagamento anterior a 22/09/2026 tem as colunas NULL e cai no comportamento antigo (30 dias corridos, cotas cheias). QR abandonado e pago depois do dia 30 recebe o ciclo corrente, senão o período nasceria vencido.
+- **Renovar antes de vencer continua não perdendo dias**: o período novo começa no fim do atual (`proximoCicloAssinatura`) — o que mudou é onde ele termina.
+- **Nenhum número da tela é fixo**: o painel lê preço, dias, vencimento e cotas do `/api/assinatura/status` (`proximoPreco`, `proximoDias`, `proximoVencimento`, `proximoCotas`) e o aviso de vencimento por WhatsApp calcula o valor da renovação por cliente. Anunciar R$ 30,00 para quem vai pagar R$ 9,00 espanta o cliente com um número errado.
+- Assinatura de **cortesia do admin** não entra nessa conta: o admin escolhe a data e a cota, como antes.
 
 ## Pagamento: PIX (0%) e cartão de crédito (+7%) — débito desligado
 

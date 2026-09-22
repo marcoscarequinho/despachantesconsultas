@@ -651,7 +651,7 @@
 
       <div>
         <h2 class="text-xl font-bold text-amber-600">Coisas de Despachantes Assinatura</h2>
-        <p class="text-sm text-gray-500">Consultas e documentos exclusivos de quem assina — R$ 30,00 por 30 dias, sem debitar crédito</p>
+        <p id="assinatura-subtitulo" class="text-sm text-gray-500">Consultas e documentos exclusivos de quem assina — vencimento todo dia 30, sem debitar crédito</p>
       </div>
 
       <!-- Saldo disponível -->
@@ -2635,13 +2635,15 @@ function buildCategoryGrid() {
 
 // ── Assinatura Coisas de Despachantes ─────────────────────────────────────────
 // Os serviços da aba "Coisas de Despachantes" não debitam crédito, mas exigem
-// assinatura ativa (R$ 30,00 / 30 dias). O bloqueio de verdade é do servidor
+// assinatura ativa, com vencimento todo dia 30 e preço por dia. O bloqueio de
+// verdade é do servidor
 // (HTTP 402 em /api/query, ver assinaturaGateDespachantes) — o que está aqui é
 // só para abrir o popup ANTES de o usuário preencher o formulário à toa.
 const ASSINATURA_IDS = [
   'assinatura-consulta-placas',
   'assinatura-codigo-seguranca-crv',
   'assinatura-digital',
+  'assinatura-verificar-crlv-data-crv',
   'declaracao-residencia-detran-rj',
   'nota-prestacao-servicos-despachante',
   'gerar-asd',
@@ -2652,6 +2654,8 @@ const ASSINATURA_PLACAS_ID = 'assinatura-consulta-placas';
 const ASSINATURA_CRV_ID = 'assinatura-codigo-seguranca-crv';
 // Assinatura Digital (Assinafy) — terceira cota independente das outras duas.
 const ASSINATURA_DIGITAL_ID = 'assinatura-digital';
+// Verificar CRLV + Data CRV — quarta cota, também independente.
+const ASSINATURA_VERIF_CRLV_ID = 'assinatura-verificar-crlv-data-crv';
 let assinaturaStatus = null;
 let assinaturaPollTimer = null;
 let assinaturaSvcPendente = null;
@@ -2661,6 +2665,7 @@ async function loadAssinaturaStatus() {
     const r = await fetch('/api/assinatura/status');
     if (!r.ok) return;
     assinaturaStatus = await r.json();
+    aplicarPrecoAssinatura();
     renderAssinaturaBanner();
     // A lista da aba é montada antes do status chegar (ver loadDashboard): sem
     // este redesenho os cards ficariam abertos até o próximo carregamento.
@@ -2690,6 +2695,11 @@ function assinaturaLiberada(serviceId) {
       assinaturaStatus.assinaturasRestantes !== null &&
       assinaturaStatus.assinaturasRestantes !== undefined &&
       assinaturaStatus.assinaturasRestantes <= 0) return false;
+  // Cota do Verificar CRLV + Data CRV, também independente.
+  if (serviceId === ASSINATURA_VERIF_CRLV_ID &&
+      assinaturaStatus.verificarCrlvRestantes !== null &&
+      assinaturaStatus.verificarCrlvRestantes !== undefined &&
+      assinaturaStatus.verificarCrlvRestantes <= 0) return false;
   return true;
 }
 
@@ -2702,8 +2712,41 @@ function abrirAssinaturaDoServico(svc) {
   if (assinaturaStatus?.ativa) {
     if (svc.id === ASSINATURA_PLACAS_ID) motivo = 'COTA_ESGOTADA';
     else if (svc.id === ASSINATURA_CRV_ID) motivo = 'COTA_ESGOTADA_CRV';
+    else if (svc.id === ASSINATURA_VERIF_CRLV_ID) motivo = 'COTA_ESGOTADA_VERIF_CRLV';
   }
   abrirModalAssinatura(svc, motivo);
+}
+
+// O período da assinatura vai até o dia 30 e é cobrado por dia, então nenhum
+// número da tela pode ficar fixo em "R$ 30,00 / 30 dias": quem entra dia 22
+// paga 8 dias e leva cota proporcional. Os valores vêm do servidor
+// (/api/assinatura/status), que é quem calcula e quem cobra.
+function aplicarPrecoAssinatura() {
+  if (!assinaturaStatus) return;
+  const preco = Number(assinaturaStatus.proximoPreco ?? assinaturaStatus.preco ?? 30);
+  const dias  = Number(assinaturaStatus.proximoDias ?? assinaturaStatus.dias ?? 30);
+  const venceEm = assinaturaStatus.proximoVencimento
+    ? new Date(assinaturaStatus.proximoVencimento).toLocaleDateString('pt-BR')
+    : null;
+  ASSINATURA_PRECO = preco;
+
+  const txt = (id, valor) => { const el = document.getElementById(id); if (el) el.textContent = valor; };
+  txt('assinatura-preco', fmt(preco));
+  txt('assinatura-periodo', venceEm
+    ? `${dias} dia(s) — até ${venceEm}, sem renovação automática`
+    : 'até o dia 30 — sem renovação automática');
+  txt('assinatura-cartao-rotulo-periodo', `Assinatura (${dias} dia(s))`);
+  txt('assinatura-subtitulo', venceEm
+    ? `Consultas e documentos exclusivos de quem assina — ${fmt(preco)} até ${venceEm} (vence todo dia 30), sem debitar crédito`
+    : 'Consultas e documentos exclusivos de quem assina — vencimento todo dia 30, sem debitar crédito');
+
+  const cotas = assinaturaStatus.proximoCotas;
+  if (cotas) {
+    txt('assinatura-cota-placas', cotas.placas);
+    txt('assinatura-cota-crv', cotas.crv);
+    txt('assinatura-cota-verif', cotas.verificarCrlv);
+  }
+  atualizarAvisoAssinatura();
 }
 
 function renderAssinaturaBanner() {
@@ -2725,7 +2768,11 @@ function renderAssinaturaBanner() {
     el.innerHTML = `✅ <strong>Assinatura ativa</strong> ${validade} — ${consultas}${consultasCrv}.`;
   } else {
     el.className = 'bg-amber-50 border border-amber-300 text-amber-800 rounded-lg px-4 py-3 text-sm';
-    el.innerHTML = `🔑 Estes serviços são exclusivos de quem assina <strong>Coisas de Despachantes</strong> (R$ 30,00 por 30 dias). ` +
+    const precoBanner = fmt(Number(assinaturaStatus.proximoPreco ?? 30));
+    const venceBanner = assinaturaStatus.proximoVencimento
+      ? ' até ' + new Date(assinaturaStatus.proximoVencimento).toLocaleDateString('pt-BR')
+      : '';
+    el.innerHTML = `🔑 Estes serviços são exclusivos de quem assina <strong>Coisas de Despachantes</strong> (${precoBanner}${venceBanner} — vence todo dia 30). ` +
       `<button onclick="abrirModalAssinatura(null)" class="ml-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold px-3 py-1.5 rounded">🔑 Assinar</button>`;
   }
   el.classList.remove('hidden');
@@ -2738,10 +2785,12 @@ function abrirModalAssinatura(svc, motivo, mensagemServidor) {
   const msg = document.getElementById('assinatura-msg');
   if (mensagemServidor) {
     msg.textContent = mensagemServidor;
+  } else if (motivo === 'COTA_ESGOTADA_VERIF_CRLV') {
+    msg.textContent = 'Você já usou todas as consultas de Verificar CRLV + Data CRV deste período da assinatura. Pague um novo período para renovar a cota.';
   } else if (motivo === 'COTA_ESGOTADA_CRV') {
-    msg.textContent = `Você já usou todas as consultas de Código de Segurança CRV deste período da assinatura. Pague um novo período de 30 dias para renovar a cota.`;
+    msg.textContent = 'Você já usou todas as consultas de Código de Segurança CRV deste período da assinatura. Pague o próximo período para renovar a cota.';
   } else if (motivo === 'COTA_ESGOTADA') {
-    msg.textContent = `Você já usou todas as consultas de placa deste período da assinatura. Pague um novo período de 30 dias para renovar a cota.`;
+    msg.textContent = 'Você já usou todas as consultas de placa deste período da assinatura. Pague o próximo período para renovar a cota.';
   } else {
     msg.textContent = 'Esta consulta só está liberada como Gratuita, se você tem assinatura: "Assinatura Coisas de Despachantes", clique no botão assinar e pague com pix.';
   }
@@ -2753,6 +2802,7 @@ function abrirModalAssinatura(svc, motivo, mensagemServidor) {
   metodoAssinatura = 'pix';
   document.querySelectorAll('[data-metodo-assinatura]').forEach(b =>
     b.classList.toggle('ativo', b.dataset.metodoAssinatura === 'pix'));
+  aplicarPrecoAssinatura();
   atualizarAvisoAssinatura();
   const btn = document.getElementById('assinatura-assinar-btn');
   btn.classList.remove('hidden');
@@ -2774,7 +2824,7 @@ function closeAssinaturaModal() {
 
 // ── Meio de pagamento da assinatura: PIX (sem acréscimo) ou débito (+5%) ────
 let metodoAssinatura = 'pix';
-const ASSINATURA_PRECO = 30;
+let ASSINATURA_PRECO = 30;
 
 const rotuloBotaoAssinatura = () =>
   metodoAssinatura === 'pix'
@@ -2823,7 +2873,7 @@ function erroCartaoAssinatura(msg) {
   box.classList.remove('hidden');
 }
 
-// Cartão de débito: mesma cobrança de R$ 30,00 com o acréscimo de 5%. A
+// Cartão: mesma cobrança da assinatura (valor do período) com o acréscimo. A
 // confirmação é o mesmo polling do PIX (/api/pix/status/:id) — a linha nasce
 // com purpose='ASSINATURA', então o servidor abre o período em vez de creditar
 // saldo, inclusive quando o banco pede o desafio do 3DS.
@@ -7246,12 +7296,13 @@ function requeryFromModal() {
       <div id="assinatura-step-oferta">
         <p id="assinatura-msg" class="text-sm text-gray-700 leading-relaxed"></p>
         <div class="mt-4 bg-amber-50 border border-amber-200 rounded-lg p-4 text-center">
-          <div class="text-3xl font-extrabold text-amber-700">R$ 30,00</div>
-          <div class="text-xs text-amber-700 mt-0.5">por 30 dias — sem renovação automática</div>
+          <div id="assinatura-preco" class="text-3xl font-extrabold text-amber-700">R$ 30,00</div>
+          <div id="assinatura-periodo" class="text-xs text-amber-700 mt-0.5">até o dia 30 — sem renovação automática</div>
         </div>
         <ul class="mt-4 space-y-1.5 text-sm text-gray-600">
-          <li>✅ Veicular Completa — consulta de placa (até 50 no período)</li>
-          <li>✅ Consulta 3 Código Segurança CRV em PDF (até 5 no período)</li>
+          <li>✅ Veicular Completa — consulta de placa (até <span id="assinatura-cota-placas">50</span> no período)</li>
+          <li>✅ Consulta 3 Código Segurança CRV em PDF (até <span id="assinatura-cota-crv">5</span> no período)</li>
+          <li>✅ Verificar CRLV + Data CRV em PDF (até <span id="assinatura-cota-verif">5</span> no período)</li>
           <li>✅ Declaração de Residência DETRAN RJ</li>
           <li>✅ Nota de Prestação de Serviços Para Despachantes Rio</li>
           <li>✅ Gerar ASD</li>
@@ -7261,9 +7312,10 @@ function requeryFromModal() {
           <span class="text-lg">📄</span>
           <span>Veja modelo da consulta <span class="underline font-semibold">(abrir PDF de exemplo)</span></span>
         </a>
-        <p class="text-xs text-gray-400 mt-3">
-          A assinatura vale por 30 dias e não renova sozinha: para continuar, é só
-          pagar outro PIX de R$ 30,00 quando o período acabar.
+        <p id="assinatura-rodape" class="text-xs text-gray-400 mt-3">
+          A assinatura vence todo dia 30 e não renova sozinha: o primeiro período é
+          proporcional aos dias que faltam (R$ 1,00 por dia) e, para continuar, é só
+          pagar outro PIX quando o período acabar.
         </p>
         <!-- Meio de pagamento. O acréscimo do cartão é calculado no servidor
              (CARTAO_ACRESCIMO); aqui é só o que o assinante vê para decidir. -->
@@ -7306,7 +7358,7 @@ function requeryFromModal() {
            número aceita o "Escanear cartão" com a câmera do aparelho. -->
       <div id="assinatura-step-cartao" class="hidden">
         <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm text-gray-700 space-y-1">
-          <div class="flex justify-between"><span>Assinatura (30 dias)</span><strong id="assinatura-cartao-liquido">R$ 30,00</strong></div>
+          <div class="flex justify-between"><span id="assinatura-cartao-rotulo-periodo">Assinatura</span><strong id="assinatura-cartao-liquido">R$ 30,00</strong></div>
           <div class="flex justify-between"><span id="assinatura-cartao-rotulo-taxa">Acréscimo do cartão</span><strong id="assinatura-cartao-taxa">R$ 1,50</strong></div>
           <div class="flex justify-between text-base pt-1 border-t border-gray-200 mt-1">
             <span class="font-semibold" id="assinatura-cartao-rotulo-total">Total à vista</span><strong id="assinatura-cartao-total" class="text-amber-700">R$ 31,50</strong>
