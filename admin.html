@@ -147,6 +147,9 @@
         💬 <span class="hidden sm:inline">Mensagens</span>
         <span id="sino-mensagens-badge" class="hidden absolute -top-2 -right-2 bg-rose-600 text-white rounded-full text-[11px] font-bold px-1.5 py-0.5 leading-none"></span>
       </button>
+      <button onclick="abrirComunicado()" title="Mensagem para todos os clientes" class="btn-ghost text-xs">
+        📢 <span class="hidden sm:inline">Mensagem para todos</span>
+      </button>
       <button onclick="refreshCurrentSection()" class="btn-ghost text-xs">🔄 Atualizar</button>
     </div>
   </header>
@@ -2128,6 +2131,15 @@ async function loadMensagensAdmin() {
 
 // ── Comunicados (mensagem para todos) ────────────────────────────────────────
 let comunicadoDestinatarios = 0;
+
+// Botão 📢 do topo: o quadro fica dentro da seção Mensagens, que ninguém acha
+// sem saber que está lá.
+function abrirComunicado() {
+  showSection('mensagens');
+  const campo = document.getElementById('comunicado-texto');
+  campo.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  campo.focus();
+}
 
 async function loadComunicados() {
   try {
