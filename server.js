@@ -1813,6 +1813,20 @@ async function initDB() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_mensagens_usuario_user ON mensagens_usuario (user_id, created_at)`);
+  // Comunicado = a mesma mensagem para todos os clientes de uma vez. Vira uma
+  // linha de mensagens_usuario por cliente (cada um tem o seu aviso, o seu
+  // "lida em" e pode responder), marcada com comunicado_id para a caixa de
+  // entrada do admin não se encher de centenas de conversas sem resposta.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS comunicados (
+      id         SERIAL PRIMARY KEY,
+      texto      TEXT NOT NULL,
+      total      INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`ALTER TABLE mensagens_usuario ADD COLUMN IF NOT EXISTS comunicado_id INTEGER REFERENCES comunicados(id) ON DELETE SET NULL`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_mensagens_usuario_comunicado ON mensagens_usuario (comunicado_id) WHERE comunicado_id IS NOT NULL`);
   console.log('✅ Tabelas prontas');
 }
 
@@ -12365,6 +12379,9 @@ app.get('/api/admin/mensagens', requireAuth, requireSuperAdmin, async (req, res)
          FROM mensagens_usuario m
          JOIN users u ON u.id = m.user_id
         GROUP BY u.id
+        -- Quem só recebeu comunicado e não respondeu não é conversa: sem isso,
+        -- cada comunicado encheria a caixa com uma linha por cliente.
+       HAVING bool_or(m.comunicado_id IS NULL)
         ORDER BY (COUNT(*) FILTER (WHERE m.autor='usuario' AND m.lida_em IS NULL) > 0) DESC,
                  MAX(m.created_at) DESC
         LIMIT 300`
@@ -12374,6 +12391,59 @@ app.get('/api/admin/mensagens', requireAuth, requireSuperAdmin, async (req, res)
   } catch (err) {
     console.error('Erro ao listar conversas (admin):', err.message);
     res.status(500).json({ error: 'Erro ao carregar as mensagens.' });
+  }
+});
+
+// ── ADMIN: comunicados (mensagem para todos) ─────────────────────────────────
+// Destinatários: toda conta ativa, menos os super admins. Um INSERT ... SELECT
+// só, dentro de transação com o registro do comunicado — ou todo mundo recebe,
+// ou ninguém (um envio pela metade não teria como ser completado sem duplicar).
+const COMUNICADO_DESTINATARIOS_SQL = `FROM users WHERE active = true AND email <> ALL($1::text[])`;
+
+app.get('/api/admin/comunicados', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    await ensureDbReady();
+    const dest = await pool.query(`SELECT COUNT(*)::int AS n ${COMUNICADO_DESTINATARIOS_SQL}`, [SUPER_ADMIN_EMAILS]);
+    const r = await pool.query(
+      `SELECT c.id, c.texto, c.total, c.created_at,
+              COUNT(m.id) FILTER (WHERE m.lida_em IS NOT NULL)::int AS lidas
+         FROM comunicados c
+         LEFT JOIN mensagens_usuario m ON m.comunicado_id = c.id
+        GROUP BY c.id
+        ORDER BY c.created_at DESC
+        LIMIT 50`
+    );
+    res.json({ comunicados: r.rows, destinatarios: dest.rows[0].n });
+  } catch (err) {
+    console.error('Erro ao listar comunicados:', err.message);
+    res.status(500).json({ error: 'Erro ao carregar os comunicados.' });
+  }
+});
+
+app.post('/api/admin/comunicados', requireAuth, requireSuperAdmin, async (req, res) => {
+  const { texto, error } = lerTextoMensagem(req.body);
+  if (error) return res.status(400).json({ error });
+  const client = await pool.connect();
+  try {
+    await ensureDbReady();
+    await client.query('BEGIN');
+    const c = await client.query(`INSERT INTO comunicados (texto) VALUES ($1) RETURNING id`, [texto]);
+    const comunicadoId = c.rows[0].id;
+    const ins = await client.query(
+      `INSERT INTO mensagens_usuario (user_id, autor, texto, comunicado_id)
+       SELECT id, 'admin', $2, $3 ${COMUNICADO_DESTINATARIOS_SQL}`,
+      [SUPER_ADMIN_EMAILS, texto, comunicadoId]
+    );
+    await client.query('UPDATE comunicados SET total=$2 WHERE id=$1', [comunicadoId, ins.rowCount]);
+    await client.query('COMMIT');
+    console.log(`[admin] comunicado #${comunicadoId} enviado a ${ins.rowCount} cliente(s)`);
+    res.json({ success: true, id: comunicadoId, total: ins.rowCount });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('Erro ao enviar comunicado:', err.message);
+    res.status(500).json({ error: 'Erro ao enviar o comunicado. Ninguém recebeu; tente de novo.' });
+  } finally {
+    client.release();
   }
 });
 

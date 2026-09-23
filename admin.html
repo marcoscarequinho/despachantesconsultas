@@ -674,6 +674,22 @@
           Todas as conversas, com as respostas não lidas no topo. Para escrever a um cliente novo, use o botão 💬 em <strong>Usuários</strong>.
         </p>
       </div>
+      <div class="card space-y-3 border-l-4 border-amber-400">
+        <div>
+          <h3 class="font-bold text-gray-800">📢 Mensagem para todos os clientes</h3>
+          <p class="text-xs text-gray-500">
+            Vai para o painel de <strong id="comunicado-destinatarios">...</strong> conta(s) ativa(s) de uma vez e abre em destaque
+            para cada um, igual à mensagem individual. Quem responder aparece na lista abaixo como conversa.
+          </p>
+        </div>
+        <textarea id="comunicado-texto" rows="4" maxlength="2000" class="input-field"
+          placeholder="Ex.: Atenção: amanhã, das 8h às 10h, o sistema do Detran estará em manutenção."></textarea>
+        <div class="flex justify-end">
+          <button id="comunicado-enviar-btn" onclick="enviarComunicado()" class="btn-primary">📢 Enviar para todos</button>
+        </div>
+        <div id="comunicados-lista" class="space-y-2"></div>
+      </div>
+      <h3 class="font-bold text-gray-700 pt-2">Conversas</h3>
       <div id="mensagens-lista" class="space-y-2"></div>
     </section>
 
@@ -2107,6 +2123,48 @@ async function loadMensagensAdmin() {
     atualizarSelosMensagens(d.naoLidas);
     naoLidasVistas = d.naoLidas;
   } catch { toast('Erro de conexão.', 'error'); }
+  loadComunicados();
+}
+
+// ── Comunicados (mensagem para todos) ────────────────────────────────────────
+let comunicadoDestinatarios = 0;
+
+async function loadComunicados() {
+  try {
+    const r = await fetch('/api/admin/comunicados');
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Erro ao carregar os comunicados.', 'error'); return; }
+    comunicadoDestinatarios = d.destinatarios;
+    document.getElementById('comunicado-destinatarios').textContent = d.destinatarios;
+    document.getElementById('comunicados-lista').innerHTML = (d.comunicados || []).length
+      ? '<div class="text-xs font-semibold text-gray-500 pt-2">Enviados</div>' + d.comunicados.map(c => `
+        <div class="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+          <div class="text-sm text-gray-800" style="white-space:pre-wrap;word-break:break-word">${escMsg(c.texto)}</div>
+          <div class="text-[11px] text-gray-500 mt-1">${fmtDate(c.created_at)} · enviado a ${c.total} · <strong>lido por ${c.lidas}</strong>${c.total ? ` (${Math.round(c.lidas * 100 / c.total)}%)` : ''}</div>
+        </div>`).join('')
+      : '';
+  } catch {}
+}
+
+async function enviarComunicado() {
+  const texto = document.getElementById('comunicado-texto').value.trim();
+  if (!texto) { toast('Escreva a mensagem.', 'error'); return; }
+  if (!confirm(`Enviar esta mensagem para TODOS os ${comunicadoDestinatarios} clientes ativos?\n\nEla abre em destaque no painel de cada um e não dá para desfazer.`)) return;
+  const btn = document.getElementById('comunicado-enviar-btn');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/admin/comunicados', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texto }),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Erro ao enviar.', 'error'); return; }
+    document.getElementById('comunicado-texto').value = '';
+    toast(`Mensagem enviada para ${d.total} cliente(s).`);
+    loadComunicados();
+  } catch { toast('Erro de conexão.', 'error'); }
+  finally { btn.disabled = false; }
 }
 
 async function enviarMensagemCliente() {
