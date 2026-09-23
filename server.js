@@ -1797,6 +1797,22 @@ async function initDB() {
       ON faturas (user_id) WHERE status='ABERTA'
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_faturas_user ON faturas (user_id, created_at DESC)`);
+  // Mensagens do admin para UM cliente, lidas no painel logado (ver "Mensagens
+  // ao cliente" nas rotas). Existe porque o WhatsApp do cadastro às vezes está
+  // errado e aí não sobra canal nenhum para um assunto urgente. lida_em é do
+  // DESTINATÁRIO: na mensagem do admin, quando o cliente leu; na resposta do
+  // cliente, quando o admin abriu a conversa.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mensagens_usuario (
+      id         SERIAL PRIMARY KEY,
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      autor      VARCHAR(10) NOT NULL CHECK (autor IN ('admin','usuario')),
+      texto      TEXT NOT NULL,
+      lida_em    TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_mensagens_usuario_user ON mensagens_usuario (user_id, created_at)`);
   console.log('✅ Tabelas prontas');
 }
 
@@ -12160,6 +12176,7 @@ app.get('/api/admin/users', requireAuth, requireSuperAdmin, async (req, res) => 
     if (role)   { conds.push(`u.role=$${i}`);   vals.push(role); i++; }
     if (active !== '') { conds.push(`u.active=$${i}`); vals.push(active === 'true'); i++; }
     const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
+    await ensureDbReady();   // mensagens_usuario é tabela nova — ver ensureDbReady
     // LEFT JOIN LATERAL traz a assinatura vigente de cada usuário (a indefinida
     // primeiro, mesma regra do getAssinaturaVigente) para a tabela do admin
     // mostrar quem tem acesso à aba "Coisas de Despachantes" sem uma consulta
@@ -12167,6 +12184,10 @@ app.get('/api/admin/users', requireAuth, requireSuperAdmin, async (req, res) => 
     const r = await pool.query(
       `SELECT u.id,u.name,u.email,u.cpf_cnpj,u.phone,u.role,u.credits,u.active,u.created_at,u.affiliate_code,
               u.pos_pago, u.pos_pago_limite,
+              (SELECT COUNT(*)::int FROM mensagens_usuario mu
+                WHERE mu.user_id = u.id AND mu.autor='usuario' AND mu.lida_em IS NULL) AS mensagens_nao_lidas,
+              (SELECT COUNT(*)::int FROM mensagens_usuario mu
+                WHERE mu.user_id = u.id AND mu.autor='admin' AND mu.lida_em IS NULL) AS mensagens_pendentes,
               s.expires_at AS assinatura_expira_em,
               s.origem     AS assinatura_origem,
               s.cota       AS assinatura_cota,
@@ -12306,6 +12327,147 @@ app.post('/api/admin/users/:id/pos-pago', requireAuth, requireSuperAdmin, async 
   } catch (err) {
     console.error('Erro ao mudar o pós-pago:', err.message);
     res.status(500).json({ error: 'Erro ao alterar o pós-pago do usuário.' });
+  }
+});
+
+// ── Mensagens ao cliente ─────────────────────────────────────────────────────
+// Canal de último recurso para quando o WhatsApp do cadastro está errado: o
+// admin escreve para UM cliente e ele lê no painel logado, num aviso que abre
+// sozinho na entrada e só fecha com "Li a mensagem". A conversa é sempre
+// aberta pelo admin — o cliente só responde a uma mensagem que recebeu, para
+// isto não virar um segundo canal de suporte ao lado do WhatsApp.
+const MENSAGEM_MAX_CHARS = 2000;
+
+function lerTextoMensagem(body) {
+  const texto = String(body?.texto || '').replace(/\r\n/g, '\n').trim();
+  if (!texto) return { error: 'Escreva a mensagem.' };
+  if (texto.length > MENSAGEM_MAX_CHARS)
+    return { error: `A mensagem passou de ${MENSAGEM_MAX_CHARS} caracteres.` };
+  return { texto };
+}
+
+// ── ADMIN: GET /api/admin/users/:id/mensagens ────────────────────────────────
+// Abrir a conversa é o que conta como "o admin leu" as respostas do cliente.
+app.get('/api/admin/users/:id/mensagens', requireAuth, requireSuperAdmin, async (req, res) => {
+  const userId = parseInt(req.params.id, 10);
+  try {
+    await ensureDbReady();   // mensagens_usuario é tabela nova — ver ensureDbReady
+    const u = await pool.query('SELECT id, name, email, phone FROM users WHERE id=$1', [userId]);
+    if (!u.rows.length) return res.status(404).json({ error: 'Usuário não encontrado.' });
+    await pool.query(
+      `UPDATE mensagens_usuario SET lida_em=NOW()
+        WHERE user_id=$1 AND autor='usuario' AND lida_em IS NULL`, [userId]
+    );
+    const m = await pool.query(
+      `SELECT id, autor, texto, lida_em, created_at FROM mensagens_usuario
+        WHERE user_id=$1 ORDER BY created_at, id`, [userId]
+    );
+    res.json({ usuario: u.rows[0], mensagens: m.rows });
+  } catch (err) {
+    console.error('Erro ao listar mensagens (admin):', err.message);
+    res.status(500).json({ error: 'Erro ao carregar as mensagens.' });
+  }
+});
+
+// ── ADMIN: POST /api/admin/users/:id/mensagens ───────────────────────────────
+app.post('/api/admin/users/:id/mensagens', requireAuth, requireSuperAdmin, async (req, res) => {
+  const userId = parseInt(req.params.id, 10);
+  const { texto, error } = lerTextoMensagem(req.body);
+  if (error) return res.status(400).json({ error });
+  try {
+    await ensureDbReady();
+    const u = await pool.query('SELECT id FROM users WHERE id=$1', [userId]);
+    if (!u.rows.length) return res.status(404).json({ error: 'Usuário não encontrado.' });
+    const r = await pool.query(
+      `INSERT INTO mensagens_usuario (user_id, autor, texto) VALUES ($1, 'admin', $2)
+       RETURNING id, autor, texto, lida_em, created_at`, [userId, texto]
+    );
+    console.log(`[admin] mensagem #${r.rows[0].id} enviada ao painel do user ${userId}`);
+    res.json({ success: true, mensagem: r.rows[0] });
+  } catch (err) {
+    console.error('Erro ao enviar mensagem (admin):', err.message);
+    res.status(500).json({ error: 'Erro ao enviar a mensagem.' });
+  }
+});
+
+// ── GET /api/mensagens ───────────────────────────────────────────────────────
+// Só lista: marcar como lida é um passo à parte (POST /api/mensagens/lidas),
+// dado pelo botão do aviso. Se abrir o painel já marcasse, a mensagem urgente
+// contaria como lida mesmo quando a página carregou e ninguém olhou.
+app.get('/api/mensagens', requireAuth, async (req, res) => {
+  try {
+    await ensureDbReady();
+    const m = await pool.query(
+      `SELECT id, autor, texto, lida_em, created_at FROM mensagens_usuario
+        WHERE user_id=$1 ORDER BY created_at, id`, [req.user.id]
+    );
+    const naoLidas = m.rows.filter(x => x.autor === 'admin' && !x.lida_em).length;
+    res.json({ mensagens: m.rows, naoLidas });
+  } catch (err) {
+    console.error('Erro ao listar mensagens:', err.message);
+    res.status(500).json({ error: 'Erro ao carregar as mensagens.' });
+  }
+});
+
+// ── POST /api/mensagens/lidas ────────────────────────────────────────────────
+app.post('/api/mensagens/lidas', requireAuth, async (req, res) => {
+  try {
+    await ensureDbReady();
+    await pool.query(
+      `UPDATE mensagens_usuario SET lida_em=NOW()
+        WHERE user_id=$1 AND autor='admin' AND lida_em IS NULL`, [req.user.id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Erro ao marcar mensagens como lidas:', err.message);
+    res.status(500).json({ error: 'Erro ao marcar as mensagens como lidas.' });
+  }
+});
+
+// ── POST /api/mensagens ──────────────────────────────────────────────────────
+// Resposta do cliente. O admin é avisado no WhatsApp dele (ADMIN_PHONE) — é o
+// número do admin, não o do cliente, então chega mesmo quando o cadastro do
+// cliente está errado.
+app.post('/api/mensagens', requireAuth, async (req, res) => {
+  const { texto, error } = lerTextoMensagem(req.body);
+  if (error) return res.status(400).json({ error });
+  try {
+    await ensureDbReady();
+    const abertaPeloAdmin = await pool.query(
+      `SELECT 1 FROM mensagens_usuario WHERE user_id=$1 AND autor='admin' LIMIT 1`, [req.user.id]
+    );
+    if (!abertaPeloAdmin.rows.length)
+      return res.status(403).json({ error: 'Você ainda não recebeu mensagens. Para falar com o suporte, use o WhatsApp.' });
+    const r = await pool.query(
+      `INSERT INTO mensagens_usuario (user_id, autor, texto) VALUES ($1, 'usuario', $2)
+       RETURNING id, autor, texto, lida_em, created_at`, [req.user.id, texto]
+    );
+    // Quem responde também já leu o que recebeu.
+    await pool.query(
+      `UPDATE mensagens_usuario SET lida_em=NOW()
+        WHERE user_id=$1 AND autor='admin' AND lida_em IS NULL`, [req.user.id]
+    );
+    if (ADMIN_PHONE) {
+      const u = await pool.query('SELECT name, email, phone FROM users WHERE id=$1', [req.user.id]);
+      const c = u.rows[0] || {};
+      const msg = [
+        `💬 *Resposta de cliente no painel*`,
+        ``,
+        `👤 *Cliente:* ${c.name || '-'} (#${req.user.id})`,
+        ...(c.email ? [`✉️ *E-mail:* ${c.email}`] : []),
+        ...(c.phone ? [`📱 *WhatsApp do cadastro:* ${c.phone}`] : []),
+        ``,
+        texto.length > 500 ? texto.slice(0, 500) + '…' : texto,
+        ``,
+        `Responda pelo admin, em Usuários → 💬.`,
+      ].join('\n');
+      // await: na Vercel a função pode congelar logo depois da resposta.
+      await sendWhatsApp(ADMIN_PHONE, msg).catch(() => {});
+    }
+    res.json({ success: true, mensagem: r.rows[0] });
+  } catch (err) {
+    console.error('Erro ao enviar resposta:', err.message);
+    res.status(500).json({ error: 'Erro ao enviar a mensagem.' });
   }
 });
 

@@ -183,6 +183,13 @@
       </svg>
       <span style="color:#cbd5e1;font-weight:bold">Integração API</span>
     </div>
+    <!-- Mensagens: só aparece para quem recebeu mensagem do admin (a conversa é
+         sempre aberta por ele — ver "Mensagens ao cliente" no server.js). -->
+    <div id="nav-mensagens" class="nav-item hidden" data-section="mensagens" onclick="showSection('mensagens')">
+      <span class="text-lg flex-shrink-0">💬</span>
+      <span style="color:#f9a8d4;font-weight:bold">Mensagens</span>
+      <span id="nav-mensagens-badge" class="hidden ml-auto bg-rose-600 text-white rounded-full text-xs font-bold px-2 py-0.5"></span>
+    </div>
     <div class="nav-item" data-section="profile" onclick="showSection('profile')">
       <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -1170,6 +1177,23 @@
       </div>
     </section>
 
+    <!-- ── MENSAGENS ───────────────────────────────────────────────────── -->
+    <section id="section-mensagens" class="dash-section hidden space-y-5 max-w-2xl">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">💬 Mensagens da MC Despachadoria</h2>
+        <p class="text-sm text-gray-500">Recados enviados só para você. Responda por aqui mesmo.</p>
+      </div>
+      <div class="card space-y-4">
+        <div id="mensagens-thread" class="space-y-2 overflow-y-auto" style="max-height:55vh"></div>
+        <div class="border-t border-gray-100 pt-4 space-y-2">
+          <textarea id="mensagens-resposta" rows="3" maxlength="2000" class="input-field" placeholder="Escreva sua resposta..."></textarea>
+          <div class="flex justify-end">
+            <button id="mensagens-enviar-btn" onclick="responderMensagem()" class="btn-primary">Enviar resposta</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- ── PERFIL ──────────────────────────────────────────────────────── -->
     <section id="section-profile" class="dash-section hidden space-y-5 max-w-2xl">
 
@@ -1238,6 +1262,27 @@
   </svg>
 </a>
 
+<!-- AVISO DE MENSAGEM DO ADMIN: abre sozinho enquanto houver mensagem não lida e
+     não fecha clicando fora — o motivo de existir é o assunto urgente que não
+     chegou pelo WhatsApp. -->
+<div id="mensagem-aviso" class="fixed inset-0 z-[9990] hidden items-center justify-center p-4" style="background:rgba(0,0,0,.65);">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden">
+    <div class="px-5 py-4 bg-rose-600 text-white">
+      <div class="font-bold text-base">💬 Mensagem importante para você</div>
+      <div class="text-xs text-rose-100">Enviada pela equipe MC Despachadoria só para a sua conta</div>
+    </div>
+    <div id="mensagem-aviso-corpo" class="px-5 py-4 space-y-3 overflow-y-auto" style="max-height:50vh"></div>
+    <div class="px-5 py-3 bg-amber-50 border-t border-amber-100 text-xs text-amber-800">
+      Seu WhatsApp no cadastro: <strong id="mensagem-aviso-phone"></strong>.
+      Se estiver errado, corrija em <a href="#" onclick="fecharAvisoMensagem('profile');return false;" class="underline font-semibold">Perfil</a>.
+    </div>
+    <div class="px-5 py-3 border-t border-gray-100 flex flex-wrap justify-end gap-2">
+      <button onclick="fecharAvisoMensagem('mensagens')" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-800 px-4 py-2 rounded font-medium">Responder</button>
+      <button onclick="fecharAvisoMensagem()" class="text-xs bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded font-medium">Li a mensagem</button>
+    </div>
+  </div>
+</div>
+
 <!-- TOAST (popup) -->
 <div id="toast-modal" class="fixed inset-0 z-[9999] hidden items-center justify-center p-4" style="background:rgba(0,0,0,.6);" onclick="if(event.target===this) closeToast()">
   <div class="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden">
@@ -1272,6 +1317,7 @@ const sectionTitles = {
   fatura:   'Conta Pós-paga',
   history:  'Histórico',
   prices:   'Tabela de Preços',
+  mensagens: 'Mensagens',
   profile:  'Perfil',
 };
 
@@ -1347,6 +1393,7 @@ function showSection(id) {
   if (id === 'history')   renderHistoryTable();
   if (id === 'prices')    renderPrices();
   if (id === 'apidocs')   renderApiDocs();
+  if (id === 'mensagens') abrirSecaoMensagens();
 }
 
 // ── Inicialização ──────────────────────────────────────────────────────────────
@@ -1385,9 +1432,104 @@ async function init() {
     buildExtrasList();
     renderServiceListV2();
     await Promise.all([loadStats(), loadQueries(), loadAssinaturaStatus()]);
+    carregarMensagens();
+    setInterval(carregarMensagens, 60000);
   } catch {
     window.location.href = '/entrar';
   }
+}
+
+// ── Mensagens do admin ─────────────────────────────────────────────────────────
+// Recado direto da equipe para ESTA conta — existe para o assunto urgente que
+// não chega porque o WhatsApp do cadastro está errado. Mensagem não lida abre o
+// aviso sozinha; ela só conta como lida no clique em "Li a mensagem" ou ao
+// responder (ver POST /api/mensagens/lidas no server.js).
+let mensagensCache = [];
+
+function renderMensagemBolha(m) {
+  const doAdmin = m.autor === 'admin';
+  return `<div class="flex ${doAdmin ? 'justify-start' : 'justify-end'}">
+    <div class="max-w-[85%] rounded-lg px-3 py-2 text-sm ${doAdmin ? 'bg-rose-50 border border-rose-200 text-gray-800' : 'bg-blue-600 text-white'}">
+      <div class="text-[11px] font-semibold mb-0.5 ${doAdmin ? 'text-rose-700' : 'text-blue-100'}">${doAdmin ? 'MC Despachadoria' : 'Você'}</div>
+      <div style="white-space:pre-wrap;word-break:break-word">${escapeHtml(m.texto)}</div>
+      <div class="text-[10px] mt-1 ${doAdmin ? 'text-gray-400' : 'text-blue-100'}">${fmtDate(m.created_at)}</div>
+    </div>
+  </div>`;
+}
+
+async function carregarMensagens() {
+  try {
+    const r = await fetch('/api/mensagens');
+    if (!r.ok) return;
+    const d = await r.json();
+    mensagensCache = d.mensagens || [];
+    const temConversa = mensagensCache.some(m => m.autor === 'admin');
+    document.getElementById('nav-mensagens').classList.toggle('hidden', !temConversa);
+    const badge = document.getElementById('nav-mensagens-badge');
+    badge.textContent = d.naoLidas || '';
+    badge.classList.toggle('hidden', !d.naoLidas);
+    const secaoAberta = !document.getElementById('section-mensagens').classList.contains('hidden');
+    if (secaoAberta) renderSecaoMensagens();
+    const naoLidas = mensagensCache.filter(m => m.autor === 'admin' && !m.lida_em);
+    if (naoLidas.length && !secaoAberta) mostrarAvisoMensagem(naoLidas);
+  } catch {}
+}
+
+function mostrarAvisoMensagem(naoLidas) {
+  document.getElementById('mensagem-aviso-corpo').innerHTML = naoLidas.map(renderMensagemBolha).join('');
+  const phone = document.getElementById('profile-phone').value || currentUser?.phone;
+  document.getElementById('mensagem-aviso-phone').textContent = phone || 'não informado';
+  const modal = document.getElementById('mensagem-aviso');
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+}
+
+async function marcarMensagensLidas() {
+  try { await fetch('/api/mensagens/lidas', { method: 'POST' }); } catch {}
+  mensagensCache.forEach(m => { if (m.autor === 'admin' && !m.lida_em) m.lida_em = new Date().toISOString(); });
+  document.getElementById('nav-mensagens-badge').classList.add('hidden');
+}
+
+async function fecharAvisoMensagem(destino) {
+  const modal = document.getElementById('mensagem-aviso');
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+  await marcarMensagensLidas();
+  if (destino) showSection(destino);
+}
+
+function renderSecaoMensagens() {
+  const box = document.getElementById('mensagens-thread');
+  box.innerHTML = mensagensCache.length
+    ? mensagensCache.map(renderMensagemBolha).join('')
+    : '<p class="text-center text-sm text-gray-400 py-6">Nenhuma mensagem.</p>';
+  box.scrollTop = box.scrollHeight;
+}
+
+function abrirSecaoMensagens() {
+  renderSecaoMensagens();
+  if (mensagensCache.some(m => m.autor === 'admin' && !m.lida_em)) marcarMensagensLidas();
+}
+
+async function responderMensagem() {
+  const campo = document.getElementById('mensagens-resposta');
+  const texto = campo.value.trim();
+  if (!texto) { toast('Escreva sua resposta.', 'error'); return; }
+  const btn = document.getElementById('mensagens-enviar-btn');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/mensagens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texto }),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Erro ao enviar a resposta.', 'error'); return; }
+    campo.value = '';
+    await carregarMensagens();
+    toast('Resposta enviada. A equipe foi avisada.');
+  } catch { toast('Erro de conexão.', 'error'); }
+  finally { btn.disabled = false; }
 }
 
 // ── Stats ──────────────────────────────────────────────────────────────────────
