@@ -12346,6 +12346,37 @@ function lerTextoMensagem(body) {
   return { texto };
 }
 
+// ── ADMIN: GET /api/admin/mensagens ──────────────────────────────────────────
+// Caixa de entrada do admin: uma linha por cliente com conversa, as que têm
+// resposta nova primeiro. É o que alimenta o alerta ao abrir o admin e o selo
+// do menu — sem isso a resposta só aparecia como um ponto na linha do usuário,
+// e ninguém fica procurando.
+app.get('/api/admin/mensagens', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    await ensureDbReady();
+    const r = await pool.query(
+      `SELECT u.id, u.name, u.email, u.phone,
+              COUNT(*) FILTER (WHERE m.autor='usuario' AND m.lida_em IS NULL)::int AS nao_lidas,
+              COUNT(*) FILTER (WHERE m.autor='admin'   AND m.lida_em IS NULL)::int AS pendentes_cliente,
+              MAX(m.created_at) AS ultima_em,
+              (SELECT row_to_json(x) FROM (
+                 SELECT autor, texto FROM mensagens_usuario
+                  WHERE user_id=u.id ORDER BY created_at DESC, id DESC LIMIT 1) x) AS ultima
+         FROM mensagens_usuario m
+         JOIN users u ON u.id = m.user_id
+        GROUP BY u.id
+        ORDER BY (COUNT(*) FILTER (WHERE m.autor='usuario' AND m.lida_em IS NULL) > 0) DESC,
+                 MAX(m.created_at) DESC
+        LIMIT 300`
+    );
+    const naoLidas = r.rows.reduce((s, c) => s + c.nao_lidas, 0);
+    res.json({ conversas: r.rows, naoLidas });
+  } catch (err) {
+    console.error('Erro ao listar conversas (admin):', err.message);
+    res.status(500).json({ error: 'Erro ao carregar as mensagens.' });
+  }
+});
+
 // ── ADMIN: GET /api/admin/users/:id/mensagens ────────────────────────────────
 // Abrir a conversa é o que conta como "o admin leu" as respostas do cliente.
 app.get('/api/admin/users/:id/mensagens', requireAuth, requireSuperAdmin, async (req, res) => {

@@ -77,6 +77,10 @@
     <div class="nav-item" data-section="users" onclick="showSection('users')">
       <span class="text-lg">👥</span> Usuários
     </div>
+    <div class="nav-item" data-section="mensagens" onclick="showSection('mensagens')">
+      <span class="text-lg">💬</span> Mensagens
+      <span id="nav-mensagens-badge" class="hidden ml-auto bg-rose-600 text-white rounded-full text-xs font-bold px-2 py-0.5"></span>
+    </div>
     <div class="nav-item" data-section="finance" onclick="showSection('finance')">
       <span class="text-lg">💰</span> Financeiro
     </div>
@@ -135,7 +139,16 @@
         <h1 id="page-title" class="font-bold text-gray-800 text-lg">Dashboard</h1>
       </div>
     </div>
-    <button onclick="refreshCurrentSection()" class="btn-ghost text-xs">🔄 Atualizar</button>
+    <div class="flex items-center gap-2">
+      <!-- Sino no topo: no celular o menu lateral fica escondido, e o selo de
+           lá sozinho não seria visto. -->
+      <button id="sino-mensagens" onclick="showSection('mensagens')" title="Mensagens de clientes"
+        class="relative btn-ghost text-xs">
+        💬 <span class="hidden sm:inline">Mensagens</span>
+        <span id="sino-mensagens-badge" class="hidden absolute -top-2 -right-2 bg-rose-600 text-white rounded-full text-[11px] font-bold px-1.5 py-0.5 leading-none"></span>
+      </button>
+      <button onclick="refreshCurrentSection()" class="btn-ghost text-xs">🔄 Atualizar</button>
+    </div>
   </header>
 
   <main class="flex-1 p-4 sm:p-6">
@@ -654,6 +667,16 @@
          esperando pagamento. Abrir esta página vira o ciclo de todo mundo que
          estiver atrasado — é o que faz o bloqueio por fatura vencida valer sem
          depender de cron. -->
+    <section id="section-mensagens" class="admin-section hidden space-y-4">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">💬 Mensagens de clientes</h2>
+        <p class="text-sm text-gray-500">
+          Todas as conversas, com as respostas não lidas no topo. Para escrever a um cliente novo, use o botão 💬 em <strong>Usuários</strong>.
+        </p>
+      </div>
+      <div id="mensagens-lista" class="space-y-2"></div>
+    </section>
+
     <section id="section-pos-pago" class="admin-section hidden space-y-4">
       <div>
         <h2 class="text-xl font-bold text-gray-800">Clientes Pós-pago</h2>
@@ -974,6 +997,21 @@
   </div>
 </div>
 
+<!-- ── ALERTA: RESPOSTAS NÃO LIDAS ───────────────────────────────────────── -->
+<div id="modal-alerta-mensagens" class="modal-backdrop hidden">
+  <div class="modal-box" style="max-width:520px">
+    <div class="px-6 py-4 bg-rose-600 text-white rounded-t-xl flex items-center justify-between">
+      <h3 class="font-bold">💬 <span id="alerta-mensagens-titulo"></span></h3>
+      <button onclick="closeModal('modal-alerta-mensagens')" class="text-rose-100 hover:text-white text-xl font-bold">✕</button>
+    </div>
+    <div id="alerta-mensagens-lista" class="p-4 space-y-2 overflow-y-auto" style="max-height:50vh"></div>
+    <div class="px-6 py-3 border-t border-gray-100 flex gap-3">
+      <button onclick="closeModal('modal-alerta-mensagens'); showSection('mensagens')" class="btn-primary flex-1 justify-center">Ver todas as mensagens</button>
+      <button onclick="closeModal('modal-alerta-mensagens')" class="btn-ghost flex-1 justify-center">Depois</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── MODAL: MENSAGENS AO CLIENTE ───────────────────────────────────────── -->
 <div id="modal-mensagens" class="modal-backdrop hidden">
   <div class="modal-box" style="max-width:600px">
@@ -1148,7 +1186,7 @@ const fmt = v => 'R$ ' + parseFloat(v||0).toLocaleString('pt-BR',{minimumFractio
 const fmtDate = s => { const d=new Date(s); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
 
 let allUsers = [], allTx = [], allQueries = [], allServices = [], allManualQueries = [];
-const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API', 'assinantes':'Lista de Assinantes Cadastrados', 'atpve':'Pedidos de ATPV-e', 'pos-pago':'Clientes Pós-pago' };
+const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API', 'assinantes':'Lista de Assinantes Cadastrados', 'atpve':'Pedidos de ATPV-e', 'pos-pago':'Clientes Pós-pago', mensagens:'Mensagens de clientes' };
 
 function toast(msg, type='success') {
   const el = document.getElementById('toast');
@@ -1181,6 +1219,7 @@ function showSection(id) {
   if (id === 'assinantes') loadAssinantes();
   if (id === 'atpve') loadAtpvePedidos();
   if (id === 'pos-pago') loadPosPago();
+  if (id === 'mensagens') loadMensagensAdmin();
 }
 
 function refreshCurrentSection() {
@@ -1199,6 +1238,7 @@ function refreshCurrentSection() {
   if (id === 'assinantes')    loadAssinantes();
   if (id === 'atpve')         loadAtpvePedidos();
   if (id === 'pos-pago')      loadPosPago();
+  if (id === 'mensagens')     loadMensagensAdmin();
 }
 
 function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
@@ -1438,6 +1478,8 @@ async function init() {
     const user = await r.json();
     if (!['contato@mygmail.com.br', 'contato@mcdetranrj.com'].includes(user.email)) { window.location.href = '/painel'; return; }
     await Promise.all([loadStats(), loadUsers(), loadManualQueries()]);
+    verificarMensagensNaoLidas(true);
+    setInterval(() => verificarMensagensNaoLidas(false), 60000);
   } catch { window.location.href = '/entrar'; }
 }
 
@@ -1964,22 +2006,106 @@ function renderThreadMensagens(mensagens) {
   box.scrollTop = box.scrollHeight;
 }
 
+// Abre a conversa a partir da lista de Usuários, da caixa de Mensagens ou do
+// alerta. Nome e WhatsApp vêm da própria rota, porque o cliente pode não estar
+// na lista de Usuários carregada (busca/filtro aplicados).
 async function openMensagensById(id) {
   const u = getUserById(id);
-  if (!u) { toast('Usuário não encontrado.', 'error'); return; }
-  document.getElementById('msg-user-id').value = u.id;
-  document.getElementById('msg-user-name').textContent = u.name;
-  document.getElementById('msg-user-phone').textContent = u.phone || 'não informado';
+  document.getElementById('msg-user-id').value = id;
+  document.getElementById('msg-user-name').textContent = u ? u.name : '...';
+  document.getElementById('msg-user-phone').textContent = u ? (u.phone || 'não informado') : '...';
   document.getElementById('msg-texto').value = '';
   document.getElementById('msg-thread').innerHTML = '<p class="text-center text-xs text-gray-400 py-6">Carregando...</p>';
+  closeModal('modal-alerta-mensagens');
   openModal('modal-mensagens');
   try {
     const r = await fetch(`/api/admin/users/${id}/mensagens`);
     const d = await r.json();
     if (!r.ok) { toast(d.error || 'Erro ao carregar as mensagens.', 'error'); return; }
+    document.getElementById('msg-user-name').textContent = d.usuario.name;
+    document.getElementById('msg-user-phone').textContent = d.usuario.phone || 'não informado';
     renderThreadMensagens(d.mensagens || []);
-    // Abrir a conversa marca as respostas como lidas: tira o selo da linha.
-    if (u.mensagens_nao_lidas) { u.mensagens_nao_lidas = 0; loadUsers(); }
+    // Abrir a conversa marca as respostas como lidas: atualiza os selos.
+    atualizarMensagensAposLeitura();
+  } catch { toast('Erro de conexão.', 'error'); }
+}
+
+// ── Caixa de entrada: alerta ao abrir o admin + selo no menu e no topo ───────
+// Sem isto a resposta do cliente só acendia um ponto na linha dele em Usuários,
+// e ninguém fica procurando. naoLidasVistas evita reabrir o alerta a cada
+// minuto: ele volta só quando chega resposta NOVA.
+let naoLidasVistas = 0;
+
+function atualizarSelosMensagens(n) {
+  for (const id of ['nav-mensagens-badge', 'sino-mensagens-badge']) {
+    const el = document.getElementById(id);
+    el.textContent = n;
+    el.classList.toggle('hidden', !n);
+  }
+  document.getElementById('sino-mensagens').classList.toggle('text-rose-700', !!n);
+  document.title = document.title.replace(/^\(\d+\) /, '');
+  if (n) document.title = `(${n}) ${document.title}`;
+}
+
+async function verificarMensagensNaoLidas(abrindo) {
+  try {
+    const r = await fetch('/api/admin/mensagens');
+    if (!r.ok) return;
+    const d = await r.json();
+    atualizarSelosMensagens(d.naoLidas);
+    const naSecao = !document.getElementById('section-mensagens').classList.contains('hidden');
+    if (naSecao) renderMensagensAdmin(d.conversas || []);
+    if (d.naoLidas && (abrindo || d.naoLidas > naoLidasVistas) && !naSecao) {
+      const comResposta = (d.conversas || []).filter(c => c.nao_lidas);
+      document.getElementById('alerta-mensagens-titulo').textContent = d.naoLidas === 1
+        ? 'Você tem 1 mensagem de cliente não lida'
+        : `Você tem ${d.naoLidas} mensagens de clientes não lidas`;
+      document.getElementById('alerta-mensagens-lista').innerHTML = comResposta.map(cartaoConversa).join('');
+      openModal('modal-alerta-mensagens');
+    }
+    naoLidasVistas = d.naoLidas;
+  } catch {}
+}
+
+function atualizarMensagensAposLeitura() {
+  verificarMensagensNaoLidas(false);
+  if (!document.getElementById('section-users').classList.contains('hidden')) loadUsers();
+}
+
+function cartaoConversa(c) {
+  const ultima = c.ultima || {};
+  const quem = ultima.autor === 'admin' ? 'Você: ' : '';
+  const preview = String(ultima.texto || '').replace(/\s+/g, ' ');
+  const selo = c.nao_lidas
+    ? `<span class="bg-rose-600 text-white rounded-full text-xs font-bold px-2 py-0.5">${c.nao_lidas} nova${c.nao_lidas > 1 ? 's' : ''}</span>`
+    : c.pendentes_cliente
+      ? '<span class="badge-amber">cliente ainda não leu</span>'
+      : '<span class="badge-gray">em dia</span>';
+  return `<button onclick="openMensagensById(${c.id})"
+      class="w-full text-left bg-white border ${c.nao_lidas ? 'border-rose-300 bg-rose-50' : 'border-gray-200'} rounded-lg px-4 py-3 hover:shadow-sm transition">
+    <div class="flex items-center justify-between gap-2">
+      <div class="font-semibold text-gray-800 text-sm truncate">${escMsg(c.name)} <span class="text-xs text-gray-400 font-mono">#${c.id}</span></div>
+      ${selo}
+    </div>
+    <div class="text-xs text-gray-500 truncate mt-1">${escMsg(quem + (preview.length > 120 ? preview.slice(0, 120) + '…' : preview))}</div>
+    <div class="text-[11px] text-gray-400 mt-1">${fmtDate(c.ultima_em)}</div>
+  </button>`;
+}
+
+function renderMensagensAdmin(conversas) {
+  document.getElementById('mensagens-lista').innerHTML = conversas.length
+    ? conversas.map(cartaoConversa).join('')
+    : '<p class="text-center text-sm text-gray-400 py-10">Nenhuma conversa ainda. Para escrever a um cliente, use o botão 💬 em Usuários.</p>';
+}
+
+async function loadMensagensAdmin() {
+  try {
+    const r = await fetch('/api/admin/mensagens');
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Erro ao carregar as mensagens.', 'error'); return; }
+    renderMensagensAdmin(d.conversas || []);
+    atualizarSelosMensagens(d.naoLidas);
+    naoLidasVistas = d.naoLidas;
   } catch { toast('Erro de conexão.', 'error'); }
 }
 
@@ -2001,6 +2127,7 @@ async function enviarMensagemCliente() {
     toast('Mensagem enviada ao painel do cliente.');
     const r2 = await fetch(`/api/admin/users/${id}/mensagens`);
     if (r2.ok) renderThreadMensagens((await r2.json()).mensagens || []);
+    verificarMensagensNaoLidas(false);
   } catch { toast('Erro de conexão.', 'error'); }
   finally { btn.disabled = false; }
 }

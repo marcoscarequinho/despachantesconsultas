@@ -208,6 +208,7 @@ Entrou em 23/09/2026 porque cliente cadastra WhatsApp errado e um assunto urgent
 - **No painel, mensagem não lida abre um aviso sozinho** (`#mensagem-aviso`, na entrada e no polling de 60s) que não fecha clicando fora — só em "Li a mensagem" ou "Responder". Abrir o painel **não** marca como lida (`GET /api/mensagens` só lista; quem marca é `POST /api/mensagens/lidas`), senão a página carregada sem ninguém olhando contaria como lida. O admin vê "✓✓ lida em …" na conversa.
 - O aviso mostra o WhatsApp do cadastro com atalho para o Perfil, que é o conserto mais comum.
 - **A conversa é sempre aberta pelo admin**: o item "💬 Mensagens" do menu só aparece para quem recebeu mensagem e `POST /api/mensagens` recusa (403) quem não recebeu — para não virar um segundo canal de suporte ao lado do WhatsApp. A resposta do cliente avisa o `ADMIN_PHONE` por WhatsApp e acende o selo vermelho no 💬 da lista de usuários (abrir a conversa zera).
+- **O admin não precisa procurar resposta**: ao abrir o admin, `verificarMensagensNaoLidas` consulta `GET /api/admin/mensagens` e, havendo resposta não lida, abre o alerta `#modal-alerta-mensagens` com a lista de quem respondeu. O polling de 60s mantém os selos do menu "💬 Mensagens" e do botão do topo (este existe porque no celular o menu fica escondido) e o `(N)` no título da aba; o alerta só reabre quando o número de não lidas **sobe** (`naoLidasVistas`), senão voltaria a cada minuto. A seção "Mensagens" é a caixa de entrada: uma linha por cliente, não lidas no topo.
 
 ### Aba "Visão Geral" (painel-usuario.html)
 
