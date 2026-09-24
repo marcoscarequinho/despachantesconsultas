@@ -13624,14 +13624,20 @@ app.get('/admin', requireAuth, async (req, res) => {
 
 // ── Broadcast WhatsApp — campanhas em rodízio ───────────────────────────────
 // Duas campanhas em rodizio: os grupos recebem uma a cada disparo, alternando,
-// para o mesmo card nao se repetir sempre no mesmo grupo. O video (marcos.mp4)
-// e comum as duas e vai logo depois da imagem.
+// para o mesmo card nao se repetir sempre no mesmo grupo.
+// - Campanha com `videoApresentacao`: vai o VIDEO de apresentacao (HeyGen, ver
+//   VIDEO_APRESENTACAO_ID) com a mensagem como legenda, e so ele — o marcos.mp4
+//   nao vai depois (seriam dois videos seguidos). O video vai por LINK, nao
+//   base64: sao ~25 MB, e a Z-API baixa direto do CDN da HeyGen (aceita ate
+//   100 MB). Se a HeyGen falhar na hora, cai na `imagem` + mensagem de antes.
+// - As demais: imagem + mensagem e, logo depois, o marcos.mp4.
 const BROADCAST_VIDEO_PATH = path.join(__dirname, 'marcos.mp4');
 
 const BROADCAST_CAMPANHAS = [
   {
     id: 'atpve',
-    imagem: path.join(__dirname, 'promo-atpve.png'),
+    videoApresentacao: true,
+    imagem: path.join(__dirname, 'promo-atpve.png'), // reserva, se a HeyGen falhar
     mensagem:
 `🛑ATENÇÃO CADASTRE COM SEU NUMERO WHATSAPP CORRETO PARA RECEBER AS NOTIFICAÇÕES
 ✅ FAÇA SEU CADASTRO:
@@ -13768,8 +13774,9 @@ async function sendBroadcastImage(dest, base64Png, caption) {
   }
 }
 
-// Envia o vídeo logo em seguida da imagem+texto (aparece abaixo no chat).
-async function sendBroadcastVideo(dest, base64Mp4) {
+// Envia vídeo para o grupo. `video` é um link (https://…) ou o base64 do MP4;
+// `caption` é opcional (o marcos.mp4 vai sem legenda, depois da imagem).
+async function sendBroadcastVideo(dest, video, caption) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !dest) return;
   const phone = String(dest);
   try {
@@ -13781,12 +13788,16 @@ async function sendBroadcastVideo(dest, base64Mp4) {
           'Content-Type': 'application/json',
           ...(ZAPI_CLIENT_TOKEN ? { 'Client-Token': ZAPI_CLIENT_TOKEN } : {}),
         },
-        body: JSON.stringify({ phone, video: `data:video/mp4;base64,${base64Mp4}` }),
+        body: JSON.stringify({
+          phone,
+          video: /^https?:\/\//.test(video) ? video : `data:video/mp4;base64,${video}`,
+          ...(caption ? { caption } : {}),
+        }),
       }
     );
     const d = await r.json().catch(() => ({}));
-    if (!r.ok) console.error(`Broadcast vídeo erro [${phone}]:`, JSON.stringify(d));
-    else console.log(`✅ Broadcast vídeo → ${phone}`);
+    if (!r.ok) { console.error(`Broadcast vídeo erro [${phone}]:`, JSON.stringify(d)); throw new Error('envio recusado'); }
+    console.log(`✅ Broadcast vídeo → ${phone}`);
   } catch (err) {
     console.error(`Broadcast vídeo falha [${phone}]:`, err.message);
     throw err;
@@ -13884,14 +13895,35 @@ async function runWhatsAppBroadcast(opts = {}) {
   const campanha = await proximaCampanhaBroadcast(canal || 'geral');
   console.log(`📢 Broadcast [${canal || 'geral'}] campanha "${campanha.id}": ${dests.length} grupos`);
 
-  const imageBase64 = fs.readFileSync(campanha.imagem).toString('base64');
-  const videoBase64 = fs.readFileSync(BROADCAST_VIDEO_PATH).toString('base64');
+  // Link novo a cada disparo: o da HeyGen é assinado e expira.
+  let videoUrl = null;
+  if (campanha.videoApresentacao) {
+    try {
+      const v = await buscarVideoApresentacao();
+      if (v.status === 'completed' && v.video_url) videoUrl = v.video_url;
+      else console.error(`Broadcast: vídeo de apresentação indisponível (status ${v.status}) — indo com a imagem.`);
+    } catch (e) {
+      console.error('Broadcast: HeyGen falhou, indo com a imagem:', e.message);
+    }
+  }
+  const imageBase64 = videoUrl ? null : fs.readFileSync(campanha.imagem).toString('base64');
+  const videoBase64 = videoUrl ? null : fs.readFileSync(BROADCAST_VIDEO_PATH).toString('base64');
   let sent = 0, failed = 0;
   for (const dest of dests) {
     try {
-      await sendBroadcastImage(dest.phone, imageBase64, campanha.mensagem);
-      await new Promise(r => setTimeout(r, 1000));
-      await sendBroadcastVideo(dest.phone, videoBase64);
+      if (videoUrl) {
+        try {
+          await sendBroadcastVideo(dest.phone, videoUrl, campanha.mensagem);
+        } catch {
+          // Vídeo recusado pela Z-API: o grupo recebe o card de antes em vez
+          // de ficar sem a campanha.
+          await sendBroadcastImage(dest.phone, fs.readFileSync(campanha.imagem).toString('base64'), campanha.mensagem);
+        }
+      } else {
+        await sendBroadcastImage(dest.phone, imageBase64, campanha.mensagem);
+        await new Promise(r => setTimeout(r, 1000));
+        await sendBroadcastVideo(dest.phone, videoBase64);
+      }
       sent++;
     } catch {
       failed++;
@@ -13899,7 +13931,7 @@ async function runWhatsAppBroadcast(opts = {}) {
     await new Promise(r => setTimeout(r, 1000));
   }
   console.log(`✅ Broadcast concluído: ${sent} enviados, ${failed} falhas`);
-  return { sent, failed, total: dests.length, campanha: campanha.id };
+  return { sent, failed, total: dests.length, campanha: campanha.id, formato: videoUrl ? 'video' : 'imagem' };
 }
 
 // ── GET /api/cron/broadcast-whatsapp (Vercel Cron — 8h BRT = 11h UTC, de 3 em
