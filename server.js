@@ -13120,6 +13120,20 @@ async function buscarVideoApresentacao() {
   return j.data;
 }
 
+// O roteiro escreve as siglas letra a letra ("A, T, P, V, e") para a voz não
+// ler "atpêvê" como palavra, e a legenda da HeyGen transcreve o roteiro — então
+// sai soletrada. Aqui as siglas voltam ao normal. Um bloco pode terminar no
+// meio da sigla ("A, T, P," | "V, e, que…"), daí os dois últimos replaces.
+function juntarSiglasLegenda(srt) {
+  return srt.replace(/\r\n/g, '\n')
+    .replace(/A, T, P, V, e,?/g, 'ATPV-e')
+    .replace(/C, R, L, V, e,?/g, 'CRLV-e')
+    .replace(/C, R, V(?=[,\s])/g, 'CRV')
+    .replace(/A, S, D/g, 'ASD')
+    .replace(/A, T, P,\n/g, 'ATPV-e\n')
+    .replace(/^V, e, /gm, '');
+}
+
 app.get('/api/admin/video-apresentacao', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     const v = await buscarVideoApresentacao();
@@ -13150,7 +13164,7 @@ app.get('/api/admin/video-apresentacao/:arquivo', requireAuth, requireSuperAdmin
       if (!s.ok) throw new Error(`Legenda indisponível (HTTP ${s.status}).`);
       res.set('Content-Type', 'application/x-subrip; charset=utf-8');
       res.set('Content-Disposition', 'attachment; filename="despachantes-consultas-apresentacao.srt"');
-      return res.send(Buffer.from(await s.arrayBuffer()));
+      return res.send(juntarSiglasLegenda(await s.text()));
     }
     if (!v.video_url) throw new Error('A HeyGen não devolveu o link do vídeo.');
     res.redirect(302, v.video_url);
