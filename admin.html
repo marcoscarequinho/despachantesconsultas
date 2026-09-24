@@ -112,6 +112,9 @@
     <div class="nav-item" data-section="pos-pago" onclick="showSection('pos-pago')">
       <span class="text-lg">🧮</span> Clientes Pós-pago
     </div>
+    <div class="nav-item" data-section="video" onclick="showSection('video')">
+      <span class="text-lg">🎬</span> Vídeo de Apresentação
+    </div>
   </nav>
 
   <div class="p-3 border-t border-gray-700 space-y-1">
@@ -763,6 +766,28 @@
       </div>
     </section>
 
+    <!-- ── VÍDEO DE APRESENTAÇÃO ─────────────────────────────────────────────── -->
+    <section id="section-video" class="admin-section hidden space-y-4">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Vídeo de Apresentação</h2>
+        <p class="text-sm text-gray-500">
+          A apresentadora explicando a plataforma (ATPV-e RJ e MG, ATPVe com Comunicação de Venda, CRLV-e e as demais consultas).
+          Baixe e use onde quiser: WhatsApp, Instagram, YouTube, status. A legenda já vem no vídeo; o arquivo <strong>.srt</strong> é para quem pede legenda separada (YouTube).
+        </p>
+      </div>
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4 space-y-4">
+        <div id="video-status" class="text-sm text-gray-500">Carregando…</div>
+        <video id="video-preview" class="w-full max-w-3xl rounded-lg bg-black hidden" controls playsinline preload="metadata"></video>
+        <div id="video-acoes" class="flex flex-wrap gap-3 hidden">
+          <button onclick="baixarVideoApresentacao()" id="btn-baixar-video" class="bg-orange-500 hover:bg-orange-600 text-white font-semibold px-4 py-2 rounded-lg">⬇️ Baixar vídeo (MP4)</button>
+          <a href="/api/admin/video-apresentacao/srt" id="btn-baixar-srt" class="bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold px-4 py-2 rounded-lg">📝 Baixar legenda (.srt)</a>
+        </div>
+        <p id="video-dica" class="text-xs text-gray-400 hidden">
+          Se o vídeo abrir em outra aba em vez de baixar: no computador, clique com o botão direito → “Salvar vídeo como”; no celular, toque nos ⋮ do player → “Baixar”.
+        </p>
+      </div>
+    </section>
+
     <!-- ── COBRANÇAS API ────────────────────────────────────────────────────── -->
     <section id="section-api-cobrancas" class="admin-section hidden space-y-4">
       <div>
@@ -1205,7 +1230,7 @@ const fmt = v => 'R$ ' + parseFloat(v||0).toLocaleString('pt-BR',{minimumFractio
 const fmtDate = s => { const d=new Date(s); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
 
 let allUsers = [], allTx = [], allQueries = [], allServices = [], allManualQueries = [];
-const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API', 'assinantes':'Lista de Assinantes Cadastrados', 'atpve':'Pedidos de ATPV-e', 'pos-pago':'Clientes Pós-pago', mensagens:'Mensagens de clientes' };
+const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API', 'assinantes':'Lista de Assinantes Cadastrados', 'atpve':'Pedidos de ATPV-e', 'pos-pago':'Clientes Pós-pago', video:'Vídeo de Apresentação', mensagens:'Mensagens de clientes' };
 
 function toast(msg, type='success') {
   const el = document.getElementById('toast');
@@ -1239,6 +1264,7 @@ function showSection(id) {
   if (id === 'atpve') loadAtpvePedidos();
   if (id === 'pos-pago') loadPosPago();
   if (id === 'mensagens') loadMensagensAdmin();
+  if (id === 'video') loadVideoApresentacao();
 }
 
 function refreshCurrentSection() {
@@ -1817,6 +1843,59 @@ function renderPublicOrders(orders) {
 // A lista já vem do servidor com o ciclo de cada um virado (ver
 // GET /api/admin/pos-pago) — aqui é só apresentação, busca e as ações.
 let allPosPago = [], posPagoCarencia = 3;
+
+// ── Vídeo de apresentação ──
+// O arquivo mora na HeyGen (ver /api/admin/video-apresentacao no server.js):
+// a rota devolve um link assinado novo a cada abertura.
+async function loadVideoApresentacao() {
+  const st = document.getElementById('video-status');
+  const pv = document.getElementById('video-preview');
+  st.textContent = 'Carregando…';
+  try {
+    const r = await fetch('/api/admin/video-apresentacao');
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { st.textContent = d.error || 'Erro ao buscar o vídeo.'; return; }
+    if (d.status !== 'completed') {
+      st.textContent = d.status === 'failed'
+        ? 'A geração do vídeo falhou na HeyGen.'
+        : '⏳ O vídeo ainda está sendo gerado na HeyGen. Volte em alguns minutos.';
+      return;
+    }
+    const min = d.duracao ? Math.floor(d.duracao / 60) + 'min' + String(Math.round(d.duracao % 60)).padStart(2, '0') : '';
+    st.innerHTML = '✅ <strong>' + escHtmlVideo(d.titulo) + '</strong>' + (min ? ' · ' + min : '') + ' · 1080p';
+    if (d.thumbnail_url) pv.poster = d.thumbnail_url;
+    pv.src = d.video_url;
+    pv.classList.remove('hidden');
+    document.getElementById('video-acoes').classList.remove('hidden');
+    document.getElementById('video-dica').classList.remove('hidden');
+    document.getElementById('btn-baixar-srt').classList.toggle('hidden', !d.tem_legenda);
+  } catch { st.textContent = 'Erro de conexão ao buscar o vídeo.'; }
+}
+
+function escHtmlVideo(t) { const d = document.createElement('div'); d.textContent = t || ''; return d.innerHTML; }
+
+// Baixa pelo navegador (blob) para sair com nome de arquivo; se o CDN da
+// HeyGen não liberar CORS, abre o vídeo numa aba nova — a dica na tela diz
+// como salvar dali.
+async function baixarVideoApresentacao() {
+  const btn = document.getElementById('btn-baixar-video');
+  const txt = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ Baixando…';
+  try {
+    const r = await fetch('/api/admin/video-apresentacao/mp4');
+    if (!r.ok) throw new Error();
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'despachantes-consultas-apresentacao.mp4';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  } catch {
+    window.open('/api/admin/video-apresentacao/mp4', '_blank');
+  } finally {
+    btn.disabled = false; btn.textContent = txt;
+  }
+}
 
 async function loadPosPago() {
   try {

@@ -176,6 +176,11 @@ const ASSINAFY_BASE_URL   = 'https://api.assinafy.com.br/v1';
 const ASSINAFY_API_KEY    = process.env.ASSINAFY_API_KEY    || '';
 const ASSINAFY_ACCOUNT_ID = process.env.ASSINAFY_ACCOUNT_ID || '';
 
+// HeyGen: só o vídeo de apresentação (apresentadora + roteiro do tour da home),
+// baixado pelo admin. Mesma regra da Assinafy: chave em variável de ambiente,
+// nunca no código — o repositório é público.
+const HEYGEN_API_KEY = process.env.HEYGEN_API_KEY || '';
+
 // Ciclo de vida do documento na Assinafy (GET /v1/documents/statuses):
 // uploading → uploaded → metadata_processing → metadata_ready → pending_signature
 // → certificating → certificated. Só "certificated" tem documento assinado para
@@ -13094,6 +13099,63 @@ app.post('/api/admin/manual-queries/:id/resend-whatsapp', requireAuth, requireSu
   } catch (err) {
     console.error('Erro no reenvio manual de WhatsApp:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── ADMIN: vídeo de apresentação ─────────────────────────────────────────────
+// O MP4 NÃO fica no repositório nem passa por esta function: tudo aqui roda
+// numa function só (vercel.json), e um 1080p de 2 minutos tem dezenas de MB.
+// A HeyGen guarda o vídeo e devolve um link assinado que expira; por isso a
+// rota pede um link novo a cada acesso e só redireciona — o download sai
+// direto do CDN deles. Vídeo novo = trocar o id abaixo.
+const VIDEO_APRESENTACAO_ID = '9ca2400ff0e149e69b1adc2f74d5bd03';
+
+async function buscarVideoApresentacao() {
+  if (!HEYGEN_API_KEY) throw new Error('HEYGEN_API_KEY não configurada no servidor.');
+  const r = await fetch(`https://api.heygen.com/v3/videos/${VIDEO_APRESENTACAO_ID}`, {
+    headers: { 'X-Api-Key': HEYGEN_API_KEY },
+  });
+  const j = await r.json().catch(() => null);
+  if (!r.ok || !j?.data) throw new Error(j?.error?.message || `HeyGen respondeu HTTP ${r.status}.`);
+  return j.data;
+}
+
+app.get('/api/admin/video-apresentacao', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const v = await buscarVideoApresentacao();
+    res.json({
+      status: v.status,
+      titulo: v.title || 'Vídeo de apresentação',
+      duracao: v.duration || null,
+      thumbnail_url: v.thumbnail_url || null,
+      video_url: v.video_url || null,
+      tem_legenda: !!v.subtitle_url,
+    });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+app.get('/api/admin/video-apresentacao/:arquivo', requireAuth, requireSuperAdmin, async (req, res) => {
+  const arquivo = req.params.arquivo;
+  if (arquivo !== 'mp4' && arquivo !== 'srt') return res.status(404).json({ error: 'Arquivo inválido.' });
+  try {
+    const v = await buscarVideoApresentacao();
+    if (v.status !== 'completed') return res.status(409).json({ error: 'O vídeo ainda está sendo gerado. Tente em alguns minutos.' });
+    if (arquivo === 'srt') {
+      // A legenda é pequena: vem por aqui para sair com nome de arquivo e
+      // como download (o link da HeyGen abriria o texto no navegador).
+      if (!v.subtitle_url) return res.status(404).json({ error: 'Este vídeo não tem legenda.' });
+      const s = await fetch(v.subtitle_url);
+      if (!s.ok) throw new Error(`Legenda indisponível (HTTP ${s.status}).`);
+      res.set('Content-Type', 'application/x-subrip; charset=utf-8');
+      res.set('Content-Disposition', 'attachment; filename="despachantes-consultas-apresentacao.srt"');
+      return res.send(Buffer.from(await s.arrayBuffer()));
+    }
+    if (!v.video_url) throw new Error('A HeyGen não devolveu o link do vídeo.');
+    res.redirect(302, v.video_url);
+  } catch (e) {
+    res.status(502).json({ error: e.message });
   }
 });
 
