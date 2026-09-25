@@ -32,9 +32,9 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 | Portal Despachantes (inclui os 3 CRLV-e do Rio) | `https://portaldespachantes.online` | header `chaveAcesso` (`PORTAL_DESP_KEY`), ver `PORTAL_PLACA_MAP` |
 | AutoCRLV | `https://autocrlv.com.br` | Bearer (`AUTOCRLV_KEY`) |
 | Infosimples | `https://api.infosimples.com/api/v2/consultas` | `INFOSIMPLES_TOKEN` |
-| Despbrasil (CRLV Rio Reemissão, Código de Segurança CRV, reserva do Número do CRV Digital) | `https://despbrasil.com.br/functions/apiConsulta` | header `chaveAcesso` (`DESPBRASIL_KEY`), ver `DESPBRASIL_SVCS` |
+| Despbrasil (CRLV Rio Reemissão, Código de Segurança CRV, Número do CRV Digital) | `https://despbrasil.com.br/functions/apiConsulta` | header `chaveAcesso` (`DESPBRASIL_KEY`), ver `DESPBRASIL_SVCS` |
 | Consultas Fácil (CRLV Rio Reemissão v2) | `https://www.consultasfacil.net` | header `chaveAcesso` (`CONSULTASFACIL_KEY`) |
-| Vistocar (Débitos e Documentação, Código de Segurança CRV, Número do CRV Digital, ATPV-e RJ/MG) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
+| Vistocar (Débitos e Documentação, Código de Segurança CRV, ATPV-e RJ/MG) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
 | Assinafy (Assinatura Digital de documentos) | `https://api.assinafy.com.br/v1` | header `X-Api-Key` (`ASSINAFY_API_KEY`) + `ASSINAFY_ACCOUNT_ID` |
 | ViaCEP | `https://viacep.com.br` | público, sem chave (só recupera acento de logradouro/bairro na Reemissão da ATPVe, ver `repairAtpveAccents`) |
 | Mercado Pago (PIX e cartão de débito) | `https://api.mercadopago.com` | `MP_ACCESS_TOKEN` (servidor) + `MP_PUBLIC_KEY` (navegador) |
@@ -90,20 +90,13 @@ Conferido contra a API real em 22/09/2026: a resposta **nem sempre traz as datas
 
 Todo PDF entregue pela Vistocar sai como **`mcdespachadoria-<consulta>-<placa>.pdf`** (`VISTOCAR_ARQUIVO_NOMES` + `nomeArquivoVistocar`, 22/09/2026): download do painel, WhatsApp, reenvio do admin e reabertura pelo histórico (`/api/pdf/:token` e `/api/admin/queries/:id/pdf`). Antes ia o id interno ("security-code-vistocar-2-ABC1D23.pdf"), que não diz nada para o cliente que salva o documento no celular. Os nomes longos são abreviados **um a um no mapa** porque o WhatsApp corta o nome na bolha do arquivo. Serviço fora do mapa devolve `null` e mantém o nome que já tinha — nada de outro fornecedor muda.
 
-### Número do CRV Digital — Vistocar com reserva na despbrasil
+### Número do CRV Digital — despbrasil
 
-O `numero-crv-digital` trocou de fornecedor em 15/09/2026: passou da despbrasil (serviço `consulta_generica`) para a Vistocar, em `apiclient/security-code-crv`. **Apesar do nome, essa rota é a do NÚMERO do CRV**, não a do código de segurança (o erro dela é "Erro ao consultar o número do CRV"); o envelope é o mesmo dos outros (`success` + `paid` + `pdfBase64`), então não precisou de tratamento próprio.
+O `numero-crv-digital` vem da despbrasil (`consulta_generica` com `nome_servico: 'Número do CRV Digital'`, entrada em `DESPBRASIL_SVCS`, fluxo genérico do `/api/query`), a **R$ 14,00 fixo** (`noMarkup`) contra R$ 7,50 de custo. Conferido contra a API real em 25/09/2026 (placa TTT7A54: PDF de 2 páginas com o número do CRV).
 
-Na troca, a rota da Vistocar **recusava toda placa** com `400 "Placa não localizada no fornecedor Nobre"` e `paid:false` — 6 placas reais do histórico e uma inventada, todas com a mesma resposta (não distinguir placa real de `XXXXXXX` é o sinal de que falha antes de olhar a entrada, igual ao `crlv-ba`). Descartadas as outras causas pelo controle: `apiclient/security-code` respondeu `200 "Consulta Realizada"` com a MESMA placa, token e conta, no mesmo minuto.
+De 15/09 a 25/09/2026 o principal foi a Vistocar (`apiclient/security-code-crv` — apesar do nome, a rota do NÚMERO do CRV), com a despbrasil de reserva na mesma consulta. A rota da Vistocar **recusou toda placa o período inteiro** (`400 "Placa não localizada no fornecedor Nobre"`, `paid:false`, igual para placa real e inventada), então quem entregava era sempre a reserva; em 25/09/2026 a Vistocar saiu e a reserva (`fetchNumeroCrvDigitalDespbrasil`/`crvDigitalReserva`) foi apagada. O id **não pode estar nos dois mapas** (`DESPBRASIL_SVCS` e `VISTOCAR_ENDPOINTS`): o header sairia com a `chaveAcesso` da despbrasil (o `else if` dela vem antes) e a resposta cairia no tratamento errado.
 
-Por isso existe `fetchNumeroCrvDigitalDespbrasil`: a despbrasil (que segue entregando, a R$ 7,50) assume **na mesma consulta** quando a Vistocar recusa, para o cliente não ficar sem o documento. Sem risco de cobrança dupla — a Vistocar recusa com `paid:false`. Quando a rota deles voltar, a reserva simplesmente deixa de ser chamada, sem deploy.
-
-Dois detalhes que não podem ser desfeitos por engano:
-- A recusa chega como **HTTP 4xx**, ou seja, no bloco `!apiRes.ok`, antes de `base64PdfBuf` existir — daí `crvDigitalReserva` ser declarado lá no topo, junto de `apiUrl`. Uma variável só também garante que a reserva é chamada **uma vez**, venha a recusa como 4xx ou como 200 com `success:false`.
-- Nesse caminho o corpo da resposta **já foi lido** como JSON no bloco de erro, então `bodyBuffer` sai vazio de propósito; ler o stream de novo lançaria exceção.
-- O id **não pode voltar** para `DESPBRASIL_SVCS`: com ele nos dois mapas, o header sairia com a `chaveAcesso` da despbrasil (o `else if` dela vem antes) e a resposta cairia no tratamento errado.
-
-O preço ao cliente não mudou: **R$ 14,00 fixo** (`basePrice` 14,00 com `noMarkup`), que é o que ele já pagava. Os custos reais são Vistocar R$ 6,90 e despbrasil R$ 7,50; pelo markup padrão de 40% os R$ 6,90 dariam R$ 9,66, mas enquanto a rota da Vistocar recusa toda placa quem atende é a reserva a R$ 7,50 — baixar agora cortaria o preço em 31% justo no período de custo mais alto (margem de R$ 2,16). Preço segurado por decisão do dono, com os números na mesa. Quando a Vistocar voltar a responder, `basePrice` 6,90 **sem** `noMarkup` devolve os R$ 9,66.
+**Número do CRV Digital V2** (doc da despbrasil: `nome_servico: 'Número do CRV Digital V2'`, placa + renavam, R$ 6,50 de custo, preço combinado R$ 15,00) **não entrou**: em 25/09/2026 a chave respondia "Serviço não encontrado ... a ApiConfig precisa estar ATIVA + auto_expose marcado" para esse nome e para todas as variações testadas. Para ligar quando a despbrasil ativar: o fluxo genérico só manda placa + `extra`, então o renavam precisa ser acrescentado ao corpo, além do serviço no `SERVICES` (`inputType:'placa_renavam'`).
 
 ### Intenção de Venda / ATPV-e RJ e MG (Vistocar)
 
