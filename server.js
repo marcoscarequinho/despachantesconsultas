@@ -13088,6 +13088,34 @@ app.get('/api/admin/video-apresentacao/:arquivo', requireAuth, requireSuperAdmin
   }
 });
 
+// ── Vídeo de apresentação: link PÚBLICO e fixo ───────────────────────────────
+// É o mesmo vídeo que já vai para os grupos no broadcast, então não tem nada
+// de restrito — o que faltava era um endereço que não vence para mandar a
+// cliente. O link da HeyGen é assinado e vale ~7 dias (e a página
+// app.heygen.com exige login na conta), por isso a rota só redireciona para
+// um link novo. O link fica em memória até 1h antes de vencer: a rota é
+// pública, e cada acesso ir à API da HeyGen gastaria cota à toa.
+let videoApresentacaoCache = null; // { url, venceEm }
+app.get('/apresentacao', async (req, res) => {
+  try {
+    if (!videoApresentacaoCache || Date.now() > videoApresentacaoCache.venceEm) {
+      const v = await buscarVideoApresentacao();
+      if (v.status !== 'completed' || !v.video_url) {
+        return res.status(503).send('O vídeo de apresentação está sendo atualizado. Tente de novo em alguns minutos.');
+      }
+      const expira = parseInt(new URL(v.video_url).searchParams.get('Expires') || '0', 10) * 1000;
+      // Sem Expires legível, guarda por 1h — melhor que nunca reaproveitar.
+      const venceEm = expira ? expira - 3600e3 : Date.now() + 3600e3;
+      videoApresentacaoCache = { url: v.video_url, venceEm };
+    }
+    res.set('Cache-Control', 'no-store');
+    res.redirect(302, videoApresentacaoCache.url);
+  } catch (e) {
+    console.error('Vídeo de apresentação público:', e.message);
+    res.status(502).send('Não foi possível abrir o vídeo agora. Tente de novo em instantes.');
+  }
+});
+
 // ── ADMIN: pedidos de ATPV-e ─────────────────────────────────────────────────
 // Controle total dos pedidos, com as MESMAS ações que o cliente tem no painel —
 // a diferença é só quem está olhando. Por isso as rotas reaproveitam as mesmas
