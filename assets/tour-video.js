@@ -11,9 +11,12 @@
  * Fechar lembra por 7 dias (localStorage, com try/catch: em aba anônima o
  * acesso lança e o tour só volta a aparecer — nada quebra).
  *
- * Narração: speechSynthesis em pt-BR, só depois do clique (o navegador
- * bloqueia voz sem gesto do usuário) e com botão para calar. Sem voz em
- * português instalada, a legenda segue sozinha.
+ * Apresentadora: um clipe da HeyGen POR CAPÍTULO (assets/tour/cap-N.mp4),
+ * numa bolha redonda no canto do palco. Clipe por capítulo, e não um vídeo
+ * só, porque assim a fala casa com a cena sem sincronizar timestamps — e
+ * pular capítulo é só trocar o src. A cena vira quando o clipe acaba.
+ * Se o clipe não carregar, cai na voz do navegador (speechSynthesis pt-BR),
+ * e sem voz em português a legenda segue sozinha.
  */
 (function () {
   'use strict';
@@ -25,6 +28,12 @@
     var t = parseInt(localStorage.getItem(CHAVE_FECHADO) || '0', 10);
     if (t && Date.now() - t < DIAS_ESCONDIDO * 864e5) return;
   } catch (e) { /* sem storage: mostra o tour */ }
+
+  // Clipes gerados na HeyGen (avatar Daphne_public_6, voz "Sofia Brazil -
+  // Friendly"), fundo liso da cor da bolha. MP4 e não WebM transparente
+  // porque o Safari do iPhone não toca VP9 com alfa.
+  var AVATAR_CLIPE = '/assets/tour/cap-';
+  var AVATAR_FOTO = '/assets/tour/avatar.jpg';
 
   var reduzMovimento = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -274,6 +283,15 @@
   .tv-close{position:absolute;top:12px;right:12px;z-index:5;width:38px;height:38px;border-radius:50%;border:0;cursor:pointer;
     background:rgba(2,6,23,.65);color:#fff;font-size:18px;backdrop-filter:blur(6px)}
   .tv-close:hover{background:#ef4444}
+  .tv-avatar{position:absolute;right:3%;bottom:calc(5% + 4.4em);z-index:3;width:clamp(96px,19%,200px);aspect-ratio:1;border-radius:50%;
+    padding:4px;background:conic-gradient(from var(--tv-ang,0deg),var(--tv-acc),var(--tv-blue),var(--tv-acc));animation:tvSpin 4s linear infinite;
+    box-shadow:0 18px 45px rgba(0,0,0,.5)}
+  .tv-avatar video{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block;background:#15213d}
+  .tv-avatar::after{content:"";position:absolute;inset:-6px;border-radius:50%;border:2px solid rgba(249,115,22,.55);opacity:0}
+  .tv-avatar.falando::after{animation:tvFala 1.6s ease-out infinite}
+  @keyframes tvFala{0%{opacity:.9;transform:scale(1)}100%{opacity:0;transform:scale(1.18)}}
+  .tv-com-avatar .tv-screen{padding-right:22%}
+  .tv-mini-face{width:40px;height:40px;border-radius:50%;object-fit:cover;flex:none;border:2px solid var(--tv-acc);background:#15213d}
   .tv-paused .tv-screen *,.tv-paused .tv-screen *::before,.tv-paused .tv-screen *::after{animation-play-state:paused!important;transition:none!important}
 
   /* ── elementos das cenas ── */
@@ -376,6 +394,8 @@
     .tv-modal{padding:0}
     .tv-player{border-radius:0;width:100%}
     .tv-stage{aspect-ratio:auto;height:min(78vh,620px)}
+    .tv-avatar{width:84px;right:10px;top:12px;bottom:auto}
+    .tv-com-avatar .tv-screen{padding-right:5%;padding-top:30%}
     .tv-caption{font-size:11.5px;bottom:3%}
     .tv-split-wide .tv-campo:nth-of-type(n+3),.tv-split-wide .tv-anexos{display:none}
     .tv-split-wide{gap:.6em}
@@ -404,7 +424,7 @@
     '<button class="tv-x" type="button" aria-label="Fechar tour">✕</button>' +
     '<div class="tv-mini-stage"><span class="tv-badge"><i></i>TOUR</span><div class="tv-screen"></div>' +
       '<div class="tv-mini-play"><b></b></div></div>' +
-    '<div class="tv-mini-foot"><div><strong>Como usar a plataforma</strong>' +
+    '<div class="tv-mini-foot"><img class="tv-mini-face" src="' + AVATAR_FOTO + '" alt="" onerror="this.remove()"><div><strong>Como usar a plataforma</strong>' +
       '<small>ATPV-e RJ/MG, CRLV-e e mais · 1min45</small></div></div>';
   document.body.appendChild(mini);
 
@@ -437,6 +457,7 @@
   // ── Player grande ──────────────────────────────────────────────────────
   var modal = null, stage, screen, caption, btnPlay, btnVoz, timeEl, segs, chaps;
   var idx = 0, inicioCena = 0, decorrido = 0, tocando = false, raf = null, vozLigada = true, falaTerminou = true;
+  var avatarBox = null, video = null, avatarFalhou = false, usandoAvatar = false;
   var TOTAL = CENAS.reduce(function (s, c) { return s + c.dur; }, 0);
 
   function montarModal() {
@@ -453,6 +474,7 @@
           '<span class="tv-orb" style="width:35%;height:45%;right:-8%;bottom:-15%;background:#f97316;animation-delay:-6s"></span>' +
           '<div class="tv-screen"></div>' +
           '<div class="tv-caption" aria-live="polite"></div>' +
+          '<div class="tv-avatar"><video playsinline preload="auto" poster="' + AVATAR_FOTO + '"></video></div>' +
         '</div>' +
         '<div class="tv-controls">' +
           '<button class="tv-ctrl" data-a="prev" aria-label="Capítulo anterior">⏮</button>' +
@@ -477,7 +499,13 @@
     segs = modal.querySelectorAll('.tv-seg i');
     chaps = modal.querySelectorAll('.tv-chap');
 
-    if (!('speechSynthesis' in window)) { vozLigada = false; btnVoz.style.display = 'none'; }
+    avatarBox = modal.querySelector('.tv-avatar');
+    video = avatarBox.querySelector('video');
+    stage.classList.add('tv-com-avatar');
+    video.addEventListener('ended', function () { falaTerminou = true; avatarBox.classList.remove('falando'); });
+    video.addEventListener('playing', function () { avatarBox.classList.add('falando'); });
+    video.addEventListener('pause', function () { avatarBox.classList.remove('falando'); });
+    video.addEventListener('error', falhaAvatar);
 
     modal.addEventListener('click', function (ev) {
       if (ev.target === modal) return fechar();
@@ -490,8 +518,9 @@
         if (acao === 'voz') {
           vozLigada = !vozLigada;
           btnVoz.textContent = vozLigada ? '🔊' : '🔇';
-          if (!vozLigada) { speechSynthesis.cancel(); falaTerminou = true; }
-          else if (tocando) falar(CENAS[idx].fala);
+          if (usandoAvatar) { video.muted = !vozLigada; return; }
+          if (!vozLigada) { if ('speechSynthesis' in window) speechSynthesis.cancel(); falaTerminou = true; }
+          else if (tocando) narrar(CENAS[idx].fala);
           return;
         }
       }
@@ -525,6 +554,7 @@
   function fechar() {
     pausar();
     if ('speechSynthesis' in window) speechSynthesis.cancel();
+    if (video) video.pause();
     modal.classList.remove('open');
     document.documentElement.style.overflow = '';
     if (mini.isConnected && !reduzMovimento) girarMini();
@@ -543,7 +573,7 @@
     tocando = true;
     stage.classList.remove('tv-paused');
     btnPlay.textContent = '⏸';
-    falar(CENAS[i].fala);
+    falar(i);
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(tick);
   }
@@ -557,7 +587,7 @@
     timeEl.textContent = mmss(decorrido + Math.min(t, cena.dur)) + ' / ' + mmss(TOTAL);
     // A cena só vira quando o tempo acabou E a voz terminou a frase — voz
     // lenta no aparelho não pode ser cortada no meio.
-    if (p >= 1 && (falaTerminou || !vozLigada)) {
+    if (p >= 1 && (falaTerminou || (!vozLigada && !usandoAvatar))) {
       if (idx < CENAS.length - 1) return irPara(idx + 1);
       tocando = false;
       btnPlay.textContent = '↺';
@@ -574,7 +604,8 @@
     stage.classList.add('tv-paused');
     btnPlay.textContent = '▶';
     decorridoCena = performance.now() - inicioCena;
-    if ('speechSynthesis' in window) speechSynthesis.pause();
+    if (usandoAvatar) video.pause();
+    else if ('speechSynthesis' in window) speechSynthesis.pause();
   }
   var decorridoCena = 0;
 
@@ -584,7 +615,8 @@
     stage.classList.remove('tv-paused');
     btnPlay.textContent = '⏸';
     inicioCena = performance.now() - decorridoCena;
-    if ('speechSynthesis' in window) speechSynthesis.resume();
+    if (usandoAvatar) { if (!falaTerminou) video.play().catch(function () {}); }
+    else if ('speechSynthesis' in window) speechSynthesis.resume();
     raf = requestAnimationFrame(tick);
   }
 
@@ -602,7 +634,36 @@
     speechSynthesis.onvoiceschanged = escolherVoz;
   }
 
-  function falar(texto) {
+  // Fala do capítulo i: o clipe da apresentadora, ou a voz do navegador se
+  // o clipe não existir/não carregar.
+  function falar(i) {
+    if (avatarFalhou) { usandoAvatar = false; return narrar(CENAS[i].fala); }
+    usandoAvatar = true;
+    falaTerminou = false;
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
+    video.muted = !vozLigada;
+    video.src = AVATAR_CLIPE + (i + 1) + '.mp4';
+    video.play().catch(function (e) {
+      // NotAllowedError = política de autoplay com som: segue sem som em
+      // vez de travar a cena (o botão 🔊 religa).
+      if (e && e.name === 'NotAllowedError') {
+        video.muted = true; vozLigada = false; btnVoz.textContent = '🔇';
+        video.play().catch(falhaAvatar);
+      } else if (!e || e.name !== 'AbortError') falhaAvatar();
+    });
+  }
+
+  function falhaAvatar() {
+    if (avatarFalhou || !usandoAvatar) return;
+    avatarFalhou = true;
+    usandoAvatar = false;
+    avatarBox.hidden = true;
+    stage.classList.remove('tv-com-avatar');
+    if (tocando) narrar(CENAS[idx].fala);
+    else falaTerminou = true;
+  }
+
+  function narrar(texto) {
     if (!vozLigada || !('speechSynthesis' in window)) { falaTerminou = true; return; }
     speechSynthesis.cancel();
     if (!vozPt) { falaTerminou = true; return; } // sem voz em português: só legenda
