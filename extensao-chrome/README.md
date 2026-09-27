@@ -15,7 +15,7 @@ Atalho na barra do Chrome: mostra quem está logado, o **saldo** (pré-pago) ou 
 
 ## Publicar na Chrome Web Store
 
-1. Gerar o pacote: `powershell -ExecutionPolicy Bypass -File .\empacotar.ps1` (sai em `dist/`, fora do git).
+1. Gerar o pacote: `powershell -ExecutionPolicy Bypass -File .\empacotar.ps1` (sai em `dist/`, fora do git, e uma cópia em `assets/extensao-chrome.zip`, que o site serve em https://www.despachantesconsultas.com.br/assets/extensao-chrome.zip depois do commit).
 2. Enviar o .zip no [painel do desenvolvedor](https://chrome.google.com/webstore/devconsole) (taxa única de US$ 5 na conta Google que vai ser a dona da extensão).
 3. Preencher a ficha com os textos de [CHROMEWEBSTORE.md](CHROMEWEBSTORE.md): descrições, justificativa da permissão, formulário de privacidade e a URL da política — https://www.despachantesconsultas.com.br/extensao/privacidade (`privacidade-extensao.html`).
 

@@ -24,3 +24,9 @@ try {
   }
 } finally { $zip.Dispose() }
 Write-Output "Pacote: $saida"
+
+# Cópia com nome fixo, servida pelo site para download direto:
+# https://www.despachantesconsultas.com.br/assets/extensao-chrome.zip
+# (nome sem versão para o link não mudar; precisa de commit para ir ao ar).
+Copy-Item $saida (Join-Path $PSScriptRoot '..\assets\extensao-chrome.zip') -Force
+Write-Output "Download do site: assets\extensao-chrome.zip"
