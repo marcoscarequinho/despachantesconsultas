@@ -36,3 +36,4 @@ build/
 .env.*.local
 
 .vercel
+extensao-chrome/dist/

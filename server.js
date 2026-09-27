@@ -13494,6 +13494,11 @@ app.get('/', (req, res) => {
 app.get('/entrar', (req, res) => {
   noCache(res); res.sendFile(path.join(__dirname, 'entrar.html'));
 });
+// Política de privacidade da extensão do Chrome (extensao-chrome/): é a URL
+// que a Chrome Web Store exige no cadastro, por isso tem endereço fixo.
+app.get('/extensao/privacidade', (req, res) => {
+  noCache(res); res.sendFile(path.join(__dirname, 'privacidade-extensao.html'));
+});
 app.get('/cadastrar', (req, res) => {
   noCache(res); res.sendFile(path.join(__dirname, 'cadastrar.html'));
 });
