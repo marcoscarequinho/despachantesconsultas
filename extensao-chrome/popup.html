@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Despachantes Consultas</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <img src="icons/icon-48.png" alt="" width="36" height="36">
+    <div>
+      <strong>Despachantes Consultas</strong>
+      <small id="saudacao">Carregando…</small>
+    </div>
+  </header>
+
+  <!-- Logado: saldo (pré-pago) ou fatura (pós-pago) -->
+  <section id="logado" hidden>
+    <div class="cartao" id="cartao">
+      <span class="rotulo" id="rotulo">Saldo disponível</span>
+      <span class="valor" id="valor">—</span>
+      <span class="detalhe" id="detalhe"></span>
+    </div>
+    <button class="principal" data-abrir="/painel">🔎 Abrir painel e consultar</button>
+    <button data-abrir="/recarga-pix" id="btn-recarga">💳 Recarga PIX</button>
+  </section>
+
+  <!-- Deslogado -->
+  <section id="deslogado" hidden>
+    <p>Entre na sua conta para ver o saldo e abrir o painel direto daqui.</p>
+    <button class="principal" data-abrir="/entrar">Entrar</button>
+    <button data-abrir="/cadastrar">Criar conta</button>
+  </section>
+
+  <!-- Sem conexão / erro do servidor -->
+  <section id="erro" hidden>
+    <p id="erro-msg">Não foi possível falar com o site agora.</p>
+    <button class="principal" data-abrir="/">Abrir o site</button>
+  </section>
+
+  <footer>
+    <a href="#" data-abrir="/">despachantesconsultas.com.br</a>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
