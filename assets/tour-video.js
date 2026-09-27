@@ -33,7 +33,9 @@
   // Friendly"), fundo liso da cor da bolha. MP4 e não WebM transparente
   // porque o Safari do iPhone não toca VP9 com alfa.
   var AVATAR_CLIPE = '/assets/tour/cap-';
-  var AVATAR_FOTO = '/assets/tour/avatar.jpg';
+  // WebP e não JPEG porque é o que o CDN da HeyGen entrega no thumbnail,
+  // qualquer que seja o Accept — reconverter só perderia qualidade.
+  var AVATAR_FOTO = '/assets/tour/avatar.webp';
 
   var reduzMovimento = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
