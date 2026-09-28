@@ -4826,6 +4826,22 @@ async function fetchProprietarioAtualV2Fields(placa) {
 const COMUNICADO_DATA_VENDA_KEYS = ['datadavenda', 'datavenda'];
 const DATA_BR_RE = /\b(\d{2}\/\d{2}\/\d{4})\b/;
 
+// O PDF da Consulta Comunicado sai com as datas UM DIA ANTES do que o SENATRAN
+// mostra — cara de meia-noite UTC formatada no fuso do Brasil, do lado deles.
+// Conferido em 28/09/2026 na placa LPM2852: portal 31/01/2021 e 23/05/2021,
+// SENATRAN 01/02/2021 e 24/05/2021 (venda e registro, as duas com -1), e o
+// dono confirmou que acontece em toda consulta. Por isso o dia é somado aqui,
+// antes de a data ir para o ATPVe. Conta feita em UTC, sem passar pelo fuso
+// local, para virar mês e ano certo (31/01 → 01/02, 31/12 → 01/01).
+// Se o portal corrigir do lado deles, esta soma passa a ADIANTAR a data —
+// é só tirar a chamada em fetchComunicadoDataVendaUmaVez.
+function somarUmDiaDataBr(dataBr) {
+  const [d, m, a] = dataBr.split('/').map(Number);
+  const dt = new Date(Date.UTC(a, m - 1, d + 1));
+  const p2 = (n) => String(n).padStart(2, '0');
+  return `${p2(dt.getUTCDate())}/${p2(dt.getUTCMonth() + 1)}/${dt.getUTCFullYear()}`;
+}
+
 async function fetchComunicadoDataVendaUmaVez(placa, renavam) {
   const r = await fetch(`${PORTAL_BASE_URL}/consultar-comunicado`, {
     method: 'POST',
@@ -4843,7 +4859,7 @@ async function fetchComunicadoDataVendaUmaVez(placa, renavam) {
   const f = await extractLinePairFieldsFromPdf(buf);
   for (const chave of COMUNICADO_DATA_VENDA_KEYS) {
     const m = DATA_BR_RE.exec(String(f[chave] || ''));
-    if (m) return { consultado: true, dataVenda: m[1] };
+    if (m) return { consultado: true, dataVenda: somarUmDiaDataBr(m[1]) };
   }
   // PDF legível e sem data da venda: é o relatório de comunicação não localizada.
   return { consultado: true, dataVenda: null };
