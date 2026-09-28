@@ -130,10 +130,6 @@ const ZAPI_TOKEN         = process.env.ZAPI_TOKEN         || '';
 const ZAPI_CLIENT_TOKEN  = process.env.ZAPI_CLIENT_TOKEN  || '';
 const WEBHOOK_BASE_URL   = (process.env.WEBHOOK_BASE_URL  || '').replace(/\/$/, '');
 const ADMIN_PHONE        = process.env.ADMIN_PHONE        || '';
-// API consultasfacil.net (CRLV Rio Reemissão v2) — auth por header chaveAcesso
-// (fixo); resposta é o PDF pronto em bytes (Content-Type: application/pdf).
-const CONSULTASFACIL_BASE_URL = 'https://www.consultasfacil.net';
-const CONSULTASFACIL_KEY      = process.env.CONSULTASFACIL_KEY || '';
 // API despbrasil.com.br — auth por header chaveAcesso (fixo); resposta traz a URL
 // do PDF pronto em "arquivo_url" (buscamos o arquivo no processCatalogQuery, ver
 // DESPBRASIL_SVCS). Mapeia serviceId para o "servico" da despbrasil (campo "extra"
@@ -364,6 +360,13 @@ const VISTOCAR_ENDPOINTS = {
   'vistocar-debitos-cod-barra': 'debitos-cod-barra',
   'atpve-vistocar-rj': 'atpve-rj',
   'atpve-vistocar-mg': 'atpve-mg',
+  // CRLV Rio Reemissão (R$ 65,00): saiu da consultasfacil.net em 28/09/2026 (a
+  // conta de lá ficou sem saldo e toda consulta voltava "Saldo insuficiente")
+  // e veio para cá. Síncrono: PDF em base64 na resposta, como o security-code.
+  // Conferido contra a API real no mesmo dia (placa KWV3236: PDF de 82 KB,
+  // paid:true). Placa que o Detran não libera volta 400 "Consulta não
+  // realizada." com paid:false — não cobra ninguém.
+  'crlv-rio-reemissao-v2': 'crlv-rj',
 };
 
 // ── Nome dos arquivos que vêm da Vistocar ────────────────────────────────────
@@ -381,6 +384,7 @@ const VISTOCAR_ARQUIVO_NOMES = {
   'vistocar-debitos-cod-barra':      'debitos',
   'atpve-vistocar-rj':               'atpve-rj',
   'atpve-vistocar-mg':               'atpve-mg',
+  'crlv-rio-reemissao-v2':           'crlv-rj-reemissao',
 };
 const MC_ARQUIVO_PREFIXO = 'mcdespachadoria';
 function nomeArquivoVistocar(serviceId, sufixo) {
@@ -989,8 +993,8 @@ const SERVICES = [
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   { id:'crlv-rj-reemissao-2', name:'CRLV 2 Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // Backup da CRLV 2 Rio Reemissão (acima): quando a API estiver fora do ar, o cliente
-  // usa esta em vez de esperar. Fonte alternativa via API consultasfacil.net (ver
-  // CONSULTASFACIL_BASE_URL), devolve o PDF pronto na hora — não é mais fila manual.
+  // usa esta em vez de esperar. Sai da Vistocar (apiclient/crlv-rj, ver
+  // VISTOCAR_ENDPOINTS) desde 28/09/2026 — antes era a consultasfacil.net.
   { id:'crlv-rio-reemissao-v2', name:'CRLV Rio Reemissão v2', group:'CRLV-e Rio de Janeiro', basePrice:65.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -7417,16 +7421,6 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       method = 'POST';
       body   = { placa };
     }
-    // CRLV Rio Reemissão v2 — API consultasfacil.net (auth por header chaveAcesso
-    // fixo, ver fetchHeaders abaixo). Resposta é o PDF pronto em bytes (isRealPdf
-    // cuida do resto do fluxo, mesmo padrão dos demais serviços em PDF direto).
-    if (serviceId === 'crlv-rio-reemissao-v2') {
-      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
-      if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
-      apiUrl = `${CONSULTASFACIL_BASE_URL}/consultar-crlv-rj2`;
-      method = 'POST';
-      body   = { placa };
-    }
     // Serviços via API despbrasil.com.br (auth por header chaveAcesso fixo, ver
     // fetchHeaders abaixo). Resposta é JSON com a URL do PDF pronto em "arquivo_url".
     if (DESPBRASIL_SVCS[serviceId]) {
@@ -7736,8 +7730,6 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY };
     } else if (DESPBRASIL_SVCS[serviceId]) {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': DESPBRASIL_KEY };
-    } else if (serviceId === 'crlv-rio-reemissao-v2') {
-      fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': CONSULTASFACIL_KEY };
     } else if (VISTOCAR_ENDPOINTS[serviceId]) {
       fetchHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await getVistocarToken()}` };
     } else {

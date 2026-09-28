@@ -33,8 +33,7 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 | AutoCRLV | `https://autocrlv.com.br` | Bearer (`AUTOCRLV_KEY`) |
 | Infosimples | `https://api.infosimples.com/api/v2/consultas` | `INFOSIMPLES_TOKEN` |
 | Despbrasil (CRLV Rio Reemissão, Código de Segurança CRV, Número do CRV Digital) | `https://despbrasil.com.br/functions/apiConsulta` | header `chaveAcesso` (`DESPBRASIL_KEY`), ver `DESPBRASIL_SVCS` |
-| Consultas Fácil (CRLV Rio Reemissão v2) | `https://www.consultasfacil.net` | header `chaveAcesso` (`CONSULTASFACIL_KEY`) |
-| Vistocar (Débitos e Documentação, Código de Segurança CRV, ATPV-e RJ/MG) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
+| Vistocar (Débitos e Documentação, Código de Segurança CRV, ATPV-e RJ/MG, CRLV Rio Reemissão v2 — `apiclient/crlv-rj` desde 28/09/2026, quando a Consultas Fácil ficou sem saldo e saiu) | `https://vistocarconsulta.com.br/api/v1` | login JWT (`VISTOCAR_LOGIN`/`VISTOCAR_PASSWORD`, ver `getVistocarToken`), ver `VISTOCAR_ENDPOINTS` |
 | Assinafy (Assinatura Digital de documentos) | `https://api.assinafy.com.br/v1` | header `X-Api-Key` (`ASSINAFY_API_KEY`) + `ASSINAFY_ACCOUNT_ID` |
 | ViaCEP | `https://viacep.com.br` | público, sem chave (só recupera acento de logradouro/bairro na Reemissão da ATPVe, ver `repairAtpveAccents`) |
 | Mercado Pago (PIX e cartão de débito) | `https://api.mercadopago.com` | `MP_ACCESS_TOKEN` (servidor) + `MP_PUBLIC_KEY` (navegador) |
@@ -214,4 +213,4 @@ Vitrine que reúne num lugar só os CRLV-e que **não saem na hora** (DF, ES, PB
 
 ## Variáveis de ambiente (.env)
 
-`DATABASE_URL`, `JWT_SECRET`, `MP_ACCESS_TOKEN`, `MP_PUBLIC_KEY`, `AUTOCRLV_KEY`, `PORTAL_DESP_KEY`, `DATACUBE_TOKEN`, `INFOSIMPLES_TOKEN`, `DESPBRASIL_KEY`, `CONSULTASFACIL_KEY`, `VISTOCAR_LOGIN`, `VISTOCAR_PASSWORD`, `ASSINAFY_API_KEY`, `ASSINAFY_ACCOUNT_ID`, `HEYGEN_API_KEY` (só o vídeo de apresentação do admin — `VIDEO_APRESENTACAO_ID`; o MP4 fica na HeyGen e a rota redireciona para um link assinado novo), `ZAPI_INSTANCE_ID`, `ZAPI_TOKEN`, `ZAPI_CLIENT_TOKEN`, `WEBHOOK_BASE_URL`, `ADMIN_PHONE`. O `.env` existe localmente e não é commitado.
+`DATABASE_URL`, `JWT_SECRET`, `MP_ACCESS_TOKEN`, `MP_PUBLIC_KEY`, `AUTOCRLV_KEY`, `PORTAL_DESP_KEY`, `DATACUBE_TOKEN`, `INFOSIMPLES_TOKEN`, `DESPBRASIL_KEY`, `VISTOCAR_LOGIN`, `VISTOCAR_PASSWORD`, `ASSINAFY_API_KEY`, `ASSINAFY_ACCOUNT_ID`, `HEYGEN_API_KEY` (só o vídeo de apresentação do admin — `VIDEO_APRESENTACAO_ID`; o MP4 fica na HeyGen e a rota redireciona para um link assinado novo), `ZAPI_INSTANCE_ID`, `ZAPI_TOKEN`, `ZAPI_CLIENT_TOKEN`, `WEBHOOK_BASE_URL`, `ADMIN_PHONE`. O `.env` existe localmente e não é commitado.
