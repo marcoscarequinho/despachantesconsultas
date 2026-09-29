@@ -4837,11 +4837,16 @@ async function fetchCodigoSegurancaCrvFields(placa, knownRenavam) {
 // município/UF do vendedor, ano de fabricação, ano do modelo, cor e data do
 // CRV) — documento inútil pro despachante, mas cobrado. Quem decide entregar ou
 // recusar é a conferência de atpveCamposFaltando, nos dois chamadores.
+// Limite de tempo porque o portal, fora do ar, demora ~97 s para dizer
+// "Consulta indisponível no momento" (KMZ5J93, 29/09/2026) — e com as reservas
+// (Datacube/despbrasil) esperar isso só atrasa o ATPVe.
+const PORTAL_PROP_TIMEOUT_MS = 30000;
 async function fetchProprietarioAtualV2Fields(placa) {
   const r = await fetch(`${PORTAL_BASE_URL}/consultar-placa-v2`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', chaveAcesso: PORTAL_DESP_KEY },
     body: JSON.stringify({ placa }),
+    signal: AbortSignal.timeout(PORTAL_PROP_TIMEOUT_MS),
   });
   const buf = Buffer.from(await r.arrayBuffer());
   if (!r.ok || buf.slice(0, 4).toString('latin1') !== '%PDF') {
@@ -4956,6 +4961,10 @@ async function fetchProprietarioAtualDatacube(placa) {
     anofabricacao: util(d.ano_fabricacao),
     anomodelo:     util(d.ano_modelo),
     cor:           util(d.cor),
+    // "VW - VOLKSWAGEN" + "GOL CL 1.6 MI" vira "VW/GOL CL 1.6 MI", o formato do
+    // Detran que as outras fontes usam.
+    marcaModelo:   util(d.marca) && util(d.modelo)
+      ? `${util(d.marca).split(/\s+-\s+/)[0]}/${util(d.modelo)}` : '',
     nome:          util(d.proprietario_nome),
     documento:     String(d.proprietario_documento || '').replace(/\D/g, ''),
     municipio:     util(d.municipio),
@@ -4968,7 +4977,10 @@ async function fetchProprietarioAtualDatacube(placa) {
 // campo dados.dataEmissaoCrv em ISO, ou o "DATA DO CRV" do PDF da resposta. A
 // resposta pode levar mais de um minuto (e às vezes cai em 524). Devolve
 // dd/mm/aaaa ou null.
-async function fetchDataCrvDespbrasil(placa) {
+// Também devolve a marca/modelo (dados.MarcaModelo, já no formato do Detran,
+// "VW/GOL CL 1.6 MI") — reserva dela quando o portal e o PDF do código de
+// segurança não trazem (KMZ5J93, 29/09/2026). Devolve { dataCrv, marcaModelo }.
+async function fetchVerificarCrlvDespbrasil(placa) {
   const r = await fetch(DESPBRASIL_BASE_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', chaveAcesso: DESPBRASIL_KEY },
@@ -4976,21 +4988,39 @@ async function fetchDataCrvDespbrasil(placa) {
   });
   const j = await r.json().catch(() => null);
   if (!r.ok || !j?.sucesso) throw new Error(`HTTP ${r.status} — resposta: ${JSON.stringify(j).slice(0, 300)}`);
+  const mm = String(j?.dados?.MarcaModelo ?? '').trim();
+  const marcaModelo = mm && !semDadoUtil(mm) ? mm : null;
   const data = dataBRSimples(j?.dados?.dataEmissaoCrv);
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(data)) return data;
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(data)) return { dataCrv: data, marcaModelo };
   // O JSON pode vir sem a data e o PDF da mesma resposta trazer: foi o caso da
   // RKQ7C90 em 29/09/2026 — dados sem dataEmissaoCrv, e o arquivo_url com
   // "DATA DO CRV" e, na linha seguinte, 20/09/2023.
-  if (!j?.arquivo_url) return null;
-  const pdfRes = await fetch(j.arquivo_url);
-  if (!pdfRes.ok) throw new Error(`falha ao baixar o arquivo_url (HTTP ${pdfRes.status})`);
-  const { text } = await pdfParseTolerante(Buffer.from(await pdfRes.arrayBuffer()));
-  const m = /DATA DO CRV\s*:?\s*(\d{2}\/\d{2}\/\d{4})/i.exec(text || '');
-  return m ? m[1] : null;
+  let dataCrv = null;
+  if (j?.arquivo_url) {
+    try {
+      const pdfRes = await fetch(j.arquivo_url);
+      if (!pdfRes.ok) throw new Error(`HTTP ${pdfRes.status}`);
+      const { text } = await pdfParseTolerante(Buffer.from(await pdfRes.arrayBuffer()));
+      const m = /DATA DO CRV\s*:?\s*(\d{2}\/\d{2}\/\d{4})/i.exec(text || '');
+      if (m) dataCrv = m[1];
+    } catch (e) {
+      console.error(`[consultar-Numero-ATPVE] PDF do verificar_crlv ilegível (placa ${placa}):`, e.message);
+    }
+  }
+  return { dataCrv, marcaModelo };
 }
 
 async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam, docVendedor) {
   const merged = {};
+
+  // Código de segurança do CRV e Consulta Comunicado não dependem de nada do
+  // que vem abaixo: saem já, em paralelo com a cadeia portal → despbrasil →
+  // Datacube. Em fila, com o portal fora, o ATPVe da KMZ5J93 levou 220 s
+  // (29/09/2026). Nenhuma das duas lança erro — os dois fetch* já tratam falha.
+  const codigoPromise = fetchCodigoSegurancaCrvFields(placa, knownRenavam);
+  // Sem renavam não há o que consultar — e renavam em branco já derruba o
+  // pedido na conferência de ATPVE_CAMPOS_OBRIGATORIOS, antes de qualquer débito.
+  const comunicadoPromise = knownRenavam ? fetchComunicadoDataVenda(placa, knownRenavam) : null;
 
   // O portal limita consultas simultâneas por token ("Muitas consultas
   // simultâneas neste token (máx. 15...). Aguarde a liberação (cerca de 15s)").
@@ -5007,8 +5037,8 @@ async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam, docVended
       console.error(`[consultar-Numero-ATPVE] Proprietário Atual (v2) falhou na tentativa ${tentativa}/${PROP_TENTATIVAS} (placa ${placa}):`, e.message);
       if (tentativa < PROP_TENTATIVAS && /simult[aâ]neas|aguarde a libera/i.test(e.message)) {
         await new Promise(r => setTimeout(r, 16000));
-      } else if (tentativa >= 2) {
-        break;   // erro que não é de limite: duas tentativas bastam, como antes
+      } else if (e.name === 'TimeoutError' || /indispon[ií]vel/i.test(e.message)) {
+        break;   // fora do ar: repetir é esperar de novo à toa — as reservas cobrem
       }
     }
   }
@@ -5029,23 +5059,34 @@ async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam, docVended
     if (prop.ufjurisdicao) { merged.ufvendedor = prop.ufjurisdicao; merged.ufemplacamento = prop.ufjurisdicao; }
   }
 
+  // verificar_crlv da despbrasil: chamado no máximo uma vez, e só quando falta
+  // algo que ela cobre (data do CRV aqui; marca/modelo mais abaixo).
+  let despVerificar;
+  const verificarCrlvDesp = async () => {
+    if (despVerificar === undefined) {
+      try { despVerificar = await fetchVerificarCrlvDespbrasil(placa); }
+      catch (e) {
+        console.error(`[consultar-Numero-ATPVE] verificar_crlv da despbrasil falhou (placa ${placa}):`, e.message);
+        despVerificar = null;
+      }
+    }
+    return despVerificar;
+  };
+
   // Data de emissão do CRV sem o portal: só a despbrasil tem (a Datacube não).
   if (!merged.datacrv) {
-    try {
-      const dataCrv = await fetchDataCrvDespbrasil(placa);
-      if (dataCrv) merged.datacrv = dataCrv;
-      else console.error(`[consultar-Numero-ATPVE] despbrasil verificar_crlv sem dataEmissaoCrv (placa ${placa}).`);
-    } catch (e) {
-      console.error(`[consultar-Numero-ATPVE] data do CRV na despbrasil falhou (placa ${placa}):`, e.message);
-    }
+    const v = await verificarCrlvDesp();
+    if (v?.dataCrv) merged.datacrv = v.dataCrv;
+    else if (v) console.error(`[consultar-Numero-ATPVE] despbrasil verificar_crlv sem data do CRV (placa ${placa}).`);
   }
+  let dcMarcaModelo = null;
 
   // Portal fora (ou sem algum campo): a Datacube completa o que dá. O nome só
   // entra se o documento do proprietário for o do vendedor do ATPVe — se o
   // veículo já foi transferido, o proprietário atual é o COMPRADOR, e o nome
-  // dele na célula do vendedor seria um documento falso. A data do CRV não
-  // tem reserva: sem o portal ela fica faltando e o pedido é recusado.
-  const faltaDoPortal = ['anofabricacao', 'anomodelo', 'cor', 'nomevendedor', 'municipiovendedor', 'ufvendedor']
+  // dele na célula do vendedor seria um documento falso. (A data do CRV vem da
+  // despbrasil, acima; a Datacube não tem.)
+  const faltaDoPortal = ['anofabricacao', 'anomodelo', 'cor', 'marcamodeloversao', 'nomevendedor', 'municipiovendedor', 'ufvendedor']
     .some(k => !merged[k]);
   if (faltaDoPortal) {
     try {
@@ -5055,6 +5096,7 @@ async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam, docVended
       if (!merged.anofabricacao && dc.anofabricacao) merged.anofabricacao = dc.anofabricacao;
       if (!merged.anomodelo && dc.anomodelo) merged.anomodelo = dc.anomodelo;
       if (!merged.cor && dc.cor) merged.cor = dc.cor;
+      dcMarcaModelo = dc.marcaModelo;
       if (mesmoDono) {
         if (!merged.nomevendedor && dc.nome) merged.nomevendedor = dc.nome;
         if (!merged.municipiovendedor && dc.municipio) { merged.municipiovendedor = dc.municipio; merged.municipioemplacamento = dc.municipio; }
@@ -5067,15 +5109,20 @@ async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam, docVended
     }
   }
 
-  const f = await fetchCodigoSegurancaCrvFields(placa, knownRenavam);
+  const f = await codigoPromise;
   if (f.codigosegurancacrv) merged.codigosegurancacrv = f.codigosegurancacrv;
   if (f.marcamodeloversao && !merged.marcamodeloversao) merged.marcamodeloversao = f.marcamodeloversao;
+  // Marca/modelo sem portal e sem o PDF do código de segurança: despbrasil
+  // (formato do Detran) e, por último, a Datacube.
+  if (!merged.marcamodeloversao) {
+    const v = await verificarCrlvDesp();
+    merged.marcamodeloversao = v?.marcaModelo || dcMarcaModelo || undefined;
+    if (!merged.marcamodeloversao) delete merged.marcamodeloversao;
+  }
 
-  // Data que o vendedor comunicou ao Detran. Sem renavam não há o que
-  // consultar — e renavam em branco já derruba o pedido na conferência de
-  // ATPVE_CAMPOS_OBRIGATORIOS, antes de qualquer débito.
-  if (knownRenavam) {
-    const comunicado = await fetchComunicadoDataVenda(placa, knownRenavam);
+  // Data que o vendedor comunicou ao Detran (consulta disparada no início).
+  if (comunicadoPromise) {
+    const comunicado = await comunicadoPromise;
     if (comunicado.dataVenda) merged.datavendacomunicada = comunicado.dataVenda;
     else if (!comunicado.consultado) merged._comunicadoIndisponivel = true;
   }
