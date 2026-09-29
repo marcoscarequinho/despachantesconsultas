@@ -4912,25 +4912,104 @@ async function fetchComunicadoDataVendaUmaVez(placa, renavam) {
 // Duas tentativas, mesma régua da Proprietário Atual (v2): falha isolada da
 // portal é comum e custa só uma segunda chamada.
 async function fetchComunicadoDataVenda(placa, renavam) {
-  for (let tentativa = 1; tentativa <= 2; tentativa++) {
+  // Mesmo token do portal da Proprietário Atual: no limite de consultas
+  // simultâneas, espera a janela antes de repetir (ver runNumeroAtpveSupplementaryQueries).
+  const TENTATIVAS = 4;
+  for (let tentativa = 1; tentativa <= TENTATIVAS; tentativa++) {
     try {
       return await fetchComunicadoDataVendaUmaVez(placa, renavam);
     } catch (e) {
-      console.error(`[consultar-Numero-ATPVE] Consulta Comunicado falhou na tentativa ${tentativa}/2 (placa ${placa}):`, e.message);
+      console.error(`[consultar-Numero-ATPVE] Consulta Comunicado falhou na tentativa ${tentativa}/${TENTATIVAS} (placa ${placa}):`, e.message);
+      if (tentativa < TENTATIVAS && /simult[aâ]neas|aguarde a libera/i.test(e.message)) {
+        await new Promise(r => setTimeout(r, 16000));
+      } else if (tentativa >= 2) {
+        break;   // erro que não é de limite: duas tentativas bastam, como antes
+      }
     }
   }
   return { consultado: false, dataVenda: null };
 }
 
-async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam) {
+// Reserva da Proprietário Atual (v2) do portal: a Proprietário Atual da Datacube
+// (/veiculos/proprietario-atual, JSON). Cobre ano de fabricação/modelo, cor,
+// nome do proprietário e município/UF — mas NÃO a data de emissão do CRV, que
+// só o portal traz. Em 29/09/2026 o portal recusou a RKQ7C90 por minutos
+// seguidos com "Muitas consultas simultâneas neste token" (placa já consultada
+// antes respondia na hora, placa nova não), e o ATPVe saía recusado com os
+// dados existindo. "indisponível" é como a Datacube escreve campo sem dado.
+async function fetchProprietarioAtualDatacube(placa) {
+  const r = await fetch(`${DATACUBE_API_URL}/veiculos/proprietario-atual`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ auth_token: DATACUBE_TOKEN, placa }).toString(),
+  });
+  const j = await r.json().catch(() => null);
+  if (!r.ok || !j?.status || !j?.result) {
+    throw new Error(`HTTP ${r.status} — resposta: ${JSON.stringify(j).slice(0, 300)}`);
+  }
+  const util = v => {
+    const s = String(v ?? '').trim();
+    return s && !/^indispon[ií]vel$/i.test(s) && !semDadoUtil(s) ? s : '';
+  };
+  const d = j.result;
+  return {
+    anofabricacao: util(d.ano_fabricacao),
+    anomodelo:     util(d.ano_modelo),
+    cor:           util(d.cor),
+    nome:          util(d.proprietario_nome),
+    documento:     String(d.proprietario_documento || '').replace(/\D/g, ''),
+    municipio:     util(d.municipio),
+    uf:            util(d.uf),
+  };
+}
+
+// Última fonte da data de emissão do CRV do ATPVe, depois do portal: o
+// verificar_crlv da despbrasil (o mesmo do "Verificar CRLV + Data CRV", R$ 1,90),
+// campo dados.dataEmissaoCrv em ISO, ou o "DATA DO CRV" do PDF da resposta. A
+// resposta pode levar mais de um minuto (e às vezes cai em 524). Devolve
+// dd/mm/aaaa ou null.
+async function fetchDataCrvDespbrasil(placa) {
+  const r = await fetch(DESPBRASIL_BASE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', chaveAcesso: DESPBRASIL_KEY },
+    body: JSON.stringify({ servico: DESPBRASIL_SVCS['verificar-crlv-data-crv'].servico, placa }),
+  });
+  const j = await r.json().catch(() => null);
+  if (!r.ok || !j?.sucesso) throw new Error(`HTTP ${r.status} — resposta: ${JSON.stringify(j).slice(0, 300)}`);
+  const data = dataBRSimples(j?.dados?.dataEmissaoCrv);
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(data)) return data;
+  // O JSON pode vir sem a data e o PDF da mesma resposta trazer: foi o caso da
+  // RKQ7C90 em 29/09/2026 — dados sem dataEmissaoCrv, e o arquivo_url com
+  // "DATA DO CRV" e, na linha seguinte, 20/09/2023.
+  if (!j?.arquivo_url) return null;
+  const pdfRes = await fetch(j.arquivo_url);
+  if (!pdfRes.ok) throw new Error(`falha ao baixar o arquivo_url (HTTP ${pdfRes.status})`);
+  const { text } = await pdfParseTolerante(Buffer.from(await pdfRes.arrayBuffer()));
+  const m = /DATA DO CRV\s*:?\s*(\d{2}\/\d{2}\/\d{4})/i.exec(text || '');
+  return m ? m[1] : null;
+}
+
+async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam, docVendedor) {
   const merged = {};
 
+  // O portal limita consultas simultâneas por token ("Muitas consultas
+  // simultâneas neste token (máx. 15...). Aguarde a liberação (cerca de 15s)").
+  // Repetir na hora cai de novo no limite — foi assim que a RKQ7C90 saiu
+  // recusada por "dados faltando" em 29/09/2026 com os dados existindo. Nesse
+  // erro espera a janela antes da próxima tentativa; nos outros, repete logo.
   let prop = null;
-  for (let tentativa = 1; tentativa <= 2 && !prop; tentativa++) {
+  // Só 2: sem o portal, Datacube e despbrasil cobrem todos os campos dele.
+  const PROP_TENTATIVAS = 2;
+  for (let tentativa = 1; tentativa <= PROP_TENTATIVAS && !prop; tentativa++) {
     try {
       prop = await fetchProprietarioAtualV2Fields(placa);
     } catch (e) {
-      console.error(`[consultar-Numero-ATPVE] Proprietário Atual (v2) falhou na tentativa ${tentativa}/2 (placa ${placa}):`, e.message);
+      console.error(`[consultar-Numero-ATPVE] Proprietário Atual (v2) falhou na tentativa ${tentativa}/${PROP_TENTATIVAS} (placa ${placa}):`, e.message);
+      if (tentativa < PROP_TENTATIVAS && /simult[aâ]neas|aguarde a libera/i.test(e.message)) {
+        await new Promise(r => setTimeout(r, 16000));
+      } else if (tentativa >= 2) {
+        break;   // erro que não é de limite: duas tentativas bastam, como antes
+      }
     }
   }
   if (prop) {
@@ -4948,6 +5027,44 @@ async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam) {
     // emplacado, não a UF da intenção de venda.
     if (prop.municipio) { merged.municipiovendedor = prop.municipio; merged.municipioemplacamento = prop.municipio; }
     if (prop.ufjurisdicao) { merged.ufvendedor = prop.ufjurisdicao; merged.ufemplacamento = prop.ufjurisdicao; }
+  }
+
+  // Data de emissão do CRV sem o portal: só a despbrasil tem (a Datacube não).
+  if (!merged.datacrv) {
+    try {
+      const dataCrv = await fetchDataCrvDespbrasil(placa);
+      if (dataCrv) merged.datacrv = dataCrv;
+      else console.error(`[consultar-Numero-ATPVE] despbrasil verificar_crlv sem dataEmissaoCrv (placa ${placa}).`);
+    } catch (e) {
+      console.error(`[consultar-Numero-ATPVE] data do CRV na despbrasil falhou (placa ${placa}):`, e.message);
+    }
+  }
+
+  // Portal fora (ou sem algum campo): a Datacube completa o que dá. O nome só
+  // entra se o documento do proprietário for o do vendedor do ATPVe — se o
+  // veículo já foi transferido, o proprietário atual é o COMPRADOR, e o nome
+  // dele na célula do vendedor seria um documento falso. A data do CRV não
+  // tem reserva: sem o portal ela fica faltando e o pedido é recusado.
+  const faltaDoPortal = ['anofabricacao', 'anomodelo', 'cor', 'nomevendedor', 'municipiovendedor', 'ufvendedor']
+    .some(k => !merged[k]);
+  if (faltaDoPortal) {
+    try {
+      const dc = await fetchProprietarioAtualDatacube(placa);
+      const docVend = String(docVendedor || '').replace(/\D/g, '');
+      const mesmoDono = !!docVend && dc.documento === docVend;
+      if (!merged.anofabricacao && dc.anofabricacao) merged.anofabricacao = dc.anofabricacao;
+      if (!merged.anomodelo && dc.anomodelo) merged.anomodelo = dc.anomodelo;
+      if (!merged.cor && dc.cor) merged.cor = dc.cor;
+      if (mesmoDono) {
+        if (!merged.nomevendedor && dc.nome) merged.nomevendedor = dc.nome;
+        if (!merged.municipiovendedor && dc.municipio) { merged.municipiovendedor = dc.municipio; merged.municipioemplacamento = dc.municipio; }
+        if (!merged.ufvendedor && dc.uf) { merged.ufvendedor = dc.uf; merged.ufemplacamento = dc.uf; }
+      } else {
+        console.error(`[consultar-Numero-ATPVE] Datacube (placa ${placa}): proprietário atual não é o vendedor do ATPVe (${dc.documento.replace(/\d(?=\d{4})/g, '*')} x ${docVend.replace(/\d(?=\d{4})/g, '*')}) — nome/município do vendedor não usados.`);
+      }
+    } catch (e) {
+      console.error(`[consultar-Numero-ATPVE] Proprietário Atual da Datacube (reserva) falhou (placa ${placa}):`, e.message);
+    }
   }
 
   const f = await fetchCodigoSegurancaCrvFields(placa, knownRenavam);
@@ -5104,7 +5221,7 @@ async function runPublicAtpveComunicacaoVenda(params) {
     throw new Error('Não foi possível gerar o documento para essa placa no momento. Tente novamente em alguns minutos ou fale com o suporte.');
   }
 
-  Object.assign(fields, await runNumeroAtpveSupplementaryQueries(placa, fields.renavam));
+  Object.assign(fields, await runNumeroAtpveSupplementaryQueries(placa, fields.renavam, fields.documentovendedor));
 
   // Mesma regra do painel: documento com célula obrigatória em branco não é
   // entregue (aqui o erro vira estorno automático do PIX, ver
@@ -8156,7 +8273,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         // três consultas extras (Proprietário Atual v2 + Consulta 3 Código
         // Segurança CRV + Consulta Comunicado) — preço já reajustado pra cobrir
         // as 4 consultas encadeadas (ver catálogo).
-        Object.assign(fields, await runNumeroAtpveSupplementaryQueries(placaUpper, fields.renavam));
+        Object.assign(fields, await runNumeroAtpveSupplementaryQueries(placaUpper, fields.renavam, fields.documentovendedor));
         // Nenhuma célula obrigatória pode sair em branco — ver ATPVE_CAMPOS_OBRIGATORIOS.
         // A recusa aqui acontece antes do débito (o desconto de créditos só vem
         // depois deste bloco), então ninguém paga por documento incompleto.

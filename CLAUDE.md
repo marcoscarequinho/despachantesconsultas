@@ -28,7 +28,7 @@ Deploy é feito na Vercel (`vercel.json` + `api/index.js`). Não há testes auto
 
 | Provedor | URL | Auth |
 |---|---|---|
-| Datacube | `https://api.consultasdeveiculos.com` | form-urlencoded `auth_token` (`DATACUBE_TOKEN`) |
+| Datacube (também reserva da Proprietário Atual do portal no ATPVe com Comunicação de Venda — ano, cor, nome/município/UF do vendedor, nome só se o CPF bater com o vendedor; ver `fetchProprietarioAtualDatacube`. A data do CRV, que a Datacube não tem, vem do `verificar_crlv` da despbrasil — do JSON ou, quando não vem nele, do "DATA DO CRV" do PDF, ver `fetchDataCrvDespbrasil`. Motivo: em 29/09/2026 o portal recusou placa nova por horas com "Muitas consultas simultâneas neste token") | `https://api.consultasdeveiculos.com` | form-urlencoded `auth_token` (`DATACUBE_TOKEN`) |
 | Portal Despachantes (inclui os 3 CRLV-e do Rio) | `https://portaldespachantes.online` | header `chaveAcesso` (`PORTAL_DESP_KEY`), ver `PORTAL_PLACA_MAP` |
 | AutoCRLV | `https://autocrlv.com.br` | Bearer (`AUTOCRLV_KEY`) |
 | Infosimples | `https://api.infosimples.com/api/v2/consultas` | `INFOSIMPLES_TOKEN` |
