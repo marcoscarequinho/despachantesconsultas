@@ -372,8 +372,31 @@ const VISTOCAR_ENDPOINTS = {
   // A rota crlv-rj (síncrona, PDF em base64, conferida em 28/09/2026 com a placa
   // KWV3236) atendeu o 'crlv-rio-reemissao-v2' por algumas horas de 28/09/2026,
   // enquanto a conta da consultasfacil.net estava sem saldo; o serviço voltou
-  // para lá. Religar é uma linha aqui — o id NÃO pode estar nos dois lugares.
+  // para lá e, desde 29/09/2026, a crlv-rj é a 2ª tentativa dele (ver
+  // fetchCrlvRjReservaVistocar). O id NÃO entra aqui: a 1ª chamada é na
+  // Consultas Fácil, e o bloco genérico da Vistocar trataria a resposta dela.
 };
+
+// 2ª tentativa do 'crlv-rio-reemissao-v2' quando a Consultas Fácil não entrega o
+// PDF. Mesma rota e mesmo contrato de 28/09/2026: { plate } → PDF em base64,
+// paid:true. Placa que o Detran não libera volta 400 "Consulta não realizada."
+// com paid:false — não cobra ninguém. Lança erro com a mensagem da Vistocar.
+async function fetchCrlvRjReservaVistocar(placa) {
+  const r = await fetch(`${VISTOCAR_BASE_URL}/apiclient/crlv-rj`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await getVistocarToken()}` },
+    body: JSON.stringify({ plate: placa }),
+  });
+  const parsed = await r.json().catch(() => null);
+  const ok = parsed?.status === 200 && parsed?.response?.success === true
+    && parsed?.response?.paid === true && parsed?.response?.pdfBase64;
+  if (!ok) {
+    const err = new Error(parsed?.message || parsed?.response?.msg || `HTTP ${r.status}`);
+    err.resposta = parsed;
+    throw err;
+  }
+  return Buffer.from(parsed.response.pdfBase64, 'base64');
+}
 
 // ── Nome dos arquivos que vêm da Vistocar ────────────────────────────────────
 // Todo PDF entregue por eles sai como "mcdespachadoria-<consulta>-<placa>.pdf".
@@ -7489,7 +7512,8 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     // CRLV Rio Reemissão v2 — consultasfacil.net (header chaveAcesso, ver
     // fetchHeaders abaixo). Sem "formato" a resposta é o PDF em bytes e o
     // isRealPdf cuida do resto, como nos demais serviços de PDF direto. Renavam
-    // vai sempre com 11 dígitos (zeros à esquerda), o formato do Detran.
+    // vai sempre com 11 dígitos (zeros à esquerda), o formato do Detran. Sem PDF
+    // daqui, a 2ª tentativa é a Vistocar (ver crlvRjReservaBuf, logo após o fetch).
     if (serviceId === 'crlv-rio-reemissao-v2') {
       const placa   = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
       const renavam = String(params?.renavam || '').replace(/\D/g, '');
@@ -7839,9 +7863,10 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     const apiRes = await fetch(apiUrl, fetchOpts);
     const ct = apiRes.headers.get('content-type') || '';
 
-    // consultar-Numero-ATPVE: erro da Consultas Fácil não encerra a consulta — o
-    // bloco do serviço tenta a despbrasil antes de desistir.
-    if (!apiRes.ok && serviceId !== 'consultar-Numero-ATPVE') {
+    // consultar-Numero-ATPVE e crlv-rio-reemissao-v2: erro da Consultas Fácil não
+    // encerra a consulta — a 2ª tentativa (despbrasil / Vistocar) vem abaixo.
+    const temReservaConsultasFacil = serviceId === 'consultar-Numero-ATPVE' || serviceId === 'crlv-rio-reemissao-v2';
+    if (!apiRes.ok && !temReservaConsultasFacil) {
       let errMsg = 'Erro na API.';
       try {
         if (ct.includes('application/json') || ct.includes('text/')) {
@@ -7874,7 +7899,25 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     // O PDF da Consultas Fácil no consultar-Numero-ATPVE é só a matéria-prima do
     // ATPVe montado (despbrasilJsonPdfBuf) — se contasse como "PDF pronto", ele
     // passaria na frente no pdfToSend e o cliente receberia o relatório cru.
-    const isRealPdf  = serviceId !== 'consultar-Numero-ATPVE' && bodyBuffer.slice(0, 4).toString() === '%PDF';
+    const isRealPdf  = serviceId !== 'consultar-Numero-ATPVE' && apiRes.ok && bodyBuffer.slice(0, 4).toString() === '%PDF';
+
+    // CRLV Rio Reemissão v2: sem PDF da Consultas Fácil (erro, sem saldo, placa
+    // que ela não acha), 2ª tentativa na Vistocar. O PDF de lá vai em
+    // base64PdfBuf, que é o primeiro do pdfToSend. As duas falhando, recusa sem
+    // cobrar — o débito só vem bem mais abaixo.
+    let crlvRjReservaBuf = null;
+    if (serviceId === 'crlv-rio-reemissao-v2' && !isRealPdf) {
+      const placaReserva = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      console.error(`[${serviceId}] ${placaReserva}: Consultas Fácil sem PDF (HTTP ${apiRes.status}: ${bodyStr.slice(0, 300)}) — tentando a Vistocar.`);
+      try {
+        crlvRjReservaBuf = await fetchCrlvRjReservaVistocar(placaReserva);
+      } catch (e) {
+        console.error(`[${serviceId}] ${placaReserva}: Vistocar também falhou: ${e.message} ${JSON.stringify(e.resposta ?? null)}`);
+        return res.status(422).json({
+          error: 'Não conseguimos emitir o CRLV dessa placa agora. Confira placa, renavam e CPF/CNPJ do proprietário. Nenhum crédito foi debitado.',
+        });
+      }
+    }
 
     // Serviços Datacube (form-urlencoded): a API retorna HTTP 200 mesmo em erro de
     // negócio (ex.: "Motor não encontrado"), sinalizando falha via status:false — não
@@ -8012,7 +8055,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
 
     // serviços que retornam JSON com pdf_base64
     const PDF_BASE64_SVCS = ['consulta-debitos-portal'];
-    let base64PdfBuf = null;
+    let base64PdfBuf = crlvRjReservaBuf;
     // CRLV-e CE: identificador do registro na Vistocar, preenchido no tratamento
     // de resposta abaixo e usado depois para criar a pendência do webhook.
     let vistocarMovementId = null;
