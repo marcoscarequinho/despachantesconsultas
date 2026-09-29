@@ -106,6 +106,9 @@ const PORTAL_BASE_URL = 'https://portaldespachantes.online';
 // prefixo, então estes precisam ser nomeados (ver PORTAL_PLACA_MAP).
 const CRLV_PORTAL_PDF_SVCS = new Set([
   'crlv-rj-reemissao-2', 'crlv-pe-instantaneo', 'crlv-ce-instantaneo',
+  // Não é do portal (é da consultasfacil.net), mas cai na mesma regra: PDF na
+  // hora e id fora do prefixo — sem estar aqui, não iria no WhatsApp.
+  'crlv-rio-reemissao-v2',
 ]);
 // CRLV-e Agendado: POST /api/crlv-agendado/solicitar → pedido_id; GET
 // /api/crlv-agendado/:id → status; GET .../:id/pdf. Todos no portal.
@@ -130,6 +133,12 @@ const ZAPI_TOKEN         = process.env.ZAPI_TOKEN         || '';
 const ZAPI_CLIENT_TOKEN  = process.env.ZAPI_CLIENT_TOKEN  || '';
 const WEBHOOK_BASE_URL   = (process.env.WEBHOOK_BASE_URL  || '').replace(/\/$/, '');
 const ADMIN_PHONE        = process.env.ADMIN_PHONE        || '';
+// API consultasfacil.net (CRLV Rio Reemissão v2) — auth por header chaveAcesso
+// (fixo). Doc "Documentação de Integração — 1 endpoint" (28/09/2026): o
+// consultar-crlv-rj2 passou a exigir placa + renavam + cpf; sem "formato" no
+// corpo a resposta é o PDF em bytes, e erro é sempre JSON 400/500 ({ error }).
+const CONSULTASFACIL_BASE_URL = 'https://www.consultasfacil.net';
+const CONSULTASFACIL_KEY      = process.env.CONSULTASFACIL_KEY || '';
 // API despbrasil.com.br — auth por header chaveAcesso (fixo); resposta traz a URL
 // do PDF pronto em "arquivo_url" (buscamos o arquivo no processCatalogQuery, ver
 // DESPBRASIL_SVCS). Mapeia serviceId para o "servico" da despbrasil (campo "extra"
@@ -360,13 +369,10 @@ const VISTOCAR_ENDPOINTS = {
   'vistocar-debitos-cod-barra': 'debitos-cod-barra',
   'atpve-vistocar-rj': 'atpve-rj',
   'atpve-vistocar-mg': 'atpve-mg',
-  // CRLV Rio Reemissão (R$ 65,00): saiu da consultasfacil.net em 28/09/2026 (a
-  // conta de lá ficou sem saldo e toda consulta voltava "Saldo insuficiente")
-  // e veio para cá. Síncrono: PDF em base64 na resposta, como o security-code.
-  // Conferido contra a API real no mesmo dia (placa KWV3236: PDF de 82 KB,
-  // paid:true). Placa que o Detran não libera volta 400 "Consulta não
-  // realizada." com paid:false — não cobra ninguém.
-  'crlv-rio-reemissao-v2': 'crlv-rj',
+  // A rota crlv-rj (síncrona, PDF em base64, conferida em 28/09/2026 com a placa
+  // KWV3236) atendeu o 'crlv-rio-reemissao-v2' por algumas horas de 28/09/2026,
+  // enquanto a conta da consultasfacil.net estava sem saldo; o serviço voltou
+  // para lá. Religar é uma linha aqui — o id NÃO pode estar nos dois lugares.
 };
 
 // ── Nome dos arquivos que vêm da Vistocar ────────────────────────────────────
@@ -384,7 +390,6 @@ const VISTOCAR_ARQUIVO_NOMES = {
   'vistocar-debitos-cod-barra':      'debitos',
   'atpve-vistocar-rj':               'atpve-rj',
   'atpve-vistocar-mg':               'atpve-mg',
-  'crlv-rio-reemissao-v2':           'crlv-rj-reemissao',
 };
 const MC_ARQUIVO_PREFIXO = 'mcdespachadoria';
 function nomeArquivoVistocar(serviceId, sufixo) {
@@ -993,9 +998,10 @@ const SERVICES = [
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   { id:'crlv-rj-reemissao-2', name:'CRLV 2 Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // Backup da CRLV 2 Rio Reemissão (acima): quando a API estiver fora do ar, o cliente
-  // usa esta em vez de esperar. Sai da Vistocar (apiclient/crlv-rj, ver
-  // VISTOCAR_ENDPOINTS) desde 28/09/2026 — antes era a consultasfacil.net.
-  { id:'crlv-rio-reemissao-v2', name:'CRLV Rio Reemissão v2', group:'CRLV-e Rio de Janeiro', basePrice:65.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
+  // usa esta em vez de esperar. Fonte: consultasfacil.net (ver
+  // CONSULTASFACIL_BASE_URL), PDF pronto na hora. Desde a doc de 28/09/2026 a
+  // rota pede placa + renavam + CPF do proprietário, daí o inputType.
+  { id:'crlv-rio-reemissao-v2', name:'CRLV Rio Reemissão v2', group:'CRLV-e Rio de Janeiro', basePrice:65.00, noMarkup:true, inputType:'placa_renavam_cpf', icon:'📄', uf:'rj' },
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -4277,8 +4283,23 @@ function buildConsultaRenavamPdfBuffer(service, data, params) {
 const PLACEHOLDER_SEM_DADO = /^(?:[-–—.\s]*|n\/?a|nao informado|não informado|sem informacao|sem informação)$/i;
 const semDadoUtil = v => PLACEHOLDER_SEM_DADO.test(String(v ?? '').trim());
 
+// O pdf.js antigo do pdf-parse recusa com "bad XRef entry" PDFs que qualquer
+// visualizador abre — é o caso de TODO PDF do consultar-Numero-ATPVE da
+// Consultas Fácil (visto em 29/09/2026, placa LPM2852) e, de vez em quando, do
+// da despbrasil. Regravar pelo pdf-lib, que é tolerante, deixa o arquivo
+// legível sem mudar o texto. O texto cru dos acentos (repairAtpveAccents)
+// continua lido do buffer original.
+async function pdfParseTolerante(pdfBuf) {
+  try {
+    return await pdfParse(pdfBuf);
+  } catch (e) {
+    const regravado = Buffer.from(await (await PDFLibDocument.load(pdfBuf)).save({ useObjectStreams: false }));
+    return pdfParse(regravado);
+  }
+}
+
 async function extractAtpveFieldsFromPdf(pdfBuf) {
-  const { text } = await pdfParse(pdfBuf);
+  const { text } = await pdfParseTolerante(pdfBuf);
   const fields = {};
   for (const rawLine of String(text || '').split('\n')) {
     const line = rawLine.trim();
@@ -5007,8 +5028,41 @@ async function fetchAndExtractAtpveFromDespbrasil(placa) {
   return extractAtpveFieldsFromPdf(sourcePdfBuf);
 }
 
+// Fonte principal do ATPVe com Comunicação de Venda desde 29/09/2026: a
+// Consultas Fácil (POST /consultar-Numero-ATPVE { placa }) devolve o PDF em
+// bytes, no MESMO formato "Rótulo: valor" do PDF da despbrasil — por isso a
+// extração, as consultas extras e o documento montado são os de sempre. Erro
+// vem em JSON ({ error } / { erro }). Se falhar, a despbrasil é a 2ª tentativa
+// (obterCamposAtpveComunicacaoVenda / bloco do /api/query).
+async function extractAtpveFieldsFromConsultasFacilPdf(r, bodyBuffer) {
+  if (!r.ok || bodyBuffer.slice(0, 4).toString() !== '%PDF') {
+    throw new Error(`Consultas Fácil HTTP ${r.status}: ${bodyBuffer.toString('utf8').slice(0, 300)}`);
+  }
+  return extractAtpveFieldsFromPdf(bodyBuffer);
+}
+
+async function fetchAndExtractAtpveFromConsultasFacil(placa) {
+  const r = await fetch(`${CONSULTASFACIL_BASE_URL}/consultar-Numero-ATPVE`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', chaveAcesso: CONSULTASFACIL_KEY },
+    body: JSON.stringify({ placa }),
+  });
+  return extractAtpveFieldsFromConsultasFacilPdf(r, Buffer.from(await r.arrayBuffer()));
+}
+
+// Duas tentativas, cada uma num fornecedor: Consultas Fácil e, se ela não
+// entregar um PDF legível, a despbrasil. Lança erro quando as duas falham.
+async function obterCamposAtpveComunicacaoVenda(placa, tag) {
+  try {
+    return await fetchAndExtractAtpveFromConsultasFacil(placa);
+  } catch (e) {
+    console.error(`[${tag}] ${placa}: Consultas Fácil falhou (${e.message}) — tentando a despbrasil.`);
+  }
+  return fetchAndExtractAtpveFromDespbrasil(placa);
+}
+
 // ── "Reemissão da ATPVe Com Comunicação de Venda" — versão avulsa (consulta-avulsa,
-// pública/sem cadastro). Pipeline despbrasil → extractAtpveFieldsFromPdf →
+// pública/sem cadastro). Pipeline Consultas Fácil (despbrasil de reserva) → extractAtpveFieldsFromPdf →
 // runNumeroAtpveSupplementaryQueries → buildNumeroAtpvePdfBuffer — idêntico ao
 // usado na versão logada (ver /api/query, serviceId 'consultar-Numero-ATPVE'),
 // inclusive a mesma extractAtpveFieldsFromPdf (o PDF bruto da despbrasil é sempre
@@ -5021,15 +5075,10 @@ async function runPublicAtpveComunicacaoVenda(params) {
 
   let fields;
   try {
-    fields = await fetchAndExtractAtpveFromDespbrasil(placa);
+    fields = await obterCamposAtpveComunicacaoVenda(placa, 'atpve-comunicacao-venda avulsa');
   } catch (e) {
-    console.error(`[atpve-comunicacao-venda avulsa] 1ª tentativa falhou (${e.message}) — tentando de novo.`);
-    try {
-      fields = await fetchAndExtractAtpveFromDespbrasil(placa);
-    } catch (e2) {
-      console.error(`[atpve-comunicacao-venda avulsa] 2ª tentativa também falhou:`, e2.stack || e2.message);
-      throw new Error('Não foi possível gerar o documento para essa placa no momento. Tente novamente em alguns minutos ou fale com o suporte.');
-    }
+    console.error(`[atpve-comunicacao-venda avulsa] 2ª tentativa (despbrasil) também falhou:`, e.stack || e.message);
+    throw new Error('Não foi possível gerar o documento para essa placa no momento. Tente novamente em alguns minutos ou fale com o suporte.');
   }
 
   Object.assign(fields, await runNumeroAtpveSupplementaryQueries(placa, fields.renavam));
@@ -7437,6 +7486,23 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       method = 'POST';
       body   = { placa };
     }
+    // CRLV Rio Reemissão v2 — consultasfacil.net (header chaveAcesso, ver
+    // fetchHeaders abaixo). Sem "formato" a resposta é o PDF em bytes e o
+    // isRealPdf cuida do resto, como nos demais serviços de PDF direto. Renavam
+    // vai sempre com 11 dígitos (zeros à esquerda), o formato do Detran.
+    if (serviceId === 'crlv-rio-reemissao-v2') {
+      const placa   = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      const renavam = String(params?.renavam || '').replace(/\D/g, '');
+      const cpf     = String(params?.cpf || '').replace(/\D/g, '');
+      if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      if (renavam.length < 9 || renavam.length > 11)
+        return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+      if (cpf.length !== 11 && cpf.length !== 14)
+        return res.status(400).json({ error: 'CPF/CNPJ do proprietário inválido. Informe 11 dígitos (CPF) ou 14 (CNPJ).' });
+      apiUrl = `${CONSULTASFACIL_BASE_URL}/consultar-crlv-rj2`;
+      method = 'POST';
+      body   = { placa, renavam: renavam.padStart(11, '0'), cpf };
+    }
     // Serviços via API despbrasil.com.br (auth por header chaveAcesso fixo, ver
     // fetchHeaders abaixo). Resposta é JSON com a URL do PDF pronto em "arquivo_url".
     if (DESPBRASIL_SVCS[serviceId]) {
@@ -7445,6 +7511,14 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       apiUrl = DESPBRASIL_BASE_URL;
       method = 'POST';
       body   = { servico: DESPBRASIL_SVCS[serviceId].servico, placa, ...(DESPBRASIL_SVCS[serviceId].extra || {}) };
+      // ATPVe com Comunicação de Venda: a 1ª tentativa é na Consultas Fácil
+      // (29/09/2026); a despbrasil fica de 2ª, chamada no bloco do serviço mais
+      // abaixo. O id continua em DESPBRASIL_SVCS por causa dessa reserva e do
+      // nome do arquivo no WhatsApp.
+      if (serviceId === 'consultar-Numero-ATPVE') {
+        apiUrl = `${CONSULTASFACIL_BASE_URL}/consultar-Numero-ATPVE`;
+        body   = { placa };
+      }
     }
     // ATPV-e por chassi via portal — mesmo endpoint de consultar-atpve-v1
     // (aceita chassi OU placa+renavam, nunca os dois juntos no corpo).
@@ -7744,8 +7818,13 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       // Cobre os três casos do portal: consulta com PDF na hora (PORTAL_PLACA_MAP),
       // o solicitar do agendado e o "Ver Status" de um pedido PORTAL-.
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY };
+    } else if (serviceId === 'consultar-Numero-ATPVE') {
+      // Antes do DESPBRASIL_SVCS: o id está nos dois, mas a 1ª chamada é na Consultas Fácil.
+      fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': CONSULTASFACIL_KEY };
     } else if (DESPBRASIL_SVCS[serviceId]) {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': DESPBRASIL_KEY };
+    } else if (serviceId === 'crlv-rio-reemissao-v2') {
+      fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': CONSULTASFACIL_KEY };
     } else if (VISTOCAR_ENDPOINTS[serviceId]) {
       fetchHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await getVistocarToken()}` };
     } else {
@@ -7760,7 +7839,9 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     const apiRes = await fetch(apiUrl, fetchOpts);
     const ct = apiRes.headers.get('content-type') || '';
 
-    if (!apiRes.ok) {
+    // consultar-Numero-ATPVE: erro da Consultas Fácil não encerra a consulta — o
+    // bloco do serviço tenta a despbrasil antes de desistir.
+    if (!apiRes.ok && serviceId !== 'consultar-Numero-ATPVE') {
       let errMsg = 'Erro na API.';
       try {
         if (ct.includes('application/json') || ct.includes('text/')) {
@@ -7783,8 +7864,6 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       // sistema, então troca por algo mais claro (o erro original já foi logado).
       if (serviceId === 'consultar-atpve' || serviceId === 'consultar-atpve-v1') {
         errMsg = 'Não encontramos ATPV-e disponível para reemissão nessa placa no momento. É possível que essa ATPV-e tenha comunicação de venda ou tenha sido gerada pelo app eCNH — nesses casos a segunda via não sai por aqui. Tente a consulta "Reemissão da ATPVe Com Comunicação de Venda".';
-      } else if (serviceId === 'consultar-Numero-ATPVE') {
-        errMsg = 'Não encontramos o número do ATPV-E para essa placa no momento. Tente novamente mais tarde ou fale com o suporte.';
       }
       return res.status(apiRes.status).json({ error: errMsg });
     }
@@ -7792,7 +7871,10 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     // Lê o corpo uma única vez.
     const bodyBuffer = Buffer.from(await apiRes.arrayBuffer());
     let   bodyStr    = bodyBuffer.toString('utf8');
-    const isRealPdf  = bodyBuffer.slice(0, 4).toString() === '%PDF';
+    // O PDF da Consultas Fácil no consultar-Numero-ATPVE é só a matéria-prima do
+    // ATPVe montado (despbrasilJsonPdfBuf) — se contasse como "PDF pronto", ele
+    // passaria na frente no pdfToSend e o cliente receberia o relatório cru.
+    const isRealPdf  = serviceId !== 'consultar-Numero-ATPVE' && bodyBuffer.slice(0, 4).toString() === '%PDF';
 
     // Serviços Datacube (form-urlencoded): a API retorna HTTP 200 mesmo em erro de
     // negócio (ex.: "Motor não encontrado"), sinalizando falha via status:false — não
@@ -8003,42 +8085,26 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
       }
     } else if (serviceId === 'consultar-Numero-ATPVE') {
-      // A despbrasil não retorna JSON estruturado pra esse serviço — só o PDF
-      // pronto em "arquivo_url". Baixamos, extraímos o texto (extractAtpveFieldsFromPdf)
-      // e remontamos no layout oficial do ATPVe digital (buildNumeroAtpvePdfBuffer)
-      // em vez de repassar o PDF genérico da despbrasil.
-      let parsed;
-      try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
-      if (!parsed?.sucesso || !parsed?.arquivo_url) {
-        const errMsg = parsed?.erro || parsed?.mensagem || parsed?.message || 'PDF não retornado pela API.';
-        console.error(`[${serviceId}] resposta inesperada da despbrasil: ${JSON.stringify(parsed)}`);
-        return res.status(422).json({ error: errMsg });
-      }
+      // Nenhum dos fornecedores devolve JSON estruturado pra esse serviço — só um
+      // PDF "Rótulo: valor". Extraímos o texto (extractAtpveFieldsFromPdf) e
+      // remontamos no layout oficial do ATPVe digital (buildNumeroAtpvePdfBuffer)
+      // em vez de repassar o relatório genérico.
       try {
-        const pdfRes = await fetch(parsed.arquivo_url);
-        if (!pdfRes.ok) {
-          console.error(`[${serviceId}] falha ao baixar arquivo_url: HTTP ${pdfRes.status}`);
-          return res.status(422).json({ error: 'Falha ao obter o PDF gerado pela API.' });
-        }
-        const sourcePdfBuf = Buffer.from(await pdfRes.arrayBuffer());
         const placaUpper = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
-        // A despbrasil gera o PDF na hora a cada chamada e às vezes devolve um
-        // arquivo malformado, que trava o pdf.js ("bad XRef entry", "Invalid
-        // number") e derrubava a consulta inteira com HTTP 500. Uma nova
-        // geração costuma vir íntegra, então pedimos outra — a mesma reação
-        // que a avulsa já tinha (ver runPublicAtpveComunicacaoVenda). Duas
-        // leituras ilegíveis viram recusa explicada, sempre antes do débito.
+        // Duas tentativas, uma por fornecedor: a resposta acima é a da
+        // Consultas Fácil (1ª); se ela não trouxer um PDF legível, a despbrasil
+        // (2ª). As duas falhando, recusa explicada, sempre antes do débito.
         let fields;
         try {
-          fields = await extractAtpveFieldsFromPdf(sourcePdfBuf);
+          fields = await extractAtpveFieldsFromConsultasFacilPdf(apiRes, bodyBuffer);
         } catch (e) {
-          console.error(`[${serviceId}] PDF da despbrasil ilegível (${e.message}) — pedindo outra geração.`);
+          console.error(`[${serviceId}] ${placaUpper}: Consultas Fácil falhou (${e.message}) — tentando a despbrasil.`);
           try {
             fields = await fetchAndExtractAtpveFromDespbrasil(placaUpper);
           } catch (e2) {
-            console.error(`[${serviceId}] 2ª geração da despbrasil também veio ilegível:`, e2.message);
+            console.error(`[${serviceId}] ${placaUpper}: despbrasil também falhou:`, e2.message);
             return res.status(422).json({
-              error: 'A base devolveu um documento ilegível para essa placa agora. Nenhum crédito foi debitado — tente novamente em alguns minutos ou fale com o suporte.',
+              error: 'Não encontramos o número do ATPV-E para essa placa no momento. Nenhum crédito foi debitado — tente novamente em alguns minutos ou fale com o suporte.',
             });
           }
         }
