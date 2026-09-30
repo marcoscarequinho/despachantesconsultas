@@ -63,6 +63,14 @@
           <p class="text-gray-500 text-sm mt-1">Acesse sua conta com e-mail ou CPF/CNPJ</p>
         </div>
 
+        <!-- Aviso de sessão expirada (vem do servidor com ?voltar=...) -->
+        <div id="alert-sessao"
+          class="hidden bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-4 py-3 mb-6 text-sm flex items-start gap-2">
+          <span class="mt-0.5">🔒</span>
+          <span><strong>Sua sessão expirou por segurança.</strong><br>
+            O sistema está funcionando normalmente — é só entrar de novo para continuar de onde parou.</span>
+        </div>
+
         <!-- Alerta de erro -->
         <div id="alert-error"
           class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 mb-6 text-sm flex items-start gap-2">
@@ -277,6 +285,14 @@
       this.value = formatted;
     });
 
+    // ── Sessão expirada ───────────────────────────────────────────────────────
+    // As páginas logadas mandam para cá com ?voltar=<caminho> quando o login
+    // venceu. Só caminho interno é aceito ("/x", nunca "//host" ou "/\host"),
+    // senão o link viraria redirecionamento aberto para qualquer site.
+    const voltarParam = new URLSearchParams(location.search).get('voltar') || '';
+    const destinoAposLogin = /^\/(?![\/\\])/.test(voltarParam) ? voltarParam : '/painel';
+    if (voltarParam) document.getElementById('alert-sessao').classList.remove('hidden');
+
     // ── Envio do formulário ───────────────────────────────────────────────────
     document.getElementById('login-form').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -304,8 +320,8 @@
           return;
         }
 
-        // Redirecionar para painel
-        window.location.href = '/painel';
+        // Volta para a página que pediu o login (ou o painel)
+        window.location.href = destinoAposLogin;
       } catch {
         showError('Falha na conexão. Verifique sua internet e tente novamente.');
       } finally {

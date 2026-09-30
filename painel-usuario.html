@@ -1396,6 +1396,26 @@ function showSection(id) {
   if (id === 'mensagens') abrirSecaoMensagens();
 }
 
+// ── Sessão expirada com o painel aberto ────────────────────────────────────────
+// O login dura 7 dias. Quem deixa a aba aberta além disso recebia "Não
+// autenticado" como se fosse erro da consulta. Toda chamada que o requireAuth
+// recusa leva ao login (com aviso e volta para cá). Casa pela MENSAGEM, não só
+// pelo 401: a troca de senha devolve 401 "Senha atual incorreta" e isso não é
+// sessão vencida.
+const SESSAO_EXPIRADA_MSGS = ['Não autenticado', 'Token inválido ou expirado'];
+const fetchOriginal = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const res = await fetchOriginal(...args);
+  if (res.status === 401) {
+    const body = await res.clone().json().catch(() => null);
+    if (body && SESSAO_EXPIRADA_MSGS.includes(body.error)) {
+      window.location.href = '/entrar?' + new URLSearchParams({ voltar: location.pathname });
+      return new Promise(() => {}); // a página vai sair; não deixa o erro chegar na tela
+    }
+  }
+  return res;
+};
+
 // ── Inicialização ──────────────────────────────────────────────────────────────
 async function init() {
   try {

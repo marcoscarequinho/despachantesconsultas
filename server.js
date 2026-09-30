@@ -1990,6 +1990,24 @@ function requireAuth(req, res, next) {
   }
 }
 
+// Irmão do requireAuth para as rotas que servem PÁGINA (/painel, /admin,
+// /recarga-pix). O cookie dura 7 dias; quem voltava depois disso via o JSON
+// {"error":"Não autenticado"} na tela e achava que o sistema estava fora do ar.
+// Página não é API: sem sessão válida vai para o login levando o caminho de
+// volta (é o `voltar` que faz o entrar.html mostrar o aviso de sessão expirada),
+// e o cookie inválido é apagado. Não dá para distinguir "expirou" de "nunca
+// entrou" pelo cookie: vencidos os 7 dias o próprio navegador o descarta.
+function requirePageAuth(req, res, next) {
+  const token = req.cookies.auth_token;
+  if (token) {
+    try {
+      req.user = jwt.verify(token, JWT_SECRET);
+      return next();
+    } catch { res.clearCookie('auth_token'); }
+  }
+  res.redirect(`/entrar?${new URLSearchParams({ voltar: req.originalUrl })}`);
+}
+
 function requireReseller(req, res, next) {
   if (req.user.role !== 'reseller' && req.user.role !== 'admin')
     return res.status(403).json({ error: 'Acesso restrito a revendedores.' });
@@ -13827,21 +13845,21 @@ app.get('/consulta-avulsa', async (req, res) => {
   res.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
   noCache(res); res.sendFile(path.join(__dirname, 'consulta-avulsa.html'));
 });
-app.get('/painel', requireAuth, (req, res) => {
+app.get('/painel', requirePageAuth, (req, res) => {
   if (req.user.role === 'reseller' || req.user.role === 'admin')
     return res.redirect('/painel/revendedor');
   res.redirect('/painel/usuario');
 });
-app.get('/painel/usuario', requireAuth, (req, res) => {
+app.get('/painel/usuario', requirePageAuth, (req, res) => {
   noCache(res); res.sendFile(path.join(__dirname, 'painel-usuario.html'));
 });
-app.get('/recarga-pix', requireAuth, (req, res) => {
+app.get('/recarga-pix', requirePageAuth, (req, res) => {
   noCache(res); res.sendFile(path.join(__dirname, 'recarga-pix.html'));
 });
-app.get('/painel/revendedor', requireAuth, (req, res) => {
+app.get('/painel/revendedor', requirePageAuth, (req, res) => {
   noCache(res); res.sendFile(path.join(__dirname, 'painel-revendedor.html'));
 });
-app.get('/admin', requireAuth, async (req, res) => {
+app.get('/admin', requirePageAuth, async (req, res) => {
   try {
     const r = await pool.query('SELECT email FROM users WHERE id=$1', [req.user.id]);
     if (!r.rows.length || !SUPER_ADMIN_EMAILS.includes(r.rows[0].email)) return res.redirect('/painel');
