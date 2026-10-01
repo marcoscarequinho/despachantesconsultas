@@ -106,9 +106,8 @@ const PORTAL_BASE_URL = 'https://portaldespachantes.online';
 // prefixo, então estes precisam ser nomeados (ver PORTAL_PLACA_MAP).
 const CRLV_PORTAL_PDF_SVCS = new Set([
   'crlv-rj-reemissao-2', 'crlv-pe-instantaneo', 'crlv-ce-instantaneo',
-  // Não é do portal (é da consultasfacil.net), mas cai na mesma regra: PDF na
-  // hora e id fora do prefixo — sem estar aqui, não iria no WhatsApp.
-  'crlv-rio-reemissao-v2',
+  // O 'crlv-rio-reemissao-v2' saiu daqui em 01/10/2026: é da Vistocar, e o PDF
+  // dele vai no WhatsApp pela regra da Vistocar (aqui iria duas vezes).
 ]);
 // CRLV-e Agendado: POST /api/crlv-agendado/solicitar → pedido_id; GET
 // /api/crlv-agendado/:id → status; GET .../:id/pdf. Todos no portal.
@@ -379,34 +378,12 @@ const VISTOCAR_ENDPOINTS = {
   // PROVEDOR REMOTO" com paid:false). O crlv_turbo da despbrasil, primeira opção
   // do dono a R$ 25,00, respondia 500 "Erro interno" para qualquer placa.
   'consultar-crlv-sp': 'crlv-sp',
-  // A rota crlv-rj (síncrona, PDF em base64, conferida em 28/09/2026 com a placa
-  // KWV3236) atendeu o 'crlv-rio-reemissao-v2' por algumas horas de 28/09/2026,
-  // enquanto a conta da consultasfacil.net estava sem saldo; o serviço voltou
-  // para lá e, desde 29/09/2026, a crlv-rj é a 2ª tentativa dele (ver
-  // fetchCrlvRjReservaVistocar). O id NÃO entra aqui: a 1ª chamada é na
-  // Consultas Fácil, e o bloco genérico da Vistocar trataria a resposta dela.
+  // CRLV Rio Reemissão v2: só Vistocar desde 01/10/2026 ({ plate } → PDF em
+  // base64, conferido com RJN0H38 em ~11 s; placa inventada volta 400 "Consulta
+  // não realizada." com paid:false). Antes a 1ª tentativa era a Consultas Fácil
+  // (placa + renavam + CPF) e esta rota era a reserva.
+  'crlv-rio-reemissao-v2': 'crlv-rj',
 };
-
-// 2ª tentativa do 'crlv-rio-reemissao-v2' quando a Consultas Fácil não entrega o
-// PDF. Mesma rota e mesmo contrato de 28/09/2026: { plate } → PDF em base64,
-// paid:true. Placa que o Detran não libera volta 400 "Consulta não realizada."
-// com paid:false — não cobra ninguém. Lança erro com a mensagem da Vistocar.
-async function fetchCrlvRjReservaVistocar(placa) {
-  const r = await fetch(`${VISTOCAR_BASE_URL}/apiclient/crlv-rj`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await getVistocarToken()}` },
-    body: JSON.stringify({ plate: placa }),
-  });
-  const parsed = await r.json().catch(() => null);
-  const ok = parsed?.status === 200 && parsed?.response?.success === true
-    && parsed?.response?.paid === true && parsed?.response?.pdfBase64;
-  if (!ok) {
-    const err = new Error(parsed?.message || parsed?.response?.msg || `HTTP ${r.status}`);
-    err.resposta = parsed;
-    throw err;
-  }
-  return Buffer.from(parsed.response.pdfBase64, 'base64');
-}
 
 // ── Nome dos arquivos que vêm da Vistocar ────────────────────────────────────
 // Todo PDF entregue por eles sai como "mcdespachadoria-<consulta>-<placa>.pdf".
@@ -425,6 +402,7 @@ const VISTOCAR_ARQUIVO_NOMES = {
   'atpve-vistocar-mg':               'atpve-mg',
   // É da despbrasil, mas o nome segue o padrão para o cliente.
   'crlv-sp-v2':                      'crlv-sp',
+  'crlv-rio-reemissao-v2':           'crlv-rj',
 };
 const MC_ARQUIVO_PREFIXO = 'mcdespachadoria';
 function nomeArquivoVistocar(serviceId, sufixo) {
@@ -1032,11 +1010,10 @@ const SERVICES = [
   // foi removido do catálogo; religá-lo é uma linha em PORTAL_PLACA_MAP.
   { id:'consultar-crlv-rj', name:'CRLV-e Rio de Janeiro', group:'CRLV-e Rio de Janeiro', basePrice:20.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   { id:'crlv-rj-reemissao-2', name:'CRLV 2 Rio Reemissão', group:'CRLV-e Rio de Janeiro', basePrice:55.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
-  // Backup da CRLV 2 Rio Reemissão (acima): quando a API estiver fora do ar, o cliente
-  // usa esta em vez de esperar. Fonte: consultasfacil.net (ver
-  // CONSULTASFACIL_BASE_URL), PDF pronto na hora. Desde a doc de 28/09/2026 a
-  // rota pede placa + renavam + CPF do proprietário, daí o inputType.
-  { id:'crlv-rio-reemissao-v2', name:'CRLV Rio Reemissão v2', group:'CRLV-e Rio de Janeiro', basePrice:65.00, noMarkup:true, inputType:'placa_renavam_cpf', icon:'📄', uf:'rj' },
+  // Backup da CRLV 2 Rio Reemissão (acima): quando o portal estiver fora do ar, o
+  // cliente usa esta em vez de esperar. Fonte: Vistocar (apiclient/crlv-rj, ver
+  // VISTOCAR_ENDPOINTS), só placa, PDF pronto na hora.
+  { id:'crlv-rio-reemissao-v2', name:'CRLV Rio Reemissão v2', group:'CRLV-e Rio de Janeiro', basePrice:65.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'rj' },
   // ── CRLV-e Digital (instantâneo) ──
   { id:'consultar-crlv-ac', name:'CRLV-e Acre (AC)',               group:'CRLV-e Digital', basePrice:20.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ap', name:'CRLV-e Amapá (AP)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -7709,24 +7686,6 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       method = 'POST';
       body   = { placa };
     }
-    // CRLV Rio Reemissão v2 — consultasfacil.net (header chaveAcesso, ver
-    // fetchHeaders abaixo). Sem "formato" a resposta é o PDF em bytes e o
-    // isRealPdf cuida do resto, como nos demais serviços de PDF direto. Renavam
-    // vai sempre com 11 dígitos (zeros à esquerda), o formato do Detran. Sem PDF
-    // daqui, a 2ª tentativa é a Vistocar (ver crlvRjReservaBuf, logo após o fetch).
-    if (serviceId === 'crlv-rio-reemissao-v2') {
-      const placa   = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
-      const renavam = String(params?.renavam || '').replace(/\D/g, '');
-      const cpf     = String(params?.cpf || '').replace(/\D/g, '');
-      if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
-      if (renavam.length < 9 || renavam.length > 11)
-        return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
-      if (cpf.length !== 11 && cpf.length !== 14)
-        return res.status(400).json({ error: 'CPF/CNPJ do proprietário inválido. Informe 11 dígitos (CPF) ou 14 (CNPJ).' });
-      apiUrl = `${CONSULTASFACIL_BASE_URL}/consultar-crlv-rj2`;
-      method = 'POST';
-      body   = { placa, renavam: renavam.padStart(11, '0'), cpf };
-    }
     // Serviços via API despbrasil.com.br (auth por header chaveAcesso fixo, ver
     // fetchHeaders abaixo). Resposta é JSON com a URL do PDF pronto em "arquivo_url".
     if (DESPBRASIL_SVCS[serviceId]) {
@@ -8047,8 +8006,6 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': CONSULTASFACIL_KEY };
     } else if (DESPBRASIL_SVCS[serviceId]) {
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': DESPBRASIL_KEY };
-    } else if (serviceId === 'crlv-rio-reemissao-v2') {
-      fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': CONSULTASFACIL_KEY };
     } else if (VISTOCAR_ENDPOINTS[serviceId]) {
       fetchHeaders = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await getVistocarToken()}` };
     } else {
@@ -8063,9 +8020,9 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     const apiRes = await fetch(apiUrl, fetchOpts);
     const ct = apiRes.headers.get('content-type') || '';
 
-    // consultar-Numero-ATPVE e crlv-rio-reemissao-v2: erro da Consultas Fácil não
-    // encerra a consulta — a 2ª tentativa (despbrasil / Vistocar) vem abaixo.
-    const temReservaConsultasFacil = serviceId === 'consultar-Numero-ATPVE' || serviceId === 'crlv-rio-reemissao-v2';
+    // consultar-Numero-ATPVE: erro da Consultas Fácil não encerra a consulta — a
+    // 2ª tentativa (despbrasil) vem abaixo.
+    const temReservaConsultasFacil = serviceId === 'consultar-Numero-ATPVE';
     if (!apiRes.ok && !temReservaConsultasFacil) {
       let errMsg = 'Erro na API.';
       try {
@@ -8100,24 +8057,6 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     // ATPVe montado (despbrasilJsonPdfBuf) — se contasse como "PDF pronto", ele
     // passaria na frente no pdfToSend e o cliente receberia o relatório cru.
     const isRealPdf  = serviceId !== 'consultar-Numero-ATPVE' && apiRes.ok && bodyBuffer.slice(0, 4).toString() === '%PDF';
-
-    // CRLV Rio Reemissão v2: sem PDF da Consultas Fácil (erro, sem saldo, placa
-    // que ela não acha), 2ª tentativa na Vistocar. O PDF de lá vai em
-    // base64PdfBuf, que é o primeiro do pdfToSend. As duas falhando, recusa sem
-    // cobrar — o débito só vem bem mais abaixo.
-    let crlvRjReservaBuf = null;
-    if (serviceId === 'crlv-rio-reemissao-v2' && !isRealPdf) {
-      const placaReserva = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
-      console.error(`[${serviceId}] ${placaReserva}: Consultas Fácil sem PDF (HTTP ${apiRes.status}: ${bodyStr.slice(0, 300)}) — tentando a Vistocar.`);
-      try {
-        crlvRjReservaBuf = await fetchCrlvRjReservaVistocar(placaReserva);
-      } catch (e) {
-        console.error(`[${serviceId}] ${placaReserva}: Vistocar também falhou: ${e.message} ${JSON.stringify(e.resposta ?? null)}`);
-        return res.status(422).json({
-          error: 'Não conseguimos emitir o CRLV dessa placa agora. Confira placa, renavam e CPF/CNPJ do proprietário. Nenhum crédito foi debitado.',
-        });
-      }
-    }
 
     // Serviços Datacube (form-urlencoded): a API retorna HTTP 200 mesmo em erro de
     // negócio (ex.: "Motor não encontrado"), sinalizando falha via status:false — não
@@ -8255,7 +8194,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
 
     // serviços que retornam JSON com pdf_base64
     const PDF_BASE64_SVCS = ['consulta-debitos-portal'];
-    let base64PdfBuf = crlvRjReservaBuf;
+    let base64PdfBuf = null;
     // CRLV-e CE: identificador do registro na Vistocar, preenchido no tratamento
     // de resposta abaixo e usado depois para criar a pendência do webhook.
     let vistocarMovementId = null;
