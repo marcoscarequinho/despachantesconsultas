@@ -369,6 +369,11 @@ const VISTOCAR_ENDPOINTS = {
   'vistocar-debitos-cod-barra': 'debitos-cod-barra',
   'atpve-vistocar-rj': 'atpve-rj',
   'atpve-vistocar-mg': 'atpve-mg',
+  // CRLV-e SP saiu do portal em 01/10/2026: { plate } → PDF em base64 na hora,
+  // paid:true (conferido com EFE5600, ~74 s; placa inventada volta 400 "ERRO NO
+  // PROVEDOR REMOTO" com paid:false). O crlv_turbo da despbrasil, primeira opção
+  // do dono a R$ 25,00, respondia 500 "Erro interno" para qualquer placa.
+  'consultar-crlv-sp': 'crlv-sp',
   // A rota crlv-rj (síncrona, PDF em base64, conferida em 28/09/2026 com a placa
   // KWV3236) atendeu o 'crlv-rio-reemissao-v2' por algumas horas de 28/09/2026,
   // enquanto a conta da consultasfacil.net estava sem saldo; o serviço voltou
@@ -1062,7 +1067,9 @@ const SERVICES = [
   { id:'dc-crlve-rs-v2',    name:'CRLV-e Rio Grande do Sul V2 (RS)', group:'CRLV-e Digital', basePrice:162.00, noMarkup:true, inputType:'placa', icon:'📄', dcPath:'/veiculos/documentos-crlve-rs-v2',
     slowNote:'Emissão assíncrona no Detran-RS: a consulta pode levar alguns minutos — mantenha a página aberta até o download do PDF.' },
   { id:'consultar-crlv-se', name:'CRLV-e Sergipe (SE)',            group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
-  { id:'consultar-crlv-sp', name:'CRLV-e São Paulo (SP)',          group:'CRLV-e Digital', basePrice:15.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  // Vistocar (apiclient/crlv-sp, ver VISTOCAR_ENDPOINTS) desde 01/10/2026: só
+  // placa, preço fixo definido pelo dono.
+  { id:'consultar-crlv-sp', name:'CRLV-e São Paulo (SP)',          group:'CRLV-e Digital', basePrice:25.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'sp' },
   { id:'consultar-crlv-to', name:'CRLV-e Tocantins (TO)',          group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   // ── CRLV-e Agendado (assíncrono) ──
   { id:'crlv-agendado-al', name:'CRLV-e Agendado Alagoas (AL)',            group:'CRLV-e Agendado', basePrice:28.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'al' },
@@ -8609,8 +8616,9 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           const fileName = `${serviceId}-${placa || 'doc'}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
         }
-        // Envia PDF via WhatsApp para serviços Vistocar (Código de Segurança)
-        if (VISTOCAR_ENDPOINTS[serviceId] && user.phone) {
+        // Envia PDF via WhatsApp para serviços Vistocar (Código de Segurança).
+        // O CRLV-e SP já foi pela regra do prefixo "consultar-crlv-" acima.
+        if (VISTOCAR_ENDPOINTS[serviceId] && !serviceId.startsWith('consultar-crlv-') && user.phone) {
           const placa = (params?.placa || '').toUpperCase();
           const caption = `✅ *${service.name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
           const fileName = nomeArquivoVistocar(serviceId, placa || 'doc')
