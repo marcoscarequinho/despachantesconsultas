@@ -13464,6 +13464,7 @@ app.get('/api/admin/atpve-pedidos', requireAuth, requireSuperAdmin, async (req, 
         created_at: row.created_at,
         whatsapp_sent_at: row.whatsapp_sent_at,
         tem_pdf: !!row.tem_pdf,
+        entrega_manual: result.entregaManual || null,
         pendente: !!row.pendencia_movement_id,
         pendencia_desde: row.pendencia_desde,
         // O protocolo (UUID) é o que serve para registrar/excluir no Detran; o
@@ -13615,6 +13616,90 @@ app.post('/api/admin/atpve-pedidos/:id/cancelar', requireAuth, requireSuperAdmin
   } catch (err) {
     console.error('Erro ao cancelar pedido de ATPV-e no admin:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// Entrega manual: o admin sobe o PDF do ATPV-e que conseguiu por fora (painel da
+// Vistocar, Detran) e ele chega ao cliente como se tivesse saído pela entrega
+// automática — que continua de pé. Por isso passa pelo MESMO finalizePendingQuery
+// (claim atômico + debitarConsulta, que respeita o pós-pago) e grava no pdf_cache
+// do mesmo jeito: histórico, WhatsApp e reenvio enxergam um pedido só.
+// Aceita também pedido 'cancelado': é o caso do documento que saiu do lado de lá
+// depois de a pendência ter morrido no prazo (ex.: pedido #1948, DDB2H98).
+const ATPVE_MANUAL_MAX_BYTES = 3 * 1024 * 1024;   // folga sob o limite de 4,5 MB de corpo da Vercel (base64 incha ~33%)
+app.post('/api/admin/atpve-pedidos/:id/entregar-manual', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    await ensureDbReady();
+    const qr = await pool.query(
+      `SELECT q.id, q.user_id, q.service_id, q.service_name, q.status, q.amount, q.params, q.result_data,
+              q.transaction_id, u.phone, u.pos_pago
+         FROM queries q JOIN users u ON u.id = q.user_id WHERE q.id=$1`,
+      [req.params.id]
+    );
+    if (!qr.rows.length) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    const q = qr.rows[0];
+    if (!ATPVE_ADMIN_SVCS.includes(q.service_id))
+      return res.status(400).json({ error: 'Este pedido não é de ATPV-e.' });
+    if (!['aguardando_pdf', 'cancelado'].includes(q.status))
+      return res.status(400).json({ error: 'Este pedido já foi entregue.' });
+
+    const b64 = String(req.body?.pdfBase64 || '').replace(/^data:[^,]+,/, '').replace(/\s/g, '');
+    if (!b64) return res.status(400).json({ error: 'Envie o PDF do ATPV-e.' });
+    const buf = Buffer.from(b64, 'base64');
+    if (buf.length > ATPVE_MANUAL_MAX_BYTES)
+      return res.status(413).json({ error: 'PDF grande demais (máximo 3 MB).' });
+    if (buf.slice(0, 4).toString() !== '%PDF')
+      return res.status(400).json({ error: 'O arquivo enviado não é um PDF.' });
+
+    const jaTem = await pool.query('SELECT 1 FROM pdf_cache WHERE query_id=$1 AND expires_at > NOW()', [q.id]);
+    if (jaTem.rows.length) return res.status(409).json({ error: 'Este pedido já tem documento entregue.' });
+
+    // Cancelado volta para 'aguardando_pdf' só para o finalizePendingQuery fazer
+    // o claim e a cobrança pelo caminho de sempre.
+    if (q.status === 'cancelado') {
+      await pool.query(`UPDATE queries SET status='aguardando_pdf' WHERE id=$1 AND status='cancelado'`, [q.id]);
+    }
+    const service = SERVICES.find(s => s.id === q.service_id);
+    const fechou = await finalizePendingQuery(q.id, q.user_id, `Consulta: ${service?.name || q.service_name}`);
+    if (!fechou) return res.status(409).json({ error: 'O pedido foi fechado por outra execução agora há pouco. Recarregue a lista.' });
+
+    // Sem a pendência o cron e a tela do cliente param de perguntar à Vistocar —
+    // e, se perguntassem, a checagem do pdf_cache já barraria a entrega dupla.
+    await pool.query('DELETE FROM vistocar_pending WHERE query_id=$1', [q.id]);
+    await pool.query(
+      `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+      [q.id, q.user_id, crypto.randomBytes(32).toString('hex'), buf.toString('base64'),
+       new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+    );
+    let result = {};
+    try { result = JSON.parse(q.result_data || '{}'); } catch {}
+    result.entregaManual = new Date().toISOString();
+    await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(result), q.id]);
+
+    let placa = '';
+    try { placa = (JSON.parse(q.params || '{}').placa || '').toUpperCase(); } catch {}
+    let whatsapp = false;
+    if (q.phone) {
+      const nome = service?.name || q.service_name || 'ATPV-e';
+      const caption = `✅ *${nome} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
+      const nomeArquivo = nomeArquivoVistocar(q.service_id, placa || q.id) || `${q.service_id}-${placa || q.id}.pdf`;
+      whatsapp = await sendWhatsAppPdf(q.phone, buf, nomeArquivo, caption).catch(() => false);
+      if (whatsapp) await pool.query('UPDATE queries SET whatsapp_sent_at = NOW() WHERE id=$1', [q.id]).catch(() => {});
+    }
+
+    const saldo = await pool.query('SELECT credits FROM users WHERE id=$1', [q.user_id]);
+    console.log(`📤 ATPV-e entregue manualmente pelo admin [query ${q.id}, placa ${placa}]`);
+    res.json({
+      success: true,
+      // Pedido que já tinha transaction_id foi cobrado antes e não é cobrado de novo.
+      cobrado: q.transaction_id ? 0 : parseFloat(q.amount || 0),
+      posPago: !!q.pos_pago,
+      saldo: parseFloat(saldo.rows[0]?.credits || 0),
+      whatsapp: !!whatsapp,
+    });
+  } catch (err) {
+    console.error('Erro na entrega manual de ATPV-e:', err.message);
+    res.status(500).json({ error: err.message || 'Erro interno.' });
   }
 });
 

@@ -1332,6 +1332,11 @@ const atpvePodeExcluir = p =>
 const atpvePodeRegistrar = p =>
   p.status === 'aguardando_pdf' && !!p.protocolo && !p.registrado_em;
 
+// Entrega manual vale para pedido aberto e para cancelado (documento que saiu
+// do lado de lá depois de a pendência morrer no prazo). O servidor confere de novo.
+const atpvePodeEntregarManual = p =>
+  ['aguardando_pdf', 'cancelado'].includes(p.status) && !p.tem_pdf;
+
 function renderAtpvePedidos() {
   const busca  = (document.getElementById('atpve-search').value || '').toLowerCase().trim();
   const filtro = document.getElementById('atpve-filtro').value;
@@ -1386,6 +1391,7 @@ function renderAtpvePedidos() {
         ${p.registrado_em ? `<div class="text-xs text-blue-600">registrado em ${fmtDate(p.registrado_em)}</div>` : ''}
         ${p.status === 'aguardando_pdf' && !p.protocolo ? `<div class="text-xs text-red-500">sem protocolo (pedido antigo)</div>` : ''}
         ${p.whatsapp_sent_at ? `<div class="text-xs text-green-600">zap em ${fmtDate(p.whatsapp_sent_at)}</div>` : ''}
+        ${p.entrega_manual ? `<div class="text-xs text-purple-600">entregue manualmente em ${fmtDate(p.entrega_manual)}</div>` : ''}
       </td>
       <td class="px-4 py-3 align-top text-center">
         ${selo(p)}
@@ -1398,6 +1404,8 @@ function renderAtpvePedidos() {
         ${p.status === 'aguardando_pdf' ? `
           <button onclick="verificarAtpve(${p.id})" class="btn-primary text-xs mb-1">⚡ Verificar agora</button>
           <button onclick="cancelarAtpve(${p.id})" class="btn-secondary text-xs mb-1">Cancelar</button>` : ''}
+        ${atpvePodeEntregarManual(p) ? `
+          <button onclick="entregarAtpveManual(${p.id})" class="btn-primary text-xs mb-1 bg-purple-600 hover:bg-purple-700">📤 Entregar PDF</button>` : ''}
         ${p.tem_pdf ? `
           <button onclick="window.open('/api/admin/queries/${p.id}/pdf','_blank')" class="btn-secondary text-xs mb-1">📄 Abrir PDF</button>
           <button onclick="reenviarAtpveWhatsapp(${p.id})" class="btn-secondary text-xs mb-1">📲 Reenviar</button>` : ''}
@@ -1483,6 +1491,47 @@ async function reenviarAtpveWhatsapp(id) {
     toast('Documento reenviado pelo WhatsApp.');
     await loadAtpvePedidos();
   } catch { toast('Erro de conexão.', 'error'); }
+}
+
+// Entrega manual: o admin escolhe o PDF que conseguiu por fora e o servidor
+// entrega pelo mesmo caminho da automática — cobra o cliente (saldo ou fatura do
+// pós-pago), guarda no histórico e manda por WhatsApp.
+function entregarAtpveManual(id) {
+  const p = allAtpvePedidos.find(x => x.id === id);
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/pdf,.pdf';
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') { toast('Escolha um arquivo PDF.', 'error'); return; }
+    if (file.size > 3 * 1024 * 1024) { toast('PDF grande demais (máximo 3 MB).', 'error'); return; }
+    const cobranca = p?.cobrada ? 'O pedido já foi cobrado antes; não haverá novo desconto.'
+                                : `Serão descontados ${fmt(p?.amount || 0)} do cliente.`;
+    if (!confirm(`Entregar "${file.name}" como o ATPV-e da placa ${p?.placa || '—'} para ${p?.user?.name || '—'}?\n\n${cobranca}\nO PDF vai para o histórico do cliente e para o WhatsApp ${p?.user?.phone || '(sem telefone)'}.`)) return;
+    try {
+      const b64 = await new Promise((ok, erro) => {
+        const fr = new FileReader();
+        fr.onload = () => ok(String(fr.result).split(',')[1] || '');
+        fr.onerror = erro;
+        fr.readAsDataURL(file);
+      });
+      toast('Enviando PDF…');
+      const r = await fetch(`/api/admin/atpve-pedidos/${id}/entregar-manual`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pdfBase64: b64 }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { toast(d.error || 'Erro na entrega manual.', 'error'); return; }
+      const cob = d.cobrado > 0
+        ? (d.posPago ? `${fmt(d.cobrado)} lançado na fatura.` : `${fmt(d.cobrado)} descontado (saldo agora ${fmt(d.saldo)}).`)
+        : 'Sem novo desconto.';
+      toast(`Documento entregue. ${cob}${d.whatsapp ? '' : ' WhatsApp não enviado.'}`, d.whatsapp ? 'success' : 'error');
+      await loadAtpvePedidos();
+    } catch { toast('Erro de conexão.', 'error'); }
+  };
+  input.click();
 }
 
 async function cancelarAtpve(id) {
