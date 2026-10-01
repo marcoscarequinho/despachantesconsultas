@@ -176,6 +176,11 @@ const DESPBRASIL_SVCS = {
   'verificar-crlv-data-crv': { servico: 'verificar_crlv' },
   'consulta-renavam':  { servico: 'consulta_renavam' },
   'consultar-Numero-ATPVE': { servico: 'numero_atpve' },
+  // CRLV-e SP v2. Conferido em 01/10/2026 (EFE5600, ~10 s, PDF de 1 página).
+  // Mais cedo no mesmo dia a rota devolvia 500 "Erro interno" para toda placa
+  // — inclusive inventada — enquanto o painel deles marcava a consulta como
+  // sucesso; por isso o SP principal é a Vistocar.
+  'crlv-sp-v2': { servico: 'crlv_turbo', extra: { uf: 'SP' } },
 };
 
 // ── Assinafy (assinafy.com.br) — assinatura digital de documentos ────────────
@@ -418,6 +423,8 @@ const VISTOCAR_ARQUIVO_NOMES = {
   'vistocar-debitos-cod-barra':      'debitos',
   'atpve-vistocar-rj':               'atpve-rj',
   'atpve-vistocar-mg':               'atpve-mg',
+  // É da despbrasil, mas o nome segue o padrão para o cliente.
+  'crlv-sp-v2':                      'crlv-sp',
 };
 const MC_ARQUIVO_PREFIXO = 'mcdespachadoria';
 function nomeArquivoVistocar(serviceId, sufixo) {
@@ -1070,6 +1077,10 @@ const SERVICES = [
   // Vistocar (apiclient/crlv-sp, ver VISTOCAR_ENDPOINTS) desde 01/10/2026: só
   // placa, preço fixo definido pelo dono.
   { id:'consultar-crlv-sp', name:'CRLV-e São Paulo (SP)',          group:'CRLV-e Digital', basePrice:25.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'sp' },
+  // Segunda opção do SP, pela despbrasil (crlv_turbo, R$ 12,90 de custo — ver
+  // DESPBRASIL_SVCS). O id NÃO começa com "consultar-crlv-" de propósito: o PDF
+  // vai no WhatsApp pela regra da despbrasil, e com o prefixo iria duas vezes.
+  { id:'crlv-sp-v2', name:'CRLV-e São Paulo (SP) v2',              group:'CRLV-e Digital', basePrice:27.00, noMarkup:true, inputType:'placa', icon:'📄', uf:'sp' },
   { id:'consultar-crlv-to', name:'CRLV-e Tocantins (TO)',          group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   // ── CRLV-e Agendado (assíncrono) ──
   { id:'crlv-agendado-al', name:'CRLV-e Agendado Alagoas (AL)',            group:'CRLV-e Agendado', basePrice:28.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'al' },
