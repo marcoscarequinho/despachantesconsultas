@@ -8030,6 +8030,16 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           const errData = await apiRes.json().catch(() => null)
             || { error: await apiRes.text().catch(() => 'Sem resposta') };
           errMsg = extractApiErrorMsg(errData);
+          // Vistocar: "message" é só o envelope ("Consulta não realizada.") e o
+          // motivo de verdade vem em response.error/response.msg. Sem isto o
+          // cliente e o log ficavam só com o genérico — foi o que aconteceu com o
+          // ATPV-e RJ da placa KRR3179 em 02/10/2026, recusado 4 vezes sem dizer
+          // por quê.
+          if (VISTOCAR_ENDPOINTS[serviceId]) {
+            const motivo = String(errData?.response?.error || errData?.response?.msg || '').trim();
+            if (motivo) errMsg = motivo;
+            console.error(`[${serviceId}] recusa Vistocar: message=${JSON.stringify(errData?.message)} error=${JSON.stringify(errData?.response?.error)} msg=${JSON.stringify(errData?.response?.msg)} paid=${errData?.response?.paid ?? errData?.paid}`);
+          }
           // DEBUG temporário — corpo bruto do erro upstream, para achar campos
           // dentro de "details" que a mensagem extraída resume/oculta.
           if (serviceId === 'inserir-comunicacao-venda') {
