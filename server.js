@@ -1681,6 +1681,10 @@ async function initDB() {
   // quer dizer "cadastrado, esperando o cliente registrar".
   await pool.query(`ALTER TABLE vistocar_pending ADD COLUMN IF NOT EXISTS protocolo VARCHAR(100);`);
   await pool.query(`ALTER TABLE vistocar_pending ADD COLUMN IF NOT EXISTS registrado_em TIMESTAMPTZ;`);
+  // Momento em que o PDF devolvido para este protocolo veio com as partes de
+  // OUTRA venda (ver conferirPdfAtpve). Serve só para o admin ser avisado uma
+  // vez, e não a cada volta do cron/polling.
+  await pool.query(`ALTER TABLE vistocar_pending ADD COLUMN IF NOT EXISTS divergencia_em TIMESTAMPTZ;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_vistocar_webhooks_movement ON vistocar_webhooks(movement_id);`);
   // A tabela nasceu sem event_id/evento (primeira versão, antes da documentação
   // do webhook) — CREATE TABLE IF NOT EXISTS não acrescenta coluna em tabela que
@@ -8363,8 +8367,21 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         // (arquivoPdfBase64 preenchido). Quando isso acontece não há o que
         // esperar: segue pelo caminho normal de PDF, cobrando agora.
         const jaPronto = parsed?.response?.arquivoPdfBase64 || parsed?.response?.pdfBase64;
-        if (jaPronto) {
-          base64PdfBuf = Buffer.from(String(jaPronto).replace(/^data:[^,]+,/, '').replace(/\s/g, ''), 'base64');
+        let bufPronto = jaPronto
+          ? Buffer.from(String(jaPronto).replace(/^data:[^,]+,/, '').replace(/\s/g, ''), 'base64')
+          : null;
+        // Mesma conferência da entrega posterior (conferirPdfAtpve): PDF pronto de
+        // OUTRA venda não é cobrado na hora. O pedido segue como pendente, e quem
+        // decide e avisa o admin é entregarResultadoVistocar na próxima busca.
+        if (bufPronto && VISTOCAR_ATPVE_SVCS.has(serviceId)) {
+          const conf = await conferirPdfAtpve(bufPronto, params);
+          if (!conf.ok) {
+            console.error(`[${serviceId}] PDF pronto no cadastro é de outra venda (falta ${conf.faltando.join(' e ')}) — segue como pendente`);
+            bufPronto = null;
+          }
+        }
+        if (bufPronto) {
+          base64PdfBuf = bufPronto;
           vistocarEntregaImediata = true;
         } else {
           // O CRLV-e devolve movementId; o ATPV-e devolve os DOIS, e são coisas
@@ -11077,6 +11094,52 @@ async function buscarDocumentoVistocar(pend) {
   return { b64 };
 }
 
+// Confere se o PDF do ATPV-e é da venda que NÓS cadastramos, pelo CPF/CNPJ do
+// vendedor e do comprador. Motivo: no pedido #2453 (CKE9I71, 02/10/2026) a rota
+// de situação devolveu, para o protocolo certo, o ATPV-e de outra intenção de
+// venda do mesmo veículo, feita fora da plataforma (mesmo vendedor, outro
+// comprador, outro valor, e-mail NAOTEM@GMAIL.COM) — e ele foi cobrado e
+// entregue, porque a única checagem era o "%PDF". Comparamos só os dígitos do
+// texto inteiro: o CRLV-e/ATPV-e é "achatado" e os números saem colados uns nos
+// outros, então procurar por rótulo não funciona. PDF ilegível (sem texto) não
+// tem como ser conferido e segue adiante — travar toda entrega por causa de um
+// PDF escaneado seria pior que o caso que isto existe para pegar.
+async function conferirPdfAtpve(buf, params) {
+  const docVend  = String(params?.documentoVendedor  || '').replace(/\D/g, '');
+  const docCompr = String(params?.documentoComprador || '').replace(/\D/g, '');
+  if (!docVend && !docCompr) return { ok: true, naoConferido: 'pedido sem documentos gravados' };
+  let digitos;
+  try { digitos = String((await pdfParseTolerante(buf)).text || '').replace(/\D/g, ''); }
+  catch (e) { return { ok: true, naoConferido: `PDF ilegível (${e.message})` }; }
+  if (!digitos) return { ok: true, naoConferido: 'PDF sem texto' };
+  const faltando = [];
+  if (docVend  && !digitos.includes(docVend))  faltando.push('vendedor');
+  if (docCompr && !digitos.includes(docCompr)) faltando.push('comprador');
+  return { ok: !faltando.length, faltando };
+}
+
+// Avisa o admin (uma vez por pendência) de que o documento devolvido não é o
+// desta venda. O pedido fica aguardando, sem cobrar: o admin confere com a
+// Vistocar e, se o certo sair por fora, entrega pelo "📤 Entregar PDF".
+async function avisarDivergenciaAtpve(pend, params, faltando) {
+  const marcado = await pool.query(
+    `UPDATE vistocar_pending SET divergencia_em=NOW()
+      WHERE movement_id=$1 AND divergencia_em IS NULL RETURNING movement_id`,
+    [pend.movement_id]
+  );
+  if (!marcado.rows.length || !ADMIN_PHONE) return;
+  await sendWhatsApp(ADMIN_PHONE, [
+    `⚠️ *ATPV-e de OUTRA venda — não entregue*`,
+    ``,
+    `🧾 *Pedido:* #${pend.query_id}`,
+    `🔤 *Placa:* ${(pend.placa || params?.placa || '').toUpperCase()}`,
+    `👤 *Cadastro:* ${params?.nomeVendedor || '?'} → ${params?.nomeComprador || '?'}`,
+    `🔢 *Protocolo:* ${pend.protocolo || '-'} (mov. ${pend.movement_id})`,
+    ``,
+    `O PDF devolvido pela Vistocar não traz o CPF/CNPJ do ${faltando.join(' nem do ')} cadastrado. Provavelmente é uma intenção de venda anterior do mesmo veículo. Nada foi cobrado nem enviado ao cliente — confira com a Vistocar.`,
+  ].join('\n')).catch(() => {});
+}
+
 // Efetiva o registro de um cadastro de ATPV-e no Detran e, se o documento já
 // sair na mesma hora, entrega na sequência. Usado pelo painel do cliente e pelo
 // admin — os dois passando pela MESMA função, para não existir um caminho que
@@ -11142,6 +11205,19 @@ async function entregarResultadoVistocar(pend) {
   if (jaTem.rows.length) {
     await pool.query('DELETE FROM vistocar_pending WHERE movement_id=$1', [movementId]);
     return { entregue: false, motivo: 'documento já havia sido entregue' };
+  }
+
+  if (VISTOCAR_ATPVE_SVCS.has(pend.service_id)) {
+    const qp = await pool.query('SELECT params FROM queries WHERE id=$1', [pend.query_id]);
+    let params = {};
+    try { params = JSON.parse(qp.rows[0]?.params || '{}'); } catch {}
+    const conf = await conferirPdfAtpve(buf, params);
+    if (conf.naoConferido) console.warn(`[atpve] PDF da query ${pend.query_id} não conferido: ${conf.naoConferido}`);
+    if (!conf.ok) {
+      console.error(`[atpve] PDF de outra venda para a query ${pend.query_id} (protocolo ${pend.protocolo}): falta ${conf.faltando.join(' e ')}`);
+      await avisarDivergenciaAtpve(pend, params, conf.faltando);
+      return { entregue: false, motivo: `o documento devolvido é de outra venda (CPF/CNPJ do ${conf.faltando.join(' e do ')} não confere)`, situacao: achado.situacao || null };
+    }
   }
 
   const service = SERVICES.find(s => s.id === pend.service_id);
