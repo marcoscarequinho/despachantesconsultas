@@ -11032,6 +11032,11 @@ const excluirAtpveVistocar = (serviceId, protocolo) =>
 const textoSituacaoAtpve = s =>
   [s?.codigo, s?.descricao].filter(Boolean).join(' · ') || null;
 
+// Situação terminal de falha no Detran ("9 · ERRO", visto em 01/10/2026). É a
+// única que a gente trata pelo nome: as outras seguem sem adivinhação.
+const situacaoAtpveErro = s =>
+  !!s && (s.codigo === '9' || String(s.descricao || '').toUpperCase() === 'ERRO');
+
 // Onde o documento é buscado depende do serviço. O ATPV-e tem rota própria de
 // situação, que devolve o PDF junto — e é a única que funciona para ele, porque
 // GET /apiclient/consult/:movementId só responde depois que a Vistocar fecha a
@@ -11106,6 +11111,19 @@ async function excluirAtpvePendencia(pend) {
 async function entregarResultadoVistocar(pend) {
   const movementId = pend.movement_id;
   const achado = await buscarDocumentoVistocar(pend);
+  // "9 · ERRO" é o Detran recusando o pedido, e ele não volta a andar sozinho:
+  // sem isto a pendência ficava "Aguardando" até o prazo de 48h e o cliente
+  // recebia "não foi emitido dentro do prazo". Foi o que aconteceu com os
+  // pedidos #2419, #2421 e #2424 (01/10/2026) — o do #2419 o cliente já tinha
+  // cadastrado de novo e recebido, e o painel seguia mostrando o antigo como
+  // não entregue. A Vistocar devolve motivoSituacao vazio nesses casos.
+  if (!achado.b64 && situacaoAtpveErro(achado.situacao)) {
+    const motivo = achado.situacao.motivo
+      ? `o Detran recusou o pedido (${achado.situacao.motivo})`
+      : 'o Detran recusou o pedido. Confira os dados e cadastre de novo';
+    await cancelarPendenciaVistocar(pend, motivo);
+    return { entregue: false, cancelado: true, motivo: `cancelado: situação ${textoSituacaoAtpve(achado.situacao)}`, situacao: achado.situacao };
+  }
   if (!achado.b64) return { entregue: false, motivo: achado.motivo, situacao: achado.situacao || null };
   const buf = Buffer.from(String(achado.b64).replace(/^data:[^,]+,/, '').replace(/\s/g, ''), 'base64');
   if (buf.slice(0, 4).toString() !== '%PDF') return { entregue: false, motivo: 'conteúdo devolvido não é um PDF' };
