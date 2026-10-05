@@ -314,6 +314,9 @@
         <!-- No celular a fila de categorias rola na horizontal em vez de quebrar
              em 8 linhas e empurrar os cards para fora da tela. -->
         <div id="catalog-filters" class="flex gap-2 mb-5 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible"></div>
+        <!-- Recurso de Multa com IA em faixa própria, acima da Assinatura
+             Digital (pedido do dono). Preenchido por renderRecursoDestaque(). -->
+        <div id="catalog-recurso-destaque" class="hidden mb-4"></div>
         <!-- Assinatura Digital em faixa própria, ACIMA do bloco Destaques: é o
              serviço que fecha o ciclo dos documentos gerados na aba
              Despachantes, e como card comum no meio da grade ele passaria
@@ -2186,6 +2189,7 @@ function renderPrices() {
     'Divida Ativa':            '⚖️',
     'CNH':                     '🪪',
     'Para os Despachantes':    '🧑‍💼',
+    'Recurso de Multas':       '⚖️',
   };
 
   document.getElementById('prices-content').innerHTML = Object.entries(groups).map(([group, svcs]) => `
@@ -2237,6 +2241,7 @@ function inputTypeLabel(t) {
     venda:               'Entrada: Dados completos da venda',
     atpve_vistocar:      'Entrada: Dados da venda + CRLV-e e comprovantes (assíncrono)',
     assinatura_digital:  'Entrada: PDF + dados de quem assina',
+    recurso_multa:       'Entrada: Notificação da multa (foto ou PDF) + perguntas',
     cancelar_venda:      'Entrada: ID + Protocolo + Motivo',
     protocolo:           'Entrada: Protocolo',
     protocolo_get:       'Entrada: Protocolo (GET)',
@@ -2531,6 +2536,7 @@ const CATALOG_GROUP_ORDER = [
   'Consultas Básicas',
   'Consulta Completa',
   'Para os Despachantes',
+  'Recurso de Multas',
   'Comunicação Venda',
   'CRV',
   'Número CRV (Apenas antigos)',
@@ -2562,6 +2568,7 @@ const CATALOG_GROUP_META = {
   'Análise de Crédito':     { icon:'📊' },
   'Óbito':                  { icon:'⚰️' },
   'Procurações e Contratos':{ icon:'📜' },
+  'Recurso de Multas':      { icon:'⚖️', badge:'🤖 Com IA', badgeClass:'bg-indigo-100 text-indigo-700' },
 };
 
 // Selo por serviço, para quando o do grupo mentiria — por exemplo um serviço que
@@ -2668,11 +2675,43 @@ function renderAssinaturaDestaque(svcsVisiveis) {
     </button>`;
 }
 
+// Faixa do Recurso de Multa com IA, logo acima da Assinatura Digital. Mesma
+// regra dela: some quando a busca/filtro atual não inclui o serviço.
+function renderRecursoDestaque(svcsVisiveis) {
+  const wrap = document.getElementById('catalog-recurso-destaque');
+  if (!wrap) return;
+  const svc = (svcsVisiveis || []).find(s => s.id === 'recurso-multa-ia');
+  if (!svc) { wrap.classList.add('hidden'); wrap.innerHTML = ''; return; }
+  wrap.classList.remove('hidden');
+  wrap.innerHTML = `
+    <button type="button" onclick="openCatalogService('recurso-multa-ia')"
+      class="w-full text-left bg-gradient-to-r from-indigo-50 to-white border border-indigo-200 rounded-xl p-4 sm:p-5 hover:border-indigo-400 hover:shadow-md transition-all">
+      <div class="flex items-center gap-4">
+        <div class="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center text-2xl flex-shrink-0">⚖️</div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="font-bold text-gray-800">${escapeHtml(svc.name)}</span>
+            <span class="svc-badge bg-indigo-100 text-indigo-700">🤖 Com IA</span>
+          </div>
+          <p class="text-xs text-gray-600 mt-1 leading-snug">
+            Envie a foto da notificação e responda poucas perguntas: sai a <strong>defesa prévia</strong>
+            ou o <strong>recurso à JARI</strong> em PDF, fundamentado no CTB, pronto para assinar e protocolar.
+          </p>
+        </div>
+        <div class="flex flex-col items-end gap-1 flex-shrink-0">
+          <span class="price-tag text-sm">${fmtPrice(svc.price)}</span>
+          <span class="svc-cta">Recorrer</span>
+        </div>
+      </div>
+    </button>`;
+}
+
 function renderCatalog() {
   const grid = document.getElementById('catalog-grid');
   if (!grid) return;
   const termo = document.getElementById('catalog-search')?.value.trim() || '';
   const svcs  = catalogFiltered();
+  renderRecursoDestaque(svcs);
   renderAssinaturaDestaque(svcs);
 
   document.getElementById('catalog-clear')
@@ -3348,6 +3387,7 @@ function queryActionLabel(inputType) {
   if (inputType === 'asd') return 'Gerar ASD RJ';
   if (inputType === 'atpve_vistocar') return 'Emitir ATPV-e';
   if (inputType === 'assinatura_digital') return 'Enviar para Assinatura';
+  if (inputType === 'recurso_multa') return 'Gerar Recurso';
   return 'Realizar Consulta';
 }
 
@@ -3960,6 +4000,8 @@ function renderFormFields(inputType, svc) {
         ${field('assin_whatsapp','WhatsApp (DDD + número)','text','22999951574',false,'inputmode="numeric"')}
       </div>`,
 
+    recurso_multa: recursoMultaBody(field),
+
     debito_doc: placaField + renavamField +
       field('documento', 'CPF ou CNPJ do Proprietário', 'text', '000.000.000-00') +
       `<p class="text-xs text-blue-600 mt-1">ℹ️ Informe o CPF ou CNPJ do proprietário do veículo.</p>`,
@@ -4093,6 +4135,18 @@ function renderFormFields(inputType, svc) {
   // Assinatura Digital: o form.reset() limpa o <input type="file">, mas nao o
   // base64 ja lido — sem zerar aqui, reabrir mandaria o PDF do pedido anterior.
   if (inputType === 'assinatura_digital') assinaturaArquivo = { base64: '', nome: '' };
+  // Recurso de Multa: mesmo motivo — os arquivos lidos ficam em memória.
+  if (inputType === 'recurso_multa') {
+    recursoArquivos = [];
+    document.querySelectorAll('[data-rm-data]').forEach(el => el.addEventListener('input', function() {
+      const d = this.value.replace(/\D/g, '').slice(0, 8);
+      this.value = d.replace(/^(\d{2})(\d{1,2})?(\d{1,4})?$/, (_, a, b, c) => [a, b, c].filter(Boolean).join('/'));
+      if (this.id === 'f-rm_prazo_final') atualizarPrazoRecurso();
+    }));
+    document.getElementById('f-rm_placa')?.addEventListener('input', function() {
+      this.value = this.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 7);
+    });
+  }
   if (inputType === 'atpve_vistocar') {
     atpveAnexos = { at_crlve: '', at_comp_v: '', at_comp_c: '' };
     const placaEl = document.getElementById('f-at_placa');
@@ -4455,6 +4509,217 @@ function lerCarteirinhaAsd(inputEl, lado) {
     setAsdStatus(statusId, '⚠️ Erro ao ler o arquivo.', 'text-amber-600');
   };
   reader.readAsDataURL(file);
+}
+
+// ── Recurso de Multa com IA ─────────────────────────────────────────────────
+// Um formulário só, em três blocos: (1) a notificação, que a IA lê e usa para
+// preencher os campos; (2) os dados da autuação, que o cliente CONFERE — é
+// isso que vai para a petição; (3) perguntas objetivas e o requerente. Quem
+// decide os fundamentos é o servidor (recurso-multa.js), a partir das datas e
+// das respostas; a tela só coleta.
+const RM_SELECT = (id, label, opcoes, ajuda = '') => `
+  <div>
+    <label class="label">${label}</label>
+    <select id="f-${id}" class="input-field">
+      ${opcoes.map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}
+    </select>
+    ${ajuda ? `<div class="text-xs text-gray-500 mt-1">${ajuda}</div>` : ''}
+  </div>`;
+
+function recursoMultaBody(field) {
+  const data = (id, label, req = false) => field(id, label, 'text', 'dd/mm/aaaa', req, 'inputmode="numeric" maxlength="10" data-rm-data="1"');
+  return `
+    <div class="bg-indigo-50 border border-indigo-200 rounded-lg p-3 mb-3">
+      <p class="text-xs font-semibold text-indigo-800 mb-1">1. Notificação da multa</p>
+      <p class="text-xs text-indigo-700 mb-2">Envie a foto (frente e verso, se houver) ou o PDF da notificação. A IA lê o documento e preenche os campos abaixo — você confere antes de gerar. A leitura não é cobrada.</p>
+      <input type="file" id="f-rm_arquivos" class="input-field bg-white" accept="image/jpeg,image/png,image/webp,application/pdf" multiple
+        onchange="handleArquivosRecurso(this)">
+      <div class="flex items-center gap-3 mt-2 flex-wrap">
+        <button type="button" id="rm-ler-btn" onclick="lerNotificacaoRecurso()" disabled
+          class="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-semibold px-3 py-2 rounded">🤖 Ler notificação com IA</button>
+        <span id="rm-status" class="text-xs text-gray-500"></span>
+      </div>
+    </div>
+
+    <div class="font-semibold text-gray-700 text-sm mt-3 mb-1">2. Dados da autuação — confira com a notificação</div>
+    ${RM_SELECT('rm_tipoPeca', 'Que notificação você recebeu? <span class="text-red-500">*</span>', [
+      ['defesa_previa', 'Notificação de Autuação — gerar Defesa Prévia'],
+      ['recurso_jari', 'Notificação de Penalidade (com valor a pagar) — gerar Recurso à JARI'],
+    ])}
+    <div class="grid grid-cols-2 gap-3">
+      ${field('rm_orgao_autuador', 'Órgão autuador', 'text', 'DETRAN-RJ')}
+      ${field('rm_numero_auto', 'Nº do auto de infração', 'text', 'E12345678')}
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      ${field('rm_placa', 'Placa', 'text', 'ABC1D23', true, 'maxlength="8"')}
+      ${field('rm_marca_modelo', 'Marca/modelo', 'text', 'FIAT/ARGO', false)}
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      ${data('rm_data_infracao', 'Data da infração', true)}
+      ${field('rm_hora_infracao', 'Hora', 'text', 'hh:mm', false, 'maxlength="5"')}
+    </div>
+    ${field('rm_local_infracao', 'Local da infração', 'text', 'AV. BRASIL, KM 10', false)}
+    <div class="grid grid-cols-2 gap-3">
+      ${field('rm_municipio_infracao', 'Município/UF', 'text', 'RIO DE JANEIRO/RJ', false)}
+      ${field('rm_codigo_infracao', 'Código da infração', 'text', '745-50', false)}
+    </div>
+    ${field('rm_descricao_infracao', 'Descrição da infração', 'text', 'Transitar em velocidade superior à máxima permitida…', false)}
+    <div class="grid grid-cols-2 gap-3">
+      ${field('rm_amparo_legal', 'Amparo legal', 'text', 'Art. 218, I', false)}
+      ${RM_SELECT('rm_natureza', 'Natureza', [['', '—'], ['leve', 'Leve'], ['media', 'Média'], ['grave', 'Grave'], ['gravissima', 'Gravíssima']])}
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      ${data('rm_data_expedicao_notificacao', 'Data de expedição da notificação')}
+      ${data('rm_prazo_final', 'Prazo final para defesa/recurso')}
+    </div>
+    <p class="text-xs text-gray-500 -mt-1">Na Notificação de Penalidade, informe a expedição da <strong>Notificação de Autuação</strong> que veio antes, se souber — é ela que conta o prazo de 30 dias.</p>
+    <details class="mt-2">
+      <summary class="text-xs font-semibold text-gray-600 cursor-pointer">Multa por radar / velocidade</summary>
+      <div class="grid grid-cols-3 gap-3 mt-2">
+        ${field('rm_velocidade_permitida', 'Permitida (km/h)', 'text', '60', false, 'inputmode="numeric"')}
+        ${field('rm_velocidade_medida', 'Medida (km/h)', 'text', '75', false, 'inputmode="numeric"')}
+        ${field('rm_velocidade_considerada', 'Considerada (km/h)', 'text', '68', false, 'inputmode="numeric"')}
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        ${field('rm_equipamento', 'Medidor (identificação)', 'text', 'Nº de série', false)}
+        ${data('rm_data_verificacao_equipamento', 'Última verificação do medidor')}
+      </div>
+    </details>
+    <input type="hidden" id="f-rm_valor_multa"><input type="hidden" id="f-rm_matricula_agente">
+
+    <div class="font-semibold text-gray-700 text-sm mt-4 mb-1">3. Perguntas sobre o caso</div>
+    ${RM_SELECT('rm_abordado', 'Um agente parou você no momento da infração?', [['nao', 'Não — recebi a notificação em casa'], ['sim', 'Sim, fui abordado(a)']])}
+    ${RM_SELECT('rm_sinalizacao', 'A sinalização no local era ausente, encoberta ou confusa?', [['nao', 'Não / não sei'], ['sim', 'Sim']])}
+    ${field('rm_sinalizacao_detalhe', 'Se sim, descreva a sinalização', 'text', 'Ex.: placa de velocidade coberta por árvore', false)}
+    ${RM_SELECT('rm_medidor', 'Se for multa de radar: a notificação informa a data da última verificação do medidor pelo Inmetro?', [
+      ['nao_aplica', 'Não é multa de radar'],
+      ['sem_data', 'Não informa a data'],
+      ['vencida', 'Informa, e é de mais de 12 meses antes da infração'],
+      ['ok', 'Informa, dentro de 12 meses'],
+    ])}
+    ${RM_SELECT('rm_outra_infracao_12m', 'O infrator cometeu outra infração de trânsito nos 12 meses anteriores?', [['sim', 'Sim / não sei'], ['nao', 'Não']], 'Para infração leve ou média, "Não" permite pedir advertência por escrito no lugar da multa (CTB, art. 267).')}
+    ${field('rm_dados_divergentes', 'Algum dado da notificação está errado? (opcional)', 'text', 'Ex.: o modelo do veículo não confere; o local não existe', false)}
+    <div>
+      <label class="label">Seu relato do que aconteceu (opcional)</label>
+      <textarea id="f-rm_relato" rows="4" maxlength="2000" class="input-field" placeholder="Conte com suas palavras. Só fatos verdadeiros — eles vão para a petição assinada por você."></textarea>
+    </div>
+
+    <div class="font-semibold text-gray-700 text-sm mt-4 mb-1">4. Quem assina o recurso</div>
+    ${RM_SELECT('rm_qualidade', 'Você é', [['proprietario', 'Proprietário(a) do veículo'], ['condutor', 'Condutor(a) indicado(a)']])}
+    ${field('rm_nome', 'Nome completo', 'text', 'NOME COMPLETO')}
+    <div class="grid grid-cols-2 gap-3">
+      ${field('rm_cpf', 'CPF', 'text', '000.000.000-00', true, 'inputmode="numeric"')}
+      ${field('rm_cnh', 'Nº da CNH (opcional)', 'text', '00000000000', false, 'inputmode="numeric"')}
+    </div>
+    ${field('rm_endereco', 'Endereço completo (opcional)', 'text', 'Rua, número, bairro, cidade/UF', false)}
+    ${field('rm_cidade', 'Cidade onde vai assinar', 'text', 'Rio de Janeiro', false)}
+
+    <label id="rm-prazo-wrap" class="hidden flex items-start gap-2 mt-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
+      <input type="checkbox" id="f-rm_ciente_prazo" class="mt-0.5">
+      <span>O prazo informado já passou. Sei que petição fora do prazo não é analisada e quero gerar mesmo assim.</span>
+    </label>
+    <label class="flex items-start gap-2 mt-3 text-xs text-gray-600">
+      <input type="checkbox" id="f-rm_ciente" class="mt-0.5">
+      <span>Conferi os dados. Entendo que o recurso é um modelo fundamentado para eu assinar e protocolar, sem garantia de cancelamento da multa.</span>
+    </label>`;
+}
+
+// Fotos vão reduzidas (lado maior 2000 px, JPEG) — a foto do celular passa
+// fácil de 5 MB e o corpo da requisição para em 4,5 MB na Vercel. PDF vai
+// como está, até 3 MB.
+let recursoArquivos = [];
+function reduzirImagemRecurso(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const esc = Math.min(1, 2000 / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * esc); c.height = Math.round(img.height * esc);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      resolve({ mediaType: 'image/jpeg', base64: c.toDataURL('image/jpeg', 0.85).split(',')[1] });
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('imagem')); };
+    img.src = url;
+  });
+}
+function lerArquivoBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1] || '');
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+async function handleArquivosRecurso(input) {
+  const status = document.getElementById('rm-status');
+  const btn = document.getElementById('rm-ler-btn');
+  recursoArquivos = [];
+  btn.disabled = true;
+  const files = [...(input.files || [])];
+  if (!files.length) { status.textContent = ''; return; }
+  if (files.length > 3) { status.textContent = 'Envie no máximo 3 arquivos.'; status.className = 'text-xs text-red-500'; return; }
+  status.textContent = '⏳ Preparando…'; status.className = 'text-xs text-gray-500';
+  try {
+    for (const f of files) {
+      if (f.type === 'application/pdf') {
+        if (f.size > 3 * 1024 * 1024) throw new Error('O PDF passa de 3 MB.');
+        recursoArquivos.push({ mediaType: 'application/pdf', base64: await lerArquivoBase64(f) });
+      } else if (/^image\//.test(f.type)) {
+        recursoArquivos.push(await reduzirImagemRecurso(f));
+      } else throw new Error('Envie foto (JPG/PNG) ou PDF.');
+    }
+    status.textContent = `✓ ${files.length} arquivo(s) pronto(s). Clique em "Ler notificação com IA".`;
+    status.className = 'text-xs text-green-600';
+    btn.disabled = false;
+  } catch (e) {
+    recursoArquivos = [];
+    status.textContent = e.message === 'imagem' ? 'Não consegui abrir a imagem. Tente outra foto.' : e.message;
+    status.className = 'text-xs text-red-500';
+  }
+}
+
+async function lerNotificacaoRecurso() {
+  if (!recursoArquivos.length) return;
+  const status = document.getElementById('rm-status');
+  const btn = document.getElementById('rm-ler-btn');
+  btn.disabled = true;
+  status.textContent = '🤖 Lendo a notificação… (cerca de 20 segundos)'; status.className = 'text-xs text-indigo-600';
+  try {
+    const r = await fetch('/api/recurso-multa/ler-notificacao', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ arquivos: recursoArquivos }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Não foi possível ler a notificação.');
+    const c = d.campos || {};
+    let n = 0;
+    Object.entries(c).forEach(([k, v]) => {
+      const el = document.getElementById(`f-rm_${k}`);
+      if (el && v) { el.value = v; n++; }
+    });
+    if (c.tipo_notificacao === 'penalidade') document.getElementById('f-rm_tipoPeca').value = 'recurso_jari';
+    if (c.tipo_notificacao === 'autuacao') document.getElementById('f-rm_tipoPeca').value = 'defesa_previa';
+    if (c.velocidade_medida || c.equipamento) document.querySelector('#form-fields details')?.setAttribute('open', '');
+    atualizarPrazoRecurso();
+    status.textContent = `✓ ${n} campos preenchidos. Confira cada um com a notificação antes de gerar.`;
+    status.className = 'text-xs text-green-600';
+  } catch (e) {
+    status.textContent = e.message; status.className = 'text-xs text-red-500';
+  } finally {
+    btn.disabled = !recursoArquivos.length;
+  }
+}
+
+const rmParseData = s => {
+  const m = String(s || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  return m ? new Date(+m[3], +m[2] - 1, +m[1]) : null;
+};
+function atualizarPrazoRecurso() {
+  const prazo = rmParseData(document.getElementById('f-rm_prazo_final')?.value);
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  document.getElementById('rm-prazo-wrap')?.classList.toggle('hidden', !(prazo && prazo < hoje));
 }
 
 // ── Arquivo da Assinatura Digital ───────────────────────────────────────────
@@ -4900,6 +5165,32 @@ function buildParams(inputType) {
       carteirinhaVerso: asdCarteirinha.verso || '',
     };
 
+  // Recurso de Multa: nomes iguais aos de CAMPOS_NOTIFICACAO (recurso-multa.js).
+  // A notificação em si não vai — ela já foi lida; vai só o que o cliente conferiu.
+  if (inputType === 'recurso_multa') {
+    const campos = ['orgao_autuador', 'numero_auto', 'placa', 'marca_modelo', 'data_infracao', 'hora_infracao',
+      'local_infracao', 'municipio_infracao', 'codigo_infracao', 'descricao_infracao', 'amparo_legal', 'natureza',
+      'valor_multa', 'data_expedicao_notificacao', 'prazo_final', 'velocidade_permitida', 'velocidade_medida',
+      'velocidade_considerada', 'equipamento', 'data_verificacao_equipamento', 'matricula_agente'];
+    const dados = {};
+    campos.forEach(k => { dados[k] = g(`rm_${k}`); });
+    return {
+      tipoPeca: g('rm_tipoPeca'),
+      dados,
+      respostas: {
+        abordado: g('rm_abordado'), sinalizacao: g('rm_sinalizacao'), sinalizacao_detalhe: g('rm_sinalizacao_detalhe'),
+        medidor: g('rm_medidor'), outra_infracao_12m: g('rm_outra_infracao_12m'),
+        dados_divergentes: g('rm_dados_divergentes'), relato: g('rm_relato'),
+      },
+      requerente: {
+        qualidade: g('rm_qualidade'), nome: g('rm_nome'), cpf: cd(g('rm_cpf')), cnh: cd(g('rm_cnh')),
+        endereco: g('rm_endereco'), cidade: g('rm_cidade'),
+      },
+      ciente: !!document.getElementById('f-rm_ciente')?.checked,
+      cienteForaDoPrazo: !!document.getElementById('f-rm_ciente_prazo')?.checked,
+    };
+  }
+
   // Assinatura Digital: o PDF vai em base64 puro; o nome do arquivo acompanha
   // para o documento chegar identificado para quem assina.
   if (inputType === 'assinatura_digital')
@@ -4977,6 +5268,23 @@ function buildParams(inputType) {
 // Validação rápida no cliente antes de enviar (espelha as regras do servidor,
 // para dar feedback imediato sem depender da resposta da API externa).
 function validateParams(inputType, p) {
+  if (inputType === 'recurso_multa') {
+    const d = p.dados;
+    if (!d.orgao_autuador) return 'Informe o órgão autuador.';
+    if (!d.numero_auto) return 'Informe o número do auto de infração.';
+    if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(d.placa)) return 'Placa inválida.';
+    if (!rmParseData(d.data_infracao)) return 'Informe a data da infração (dd/mm/aaaa).';
+    if (p.requerente.nome.length < 5) return 'Informe o nome completo de quem assina.';
+    if (p.requerente.cpf.length !== 11) return 'CPF de quem assina inválido.';
+    const prazo = rmParseData(d.prazo_final);
+    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+    if (prazo && prazo < hoje && !p.cienteForaDoPrazo) {
+      atualizarPrazoRecurso();
+      return 'O prazo informado já passou. Confira a data ou marque a confirmação no fim do formulário.';
+    }
+    if (!p.ciente) return 'Marque a confirmação de que conferiu os dados.';
+    return null;
+  }
   if (inputType === 'assinatura_digital') {
     if (!p.arquivoBase64) return 'Anexe o documento em PDF que será assinado.';
     if (!p.nome || p.nome.length < 3) return 'Informe o nome completo de quem vai assinar.';
@@ -5113,7 +5421,7 @@ function validateParams(inputType, p) {
 function setQueryLoading(on) {
   document.getElementById('query-submit').disabled = on;
   document.getElementById('query-submit-text').textContent = on
-    ? 'Processando...'
+    ? (selectedSvc?.inputType === 'recurso_multa' ? 'Redigindo o recurso com IA (cerca de 1 min)...' : 'Processando...')
     : (editingComunicacaoVendaQueryId ? 'Salvar Alterações' : queryActionLabel(selectedSvc?.inputType));
   document.getElementById('query-spinner').classList.toggle('hidden', !on);
 }

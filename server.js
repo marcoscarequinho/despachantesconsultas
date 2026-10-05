@@ -12,6 +12,7 @@ const PDFDocument = require('pdfkit');
 const bwipjs = require('bwip-js');
 const pdfParse = require('pdf-parse');
 const { PDFDocument: PDFLibDocument, StandardFonts: PDFLibStandardFonts, rgb } = require('pdf-lib');
+const recursoMulta = require('./recurso-multa');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1003,6 +1004,13 @@ const SERVICES = [
   // processCatalogQuery).
   { id:'assinatura-verificar-crlv-data-crv', name:'Verificar CRLV + Data CRV', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'placa', icon:'📅',
     slowNote:`Situação do CRLV, último licenciamento e a data de emissão do CRV, em PDF. Incluído na Assinatura Coisas de Despachantes, com cota própria de ${ASSINATURA_VERIFICAR_CRLV_COTA} consultas por período.` },
+  // Recurso de Multa com IA (ver recurso-multa.js) — defesa prévia ou recurso à
+  // JARI em PDF, a partir da notificação e de perguntas objetivas. Grupo
+  // próprio e PAGO: o grupo "Para os Despachantes" é gratuito por regra
+  // (FREE_SERVICE_GROUPS), e cada recurso custa chamada de IA. No painel ele
+  // tem faixa própria na Visão Geral, acima da Assinatura Digital.
+  { id:'recurso-multa-ia', name:'Recurso de Multa com IA', group:'Recurso de Multas', basePrice:80, noMarkup:true, inputType:'recurso_multa', icon:'⚖️',
+    slowNote:'Envie a foto ou o PDF da notificação, confira os dados e responda as perguntas. A IA redige a defesa prévia ou o recurso à JARI em PDF, pronto para assinar e protocolar (leva cerca de 1 minuto). Só é cobrado se o PDF for gerado.' },
   // ── CRLV-e Rio de Janeiro (destaque no topo da Nova Consulta) ──
   // Saem da API portaldespachantes.online (consultar-crlv-rj e -rj2, ver
   // PORTAL_PLACA_MAP): mesmo contrato — POST { placa }, header chaveAcesso e o
@@ -1601,6 +1609,17 @@ async function initDB() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_assinafy_pending_query ON assinafy_pending(query_id);`);
+  // Leituras de notificação do Recurso de Multa com IA: a leitura é grátis,
+  // mas cada uma é uma chamada paga na Anthropic — a tabela só existe para o
+  // limite diário por cliente (RECURSO_MULTA_LEITURAS_DIA).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS recurso_multa_leituras (
+      id         SERIAL PRIMARY KEY,
+      user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_recurso_multa_leituras_user ON recurso_multa_leituras(user_id, created_at);`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS whatsapp_inbox (
       id           SERIAL PRIMARY KEY,
@@ -6820,6 +6839,100 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         },
         charged: 0,
       });
+    }
+
+    // ── Recurso de Multa com IA (ver recurso-multa.js) ────────────────────────
+    // Os dados já chegam conferidos pelo cliente (lidos da notificação em
+    // /api/recurso-multa/ler-notificacao e editados no formulário). Tudo que
+    // barra o pedido — campo faltando, prazo vencido, nenhum fundamento — é
+    // checado ANTES da chamada à IA, e o débito só acontece com o PDF pronto.
+    if (serviceId === 'recurso-multa-ia') {
+      const txt = (v, max = 200) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+      const dados = {};
+      for (const k of Object.keys(recursoMulta.CAMPOS_NOTIFICACAO))
+        if (k !== 'eh_notificacao_transito' && k !== 'tipo_notificacao') dados[k] = txt(params?.dados?.[k]);
+      dados.placa = dados.placa.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (!['leve', 'media', 'grave', 'gravissima'].includes(dados.natureza)) dados.natureza = '';
+      const r = params?.respostas || {};
+      const respostas = {
+        abordado: r.abordado === 'sim' ? 'sim' : 'nao',
+        sinalizacao: r.sinalizacao === 'sim' ? 'sim' : 'nao',
+        sinalizacao_detalhe: txt(r.sinalizacao_detalhe, 500),
+        medidor: ['sem_data', 'vencida', 'ok', 'nao_aplica'].includes(r.medidor) ? r.medidor : 'nao_aplica',
+        outra_infracao_12m: r.outra_infracao_12m === 'nao' ? 'nao' : 'sim',
+        dados_divergentes: txt(r.dados_divergentes, 500),
+        relato: String(r.relato ?? '').trim().slice(0, 2000),
+      };
+      const q = params?.requerente || {};
+      const requerente = {
+        nome: txt(q.nome, 120),
+        cpf: String(q.cpf || '').replace(/\D/g, ''),
+        cnh: txt(q.cnh, 20).replace(/\D/g, ''),
+        endereco: txt(q.endereco, 250),
+        cidade: txt(q.cidade, 80),
+        qualidade: q.qualidade === 'condutor' ? 'condutor' : 'proprietario',
+      };
+      const tipoPeca = params?.tipoPeca === 'recurso_jari' ? 'recurso_jari' : 'defesa_previa';
+
+      if (!dados.orgao_autuador) return res.status(400).json({ error: 'Informe o órgão autuador.' });
+      if (!dados.numero_auto) return res.status(400).json({ error: 'Informe o número do auto de infração.' });
+      if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(dados.placa)) return res.status(400).json({ error: 'Placa inválida.' });
+      if (!recursoMulta.parseDataBR(dados.data_infracao)) return res.status(400).json({ error: 'Informe a data da infração (dd/mm/aaaa).' });
+      for (const [campo, rot] of [['data_expedicao_notificacao', 'de expedição da notificação'], ['prazo_final', 'do prazo final'], ['data_verificacao_equipamento', 'da verificação do medidor']])
+        if (dados[campo] && !recursoMulta.parseDataBR(dados[campo]))
+          return res.status(400).json({ error: `Data ${rot} inválida. Use dd/mm/aaaa.` });
+      if (requerente.nome.length < 5) return res.status(400).json({ error: 'Informe o nome completo do requerente.' });
+      if (requerente.cpf.length !== 11 || !isValidDoc(requerente.cpf)) return res.status(400).json({ error: 'CPF do requerente inválido.' });
+      // Petição fora do prazo não é analisada: cobrar R$ 80 por ela sem avisar
+      // seria vender papel. O cliente pode seguir (prazo prorrogado, data lida
+      // errada), mas só depois de dizer que sabe.
+      const prazo = recursoMulta.parseDataBR(dados.prazo_final);
+      if (prazo && prazo < recursoMulta.hojeBR() && params?.cienteForaDoPrazo !== true)
+        return res.status(400).json({ error: `O prazo informado (${dados.prazo_final}) já passou. Petição entregue fora do prazo não é analisada pelo órgão. Se o prazo estiver certo e mesmo assim quiser gerar, marque a confirmação no formulário.`, code: 'FORA_DO_PRAZO' });
+
+      const prep = recursoMulta.prepararRecurso(dados, respostas);
+      if (prep.erro) return res.status(400).json({ error: prep.erro });
+
+      let pdfBuf;
+      try {
+        ({ pdf: pdfBuf } = await recursoMulta.gerarRecurso({ dados, respostas, req: requerente, tipoPeca, teses: prep.teses }));
+      } catch (e) {
+        console.error(`[${serviceId}] falha ao gerar:`, e.semChave ? 'sem ANTHROPIC_API_KEY' : e.message);
+        return res.status(502).json({ error: 'Não foi possível gerar o recurso agora. Nada foi cobrado. Tente de novo em instantes.' });
+      }
+
+      // params gravado sem CPF completo e sem o relato (que pode ter dado
+      // pessoal de terceiros) — o documento inteiro fica no pdf_cache.
+      const paramsLog = {
+        tipoPeca, placa: dados.placa, numero_auto: dados.numero_auto, orgao_autuador: dados.orgao_autuador,
+        codigo_infracao: dados.codigo_infracao, teses: prep.teses.map(t => t.id),
+        requerente: requerente.nome, cpf: requerente.cpf.replace(/\d(?=\d{4})/g, '*'),
+      };
+      await debitarConsulta(userId, price);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name} — ${dados.placa}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify(paramsLog), price, txRow.rows[0].id]
+      );
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, { placa: dados.placa });
+      const nomeArq = `mcdespachadoria-recurso-multa-${dados.placa}.pdf`;
+      if (user.phone) {
+        const caption = `✅ *${tipoPeca === 'recurso_jari' ? 'Recurso à JARI' : 'Defesa prévia'} pronta!*\n🔤 Placa: ${dados.placa}\n📄 Auto: ${dados.numero_auto}\n\nConfira os dados, assine e protocole no ${dados.orgao_autuador} dentro do prazo. As orientações estão na última página.`;
+        await sendWhatsAppPdf(user.phone, pdfBuf, nomeArq, caption).catch(() => {});
+      }
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
+      return res.send(pdfBuf);
     }
 
     // ── Serviços manuais (upload de arquivo pelo super admin — resultado não vem na hora) ──
@@ -12291,6 +12404,50 @@ function validarCamposCrlve(bruto) {
 
   return { campos, rejeitados };
 }
+
+// ── POST /api/recurso-multa/ler-notificacao ───────────────────────────────────
+// Primeira etapa do Recurso de Multa com IA: lê a foto (frente/verso) ou o PDF
+// da notificação e devolve os campos para o cliente CONFERIR no formulário —
+// nada aqui é cobrado nem gravado além da contagem do limite diário. O painel
+// já reduz as fotos antes de mandar (o corpo da function da Vercel para em
+// 4,5 MB), então os limites abaixo são só a trava do servidor.
+const RECURSO_MULTA_LEITURAS_DIA = 15;
+const RECURSO_MULTA_TIPOS = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+app.post('/api/recurso-multa/ler-notificacao', requireAuth, async (req, res) => {
+  const arquivos = Array.isArray(req.body?.arquivos) ? req.body.arquivos : [];
+  if (!arquivos.length) return res.status(400).json({ error: 'Envie a foto ou o PDF da notificação.' });
+  if (arquivos.length > 3) return res.status(400).json({ error: 'Envie no máximo 3 arquivos (frente e verso, por exemplo).' });
+  let total = 0;
+  const limpos = [];
+  for (const a of arquivos) {
+    const mediaType = String(a?.mediaType || '');
+    const base64 = String(a?.base64 || '').replace(/^data:[^,]*,/, '').replace(/\s+/g, '');
+    if (!RECURSO_MULTA_TIPOS.includes(mediaType)) return res.status(400).json({ error: 'Formato não aceito. Envie foto (JPG, PNG) ou PDF.' });
+    if (!base64) return res.status(400).json({ error: 'Arquivo vazio.' });
+    total += Math.floor(base64.length * 3 / 4);
+    limpos.push({ mediaType, base64 });
+  }
+  if (total > 4 * 1024 * 1024) return res.status(400).json({ error: 'Arquivos grandes demais (máx. 4 MB no total). Tire a foto com menos zoom ou envie o PDF.' });
+
+  try {
+    const usadas = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM recurso_multa_leituras WHERE user_id=$1 AND created_at > NOW() - INTERVAL '1 day'`,
+      [req.user.id]
+    );
+    if (usadas.rows[0].n >= RECURSO_MULTA_LEITURAS_DIA)
+      return res.status(429).json({ error: 'Você atingiu o limite de leituras automáticas de hoje. Preencha os campos à mão — o recurso funciona do mesmo jeito.' });
+    await pool.query('INSERT INTO recurso_multa_leituras (user_id) VALUES ($1)', [req.user.id]);
+
+    const campos = await recursoMulta.lerNotificacao(limpos);
+    if (!campos.eh_notificacao_transito)
+      return res.status(422).json({ error: 'Não reconhecemos uma notificação de trânsito nesse arquivo. Confira se enviou o documento certo ou preencha os campos à mão.' });
+    campos.placa = String(campos.placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return res.json({ campos });
+  } catch (e) {
+    console.error('[recurso-multa] leitura da notificação:', e.semChave ? 'sem ANTHROPIC_API_KEY' : e.message);
+    return res.status(502).json({ error: 'Não foi possível ler a notificação agora. Preencha os campos à mão ou tente de novo.' });
+  }
+});
 
 // ── POST /api/pdf/extrair-crlve ───────────────────────────────────────────────
 // Irmã da /api/pdf/extrair-atpv, para o outro documento: recebe o texto e as
