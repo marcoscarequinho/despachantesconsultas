@@ -27,10 +27,23 @@ const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 // Na Vercel a chave foi cadastrada como LLM_API_KEY (05/10/2026). Ela só é
 // aceita se tiver cara de chave da Anthropic — chave de outro provedor daria
 // 401 com mensagem confusa em vez de "sem chave".
+// O trim não é cosmético: em 06/10/2026 a chave colada no painel da Vercel
+// voltava 401 "API key is invalid" enquanto o mesmo valor funcionava no .env
+// local — quebra de linha/espaço invisível que veio junto na colagem.
 function chaveAnthropic() {
-  if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY;
-  const llm = process.env.LLM_API_KEY || '';
+  const principal = (process.env.ANTHROPIC_API_KEY || '').trim();
+  if (principal) return principal;
+  const llm = (process.env.LLM_API_KEY || '').trim();
   return llm.startsWith('sk-ant-') ? llm : '';
+}
+
+// Impressão digital da chave para o log do 401: dá para comparar o valor da
+// Vercel com o do .env sem que a chave apareça em lugar nenhum.
+function digitalChave() {
+  const bruta = process.env.ANTHROPIC_API_KEY || process.env.LLM_API_KEY || '';
+  const k = chaveAnthropic();
+  const hash = require('crypto').createHash('sha256').update(k).digest('hex').slice(0, 8);
+  return `tamanho ${k.length} (bruto ${bruta.length}), prefixo ${k.slice(0, 10)}, sha256 ${hash}`;
 }
 
 let clienteAnthropic = null;
@@ -398,6 +411,6 @@ async function gerarRecurso({ dados, respostas, req, tipoPeca, teses }) {
 }
 
 module.exports = {
-  CAMPOS_NOTIFICACAO, TESES, lerNotificacao, parseDataBR, hojeBR, diasEntre,
+  CAMPOS_NOTIFICACAO, TESES, lerNotificacao, parseDataBR, hojeBR, diasEntre, digitalChave,
   tesesAplicaveis, prepararRecurso, gerarRecurso, montarPdf,
 };

@@ -6897,7 +6897,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       try {
         ({ pdf: pdfBuf } = await recursoMulta.gerarRecurso({ dados, respostas, req: requerente, tipoPeca, teses: prep.teses }));
       } catch (e) {
-        console.error(`[${serviceId}] falha ao gerar:`, e.semChave ? 'sem ANTHROPIC_API_KEY' : e.message);
+        console.error(`[${serviceId}] falha ao gerar:`, e.semChave ? 'sem ANTHROPIC_API_KEY' : e.message, e.status === 401 ? `— chave: ${recursoMulta.digitalChave()}` : '');
         return res.status(502).json({ error: 'Não foi possível gerar o recurso agora. Nada foi cobrado. Tente de novo em instantes.' });
       }
 
@@ -12444,7 +12444,7 @@ app.post('/api/recurso-multa/ler-notificacao', requireAuth, async (req, res) => 
     campos.placa = String(campos.placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     return res.json({ campos });
   } catch (e) {
-    console.error('[recurso-multa] leitura da notificação:', e.semChave ? 'sem ANTHROPIC_API_KEY' : e.message);
+    console.error('[recurso-multa] leitura da notificação:', e.semChave ? 'sem ANTHROPIC_API_KEY' : e.message, e.status === 401 ? `— chave: ${recursoMulta.digitalChave()}` : '');
     return res.status(502).json({ error: 'Não foi possível ler a notificação agora. Preencha os campos à mão ou tente de novo.' });
   }
 });
