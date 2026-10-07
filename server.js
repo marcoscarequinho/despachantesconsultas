@@ -4320,6 +4320,87 @@ function buildConsultaRenavamPdfBuffer(service, data, params) {
   });
 }
 
+// ── Número do CRV Digital — relatório no padrão do site ─────────────────────
+// A despbrasil só devolve o PDF pronto em arquivo_url (sem JSON com os dados),
+// num layout genérico dela. Lemos o texto desse PDF e remontamos o relatório
+// com o cabeçalho/barras/grade dos nossos. No texto extraído o rótulo vem numa
+// linha ("PLACA:") e o valor na seguinte ("TTT7A54"), agrupados por seção
+// ("DADOS DO VEÍCULO", "DADOS DO PROPRIETÁRIO", "DADOS CRLV") — conferido
+// contra a API real em 07/10/2026 (placa TTT7A54). O que vem depois de
+// "INFORMAÇÕES IMPORTANTES" é o aviso legal deles, que o nosso rodapé substitui.
+const CRV_DIGITAL_SECOES = {
+  'DADOS DO VEICULO': 'veiculo',
+  'DADOS DO PROPRIETARIO': 'proprietario',
+  'DADOS CRLV': 'crlv',
+};
+const semAcentoMaiusculo = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+
+async function extractNumeroCrvDigitalFromPdf(pdfBuf) {
+  const { text } = await pdfParseTolerante(pdfBuf);
+  const linhas = String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
+  const secoes = { veiculo: [], proprietario: [], crlv: [] };
+  let atual = null;
+  for (let i = 0; i < linhas.length; i++) {
+    const norm = semAcentoMaiusculo(linhas[i]);
+    if (norm.startsWith('INFORMACOES IMPORTANTES')) break;
+    if (CRV_DIGITAL_SECOES[norm]) { atual = CRV_DIGITAL_SECOES[norm]; continue; }
+    if (!atual) continue;
+    const m = linhas[i].match(/^(.+?):\s*(.*)$/);
+    if (!m) continue;
+    let valor = m[2].trim();
+    if (!valor && i + 1 < linhas.length && !/:\s*$/.test(linhas[i + 1])) valor = linhas[++i];
+    secoes[atual].push([m[1].trim(), valor]);
+  }
+  const numeroCrv = (secoes.crlv.find(([r]) => semAcentoMaiusculo(r) === 'NUMERO CRV') || [])[1];
+  return { secoes, numeroCrv: semDadoUtil(numeroCrv) ? null : numeroCrv };
+}
+
+function buildNumeroCrvDigitalPdfBuffer(service, dados, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+      // Rótulo do fornecedor vem em caixa alta ("MARCA / MODELO") — no nosso
+      // padrão a grade usa só a inicial maiúscula, fora as siglas do mapa.
+      const ROTULOS = { 'UF': 'UF', 'NUMERO CRV': 'Número do CRV', 'ANO FAB.': 'Ano fabricação', 'ANO MOD.': 'Ano modelo' };
+      const rotulo = r => ROTULOS[semAcentoMaiusculo(r)] || (r.charAt(0) + r.slice(1).toLowerCase());
+      const pares = lista => lista.map(([r, v]) => [rotulo(r), semDadoUtil(v) ? 'Nada consta' : v]);
+
+      pdfReportHeader(doc, 'NÚMERO DO CRV DIGITAL', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Placa', maskPlacaDisplay(params?.placa)]]);
+      doc.moveDown(0.4);
+
+      // O número do CRV é o que o cliente veio buscar: sai primeiro no bloco.
+      pdfBar(doc, 'CRV DIGITAL');
+      const ehNumero = ([r]) => semAcentoMaiusculo(r) === 'NUMERO CRV';
+      pdfFieldGrid(doc, pares([...dados.secoes.crlv.filter(ehNumero), ...dados.secoes.crlv.filter(p => !ehNumero(p))]));
+      doc.moveDown(0.4);
+
+      pdfBar(doc, 'DADOS DO VEÍCULO');
+      if (dados.secoes.veiculo.length) pdfFieldGrid(doc, pares(dados.secoes.veiculo));
+      else pdfEmptyNotice(doc, 'Nenhum dado retornado para essa placa.');
+      doc.moveDown(0.4);
+
+      if (dados.secoes.proprietario.length) {
+        pdfBar(doc, 'DADOS DO PROPRIETÁRIO');
+        pdfFieldGrid(doc, pares(dados.secoes.proprietario));
+        doc.moveDown(0.4);
+      }
+
+      pdfReportFooter(doc, now);
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── Extração de campos — "Número ATPV-E" (despbrasil só devolve o PDF pronto em
 // arquivo_url, sem JSON estruturado; extraímos o texto desse PDF — sempre no
 // formato "Rótulo: valor", um por linha — para remontar o documento no layout
@@ -8449,6 +8530,27 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           return res.status(422).json({ error: 'Falha ao obter o PDF gerado pela API.' });
         }
         base64PdfBuf = Buffer.from(await pdfRes.arrayBuffer());
+        // Número do CRV Digital: o PDF da despbrasil é só a fonte dos dados — o
+        // cliente recebe o relatório no padrão do site. Sem o número do CRV no
+        // texto, recusa sem cobrar (é o único dado que o serviço promete). PDF
+        // que nem dá para ler segue como veio, para não perder uma consulta paga.
+        if (serviceId === 'numero-crv-digital') {
+          let dadosCrv = null;
+          try { dadosCrv = await extractNumeroCrvDigitalFromPdf(base64PdfBuf); }
+          catch (e) { console.error(`[${serviceId}] PDF da despbrasil ilegível, entregando o original:`, e.message); }
+          if (dadosCrv) {
+            if (!dadosCrv.numeroCrv) {
+              console.error(`[${serviceId}] PDF sem o número do CRV: ${JSON.stringify(dadosCrv.secoes)}`);
+              return res.status(422).json({ error: 'A base não retornou o número do CRV Digital para essa placa. Nenhum crédito foi debitado.' });
+            }
+            try {
+              despbrasilJsonPdfBuf = await buildNumeroCrvDigitalPdfBuffer(service, dadosCrv, params);
+              base64PdfBuf = null;
+            } catch (e) {
+              console.error(`[${serviceId}] erro ao gerar PDF do relatório, entregando o original:`, e.message);
+            }
+          }
+        }
       } else {
         const errMsg = parsed?.erro || parsed?.mensagem || parsed?.message || 'PDF não retornado pela API.';
         console.error(`[${serviceId}] resposta inesperada da despbrasil: ${JSON.stringify(parsed)}`);
