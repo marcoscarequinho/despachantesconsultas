@@ -98,6 +98,10 @@ O `verificar-crlv` (R$ 3,00, grupo Consultas Básicas) **continua intocado** —
 
 Conferido contra a API real em 22/09/2026: a resposta **nem sempre traz as datas nem `arquivo_url`** (placa ABC1D23, veículo de 1979, voltou só com os dados do veículo e `arquivo_url: null`). Por isso o relatório é montado do JSON e a linha da data sai com "Nada consta" em vez de sumir — o serviço que promete a data do CRV tem que dizer quando a base não tem essa data. Placa que a base recusa volta 400 ("Erro ao consultar veículo"), sem cobrar.
 
+### Valida CRV (portal) — resultado lido do PDF, não do JSON
+
+`valida-crv` (grátis, grupo CRV) vai para `portaldespachantes.online/valida-crv` pelo `apiUrl` default e, desde 07/10/2026, entrega PDF no padrão do site (`buildValidaCrvPdfBuffer`) em vez do JSON cru. **O `status` do JSON deles mente**: das 13 consultas de 14/09 a 07/10/2026, todas vieram `"VALIDO" / "Sem pendências"` no JSON enquanto o `pdf_base64` da MESMA resposta dizia `INVALIDO` com "E necessario concluir o desafio de verificacao" (captcha que o robô deles não passa) ou "Erro de conexão com a BIN" — o CRV nunca foi conferido. Por isso o resultado sai de `extractValidaCrvFromPdf`, e impedimento que casa `VALIDA_CRV_FALHA_PORTAL` vira 422 "indisponível" (sem afirmar válido nem inválido). Resposta sem `pdf_base64` (formato antigo) cai no JSON.
+
 ### Nome dos arquivos da Vistocar
 
 Todo PDF entregue pela Vistocar sai como **`mcdespachadoria-<consulta>-<placa>.pdf`** (`VISTOCAR_ARQUIVO_NOMES` + `nomeArquivoVistocar`, 22/09/2026): download do painel, WhatsApp, reenvio do admin e reabertura pelo histórico (`/api/pdf/:token` e `/api/admin/queries/:id/pdf`). Antes ia o id interno ("security-code-vistocar-2-ABC1D23.pdf"), que não diz nada para o cliente que salva o documento no celular. Os nomes longos são abreviados **um a um no mapa** porque o WhatsApp corta o nome na bolha do arquivo. Serviço fora do mapa devolve `null` e mantém o nome que já tinha — nada de outro fornecedor muda.

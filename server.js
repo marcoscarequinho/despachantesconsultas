@@ -4401,6 +4401,72 @@ function buildNumeroCrvDigitalPdfBuffer(service, dados, params) {
   });
 }
 
+// ── Valida CRV — relatório no padrão do site ─────────────────────────────────
+// O portal (/valida-crv) devolve JSON com status/impedimentos E um pdf_base64.
+// O JSON NÃO é confiável: em 07/10/2026 levantamos as 13 consultas desde
+// 14/09/2026 e em todas o JSON dizia "VALIDO / Sem pendências" enquanto o PDF
+// do próprio portal, da mesma resposta, dizia "INVALIDO" com o impedimento
+// "E necessario concluir o desafio de verificacao para continuar" (captcha do
+// Detran que o robô deles não passou) ou "Erro de conexão com a BIN" — ou seja,
+// o CRV nem chegou a ser conferido. Por isso o resultado é lido do PDF.
+// Falha do lado deles (VALIDA_CRV_FALHA_PORTAL) não é resultado nenhum: a
+// consulta é recusada como indisponível, em vez de afirmar válido OU inválido.
+const VALIDA_CRV_FALHA_PORTAL = /desafio de verifica|erro de conex|tente novamente/i;
+
+async function extractValidaCrvFromPdf(pdfBuf) {
+  const { text } = await pdfParseTolerante(pdfBuf);
+  const corpo = String(text || '').split(/INFORMA[ÇC][ÕO]ES IMPORTANTES/i)[0];
+  const linhas = corpo.split('\n').map(l => l.trim()).filter(Boolean);
+  const campos = {};
+  for (let i = 0; i < linhas.length; i++) {
+    const m = linhas[i].match(/^([A-Za-zÀ-ÿ ]+):\s*(.*)$/);
+    if (!m) continue;
+    let valor = m[2].trim();
+    if (!valor && i + 1 < linhas.length && !/:\s*$/.test(linhas[i + 1])) valor = linhas[++i];
+    campos[semAcentoMaiusculo(m[1])] = valor;
+  }
+  return campos;
+}
+
+function buildValidaCrvPdfBuffer(service, r, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+      const valido = r.valido;
+
+      pdfReportHeader(doc, 'VALIDAÇÃO DE CRV', now);
+
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [
+        ['Placa', maskPlacaDisplay(r.placa || params?.placa)],
+        ['UF', String(r.uf || params?.uf || '').toUpperCase() || 'Nada consta'],
+        ['Renavam', r.renavam || params?.renavam || 'Nada consta'],
+        ['Número do CRV', r.crv || params?.crv || 'Nada consta'],
+      ]);
+      doc.moveDown(0.4);
+
+      // Resultado em destaque, verde ou vermelho, como o cliente lê de relance.
+      pdfBar(doc, valido ? 'CRV VÁLIDO' : 'CRV INVÁLIDO OU COM IMPEDIMENTOS',
+        { bg: valido ? '#15803d' : '#b91c1c', size: 12 });
+      pdfFieldGrid(doc, [
+        ['Resultado', valido ? 'Válido' : 'Inválido'],
+        ['Impedimentos', semDadoUtil(r.impedimentos) ? (valido ? 'Sem pendências' : 'Nada consta') : r.impedimentos],
+      ]);
+      doc.moveDown(0.4);
+
+      pdfReportFooter(doc, now);
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── Extração de campos — "Número ATPV-E" (despbrasil só devolve o PDF pronto em
 // arquivo_url, sem JSON estruturado; extraímos o texto desse PDF — sempre no
 // formato "Rótulo: valor", um por linha — para remontar o documento no layout
@@ -8558,6 +8624,42 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       }
     }
 
+    // Valida CRV: o resultado sai do pdf_base64 da resposta, não do JSON — ver
+    // VALIDA_CRV_FALHA_PORTAL. Resposta antiga, sem PDF, usa o próprio JSON.
+    let validaCrvPdfBuf = null;
+    if (serviceId === 'valida-crv') {
+      let parsed;
+      try { parsed = JSON.parse(bodyStr); } catch { parsed = null; }
+      if (!parsed || (!parsed.status && !parsed.pdf_base64)) {
+        const errMsg = parsed?.error || parsed?.message || 'Nenhum resultado encontrado para essa consulta.';
+        console.error(`[${serviceId}] resposta inesperada do portal: ${bodyStr.slice(0, 300)}`);
+        return res.status(422).json({ error: errMsg });
+      }
+      const r = { placa: parsed.placa, uf: parsed.uf, renavam: parsed.renavam, crv: parsed.crv,
+        impedimentos: parsed.impedimentos, valido: String(parsed.status || '').toUpperCase() === 'VALIDO' };
+      if (parsed.pdf_base64) {
+        try {
+          const c = await extractValidaCrvFromPdf(Buffer.from(String(parsed.pdf_base64), 'base64'));
+          if (c.STATUS || c.RESULTADO) {
+            r.valido = semAcentoMaiusculo(c.STATUS || c.RESULTADO) === 'VALIDO';
+            r.impedimentos = c.IMPEDIMENTOS ?? null;
+          }
+        } catch (e) {
+          console.error(`[${serviceId}] PDF do portal ilegível, usando o JSON:`, e.message);
+        }
+      }
+      if (!r.valido && VALIDA_CRV_FALHA_PORTAL.test(String(r.impedimentos || ''))) {
+        console.error(`[${serviceId}] ${String(r.placa || '').toUpperCase()}: falha do portal, sem resultado — ${r.impedimentos}`);
+        return res.status(422).json({ error: 'A validação do CRV está indisponível no momento: o sistema do Detran não respondeu à verificação. Nada foi cobrado — tente novamente mais tarde.' });
+      }
+      try {
+        validaCrvPdfBuf = await buildValidaCrvPdfBuffer(service, r, params);
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF do relatório:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+      }
+    }
+
     // Serviço Vistocar (Código de Segurança) — resposta em JSON com PDF pronto
     // em base64 (mesmo padrão dos serviços em PDF_BASE64_SVCS).
     if (VISTOCAR_ENDPOINTS[serviceId]) {
@@ -8720,7 +8822,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     // Serviços genéricos (não-PDF, não-HTML): recusa cobrar se a API não retornou
     // nenhum dado relevante (corpo vazio, JSON vazio/nulo ou com indicador de falha).
     let genericData = null, genericParseOk = false;
-    const willBePdfOrHtml = isRealPdf || base64PdfBuf || htmlBuf || dcDebitoPdfBuf || dcMotorPdfBuf || despbrasilJsonPdfBuf;
+    const willBePdfOrHtml = isRealPdf || base64PdfBuf || htmlBuf || dcDebitoPdfBuf || dcMotorPdfBuf || despbrasilJsonPdfBuf || validaCrvPdfBuf;
     if (!willBePdfOrHtml) {
       const trimmed = bodyStr.trim();
       if (!trimmed) {
@@ -8765,11 +8867,11 @@ async function processCatalogQuery(userId, serviceId, params, res) {
        VALUES ($1,$2,$3,$4,'success',$5,$6,$7,$8) RETURNING id`,
       [userId, serviceId, service.name, JSON.stringify(params || {}),
        price, txRow.rows[0].id,
-       htmlBuf ? 'html' : (isRealPdf || base64PdfBuf || dcDebitoPdfBuf || dcMotorPdfBuf || despbrasilJsonPdfBuf) ? 'pdf' : 'json',
+       htmlBuf ? 'html' : (isRealPdf || base64PdfBuf || dcDebitoPdfBuf || dcMotorPdfBuf || despbrasilJsonPdfBuf || validaCrvPdfBuf) ? 'pdf' : 'json',
        resultData]
     );
     // ── Envia PDF + salva no cache por 7 dias ────────────────────────────────
-    const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null) || dcDebitoPdfBuf || dcMotorPdfBuf || despbrasilJsonPdfBuf;
+    const pdfToSend = base64PdfBuf || (isRealPdf ? bodyBuffer : null) || dcDebitoPdfBuf || dcMotorPdfBuf || despbrasilJsonPdfBuf || validaCrvPdfBuf;
 
     await notifyAdminNewQuery(user, service, price, params);
 
