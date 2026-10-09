@@ -861,6 +861,13 @@ const SERVICES = [
     slowNote:'ATENÇÃO, ao inserir a placa você concorda com os termos: "Devido ao formato como esta ATPVe é gerada, o QR Code não faz leitura — todas as demais informações deste documento são reais. Fica a seu critério."',
     noteStyle:'danger',
     modeloUrl:'/assets/modelo-atpve.pdf' },
+  // CRLV-e com Comunicação de Venda (09/10/2026): Licenciamento + BIN e
+  // Consulta Comunicado do portal montados no modelo do CRLV-e — ver
+  // gerarCrlveComunicacaoVenda. Só sai com comunicação de venda registrada.
+  { id:'crlve-comunicacao-venda',         name:'CRLV-e com Comunicação de Venda', group:'Débitos e Documentação', basePrice:150.00, noMarkup:true, inputType:'placa', icon:'🚘',
+    slowNote:'ATENÇÃO, ao inserir a placa você concorda com os termos: "Devido ao formato como este CRLVe é gerado, o QR Code não faz leitura — todas as demais informações deste documento são reais. Fica a seu critério."',
+    noteStyle:'danger',
+    modeloUrl:'/assets/modelo-crlve.pdf', modeloLabel:'Visualize modelo do CRLVe' },
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa_renavam',icon:'📝' },
   // API Datacube (form-urlencoded) — movido da Opção 2 (grupo Cadastros) para valor
   // fixo de R$5,00, noMarkup:true. O PDF é montado a partir do JSON retornado (ver
@@ -5118,6 +5125,300 @@ async function fetchComunicadoDataVenda(placa, renavam) {
   return { consultado: false, dataVenda: null };
 }
 
+// ── CRLV-e com Comunicação de Venda ─────────────────────────────────────────
+// Reproduz o CRLV-e (modelo nacional SENATRAN) com os dados de duas consultas
+// do portal: "Licenciamento + BIN" (só placa — veículo, proprietário,
+// exercício, emissão do CRLV e o renavam) e "Consulta Comunicado" (placa +
+// renavam — data da venda, data do registro e o comprador). O modelo é
+// assets/crlve-template.pdf: o CRLV-e real com TODO o texto variável apagado do
+// content stream (só sobraram rótulos, caixas e o QR Code). O QR é o único
+// elemento fixo — ele não corresponde a este veículo, e o painel avisa disso
+// antes da consulta (slowNote do serviço). O repositório é público: o modelo
+// foi limpo antes de entrar aqui e não carrega o dado de ninguém.
+//
+// Só sai documento de veículo COM comunicação de venda: sem ela a consulta
+// volta 422 com o aviso, sem cobrar (o custo das consultas fica conosco).
+const CRLVE_COMUNICACAO_SERVICE_ID = 'crlve-comunicacao-venda';
+const CRLVE_TEMPLATE_PATH = path.join(__dirname, 'assets', 'crlve-template.pdf');
+const CRLVE_SEM_COMUNICACAO_MSG = 'Esse CRLV-e não tem comunicação de venda. Nada foi cobrado.';
+
+// Os relatórios do portal são "RÓTULO:" numa linha e o valor na seguinte, mas
+// valor longo QUEBRA de linha — "GASOLINA/ALCOOL/GAS " + "NATURAL", "MARCELO
+// SENOS " + "CUNHA VALENCIO". O extractLinePairFieldsFromPdf pega só a primeira
+// metade; aqui a linha que termina em espaço é emendada na seguinte. Linha sem
+// ":" que não é valor é título de seção, e as chaves ficam também por seção —
+// a Consulta Comunicado tem "Documento:" no VENDEDOR e no COMPRADOR.
+async function extractRelatorioPortal(pdfBuf) {
+  const { text } = await pdfParseTolerante(pdfBuf);
+  const brutas = String(text || '').split('\n').filter(l => l.trim());
+  const norm = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+  const campos = {};
+  const secoes = {};
+  let secao = '';
+  for (let i = 0; i < brutas.length; i++) {
+    const linha = brutas[i].trim();
+    if (!linha.endsWith(':')) { secao = norm(linha); continue; }
+    if (brutas[i + 1] == null || brutas[i + 1].trim().endsWith(':')) continue;
+    let valor = '';
+    let j = i + 1;
+    while (j < brutas.length) {
+      valor += brutas[j];
+      if (!/\s$/.test(brutas[j]) || brutas[j + 1] == null || brutas[j + 1].trim().endsWith(':')) break;
+      j++;
+    }
+    i = j;
+    const chave = norm(linha.slice(0, -1));
+    valor = valor.replace(/\s+/g, ' ').trim();
+    if (!chave || semDadoUtil(valor)) continue;
+    if (!(chave in campos)) campos[chave] = valor;
+    (secoes[secao] ||= {})[chave] = valor;
+  }
+  return { campos, secoes };
+}
+
+// Mesma régua da fetchComunicadoDataVenda: o token do portal recusa com
+// "Muitas consultas simultâneas" e libera em segundos.
+async function chamarPortalPdf(rota, corpo, rotulo) {
+  const TENTATIVAS = 3;
+  let ultimoErro = '';
+  for (let t = 1; t <= TENTATIVAS; t++) {
+    try {
+      const r = await fetch(`${PORTAL_BASE_URL}/${rota}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', chaveAcesso: PORTAL_DESP_KEY },
+        body: JSON.stringify(corpo),
+      });
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (buf.slice(0, 4).toString('latin1') === '%PDF') return { pdf: buf };
+      const txt = buf.toString('utf8').slice(0, 300);
+      let msg = txt;
+      try { msg = extractApiErrorMsg(JSON.parse(txt)) || txt; } catch {}
+      // 4xx com JSON é resposta de negócio (placa inválida, sem registro):
+      // repetir não muda nada.
+      if (r.status >= 400 && r.status < 500 && !/simult[aâ]neas|aguarde a libera/i.test(msg)) return { erro: msg, negocio: true };
+      if (r.ok) return { erro: msg, negocio: true };
+      throw new Error(`HTTP ${r.status} — ${msg}`);
+    } catch (e) {
+      ultimoErro = e.message;
+      console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] ${rotulo} falhou na tentativa ${t}/${TENTATIVAS}:`, e.message);
+      if (t < TENTATIVAS) await new Promise(r => setTimeout(r, /simult[aâ]neas|aguarde a libera/i.test(e.message) ? 16000 : 2000));
+    }
+  }
+  return { erro: ultimoErro, negocio: false };
+}
+
+// Placa no formato antigo (AAA9999), que é o que o CRLV-e imprime em "PLACA
+// ANTERIOR". Mercosul (AAA9A99): a 5ª letra volta a dígito (A=0 … J=9).
+function placaFormatoAntigo(placa) {
+  const p = String(placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (/^[A-Z]{3}\d[A-J]\d{2}$/.test(p)) return p.slice(0, 4) + (p.charCodeAt(4) - 65) + p.slice(5);
+  return p;
+}
+
+// "17" → "17.0", "0.32" fica "0.32": o CRLV-e mostra peso/capacidade com casa decimal.
+const crlveDecimal = v => {
+  const s = String(v ?? '').trim().replace(',', '.');
+  if (!/^\d+(\.\d+)?$/.test(s)) return s;
+  return s.includes('.') ? s : `${s}.0`;
+};
+
+// Quebra o texto em linhas de "largura" caracteres (Courier: todo glifo tem a
+// mesma largura), sem cortar palavra quando dá.
+function quebrarLinhas(texto, largura) {
+  const linhas = [];
+  let atual = '';
+  for (const palavra of String(texto).split(/\s+/).filter(Boolean)) {
+    if (!atual) atual = palavra;
+    else if ((atual + ' ' + palavra).length <= largura) atual += ' ' + palavra;
+    else { linhas.push(atual); atual = palavra; }
+    while (atual.length > largura) { linhas.push(atual.slice(0, largura)); atual = atual.slice(largura); }
+  }
+  if (atual) linhas.push(atual);
+  return linhas;
+}
+
+// Junta as duas consultas nos campos do documento. Devolve { erro } quando
+// falta o que não pode faltar.
+function montarCamposCrlve(placa, lic, com) {
+  const L = lic.campos;
+  const comprador = com.secoes.comprador || {};
+  const venda = com.secoes.venda || com.campos;
+  const dataVendaBr = DATA_BR_RE.exec(String(venda.datadavenda || ''))?.[1];
+  // Mesma correção do ATPVe: a Consulta Comunicado escreve as datas um dia
+  // antes do SENATRAN (ver somarUmDiaDataBr).
+  const dataVenda = dataVendaBr ? somarUmDiaDataBr(dataVendaBr) : '';
+  const dataRegistroBr = DATA_BR_RE.exec(String(venda.dataderegistro || ''))?.[1];
+  const dataRegistro = dataRegistroBr ? somarUmDiaDataBr(dataRegistroBr) : '';
+  const uf = String(L.ufjurisdicao || '').toUpperCase();
+  const lotacao = String(L.lotacao || '').replace(/\D/g, '');
+  const potencia = String(L.potencia || '').replace(/\D/g, '');
+  const cilindradas = String(L.cilindradas || '').replace(/\D/g, '');
+  const restricoes = ['restricao1', 'restricao2', 'restricao3', 'restricao4']
+    .map(k => String(L[k] || '').replace(/_/g, ' ').toUpperCase())
+    .filter(r => r && !/^SEM RESTRICAO$/.test(r) && !/COMUNICACAO DE VENDA/.test(r));
+
+  const c = {
+    uf,
+    renavam: String(L.renavam || '').replace(/\D/g, ''),
+    placa,
+    exercicio: L.licenciamentopago || '',
+    anoFabricacao: L.anodefabricacao || '',
+    anoModelo: L.anodomodelo || '',
+    marcaModelo: L.marcamodelo || '',
+    especieTipo: [L.especie, L.tipodeveiculo].filter(Boolean).join(' '),
+    placaAnterior: [placaFormatoAntigo(L.placaantiga || placa), uf].filter(Boolean).join('/'),
+    chassi: L.chassi || '',
+    cor: L.cor || '',
+    combustivel: L.combustivel || '',
+    categoria: L.categoria || '',
+    capacidade: crlveDecimal(L.cmc),
+    potenciaCilindrada: (potencia || cilindradas) ? `${potencia || '0'}CV/${cilindradas || '0'}` : '',
+    pesoBruto: crlveDecimal(L.pbt),
+    motor: L.motor || '',
+    cmt: crlveDecimal(L.cmt),
+    eixos: L.qtdeixos || '',
+    lotacao: lotacao ? `${lotacao.padStart(2, '0')}P` : '',
+    carroceria: L.carroceria || '',
+    nome: L.nomedoproprietario || '',
+    documento: L.documento || '',
+    local: [L.municipio, uf].filter(Boolean).join(' '),
+    dataEmissao: DATA_BR_RE.exec(String(L.emissaodocrlv || ''))?.[1] || '',
+    dataVenda,
+    dataRegistro,
+    compradorNome: comprador.nome || '',
+    compradorDocumento: comprador.documento || '',
+    restricoes,
+  };
+  // O CRLV-e sai todo em maiúscula e sem acento — e o portal manda coisas
+  // como "NãO APLICAVEL" na carroceria.
+  for (const k of Object.keys(c)) if (typeof c[k] === 'string') c[k] = semAcento(c[k]).trim();
+  for (const [k, rotulo] of [['renavam', 'renavam'], ['marcaModelo', 'marca/modelo'], ['chassi', 'chassi'], ['nome', 'nome do proprietário'], ['dataVenda', 'data da venda']])
+    if (!c[k]) return { erro: rotulo };
+  return { campos: c };
+}
+
+async function buildCrlveComunicacaoPdfBuffer(c, { ocultarPessoais = false } = {}) {
+  const pdfDoc = await PDFLibDocument.load(await fs.promises.readFile(CRLVE_TEMPLATE_PATH));
+  const page = pdfDoc.getPages()[0];
+  const courier = await pdfDoc.embedFont(PDFLibStandardFonts.CourierBold);
+  const helv = await pdfDoc.embedFont(PDFLibStandardFonts.Helvetica);
+  const preto = rgb(0, 0, 0);
+
+  // Coordenadas = as do texto do CRLV-e original (origem embaixo, como no
+  // pdf-lib), lidas do próprio PDF antes de o texto ser apagado. "maxX" é a
+  // borda da célula: valor maior encolhe até 6pt e só então é cortado.
+  const V = (texto, x, y, maxX, { font = courier, size = 10.006 } = {}) => {
+    let t = toWinAnsiSafe(String(texto ?? '').trim());
+    if (!t) return;
+    let s = size;
+    while (font.widthOfTextAtSize(t, s) > maxX - x && s > 6) s -= 0.5;
+    while (t.length > 1 && font.widthOfTextAtSize(t, s) > maxX - x) t = t.slice(0, -1);
+    page.drawText(t, { x, y, size: s, font, color: preto });
+  };
+  // ocultarPessoais: só para o modelo de exemplo do painel (assets/modelo-crlve.pdf).
+  const oculto = v => (ocultarPessoais && v ? v.replace(/[A-Z0-9]/gi, '*') : v);
+
+  V(c.uf, 51.024, 784.289, 80, { font: helv, size: 4.507 });
+
+  // Coluna esquerda
+  V(oculto(c.renavam), 31.039, 733.039, 150);
+  V(oculto(c.placa), 31.039, 706.79, 98);
+  V(c.exercicio, 102.643, 706.79, 150);
+  V(c.anoFabricacao, 31.039, 680.541, 98);
+  V(c.anoModelo, 102.643, 680.541, 150);
+  V('***', 31.039, 654.292, 150);                      // número do CRV
+  V('***', 31.039, 576.708, 155);                      // código de segurança do CLA
+  V('***', 162.255, 576.708, 270);                     // CAT
+  V(c.marcaModelo, 31.039, 541.473, 270);
+  V(c.especieTipo, 31.039, 506.21, 270);
+  V(ocultarPessoais ? '*******/' + c.uf : c.placaAnterior, 31.039, 470.976, 126);
+  V(oculto(c.chassi), 130.62, 470.976, 270);
+  V(c.cor, 31.039, 435.713, 98);
+  V(c.combustivel, 102.643, 435.713, 270);
+
+  // Coluna direita
+  V(c.categoria, 316.176, 761.725, 500);
+  V(c.capacidade, 509.726, 746.985, 570);
+  V(c.potenciaCilindrada, 316.176, 720.708, 500);
+  V(c.pesoBruto, 509.726, 720.708, 570);
+  V(oculto(c.motor), 316.176, 694.459, 449);
+  V(c.cmt, 453.515, 694.459, 500);
+  V(c.eixos, 504.3, 694.459, 535);
+  V(c.lotacao, 538.4, 694.459, 572);
+  V(c.carroceria, 316.176, 668.2, 570);
+  V(oculto(c.nome), 316.176, 643.6, 570);
+  V(ocultarPessoais ? '***.***.***-**' : maskDocDisplay(c.documento), 462.9, 612, 572);
+  V(c.local, 316.176, 576.7, 505);
+  V(c.dataEmissao, 509.726, 576.7, 572);
+
+  // Seguro DPVAT: o CRLV-e de hoje sai com "*" em todas as células.
+  for (const [x, y] of [[316.2, 512.7], [389, 512.7], [316.2, 475], [423.5, 475], [494.3, 475], [316.2, 434.3], [423.5, 434.3], [494.3, 434.3]])
+    V('*', x, y, x + 10);
+
+  // Observações do veículo: é aqui que a comunicação de venda aparece.
+  // Courier 10 cabe 32 caracteres na caixa, como as linhas "*BIN...*" do
+  // documento original — por isso o preenchimento com "*".
+  const LARG = 32;
+  const linhas = ['*COMUNICACAO DE VENDA'.padEnd(LARG, '*')];
+  linhas.push(`DATA DA VENDA: ${c.dataVenda}`);
+  if (c.dataRegistro) linhas.push(`DATA DO REGISTRO: ${c.dataRegistro}`);
+  if (c.compradorNome) linhas.push(...quebrarLinhas(`COMPRADOR: ${oculto(c.compradorNome)}`, LARG));
+  if (c.compradorDocumento) {
+    const dig = String(c.compradorDocumento).replace(/\D/g, '');
+    const rot = dig.length === 14 ? 'CNPJ' : 'CPF';
+    linhas.push(`${rot}: ${ocultarPessoais ? '***.***.***-**' : maskDocDisplay(dig)}`);
+  }
+  for (const r of c.restricoes) linhas.push(...quebrarLinhas(`*${r}*`, LARG));
+  linhas.push('*'.repeat(LARG));
+  linhas.slice(0, 18).forEach((l, i) => V(l, 28.08, 391.7 - i * 12, 222));
+
+  const agora = new Date(Date.now() - TZ_BR_OFFSET_MS);
+  const p2 = n => String(n).padStart(2, '0');
+  const quando = `${p2(agora.getUTCDate())}/${p2(agora.getUTCMonth() + 1)}/${agora.getUTCFullYear()} às ${p2(agora.getUTCHours())}:${p2(agora.getUTCMinutes())}:${p2(agora.getUTCSeconds())}`;
+  V(`Documento emitido por DETRAN ${c.uf} em ${quando}.`, 31.039, 425.395, 270, { font: helv, size: 4.507 });
+
+  return Buffer.from(await pdfDoc.save());
+}
+
+// As duas consultas em sequência (a 2ª precisa do renavam da 1ª). Devolve
+// { pdf, campos } ou { status, error } — nunca cobra nada.
+async function gerarCrlveComunicacaoVenda(placa) {
+  const lic = await chamarPortalPdf('consultar-licenciamento', { placa }, 'Licenciamento + BIN');
+  if (!lic.pdf) {
+    return lic.negocio
+      ? { status: 400, error: lic.erro || 'Placa não encontrada na base do Licenciamento.' }
+      : { status: 502, error: 'A consulta de Licenciamento está indisponível agora. Nada foi cobrado — tente de novo em instantes.' };
+  }
+  const licDados = await extractRelatorioPortal(lic.pdf);
+  const renavam = String(licDados.campos.renavam || '').replace(/\D/g, '');
+  if (!renavam) {
+    console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Licenciamento sem renavam (placa ${placa}).`);
+    return { status: 422, error: 'Não encontramos o renavam desse veículo na base. Nada foi cobrado.' };
+  }
+  // O Licenciamento já diz se há comunicação. "Não" ali encerra sem gastar a
+  // Consulta Comunicado; "Sim" (ou campo ausente) segue para ela, que é quem
+  // tem a data e o comprador.
+  if (/^n[aã]o$/i.test(String(licDados.campos.comunicacaovenda || '').trim()))
+    return { status: 422, error: CRLVE_SEM_COMUNICACAO_MSG, code: 'SEM_COMUNICACAO_VENDA' };
+
+  const com = await chamarPortalPdf('consultar-comunicado', { placa, renavam }, 'Consulta Comunicado');
+  if (!com.pdf) {
+    if (com.negocio) return { status: 422, error: CRLVE_SEM_COMUNICACAO_MSG, code: 'SEM_COMUNICACAO_VENDA' };
+    return { status: 502, error: 'A Consulta Comunicado está indisponível agora. Nada foi cobrado — tente de novo em instantes.' };
+  }
+  const comDados = await extractRelatorioPortal(com.pdf);
+  const localizada = /^sim$/i.test(String(comDados.campos.sucesso || '').trim())
+    && DATA_BR_RE.test(String((comDados.secoes.venda || comDados.campos).datadavenda || ''));
+  if (!localizada) return { status: 422, error: CRLVE_SEM_COMUNICACAO_MSG, code: 'SEM_COMUNICACAO_VENDA' };
+
+  const m = montarCamposCrlve(placa, licDados, comDados);
+  if (m.erro) {
+    console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] sem ${m.erro} (placa ${placa}).`);
+    return { status: 422, error: `A base não devolveu ${m.erro} desse veículo, e o CRLV-e não sai incompleto. Nada foi cobrado.` };
+  }
+  return { pdf: await buildCrlveComunicacaoPdfBuffer(m.campos), campos: m.campos };
+}
+
 // Reserva da Proprietário Atual (v2) do portal: a Proprietário Atual da Datacube
 // (/veiculos/proprietario-atual, JSON). Cobre ano de fabricação/modelo, cor,
 // nome do proprietário e município/UF — mas NÃO a data de emissão do CRV, que
@@ -7080,6 +7381,44 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
       return res.send(pdfBuf);
+    }
+
+    // ── CRLV-e com Comunicação de Venda (ver gerarCrlveComunicacaoVenda) ──────
+    // Duas consultas do portal; o débito só acontece com o PDF pronto, e
+    // veículo sem comunicação de venda volta com o aviso, sem cobrar.
+    if (serviceId === CRLVE_COMUNICACAO_SERVICE_ID) {
+      const placa = String(params?.placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa))
+        return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+
+      const r = await gerarCrlveComunicacaoVenda(placa);
+      if (!r.pdf) return res.status(r.status).json({ error: r.error, ...(r.code ? { code: r.code } : {}) });
+
+      await debitarConsulta(userId, price);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name} — ${placa}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify({ placa }), price, txRow.rows[0].id]
+      );
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, r.pdf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, { placa });
+      const nomeArq = `mcdespachadoria-crlve-comunicacao-venda-${placa}.pdf`;
+      if (user.phone) {
+        const caption = `✅ *CRLV-e com Comunicação de Venda*\n🔤 Placa: ${placa}\n📅 Venda comunicada em ${r.campos.dataVenda}`;
+        await sendWhatsAppPdf(user.phone, r.pdf, nomeArq, caption).catch(() => {});
+      }
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
+      return res.send(r.pdf);
     }
 
     // ── Serviços manuais (upload de arquivo pelo super admin — resultado não vem na hora) ──

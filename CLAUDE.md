@@ -87,6 +87,15 @@ Entrou em 05/10/2026 (`recurso-multa-ia`, grupo próprio **"Recurso de Multas"**
 - **Nada é cobrado antes do PDF pronto**: sem nenhuma tese aplicável volta 400 explicando o motivo; prazo vencido exige `cienteForaDoPrazo` (petição fora do prazo não é analisada); falha da IA volta 502. O `queries.params` grava CPF mascarado e sem o relato.
 - **Modelo**: `claude-opus-5-5`, leitura com `effort:'low'`, redação com `effort:'medium'` em streaming, `fallbacks:'default'` (beta `server-side-fallback-2026-07-01`). A última página do PDF é uma folha de orientações (documentos, prazo, onde protocolar) com o aviso de que é modelo gerado por IA, sem garantia.
 
+### CRLV-e com Comunicação de Venda (portal)
+
+Entrou em 09/10/2026 (`crlve-comunicacao-venda`, **R$ 150,00 fixo**, só placa, em `CATALOG_DESTAQUES` logo depois da ATPVe com Comunicação de Venda). Bloco próprio em `processCatalogQuery`, lógica em `gerarCrlveComunicacaoVenda`.
+
+- **Duas consultas do portal em sequência**: `consultar-licenciamento` (Licenciamento + BIN, só placa — veículo, proprietário, exercício, emissão do CRLV e o **renavam**) → `consultar-comunicado` (placa + renavam — data da venda, registro e comprador). Os dois relatórios são "RÓTULO:" + valor na linha seguinte, com valor longo quebrado em duas linhas (a primeira termina em espaço); `extractRelatorioPortal` emenda e separa por seção (o "Documento:" aparece no vendedor e no comprador).
+- **Só sai com comunicação de venda**: Licenciamento dizendo "COMUNICAÇÃO VENDA: Não" encerra antes da 2ª consulta; Consulta Comunicado sem "Sucesso: Sim" + data da venda também. Os dois voltam 422 "Esse CRLV-e não tem comunicação de venda", **sem cobrar**. As datas da Consulta Comunicado levam o mesmo +1 dia do ATPVe (`somarUmDiaDataBr`).
+- **Modelo**: `assets/crlve-template.pdf` é o CRLV-e real com todo o texto variável **removido do content stream** (blocos de texto em `/F4 10.006`, o "RJ" do cabeçalho e o rodapé "Documento emitido por…") — o repositório é público, então o modelo não pode carregar dado de ninguém; conferido que nome/CPF/placa/chassi não aparecem em nenhum objeto. O QR é o único elemento fixo (não lê este veículo — aviso em vermelho como termo de aceite). Número do CRV, código de segurança do CLA e CAT saem "***" (nenhuma das duas fontes tem). A comunicação de venda vai em "Observações do veículo".
+- `assets/modelo-crlve.pdf` (link "Visualize modelo do CRLVe") é gerado pelo mesmo builder com `ocultarPessoais` — nome, CPF/CNPJ, placa, renavam, chassi e motor viram "*".
+
 ### Verificar CRLV + Data CRV (despbrasil)
 
 Entrou em 22/09/2026, em dois ids sobre o MESMO serviço da despbrasil (`verificar_crlv`, R$ 1,90 de custo):
