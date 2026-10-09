@@ -861,10 +861,10 @@ const SERVICES = [
     slowNote:'ATENÇÃO, ao inserir a placa você concorda com os termos: "Devido ao formato como esta ATPVe é gerada, o QR Code não faz leitura — todas as demais informações deste documento são reais. Fica a seu critério."',
     noteStyle:'danger',
     modeloUrl:'/assets/modelo-atpve.pdf' },
-  // CRLV-e com Comunicação de Venda (09/10/2026): Licenciamento + BIN e
+  // CRLV-e Rio, com Comunicação de Venda (09/10/2026): Licenciamento + BIN e
   // Consulta Comunicado do portal montados no modelo do CRLV-e — ver
   // gerarCrlveComunicacaoVenda. Só sai com comunicação de venda registrada.
-  { id:'crlve-comunicacao-venda',         name:'CRLV-e com Comunicação de Venda', group:'Débitos e Documentação', basePrice:150.00, noMarkup:true, inputType:'placa', icon:'🚘',
+  { id:'crlve-comunicacao-venda',         name:'CRLV-e Rio, com Comunicação de Venda', group:'Débitos e Documentação', basePrice:150.00, noMarkup:true, inputType:'placa', icon:'🚘',
     slowNote:'ATENÇÃO, ao inserir a placa você concorda com os termos: "Devido ao formato como este CRLVe é gerado, o QR Code não faz leitura — todas as demais informações deste documento são reais. Fica a seu critério."',
     noteStyle:'danger',
     modeloUrl:'/assets/modelo-crlve.pdf', modeloLabel:'Visualize modelo do CRLVe' },
@@ -5125,7 +5125,7 @@ async function fetchComunicadoDataVenda(placa, renavam) {
   return { consultado: false, dataVenda: null };
 }
 
-// ── CRLV-e com Comunicação de Venda ─────────────────────────────────────────
+// ── CRLV-e Rio, com Comunicação de Venda ────────────────────────────────────────
 // Reproduz o CRLV-e (modelo nacional SENATRAN) com os dados de duas consultas
 // do portal: "Licenciamento + BIN" (só placa — veículo, proprietário,
 // exercício, emissão do CRLV e o renavam) e "Consulta Comunicado" (placa +
@@ -7383,7 +7383,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       return res.send(pdfBuf);
     }
 
-    // ── CRLV-e com Comunicação de Venda (ver gerarCrlveComunicacaoVenda) ──────
+    // ── CRLV-e Rio, com Comunicação de Venda (ver gerarCrlveComunicacaoVenda) ──────
     // Duas consultas do portal; o débito só acontece com o PDF pronto, e
     // veículo sem comunicação de venda volta com o aviso, sem cobrar.
     if (serviceId === CRLVE_COMUNICACAO_SERVICE_ID) {
@@ -7413,7 +7413,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       await notifyAdminNewQuery(user, service, price, { placa });
       const nomeArq = `mcdespachadoria-crlve-comunicacao-venda-${placa}.pdf`;
       if (user.phone) {
-        const caption = `✅ *CRLV-e com Comunicação de Venda*\n🔤 Placa: ${placa}\n📅 Venda comunicada em ${r.campos.dataVenda}`;
+        const caption = `✅ *CRLV-e Rio, com Comunicação de Venda*\n🔤 Placa: ${placa}\n📅 Venda comunicada em ${r.campos.dataVenda}`;
         await sendWhatsAppPdf(user.phone, r.pdf, nomeArq, caption).catch(() => {});
       }
       res.setHeader('Content-Type', 'application/pdf');

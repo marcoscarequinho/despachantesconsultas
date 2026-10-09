@@ -87,7 +87,7 @@ Entrou em 05/10/2026 (`recurso-multa-ia`, grupo próprio **"Recurso de Multas"**
 - **Nada é cobrado antes do PDF pronto**: sem nenhuma tese aplicável volta 400 explicando o motivo; prazo vencido exige `cienteForaDoPrazo` (petição fora do prazo não é analisada); falha da IA volta 502. O `queries.params` grava CPF mascarado e sem o relato.
 - **Modelo**: `claude-opus-5-5`, leitura com `effort:'low'`, redação com `effort:'medium'` em streaming, `fallbacks:'default'` (beta `server-side-fallback-2026-07-01`). A última página do PDF é uma folha de orientações (documentos, prazo, onde protocolar) com o aviso de que é modelo gerado por IA, sem garantia.
 
-### CRLV-e com Comunicação de Venda (portal)
+### CRLV-e Rio, com Comunicação de Venda (portal)
 
 Entrou em 09/10/2026 (`crlve-comunicacao-venda`, **R$ 150,00 fixo**, só placa, em `CATALOG_DESTAQUES` logo depois da ATPVe com Comunicação de Venda). Bloco próprio em `processCatalogQuery`, lógica em `gerarCrlveComunicacaoVenda`.
 
