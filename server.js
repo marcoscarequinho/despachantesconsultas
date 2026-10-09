@@ -2742,6 +2742,16 @@ function extractApiErrorMsg(data) {
     current = current.details;
     msg = current?.msg || current?.message || current?.error || current?.erro || current?.mensagem || msg;
   }
+  // O portal repassa o erro do fornecedor dele como TEXTO de um JSON — no CRLV-e
+  // GO vem {"error":"{\"status\":false,\"erro\":\"Não foi possível emitir o CRLV.\"}"}
+  // e o cliente lia as chaves e aspas na tela. Desembrulha uma camada.
+  if (typeof msg === 'string' && /^\s*\{/.test(msg)) {
+    try {
+      const interno = JSON.parse(msg);
+      const texto = interno?.erro || interno?.error || interno?.message || interno?.mensagem || interno?.msg;
+      if (typeof texto === 'string' && texto.trim()) msg = texto.trim();
+    } catch {}
+  }
   return msg || JSON.stringify(data);
 }
 
