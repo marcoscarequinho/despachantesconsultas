@@ -14738,6 +14738,7 @@ const BROADCAST_CAMPANHAS = [
 ✅ PAGAMENTO INSTANTÂNEO: PIX: QRcod, copia e Cola, na tela.
 ✅ Faça Recarga via PIX no valor que quiser.
 🔎 Nossos Serviços:
+🛑CRLVe Rio com comunicação de venda, não se esqueça de ler os Termos de "Atenção" em vermelho acima da inserção da placa
 🛑Agora temos consulta ATPVe com comunicação de venda, Saindo na hora
 🛑Numero do CRV Antigo, dos Estados: RJ, SP, MG, CE, ES, BA, RN, PE, PB, e outros, total de 21 Estados veja em seu painel🛑
 ✅ Sem mensalidade. Pague só pelo que usar.
