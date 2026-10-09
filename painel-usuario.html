@@ -2228,7 +2228,7 @@ function inputTypeLabel(t) {
     placa_uf_select:                 'Entrada: Placa + Estado',
     placa_renavam_cpfcnpj_uf_select: 'Entrada: Placa + Renavam + CPF/CNPJ + Estado',
     placa_renavam:       'Entrada: Placa + Renavam',
-    placa_renavam_cpf:   'Entrada: Placa + Renavam + CPF',
+    placa_renavam_cpf:   'Entrada: Placa + Renavam + CPF/CNPJ',
     motor:               'Entrada: Número do Motor',
     chassi:              'Entrada: Chassi',
     cpfcnpj:             'Entrada: CPF/CNPJ',
@@ -2236,7 +2236,7 @@ function inputTypeLabel(t) {
     crv_full:            'Entrada: Placa + Renavam + Dados CRV',
     valida_crv:          'Entrada: Placa + Renavam + UF + CRV',
     crlv_agendado_placa: 'Entrada: Placa (assíncrono)',
-    crlv_agendado_cpf:   'Entrada: Placa + Renavam + CPF (assíncrono)',
+    crlv_agendado_cpf:   'Entrada: Placa + Renavam + CPF/CNPJ (assíncrono)',
     pedido_id_get:       'Entrada: ID do Pedido',
     venda:               'Entrada: Dados completos da venda',
     atpve_vistocar:      'Entrada: Dados da venda + CRLV-e e comprovantes (assíncrono)',
@@ -3404,6 +3404,10 @@ function renderFormFields(inputType, svc) {
   const placaField = field('placa', 'Placa', 'text', 'ABC1234 ou ABC-1234');
   const renavamField = field('renavam', 'Renavam', 'text', '12345678901');
   const cpfField = field('cpf', 'CPF do Proprietário', 'text', '000.000.000-00');
+  // CRLV-e por estado e agendados: o dono do veículo pode ser empresa. O
+  // parâmetro continua "cpf" (é o nome que o portal recebe); só o campo da
+  // tela aceita os 14 dígitos do CNPJ.
+  const cpfCnpjPropField = field('cpfprop', 'CPF ou CNPJ do Proprietário', 'text', '000.000.000-00 ou 00.000.000/0001-00');
 
   const vendaBody = `
     <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
@@ -3583,7 +3587,7 @@ function renderFormFields(inputType, svc) {
     placa_renavam: placaField + renavamField +
       `<p class="text-xs text-amber-600 mt-1">⚠️ Renavam deve ser o número <strong>exato</strong> do documento do veículo (9 a 11 dígitos, sem traços).</p>`,
 
-    placa_renavam_cpf: placaField + renavamField + cpfField,
+    placa_renavam_cpf: placaField + renavamField + cpfCnpjPropField,
 
     placa_uf: placaField + field('uf', 'UF (Estado)', 'text', 'SP'),
 
@@ -3954,7 +3958,7 @@ function renderFormFields(inputType, svc) {
     crlv_agendado_cpf: `
       <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 mb-2">
         ⏳ <strong>Serviço Assíncrono:</strong> Após solicitar, você receberá um pedido_id. Use "CRLV Agendado — Ver Status" para acompanhar e baixar o PDF quando concluído.
-      </div>` + placaField + renavamField + cpfField,
+      </div>` + placaField + renavamField + cpfCnpjPropField,
 
     pedido_id_get: field('pedido_id', 'ID do Pedido', 'text', '123', true, 'inputmode="numeric"'),
 
@@ -4100,8 +4104,9 @@ function renderFormFields(inputType, svc) {
       this.value = d.replace(/(\d{3})(\d{3})(\d{3})(\d{1,2})/, '$1.$2.$3-$4');
     });
   }
-  // Máscara CPF/CNPJ (vendedor/comprador do Comunicado de Venda podem ser PJ)
-  ['v_cpf', 'c_cpf'].forEach(id => {
+  // Máscara CPF/CNPJ (vendedor/comprador do Comunicado de Venda e o dono do
+  // veículo nos CRLV-e por estado podem ser PJ)
+  ['v_cpf', 'c_cpf', 'cpfprop'].forEach(id => {
     const el = document.getElementById('f-' + id);
     if (el) {
       el.addEventListener('input', function() {
@@ -5017,13 +5022,13 @@ function buildParams(inputType) {
     return { placa: g('placa'), renavam: g('renavam') };
 
   if (inputType === 'placa_renavam_cpf')
-    return { placa: g('placa'), renavam: g('renavam'), cpf: cd(g('cpf')) };
+    return { placa: g('placa'), renavam: g('renavam'), cpf: cd(g('cpfprop')) };
 
   if (inputType === 'crlv_agendado_placa')
     return { placa: g('placa') };
 
   if (inputType === 'crlv_agendado_cpf')
-    return { placa: g('placa'), renavam: g('renavam'), cpf: cd(g('cpf')) };
+    return { placa: g('placa'), renavam: g('renavam'), cpf: cd(g('cpfprop')) };
 
   if (inputType === 'crv_full')
     return {
