@@ -5140,7 +5140,15 @@ async function fetchComunicadoDataVenda(placa, renavam) {
 // volta 422 com o aviso, sem cobrar (o custo das consultas fica conosco).
 const CRLVE_COMUNICACAO_SERVICE_ID = 'crlve-comunicacao-venda';
 const CRLVE_TEMPLATE_PATH = path.join(__dirname, 'assets', 'crlve-template.pdf');
-const CRLVE_SEM_COMUNICACAO_MSG = 'Esse CRLV-e não tem comunicação de venda. Nada foi cobrado.';
+const CRLVE_SEM_COMUNICACAO_MSG = 'Esse CRLV-e não tem comunicação de venda nem intenção de venda. Nada foi cobrado.';
+
+// Restrições 1 a 4 do Licenciamento + BIN, normalizadas ("COMUNICACAO_DE_VENDA"
+// → "COMUNICACAO DE VENDA"), sem as vazias e sem "SEM RESTRICAO".
+const crlveRestricoes = L => ['restricao1', 'restricao2', 'restricao3', 'restricao4']
+  .map(k => semAcento(String(L[k] || '').replace(/_/g, ' ')).replace(/s+/g, ' ').trim())
+  .filter(r => r && r !== 'SEM RESTRICAO');
+const CRLVE_INTENCAO_RE = /INTENCAO( DE)? VENDA/;
+const CRLVE_COMUNICACAO_RE = /COMUNICACAO( DE)? VENDA/;
 
 // Os relatórios do portal são "RÓTULO:" numa linha e o valor na seguinte, mas
 // valor longo QUEBRA de linha — "GASOLINA/ALCOOL/GAS " + "NATURAL", "MARCELO
@@ -5239,10 +5247,11 @@ function quebrarLinhas(texto, largura) {
 
 // Junta as duas consultas nos campos do documento. Devolve { erro } quando
 // falta o que não pode faltar.
+// com = null quando o veículo só tem intenção de venda (sem comunicação).
 function montarCamposCrlve(placa, lic, com) {
   const L = lic.campos;
-  const comprador = com.secoes.comprador || {};
-  const venda = com.secoes.venda || com.campos;
+  const comprador = com?.secoes.comprador || {};
+  const venda = com ? (com.secoes.venda || com.campos) : {};
   const dataVendaBr = DATA_BR_RE.exec(String(venda.datadavenda || ''))?.[1];
   // Mesma correção do ATPVe: a Consulta Comunicado escreve as datas um dia
   // antes do SENATRAN (ver somarUmDiaDataBr).
@@ -5253,9 +5262,11 @@ function montarCamposCrlve(placa, lic, com) {
   const lotacao = String(L.lotacao || '').replace(/\D/g, '');
   const potencia = String(L.potencia || '').replace(/\D/g, '');
   const cilindradas = String(L.cilindradas || '').replace(/\D/g, '');
-  const restricoes = ['restricao1', 'restricao2', 'restricao3', 'restricao4']
-    .map(k => String(L[k] || '').replace(/_/g, ' ').toUpperCase())
-    .filter(r => r && !/^SEM RESTRICAO$/.test(r) && !/COMUNICACAO DE VENDA/.test(r));
+  // Comunicação e intenção têm linha própria nas observações; o resto das
+  // restrições vem depois delas.
+  const todas = crlveRestricoes(L);
+  const intencao = todas.some(r => CRLVE_INTENCAO_RE.test(r));
+  const restricoes = todas.filter(r => !CRLVE_INTENCAO_RE.test(r) && !CRLVE_COMUNICACAO_RE.test(r));
 
   const c = {
     uf,
@@ -5288,12 +5299,15 @@ function montarCamposCrlve(placa, lic, com) {
     compradorNome: comprador.nome || '',
     compradorDocumento: comprador.documento || '',
     restricoes,
+    intencao,
   };
   // O CRLV-e sai todo em maiúscula e sem acento — e o portal manda coisas
   // como "NãO APLICAVEL" na carroceria.
   for (const k of Object.keys(c)) if (typeof c[k] === 'string') c[k] = semAcento(c[k]).trim();
-  for (const [k, rotulo] of [['renavam', 'renavam'], ['marcaModelo', 'marca/modelo'], ['chassi', 'chassi'], ['nome', 'nome do proprietário'], ['dataVenda', 'data da venda']])
+  for (const [k, rotulo] of [['renavam', 'renavam'], ['marcaModelo', 'marca/modelo'], ['chassi', 'chassi'], ['nome', 'nome do proprietário']])
     if (!c[k]) return { erro: rotulo };
+  // Regra do serviço: só sai com comunicação de venda, intenção de venda ou as duas.
+  if (!c.dataVenda && !c.intencao) return { erro: 'comunicação nem intenção de venda' };
   return { campos: c };
 }
 
@@ -5359,15 +5373,19 @@ async function buildCrlveComunicacaoPdfBuffer(c, { ocultarPessoais = false } = {
   // Courier 10 cabe 32 caracteres na caixa, como as linhas "*BIN...*" do
   // documento original — por isso o preenchimento com "*".
   const LARG = 32;
-  const linhas = ['*COMUNICACAO DE VENDA'.padEnd(LARG, '*')];
-  linhas.push(`DATA DA VENDA: ${c.dataVenda}`);
-  if (c.dataRegistro) linhas.push(`DATA DO REGISTRO: ${c.dataRegistro}`);
-  if (c.compradorNome) linhas.push(...quebrarLinhas(`COMPRADOR: ${oculto(c.compradorNome)}`, LARG));
-  if (c.compradorDocumento) {
-    const dig = String(c.compradorDocumento).replace(/\D/g, '');
-    const rot = dig.length === 14 ? 'CNPJ' : 'CPF';
-    linhas.push(`${rot}: ${ocultarPessoais ? '***.***.***-**' : maskDocDisplay(dig)}`);
+  const linhas = [];
+  if (c.dataVenda) {
+    linhas.push('*COMUNICACAO DE VENDA'.padEnd(LARG, '*'));
+    linhas.push(`DATA DA VENDA: ${c.dataVenda}`);
+    if (c.dataRegistro) linhas.push(`DATA DO REGISTRO: ${c.dataRegistro}`);
+    if (c.compradorNome) linhas.push(...quebrarLinhas(`COMPRADOR: ${oculto(c.compradorNome)}`, LARG));
+    if (c.compradorDocumento) {
+      const dig = String(c.compradorDocumento).replace(/\D/g, '');
+      const rot = dig.length === 14 ? 'CNPJ' : 'CPF';
+      linhas.push(`${rot}: ${ocultarPessoais ? '***.***.***-**' : maskDocDisplay(dig)}`);
+    }
   }
+  if (c.intencao) linhas.push('*INTENCAO DE VENDA'.padEnd(LARG, '*'));
   for (const r of c.restricoes) linhas.push(...quebrarLinhas(`*${r}*`, LARG));
   linhas.push('*'.repeat(LARG));
   linhas.slice(0, 18).forEach((l, i) => V(l, 28.08, 391.7 - i * 12, 222));
@@ -5422,28 +5440,38 @@ async function gerarCrlveComunicacaoVenda(placa) {
     console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Licenciamento sem renavam (placa ${placa}).`);
     return { status: 422, error: 'Não encontramos o renavam desse veículo na base. Nada foi cobrado.' };
   }
-  // O Licenciamento já diz se há comunicação. "Não" ali encerra sem gastar a
-  // Consulta Comunicado; "Sim" (ou campo ausente) segue para ela, que é quem
-  // tem a data e o comprador.
-  if (/^n[aã]o$/i.test(String(licDados.campos.comunicacaovenda || '').trim()))
-    return { status: 422, error: CRLVE_SEM_COMUNICACAO_MSG, code: 'SEM_COMUNICACAO_VENDA' };
+  // Regra do serviço: o PDF só sai com comunicação de venda, intenção de venda
+  // ou as duas — em nenhuma outra circunstância. A intenção vem das restrições
+  // do Licenciamento; a comunicação é confirmada pela Consulta Comunicado
+  // (quem tem a data e o comprador). "COMUNICAÇÃO VENDA: Não" no Licenciamento
+  // poupa essa 2ª consulta; sem intenção, encerra ali mesmo.
+  const temIntencao = crlveRestricoes(licDados.campos).some(r => CRLVE_INTENCAO_RE.test(r));
+  const semComunicacaoNoLic = /^n[aã]o$/i.test(String(licDados.campos.comunicacaovenda || '').trim());
+  const recusa = { status: 422, error: CRLVE_SEM_COMUNICACAO_MSG, code: 'SEM_COMUNICACAO_VENDA' };
+  if (semComunicacaoNoLic && !temIntencao) return recusa;
 
-  const com = await chamarPortalPdf('consultar-comunicado', { placa, renavam }, 'Consulta Comunicado');
-  if (!com.pdf) {
-    if (com.negocio) return { status: 422, error: CRLVE_SEM_COMUNICACAO_MSG, code: 'SEM_COMUNICACAO_VENDA' };
-    return { status: 502, error: 'A Consulta Comunicado está indisponível agora. Nada foi cobrado — tente de novo em instantes.' };
+  let comDados = null;
+  if (!semComunicacaoNoLic) {
+    const com = await chamarPortalPdf('consultar-comunicado', { placa, renavam }, 'Consulta Comunicado');
+    // Fora do ar não é "sem comunicação": o Licenciamento disse que tem, e o
+    // documento não pode sair sem ela (nem só com a intenção).
+    if (!com.pdf && !com.negocio)
+      return { status: 502, error: 'A Consulta Comunicado está indisponível agora. Nada foi cobrado — tente de novo em instantes.' };
+    if (com.pdf) {
+      const d = await extractRelatorioPortal(com.pdf);
+      const localizada = /^sim$/i.test(String(d.campos.sucesso || '').trim())
+        && DATA_BR_RE.test(String((d.secoes.venda || d.campos).datadavenda || ''));
+      if (localizada) comDados = d;
+    }
   }
-  const comDados = await extractRelatorioPortal(com.pdf);
-  const localizada = /^sim$/i.test(String(comDados.campos.sucesso || '').trim())
-    && DATA_BR_RE.test(String((comDados.secoes.venda || comDados.campos).datadavenda || ''));
-  if (!localizada) return { status: 422, error: CRLVE_SEM_COMUNICACAO_MSG, code: 'SEM_COMUNICACAO_VENDA' };
+  if (!comDados && !temIntencao) return recusa;
 
   const m = montarCamposCrlve(placa, licDados, comDados);
   if (m.erro) {
     console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] sem ${m.erro} (placa ${placa}).`);
     return { status: 422, error: `A base não devolveu ${m.erro} desse veículo, e o CRLV-e não sai incompleto. Nada foi cobrado.` };
   }
-  // 3ª consulta, só depois de confirmada a comunicação (para não pagar por ela
+  // 3ª consulta, só depois de confirmada a comunicação/intenção (para não pagar por ela
   // quando o documento nem vai sair). Sem CRV Digital, a célula fica "***".
   m.campos.numeroCrv = await fetchNumeroCrvDigitalCrlve(placa);
   return { pdf: await buildCrlveComunicacaoPdfBuffer(m.campos), campos: m.campos };
@@ -7443,7 +7471,8 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       await notifyAdminNewQuery(user, service, price, { placa });
       const nomeArq = `mcdespachadoria-crlve-comunicacao-venda-${placa}.pdf`;
       if (user.phone) {
-        const caption = `✅ *CRLV-e Rio, com Comunicação de Venda*\n🔤 Placa: ${placa}\n📅 Venda comunicada em ${r.campos.dataVenda}`;
+        const caption = `✅ *CRLV-e Rio, com Comunicação de Venda*\n🔤 Placa: ${placa}\n`
+          + (r.campos.dataVenda ? `📅 Venda comunicada em ${r.campos.dataVenda}` : '📝 Intenção de venda registrada');
         await sendWhatsAppPdf(user.phone, r.pdf, nomeArq, caption).catch(() => {});
       }
       res.setHeader('Content-Type', 'application/pdf');
