@@ -5326,7 +5326,7 @@ async function buildCrlveComunicacaoPdfBuffer(c, { ocultarPessoais = false } = {
   V(c.exercicio, 102.643, 706.79, 150);
   V(c.anoFabricacao, 31.039, 680.541, 98);
   V(c.anoModelo, 102.643, 680.541, 150);
-  V('***', 31.039, 654.292, 150);                      // número do CRV
+  V(c.numeroCrv ? oculto(c.numeroCrv) : '***', 31.039, 654.292, 150);   // número do CRV (só CRV Digital)
   V('***', 31.039, 576.708, 155);                      // código de segurança do CLA
   V('***', 162.255, 576.708, 270);                     // CAT
   V(c.marcaModelo, 31.039, 541.473, 270);
@@ -5380,6 +5380,33 @@ async function buildCrlveComunicacaoPdfBuffer(c, { ocultarPessoais = false } = {
   return Buffer.from(await pdfDoc.save());
 }
 
+// Número do CRV para a célula "NÚMERO DO CRV" — o mesmo serviço do catálogo
+// (numero-crv-digital, despbrasil). Só existe para veículo com CRV Digital: o
+// de recibo em papel a despbrasil recusa com 400 ("Este veículo não possui CRV
+// Digital"). Qualquer falha aqui devolve null e a célula sai "***", como no
+// CRLV-e oficial — o número é complemento, não motivo para recusar o documento.
+async function fetchNumeroCrvDigitalCrlve(placa) {
+  try {
+    const r = await fetch(DESPBRASIL_BASE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', chaveAcesso: DESPBRASIL_KEY },
+      body: JSON.stringify({ servico: DESPBRASIL_SVCS['numero-crv-digital'].servico, placa, ...DESPBRASIL_SVCS['numero-crv-digital'].extra }),
+    });
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j?.sucesso || !j?.arquivo_url) {
+      console.log(`[${CRLVE_COMUNICACAO_SERVICE_ID}] sem CRV Digital (placa ${placa}): ${JSON.stringify(j).slice(0, 200)}`);
+      return null;
+    }
+    const pdfRes = await fetch(j.arquivo_url);
+    if (!pdfRes.ok) throw new Error(`arquivo_url HTTP ${pdfRes.status}`);
+    const { numeroCrv } = await extractNumeroCrvDigitalFromPdf(Buffer.from(await pdfRes.arrayBuffer()));
+    return numeroCrv ? String(numeroCrv).trim() : null;
+  } catch (e) {
+    console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Número do CRV Digital falhou (placa ${placa}):`, e.message);
+    return null;
+  }
+}
+
 // As duas consultas em sequência (a 2ª precisa do renavam da 1ª). Devolve
 // { pdf, campos } ou { status, error } — nunca cobra nada.
 async function gerarCrlveComunicacaoVenda(placa) {
@@ -5416,6 +5443,9 @@ async function gerarCrlveComunicacaoVenda(placa) {
     console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] sem ${m.erro} (placa ${placa}).`);
     return { status: 422, error: `A base não devolveu ${m.erro} desse veículo, e o CRLV-e não sai incompleto. Nada foi cobrado.` };
   }
+  // 3ª consulta, só depois de confirmada a comunicação (para não pagar por ela
+  // quando o documento nem vai sair). Sem CRV Digital, a célula fica "***".
+  m.campos.numeroCrv = await fetchNumeroCrvDigitalCrlve(placa);
   return { pdf: await buildCrlveComunicacaoPdfBuffer(m.campos), campos: m.campos };
 }
 
