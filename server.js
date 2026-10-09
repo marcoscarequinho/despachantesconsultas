@@ -181,11 +181,8 @@ const DESPBRASIL_SVCS = {
   // — inclusive inventada — enquanto o painel deles marcava a consulta como
   // sucesso; por isso o SP principal é a Vistocar.
   'crlv-sp-v2': { servico: 'crlv_turbo', extra: { uf: 'SP' } },
-  // CRLV-e GO (09/10/2026): saiu do portal (consultar-crlv-go), que devolvia
-  // "Não foi possível emitir o CRLV." para todo veículo GO — com CPF ou CNPJ,
-  // com ou sem renavam. Aqui é só placa. No dia da troca o crlv_turbo também
-  // respondia 502 para GO (PRR1514) enquanto o de SP emitia normal (GHT7H58).
-  'consultar-crlv-go': { servico: 'crlv_turbo', extra: { uf: 'GO' } },
+  // O CRLV-e GO também é crlv_turbo, mas NÃO entra aqui: tem duas tentativas
+  // (GO-V2 e GO) e bloco próprio em processCatalogQuery — ver emitirCrlvGoDespbrasil.
 };
 
 // ── Assinafy (assinafy.com.br) — assinatura digital de documentos ────────────
@@ -1054,8 +1051,8 @@ const SERVICES = [
   // PORTAL_PLACA_MAP). Antes dele o CE passou pela Vistocar (apiclient/crlv-ce,
   // assíncrono por webhook) e pelo CRLV-e Agendado do portal.
   { id:'crlv-ce-instantaneo', name:'CRLV-e Emissão Instantânea Ceará (CE)', group:'CRLV-e Digital', basePrice:32.50, noMarkup:true, inputType:'placa', icon:'⚡', uf:'ce' },
-  // Despbrasil (crlv_turbo + uf GO), só placa — ver DESPBRASIL_SVCS.
-  { id:'consultar-crlv-go', name:'CRLV-e Goiás (GO)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa', icon:'📄', uf:'go' },
+  // Despbrasil (crlv_turbo GO-V2, depois GO) — ver emitirCrlvGoDespbrasil.
+  { id:'consultar-crlv-go', name:'CRLV-e Goiás (GO)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄', uf:'go' },
   { id:'consultar-crlv-ma', name:'CRLV-e Maranhão (MA)',           group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-mg', name:'CRLV-e Minas Gerais (MG)',       group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ms', name:'CRLV-e Mato Grosso do Sul (MS)',group:'CRLV-e Digital', basePrice:15.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -5494,6 +5491,48 @@ async function gerarCrlveComunicacaoVenda(placa) {
   return { pdf: await buildCrlveComunicacaoPdfBuffer(m.campos), campos: m.campos };
 }
 
+// ── CRLV-e Goiás (despbrasil, crlv_turbo) ───────────────────────────────────
+// Duas rotas do mesmo serviço, tentadas em ordem — a primeira que devolver o PDF
+// é a entregue:
+//   1. uf "GO-V2" — placa + renavam + cpf (CPF ou CNPJ no mesmo campo);
+//   2. uf "GO"    — só placa (a despbrasil busca o proprietário).
+// Histórico (09/10/2026): o consultar-crlv-go do portal recusava todo veículo
+// GO; o "GO" da despbrasil respondia 502 para qualquer placa (PRR1514 e
+// ONX4882, com e sem renavam/documento) enquanto o SP do mesmo serviço emitia;
+// e o "GO-V2" respondia 404 "CRLV Turbo não disponível para UF: GO-V2" na
+// nossa chave (falta liberar do lado deles). O dono decidiu subir assim mesmo,
+// com o V2 na frente, para valer no dia em que for liberado.
+// Devolve { pdf, rota } ou { erro } — nunca cobra nada.
+async function emitirCrlvGoDespbrasil({ placa, renavam, documento }) {
+  const tentativas = [
+    { rota: 'GO-V2', corpo: { servico: 'crlv_turbo', placa, renavam, cpf: documento, uf: 'GO-V2' } },
+    { rota: 'GO',    corpo: { servico: 'crlv_turbo', placa, uf: 'GO' } },
+  ];
+  let ultimoErro = '';
+  for (const t of tentativas) {
+    try {
+      const r = await fetch(DESPBRASIL_BASE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', chaveAcesso: DESPBRASIL_KEY },
+        body: JSON.stringify(t.corpo),
+      });
+      const j = await r.json().catch(() => null);
+      if (j?.sucesso && j?.arquivo_url) {
+        const pdfRes = await fetch(j.arquivo_url);
+        const buf = Buffer.from(await pdfRes.arrayBuffer());
+        if (pdfRes.ok && buf.slice(0, 4).toString('latin1') === '%PDF') return { pdf: buf, rota: t.rota };
+        throw new Error(`arquivo_url HTTP ${pdfRes.status}, ${buf.length} bytes`);
+      }
+      ultimoErro = String(j?.erro || j?.mensagem || `HTTP ${r.status}`).trim();
+      console.error(`[consultar-crlv-go] ${t.rota} não emitiu (placa ${placa}): ${ultimoErro}`);
+    } catch (e) {
+      ultimoErro = e.message;
+      console.error(`[consultar-crlv-go] ${t.rota} falhou (placa ${placa}):`, e.message);
+    }
+  }
+  return { erro: ultimoErro };
+}
+
 // Reserva da Proprietário Atual (v2) do portal: a Proprietário Atual da Datacube
 // (/veiculos/proprietario-atual, JSON). Cobre ano de fabricação/modelo, cor,
 // nome do proprietário e município/UF — mas NÃO a data de emissão do CRV, que
@@ -7458,6 +7497,60 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       return res.send(pdfBuf);
     }
 
+    // ── CRLV-e Goiás (ver emitirCrlvGoDespbrasil) ─────────────────────────────
+    // Duas tentativas na despbrasil; o débito só acontece com o PDF na mão.
+    if (serviceId === 'consultar-crlv-go') {
+      const placa = String(params?.placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const renavam = String(params?.renavam || '').replace(/\D/g, '');
+      const documento = String(params?.cpf || '').replace(/\D/g, '');
+      if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa))
+        return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      if (renavam.length < 9 || renavam.length > 11)
+        return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+      if (documento.length !== 11 && documento.length !== 14)
+        return res.status(400).json({ error: 'Informe o CPF (11 dígitos) ou o CNPJ (14 dígitos) do proprietário.' });
+
+      const r = await emitirCrlvGoDespbrasil({ placa, renavam: renavam.padStart(11, '0'), documento });
+      if (!r.pdf) {
+        // Texto técnico da base fora do ar ("Resposta inesperada da API (HTTP
+        // 502)") e a recusa da rota não liberada não dizem nada ao cliente.
+        const tecnico = /resposta inesperada da api|error code: 5\d\d|não disponível para uf|HTTP \d{3}/i.test(r.erro || '');
+        return res.status(422).json({
+          error: tecnico || !r.erro
+            ? 'A base do Detran de Goiás não respondeu agora. Nada foi cobrado — tente de novo em alguns minutos.'
+            : `${r.erro} Nada foi cobrado.`,
+        });
+      }
+
+      // CPF/CNPJ mascarado no histórico, como nas outras consultas.
+      const paramsLog = { placa, renavam, cpf: documento.replace(/\d(?=\d{4})/g, '*'), rota: r.rota };
+      await debitarConsulta(userId, price);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name} — ${placa}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify(paramsLog), price, txRow.rows[0].id]
+      );
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, r.pdf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, { placa });
+      const nomeArq = nomeArquivoVistocar(serviceId, placa) || `CRLV-e-GO-${placa}.pdf`;
+      if (user.phone) {
+        const caption = `✅ *CRLV-e GO pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
+        await sendWhatsAppPdf(user.phone, r.pdf, nomeArq, caption).catch(() => {});
+      }
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
+      return res.send(r.pdf);
+    }
+
     // ── CRLV-e Rio, com Comunicação de Venda (ver gerarCrlveComunicacaoVenda) ──────
     // Duas consultas do portal; o débito só acontece com o PDF pronto, e
     // veículo sem comunicação de venda volta com o aviso, sem cobrar.
@@ -9307,8 +9400,8 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
       if (pdfToSend) {
         // Envia PDF via WhatsApp para CRLV-e Digital (instantâneo)
-        // Os da despbrasil (hoje o GO) saem pela regra dela, logo abaixo —
-        // aqui iriam duas vezes.
+        // Id da despbrasil com esse prefixo sai pela regra dela, logo abaixo —
+        // aqui iria duas vezes. (O GO tem bloco próprio e nem chega aqui.)
         if (serviceId.startsWith('consultar-crlv-') && !DESPBRASIL_SVCS[serviceId] && user.phone) {
           const ufCode = serviceId.replace('consultar-crlv-', '').toUpperCase();
           const placa  = (params?.placa || '').toUpperCase();
