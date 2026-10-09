@@ -89,7 +89,7 @@ Entrou em 05/10/2026 (`recurso-multa-ia`, grupo próprio **"Recurso de Multas"**
 
 ### CRLV-e Rio, com Comunicação de Venda (portal)
 
-Entrou em 09/10/2026 (`crlve-comunicacao-venda`, **R$ 150,00 fixo**, só placa, em `CATALOG_DESTAQUES` logo depois da ATPVe com Comunicação de Venda). Bloco próprio em `processCatalogQuery`, lógica em `gerarCrlveComunicacaoVenda`.
+Entrou em 09/10/2026 (`crlve-comunicacao-venda`, **R$ 60,00 fixo** (era R$ 150,00 no lançamento), só placa, em `CATALOG_DESTAQUES` logo depois da ATPVe com Comunicação de Venda). Bloco próprio em `processCatalogQuery`, lógica em `gerarCrlveComunicacaoVenda`.
 
 - **Duas consultas do portal em sequência**: `consultar-licenciamento` (Licenciamento + BIN, só placa — veículo, proprietário, exercício, emissão do CRLV e o **renavam**) → `consultar-comunicado` (placa + renavam — data da venda, registro e comprador). Os dois relatórios são "RÓTULO:" + valor na linha seguinte, com valor longo quebrado em duas linhas (a primeira termina em espaço); `extractRelatorioPortal` emenda e separa por seção (o "Documento:" aparece no vendedor e no comprador).
 - **Só sai com comunicação de venda**: Licenciamento dizendo "COMUNICAÇÃO VENDA: Não" encerra antes da 2ª consulta; Consulta Comunicado sem "Sucesso: Sim" + data da venda também. Os dois voltam 422 "Esse CRLV-e não tem comunicação de venda", **sem cobrar**. As datas da Consulta Comunicado levam o mesmo +1 dia do ATPVe (`somarUmDiaDataBr`).
