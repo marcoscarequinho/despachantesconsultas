@@ -181,6 +181,11 @@ const DESPBRASIL_SVCS = {
   // — inclusive inventada — enquanto o painel deles marcava a consulta como
   // sucesso; por isso o SP principal é a Vistocar.
   'crlv-sp-v2': { servico: 'crlv_turbo', extra: { uf: 'SP' } },
+  // CRLV-e GO (09/10/2026): saiu do portal (consultar-crlv-go), que devolvia
+  // "Não foi possível emitir o CRLV." para todo veículo GO — com CPF ou CNPJ,
+  // com ou sem renavam. Aqui é só placa. No dia da troca o crlv_turbo também
+  // respondia 502 para GO (PRR1514) enquanto o de SP emitia normal (GHT7H58).
+  'consultar-crlv-go': { servico: 'crlv_turbo', extra: { uf: 'GO' } },
 };
 
 // ── Assinafy (assinafy.com.br) — assinatura digital de documentos ────────────
@@ -403,6 +408,7 @@ const VISTOCAR_ARQUIVO_NOMES = {
   'atpve-vistocar-mg':               'atpve-mg',
   // É da despbrasil, mas o nome segue o padrão para o cliente.
   'crlv-sp-v2':                      'crlv-sp',
+  'consultar-crlv-go':               'crlv-go',
   'crlv-rio-reemissao-v2':           'crlv-rj',
 };
 const MC_ARQUIVO_PREFIXO = 'mcdespachadoria';
@@ -1048,7 +1054,8 @@ const SERVICES = [
   // PORTAL_PLACA_MAP). Antes dele o CE passou pela Vistocar (apiclient/crlv-ce,
   // assíncrono por webhook) e pelo CRLV-e Agendado do portal.
   { id:'crlv-ce-instantaneo', name:'CRLV-e Emissão Instantânea Ceará (CE)', group:'CRLV-e Digital', basePrice:32.50, noMarkup:true, inputType:'placa', icon:'⚡', uf:'ce' },
-  { id:'consultar-crlv-go', name:'CRLV-e Goiás (GO)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
+  // Despbrasil (crlv_turbo + uf GO), só placa — ver DESPBRASIL_SVCS.
+  { id:'consultar-crlv-go', name:'CRLV-e Goiás (GO)',              group:'CRLV-e Digital', basePrice:10.00, inputType:'placa', icon:'📄', uf:'go' },
   { id:'consultar-crlv-ma', name:'CRLV-e Maranhão (MA)',           group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-mg', name:'CRLV-e Minas Gerais (MG)',       group:'CRLV-e Digital', basePrice:10.00, inputType:'placa_renavam_cpf', icon:'📄' },
   { id:'consultar-crlv-ms', name:'CRLV-e Mato Grosso do Sul (MS)',group:'CRLV-e Digital', basePrice:15.00, inputType:'placa_renavam_cpf', icon:'📄' },
@@ -9026,7 +9033,13 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           }
         }
       } else {
-        const errMsg = parsed?.erro || parsed?.mensagem || parsed?.message || 'PDF não retornado pela API.';
+        let errMsg = parsed?.erro || parsed?.mensagem || parsed?.message || 'PDF não retornado pela API.';
+        // Quando a base de onde a despbrasil tira o documento cai, ela repassa o
+        // texto técnico ("Resposta inesperada da API (HTTP 502): error code: 502")
+        // — foi o CRLV-e GO em 09/10/2026. O cliente só precisa saber que é
+        // temporário e que não pagou; o texto original fica no log.
+        if (/resposta inesperada da api|error code: 5\d\d/i.test(errMsg))
+          errMsg = 'A base do Detran não respondeu agora. Nada foi cobrado — tente de novo em alguns minutos.';
         console.error(`[${serviceId}] resposta inesperada da despbrasil: ${JSON.stringify(parsed)}`);
         return res.status(422).json({ error: errMsg });
       }
@@ -9294,7 +9307,9 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
       if (pdfToSend) {
         // Envia PDF via WhatsApp para CRLV-e Digital (instantâneo)
-        if (serviceId.startsWith('consultar-crlv-') && user.phone) {
+        // Os da despbrasil (hoje o GO) saem pela regra dela, logo abaixo —
+        // aqui iriam duas vezes.
+        if (serviceId.startsWith('consultar-crlv-') && !DESPBRASIL_SVCS[serviceId] && user.phone) {
           const ufCode = serviceId.replace('consultar-crlv-', '').toUpperCase();
           const placa  = (params?.placa || '').toUpperCase();
           const caption = `✅ *CRLV-e ${ufCode} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
