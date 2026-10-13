@@ -5401,9 +5401,9 @@ async function buildCrlveComunicacaoPdfBuffer(c, { ocultarPessoais = false } = {
 
   // Coluna direita
   V(c.categoria, 316.176, 761.725, 500);
-  V(c.capacidade, 509.726, 746.985, 570);
-  V(c.potenciaCilindrada, 316.176, 720.708, 500);
-  V(c.pesoBruto, 509.726, 720.708, 570);
+  V(c.capacidade || '***', 509.726, 746.985, 570);   // sem dado: "***", como no CRLV-e oficial
+  V(c.potenciaCilindrada || '***', 316.176, 720.708, 500);
+  V(c.pesoBruto || '***', 509.726, 720.708, 570);
   V(oculto(c.motor), 316.176, 694.459, 449);
   V(c.cmt, 453.515, 694.459, 500);
   V(c.eixos, 504.3, 694.459, 535);
