@@ -4354,6 +4354,8 @@ const CRV_DIGITAL_SECOES = {
   'DADOS DO PROPRIETARIO': 'proprietario',
   'DADOS CRLV': 'crlv',
 };
+const CRV_DIGITAL_ROTULOS_SEM_DOIS_PONTOS = new Set(['PLACA', 'RENAVAM', 'CHASSI', 'MARCA/MODELO', 'ANO FABRICACAO',
+  'ANO MODELO', 'COR', 'COMBUSTIVEL', 'ESPECIE', 'CATEGORIA', 'UF', 'TIPO', 'MUNICIPIO']);
 const semAcentoMaiusculo = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
 
 async function extractNumeroCrvDigitalFromPdf(pdfBuf) {
@@ -4361,17 +4363,32 @@ async function extractNumeroCrvDigitalFromPdf(pdfBuf) {
   const linhas = String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
   const secoes = { veiculo: [], proprietario: [], crlv: [] };
   let atual = null;
+  let numeroNovo = null;
   for (let i = 0; i < linhas.length; i++) {
     const norm = semAcentoMaiusculo(linhas[i]);
-    if (norm.startsWith('INFORMACOES IMPORTANTES')) break;
+    if (norm.startsWith('INFORMACOES IMPORTANTES') || norm.startsWith('ALERTAS / INFORMACOES')) break;
+    // Layout de 13/10/2026 (FNY5J96): o número vem em destaque no topo, num
+    // rótulo próprio sem ":", e os dados do veículo são rótulo/valor também
+    // sem ":" — por isso os rótulos são reconhecidos por nome.
+    if (/^NUMERO DO CERTIFICADO DE REGISTRO/.test(norm)) {
+      const v = (linhas[i + 1] || '').replace(/\D/g, '');
+      if (v) { numeroNovo = v; i++; }
+      continue;
+    }
     if (CRV_DIGITAL_SECOES[norm]) { atual = CRV_DIGITAL_SECOES[norm]; continue; }
     if (!atual) continue;
+    if (CRV_DIGITAL_ROTULOS_SEM_DOIS_PONTOS.has(norm) && i + 1 < linhas.length
+        && !CRV_DIGITAL_ROTULOS_SEM_DOIS_PONTOS.has(semAcentoMaiusculo(linhas[i + 1]))) {
+      secoes[atual].push([linhas[i], linhas[++i]]);
+      continue;
+    }
     const m = linhas[i].match(/^(.+?):\s*(.*)$/);
     if (!m) continue;
     let valor = m[2].trim();
     if (!valor && i + 1 < linhas.length && !/:\s*$/.test(linhas[i + 1])) valor = linhas[++i];
     secoes[atual].push([m[1].trim(), valor]);
   }
+  if (numeroNovo && !secoes.crlv.length) secoes.crlv.push(['NÚMERO CRV', numeroNovo]);
   const numeroCrv = (secoes.crlv.find(([r]) => semAcentoMaiusculo(r) === 'NUMERO CRV') || [])[1];
   return { secoes, numeroCrv: semDadoUtil(numeroCrv) ? null : numeroCrv };
 }
@@ -9144,6 +9161,20 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           try { dadosCrv = await extractNumeroCrvDigitalFromPdf(base64PdfBuf); }
           catch (e) { console.error(`[${serviceId}] PDF da despbrasil ilegível, entregando o original:`, e.message); }
           if (dadosCrv) {
+            // Reserva do número: o Número da ATPVe (Consultas Fácil, despbrasil
+            // de 2ª), do qual só se aproveita o número do CRV.
+            if (!dadosCrv.numeroCrv) {
+              try {
+                const atpve = await obterCamposAtpveComunicacaoVenda(String(params?.placa || '').toUpperCase().replace(/[\s-]/g, ''), serviceId);
+                const n = String(atpve?.numerocrv || '').replace(/\D/g, '');
+                if (n) {
+                  dadosCrv.numeroCrv = n;
+                  dadosCrv.secoes.crlv = [['NÚMERO CRV', n], ...dadosCrv.secoes.crlv.filter(([r]) => semAcentoMaiusculo(r) !== 'NUMERO CRV')];
+                }
+              } catch (e) {
+                console.error(`[${serviceId}] reserva Número da ATPVe falhou:`, e.message);
+              }
+            }
             if (!dadosCrv.numeroCrv) {
               console.error(`[${serviceId}] PDF sem o número do CRV: ${JSON.stringify(dadosCrv.secoes)}`);
               return res.status(422).json({ error: 'A base não retornou o número do CRV Digital para essa placa. Nenhum crédito foi debitado.' });
