@@ -5159,7 +5159,8 @@ const CRLVE_SEM_COMUNICACAO_MSG = 'Esse CRLV-e não tem comunicação de venda n
 // Restrições 1 a 4 do Licenciamento + BIN, normalizadas ("COMUNICACAO_DE_VENDA"
 // → "COMUNICACAO DE VENDA"), sem as vazias e sem "SEM RESTRICAO".
 const crlveRestricoes = L => ['restricao1', 'restricao2', 'restricao3', 'restricao4']
-  .map(k => semAcento(String(L[k] || '').replace(/_/g, ' ')).replace(/s+/g, ' ').trim())
+  .flatMap(k => String(L[k] || '').split('|'))
+  .map(r => semAcento(r.replace(/_/g, ' ')).replace(/\s+/g, ' ').trim())
   .filter(r => r && r !== 'SEM RESTRICAO');
 const CRLVE_INTENCAO_RE = /INTENCAO( DE)? VENDA/;
 const CRLVE_COMUNICACAO_RE = /COMUNICACAO( DE)? VENDA/;
@@ -5177,9 +5178,25 @@ async function extractRelatorioPortal(pdfBuf) {
   const campos = {};
   const secoes = {};
   let secao = '';
+  let ultimaChave = '';
   for (let i = 0; i < brutas.length; i++) {
     const linha = brutas[i].trim();
-    if (!linha.endsWith(':')) { secao = norm(linha); continue; }
+    if (!linha.endsWith(':')) {
+      // Restrição com mais de um item vem uma por linha, sem rótulo e sem o
+      // espaço final da quebra: "RESTRIÇÃO 1:" / "Alienação Fiduciária" /
+      // "Intenção de venda" (FNY5J96, 13/10/2026). Título de seção é todo em
+      // maiúscula; o item tem minúscula. Os itens vão juntos, separados por "|".
+      if (secao === 'restricoes' && /^restricao\d$/.test(ultimaChave) && /[a-zà-ü]/.test(linha)
+          && !/documento gerado|p[aá]gina \d/i.test(linha)) {
+        const v = `${campos[ultimaChave] || ''} | ${linha}`.replace(/^ \| /, '');
+        campos[ultimaChave] = v;
+        secoes[secao][ultimaChave] = v;
+        continue;
+      }
+      secao = norm(linha);
+      ultimaChave = '';
+      continue;
+    }
     if (brutas[i + 1] == null || brutas[i + 1].trim().endsWith(':')) continue;
     let valor = '';
     let j = i + 1;
@@ -5194,6 +5211,7 @@ async function extractRelatorioPortal(pdfBuf) {
     if (!chave || semDadoUtil(valor)) continue;
     if (!(chave in campos)) campos[chave] = valor;
     (secoes[secao] ||= {})[chave] = valor;
+    ultimaChave = chave;
   }
   return { campos, secoes };
 }
