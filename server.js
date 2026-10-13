@@ -5405,14 +5405,14 @@ async function buildCrlveComunicacaoPdfBuffer(c, { ocultarPessoais = false } = {
   V(c.potenciaCilindrada || '***', 316.176, 720.708, 500);
   V(c.pesoBruto || '***', 509.726, 720.708, 570);
   V(oculto(c.motor), 316.176, 694.459, 449);
-  V(c.cmt, 453.515, 694.459, 500);
-  V(c.eixos, 504.3, 694.459, 535);
+  V(c.cmt || '***', 453.515, 694.459, 500);
+  V(c.eixos || '***', 504.3, 694.459, 535);
   V(c.lotacao, 538.4, 694.459, 572);
   V(c.carroceria, 316.176, 668.2, 570);
   V(oculto(c.nome), 316.176, 643.6, 570);
   V(ocultarPessoais ? '***.***.***-**' : maskDocDisplay(c.documento), 462.9, 612, 572);
   V(c.local, 316.176, 576.7, 505);
-  V(c.dataEmissao, 509.726, 576.7, 572);
+  V(c.dataEmissao || '***', 509.726, 576.7, 572);
 
   // Seguro DPVAT: o CRLV-e de hoje sai com "*" em todas as células.
   for (const [x, y] of [[316.2, 512.7], [389, 512.7], [316.2, 475], [423.5, 475], [494.3, 475], [316.2, 434.3], [423.5, 434.3], [494.3, 434.3]])
