@@ -5506,6 +5506,19 @@ async function gerarCrlveComunicacaoVenda(placa) {
   // 3ª consulta, só depois de confirmada a comunicação/intenção (para não pagar por ela
   // quando o documento nem vai sair). Sem CRV Digital, a célula fica "***".
   m.campos.numeroCrv = await fetchNumeroCrvDigitalCrlve(placa);
+  // Com intenção de venda e sem CRV Digital, o número do CRV ainda sai pelo
+  // Número da ATPVe (Consultas Fácil, despbrasil de reserva) — dele só se usa
+  // o número do CRV (FNY5J96, 13/10/2026). Falha aqui também vira "***".
+  if (!m.campos.numeroCrv && m.campos.intencao) {
+    try {
+      const atpve = await obterCamposAtpveComunicacaoVenda(placa, CRLVE_COMUNICACAO_SERVICE_ID);
+      const n = String(atpve?.numerocrv || '').replace(/\D/g, '');
+      if (n) m.campos.numeroCrv = n;
+      else console.log(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Número da ATPVe sem número do CRV (placa ${placa}).`);
+    } catch (e) {
+      console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Número da ATPVe falhou (placa ${placa}):`, e.message);
+    }
+  }
   return { pdf: await buildCrlveComunicacaoPdfBuffer(m.campos), campos: m.campos };
 }
 
