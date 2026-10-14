@@ -1832,6 +1832,13 @@ async function initDB() {
   // OUTRA venda (ver conferirPdfAtpve). Serve só para o admin ser avisado uma
   // vez, e não a cada volta do cron/polling.
   await pool.query(`ALTER TABLE vistocar_pending ADD COLUMN IF NOT EXISTS divergencia_em TIMESTAMPTZ;`);
+  // Controle das consultas de situação do ATPV-e, que o Detran limita por
+  // registro e por dia (ver consultarSituacaoComLimite): quando foi a última,
+  // o que ela disse (para responder a tela sem gastar outra) e até quando o
+  // Detran mandou parar.
+  await pool.query(`ALTER TABLE vistocar_pending ADD COLUMN IF NOT EXISTS situacao_em TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE vistocar_pending ADD COLUMN IF NOT EXISTS situacao_cache TEXT;`);
+  await pool.query(`ALTER TABLE vistocar_pending ADD COLUMN IF NOT EXISTS situacao_bloqueada_ate TIMESTAMPTZ;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_vistocar_webhooks_movement ON vistocar_webhooks(movement_id);`);
   // A tabela nasceu sem event_id/evento (primeira versão, antes da documentação
   // do webhook) — CREATE TABLE IF NOT EXISTS não acrescenta coluna em tabela que
@@ -12095,10 +12102,60 @@ const situacaoAtpveErro = s =>
 // GET /apiclient/consult/:movementId só responde depois que a Vistocar fecha a
 // consulta. O CRLV-e (e os ATPV-e antigos, cadastrados antes de o protocolo
 // passar a ser guardado) continuam pelo consult.
-async function buscarDocumentoVistocar(pend) {
+// ── Limite diário de consultas de situação do ATPV-e ─────────────────────────
+// O Detran limita as consultas de situação POR REGISTRO E POR DIA. Passou do
+// limite, a resposta é 400 "NUMERO DE REQUISICOES DIARIA EXCEDIDAS PARA ESTE
+// REGISTRO." até virar o dia — e com isso o documento pronto fica invisível
+// para nós até amanhã. Foi o que aconteceu com a SRM2D17 (#2785, 14/10/2026):
+// a tela de acompanhamento, que perguntava a cada 8s, gastou as 10 consultas
+// do dia nos 8 minutos seguintes ao registro, e o pedido ficou parado em
+// "3 · PROCESSANDO". Cada consulta nossa também volta como um webhook
+// "Situação atualizada" — foram exatamente 10 por protocolo —, ou seja, a
+// Vistocar não acompanha sozinha: se a gente não perguntar, ninguém pergunta.
+//
+// Por isso a consulta de verdade fica espaçada (15 min na primeira hora depois
+// do registro, 3 h depois disso — por volta de 11 no primeiro dia, 8 nos
+// seguintes) e, entre uma e outra, a tela e o cron recebem a última situação
+// guardada. O webhook com resultAvailable=true passa na frente do intervalo:
+// é o único sinal de que vale a pena gastar uma consulta agora. O bloqueio do
+// Detran é respeitado até a meia-noite de Brasília, sem exceção.
+const ATPVE_SITUACAO_LIMITE_RE = /REQUISIC[OÕ]ES DIARIA EXCEDIDAS/i;
+function intervaloSituacaoAtpveMs(pend) {
+  const base = new Date(pend.registrado_em || pend.created_at).getTime();
+  return Date.now() - base < 3600 * 1000 ? 15 * 60 * 1000 : 3 * 3600 * 1000;
+}
+function proximaMeiaNoiteBrasilia() {
+  // Brasília é UTC-3: o "agora" local é UTC menos 3h, e a meia-noite local é
+  // 03:00 UTC.
+  const agoraBr = new Date(Date.now() - TZ_BR_OFFSET_MS);
+  return new Date(Date.UTC(agoraBr.getUTCFullYear(), agoraBr.getUTCMonth(), agoraBr.getUTCDate() + 1) + TZ_BR_OFFSET_MS);
+}
+async function consultarSituacaoComLimite(pend, { forcar = false } = {}) {
+  let guardada = null;
+  try { guardada = pend.situacao_cache ? JSON.parse(pend.situacao_cache) : null; } catch {}
+  const bloqueada = pend.situacao_bloqueada_ate && new Date(pend.situacao_bloqueada_ate) > new Date();
+  const recente = pend.situacao_em && Date.now() - new Date(pend.situacao_em).getTime() < intervaloSituacaoAtpveMs(pend);
+  if (guardada && (bloqueada || (recente && !forcar))) return { ...guardada, guardada: true };
+  if (bloqueada) return { ok: false, erro: 'limite diário de consultas do Detran atingido para este registro', guardada: true };
+
+  const s = await consultarSituacaoAtpve(pend.service_id, pend.protocolo);
+  const estourou = ATPVE_SITUACAO_LIMITE_RE.test(String(s.erro || ''));
+  // O PDF não vai para o cache: além de pesado, ele é entregue na mesma hora.
+  const { pdfBase64, ...semPdf } = s;
+  await pool.query(
+    `UPDATE vistocar_pending SET situacao_em=NOW(), situacao_cache=$2,
+            situacao_bloqueada_ate=COALESCE($3, situacao_bloqueada_ate)
+      WHERE movement_id=$1`,
+    [pend.movement_id, JSON.stringify(estourou && guardada ? guardada : semPdf), estourou ? proximaMeiaNoiteBrasilia() : null]
+  ).catch(e => console.error(`[atpve] falha ao guardar a situação de ${pend.movement_id}:`, e.message));
+  if (estourou) console.warn(`[atpve] limite diário de consultas de situação do Detran atingido [protocolo ${pend.protocolo}, query ${pend.query_id}] — pausado até a meia-noite`);
+  return s;
+}
+
+async function buscarDocumentoVistocar(pend, opcoes = {}) {
   if (VISTOCAR_ATPVE_SVCS.has(pend.service_id) && pend.protocolo) {
     let s;
-    try { s = await consultarSituacaoAtpve(pend.service_id, pend.protocolo); }
+    try { s = await consultarSituacaoComLimite(pend, opcoes); }
     catch (e) { return { motivo: `falha ao consultar a situação: ${e.message}` }; }
     // Processo encerrado (registro recusado e estornado do lado deles): a
     // situação volta em HTTP 400 com o erro gravado, e nada mais vai sair dali.
@@ -12196,7 +12253,7 @@ async function registrarAtpvePendencia(pend) {
   await pool.query('UPDATE vistocar_pending SET registrado_em=NOW() WHERE movement_id=$1', [pend.movement_id]);
   console.log(`✅ ATPV-e registrado no Detran [protocolo ${pend.protocolo}, query ${pend.query_id}]`);
   // O PDF costuma demorar; se já vier, entrega (e cobra) agora.
-  const entrega = await entregarResultadoVistocar({ ...pend, registrado_em: new Date() })
+  const entrega = await entregarResultadoVistocar({ ...pend, registrado_em: new Date() }, { forcar: true })
     .catch(e => { console.error(`[atpve-registrar] falha na entrega imediata:`, e.message); return { entregue: false }; });
   return { ok: true, entregue: !!entrega.entregue, situacao: entrega.situacao || null };
 }
@@ -12223,9 +12280,9 @@ async function excluirAtpvePendencia(pend) {
 // cobra (só agora, com o documento em mãos), guarda no pdf_cache e manda por
 // WhatsApp. Usado pelo webhook e pela varredura periódica — daí o claim atômico
 // em finalizePendingQuery e a checagem de cache, que evitam entrega dupla.
-async function entregarResultadoVistocar(pend) {
+async function entregarResultadoVistocar(pend, opcoes = {}) {
   const movementId = pend.movement_id;
-  const achado = await buscarDocumentoVistocar(pend);
+  const achado = await buscarDocumentoVistocar(pend, opcoes);
   // "9 · ERRO" é o Detran recusando o pedido, e ele não volta a andar sozinho:
   // sem isto a pendência ficava "Aguardando" até o prazo de 48h e o cliente
   // recebia "não foi emitido dentro do prazo". Foi o que aconteceu com os
@@ -12605,7 +12662,9 @@ app.post(VISTOCAR_WEBHOOK_PATHS, async (req, res) => {
     if (payload?.data?.resultAvailable !== true)
       return registrar(`sem resultado disponível ainda (${payload.event || 'evento'}${statusMessage ? `: ${statusMessage}` : ''})`, true);
 
-    const r = await entregarResultadoVistocar(pend);
+    // resultAvailable=true é o único caso que fura o intervalo entre consultas
+    // de situação (ver consultarSituacaoComLimite).
+    const r = await entregarResultadoVistocar(pend, { forcar: true });
     return registrar(r.entregue ? 'resultado entregue' : r.motivo, r.entregue);
   } catch (e) {
     await registrar(`erro ao processar: ${e.message}`);
