@@ -2239,7 +2239,7 @@ function inputTypeLabel(t) {
     crlv_agendado_cpf:   'Entrada: Placa + Renavam + CPF/CNPJ (assíncrono)',
     pedido_id_get:       'Entrada: ID do Pedido',
     venda:               'Entrada: Dados completos da venda',
-    atpve_vistocar:      'Entrada: Dados da venda + CRLV-e e comprovantes (assíncrono)',
+    atpve_vistocar:      'Entrada: Dados da venda + CRLV-e, comprovantes e CNHs (assíncrono)',
     assinatura_digital:  'Entrada: PDF + dados de quem assina',
     recurso_multa:       'Entrada: Notificação da multa (foto ou PDF) + perguntas',
     cancelar_venda:      'Entrada: ID + Protocolo + Motivo',
@@ -2310,13 +2310,14 @@ function apiExampleParams(inputType) {
     placa_renavam_cpf:   { placa: 'ABC1D23', renavam: '00000000000', cpf: '00000000000' },
     crlv_agendado_placa: { placa: 'ABC1D23' },
     crlv_agendado_cpf:   { placa: 'ABC1D23', renavam: '00000000000', cpf: '00000000000' },
-    // ATPV-e: os três anexos vão em base64 PURO (sem o prefixo "data:").
+    // ATPV-e: os cinco anexos vão em base64 PURO (sem o prefixo "data:").
     // A resposta não traz o documento — vem { pending: true, result.protocolo }
     // e o PDF sai depois, pelo WhatsApp e no histórico da conta.
     atpve_vistocar: {
       placa: 'ABC1D23', renavam: '00000000000',
       anoFabricacao: '2020', anoModelo: '2021',
-      dataVenda: '01/09/2026', valorVenda: '10000.00',
+      numeroCrv: '123456789012', numeroViaCrv: '1',
+      dataVenda: '01/09/2026', valorVenda: '10000,00',
       cidadeVenda: 'RIO DE JANEIRO', ufVenda: 'RJ',
       nomeVendedor: 'NOME DO VENDEDOR', documentoVendedor: '00000000000',
       nomeComprador: 'NOME DO COMPRADOR', documentoComprador: '00000000000',
@@ -2326,6 +2327,9 @@ function apiExampleParams(inputType) {
       crlvePdfBase64: 'JVBERi0...',
       comprovanteEnderecoVendedor: 'JVBERi0...',
       comprovanteEnderecoComprador: 'JVBERi0...',
+      // CPF → cnhPdfBase64...; CNPJ → cnhRepresentanteLegalPdfBase64... (CNH do representante legal).
+      cnhPdfBase64Vendedor: 'JVBERi0...',
+      cnhPdfBase64Comprador: 'JVBERi0...',
     },
     crv_full: {
       placa: 'ABC1D23', renavam: '00000000000',
@@ -3371,7 +3375,7 @@ function selectService(svc) {
   document.getElementById('query-form-wrap').scrollIntoView({ behavior:'smooth', block:'nearest' });
   // ATPV-e: as instruções abrem junto do formulário (popup
   // #atpve-instrucoes-modal). O gatilho é o inputType, então vale para o RJ, o
-  // MG e qualquer UF que entre depois — os três anexos precisam estar em mãos
+  // MG e qualquer UF que entre depois — os cinco anexos precisam estar em mãos
   // ANTES de começar a preencher, senão o trabalho se perde no meio.
   if (svc.inputType === 'atpve_vistocar') abrirAtpveInstrucoes();
 }
@@ -3465,9 +3469,10 @@ function renderFormFields(inputType, svc) {
 
   // ── Intenção de Venda / ATPV-e (Vistocar) ──────────────────────────────────
   // Formulário grande porque a API exige o cadastro inteiro da venda, incluindo
-  // TRÊS arquivos (CRLV-e e os comprovantes de endereço das duas partes) — sem
-  // eles a rota nem aceita o pedido. Os campos do CRV impresso ficam opcionais:
-  // a API aceita sem eles e nem todo veículo tem CRV em papel.
+  // CINCO arquivos (CRLV-e, os comprovantes de endereço e as CNHs das duas
+  // partes) — sem eles a rota nem aceita o pedido. Número do CRV e via são
+  // obrigatórios desde a doc de 14/10/2026; código de segurança e data de
+  // emissão do CRV saíram do contrato.
   // A UF de emissão do CRV não é campo: ela é a do próprio serviço (ATPV-e RJ
   // emite CRV do RJ), e é ela que decide a configuração no Detran.
   const atpveUfOptions = ['AC','AL','AM','AP','BA','CE','DF','ES','GO','MA','MG','MS','MT','PA','PB','PE','PI','PR','RJ','RN','RO','RR','RS','SC','SE','SP','TO'];
@@ -3527,13 +3532,11 @@ function renderFormFields(inputType, svc) {
     </div>
     ${field('at_chassi','Chassi','text','9BWZZZ377VT004251',false,'maxlength="17"')}
 
-    <div class="font-semibold text-gray-700 text-sm mt-3 mb-1">CRV impresso (opcional)</div>
-    <p class="text-xs text-gray-500 mb-2">Preencha se o veículo tiver CRV em papel. Deixe em branco no caso de CRV digital.</p>
+    <div class="font-semibold text-gray-700 text-sm mt-3 mb-1">CRV</div>
+    <p class="text-xs text-gray-500 mb-2">O número do CRV (impresso ou digital) e a via são obrigatórios para o Detran. O "Importar CRLV-e" preenche o número.</p>
     <div class="grid grid-cols-2 gap-3">
-      ${field('at_crv_numero','Número do CRV','text','123456789012',false,'inputmode="numeric"')}
-      ${field('at_crv_codigo','Código de Segurança do CRV','text','12345678901',false,'inputmode="numeric"')}
-      ${field('at_crv_via','Nº da Via','text','1',false,'inputmode="numeric"')}
-      ${field('at_crv_data','Data de Emissão do CRV','text','DD/MM/AAAA',false)}
+      ${field('at_crv_numero','Número do CRV (12 dígitos)','text','123456789012',true,'inputmode="numeric" maxlength="12"')}
+      ${field('at_crv_via','Nº da Via do CRV','text','1',true,'inputmode="numeric" maxlength="2"')}
     </div>
 
     <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Venda</div>
@@ -3579,7 +3582,9 @@ function renderFormFields(inputType, svc) {
     <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Documentos (obrigatórios)</div>
     ${atpveArquivo('at_crlve','CRLV-e do veículo (PDF)','O documento digital do veículo, em PDF. Até 8 MB. Se você usou a importação lá em cima, ele já está anexado.')}
     ${atpveArquivo('at_comp_v','Comprovante de endereço do vendedor','PDF ou foto legível. Até 8 MB.')}
-    ${atpveArquivo('at_comp_c','Comprovante de endereço do comprador','PDF ou foto legível. Até 8 MB.')}`;
+    ${atpveArquivo('at_comp_c','Comprovante de endereço do comprador','PDF ou foto legível. Até 8 MB.')}
+    ${atpveArquivo('at_cnh_v','CNH do vendedor','PDF ou foto legível. Se o vendedor for empresa (CNPJ), anexe a CNH do representante legal. Até 8 MB.')}
+    ${atpveArquivo('at_cnh_c','CNH do comprador','PDF ou foto legível. Se o comprador for empresa (CNPJ), anexe a CNH do representante legal. Até 8 MB.')}`;
 
   const templates = {
     placa: placaField,
@@ -4154,7 +4159,7 @@ function renderFormFields(inputType, svc) {
     });
   }
   if (inputType === 'atpve_vistocar') {
-    atpveAnexos = { at_crlve: '', at_comp_v: '', at_comp_c: '' };
+    atpveAnexos = { at_crlve: '', at_comp_v: '', at_comp_c: '', at_cnh_v: '', at_cnh_c: '' };
     const placaEl = document.getElementById('f-at_placa');
     if (placaEl) placaEl.addEventListener('input', function() {
       this.value = this.value.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 8);
@@ -4765,7 +4770,7 @@ function handleArquivoAssinatura(input) {
 // ── Anexos do ATPV-e ────────────────────────────────────────────────────────
 // Guardados aqui em base64 puro (sem o prefixo "data:"), e não no próprio
 // <input type="file">, porque é isso que vai no corpo JSON de /api/query.
-let atpveAnexos = { at_crlve: '', at_comp_v: '', at_comp_c: '' };
+let atpveAnexos = { at_crlve: '', at_comp_v: '', at_comp_c: '', at_cnh_v: '', at_cnh_c: '' };
 const ATPVE_ANEXO_MAX_MB = 8;
 
 function handleAnexoAtpve(input, campo) {
@@ -4802,7 +4807,7 @@ function handleAnexoAtpve(input, campo) {
     const ehPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
     if (ehPdf) { guardar(String(reader.result).split(',')[1] || '', `${(file.size / 1024).toFixed(0)} KB`); return; }
     // Foto de comprovante tirada no celular passa de 5 MB com facilidade, e são
-    // três anexos numa requisição só — reduz para 1800px no maior lado antes de
+    // cinco anexos numa requisição só — reduz para 1800px no maior lado antes de
     // virar base64, que é o mesmo tratamento da digitalização da carteirinha na
     // ASD. Comprovante de endereço continua legível nesse tamanho.
     const img = new Image();
@@ -5221,9 +5226,7 @@ function buildParams(inputType) {
       anoModelo: g('at_ano_mod'),
       kilometragem: cd(g('at_km')),
       numeroCrv: cd(g('at_crv_numero')),
-      codigoSegurancaCrv: cd(g('at_crv_codigo')),
       numeroViaCrv: cd(g('at_crv_via')),
-      dataEmissaoCrv: g('at_crv_data'),
       dataVenda: g('at_venda_data'),
       valorVenda: g('at_venda_valor'),
       cidadeVenda: g('at_venda_cidade'),
@@ -5244,6 +5247,10 @@ function buildParams(inputType) {
       crlvePdfBase64: atpveAnexos.at_crlve || '',
       comprovanteEnderecoVendedor: atpveAnexos.at_comp_v || '',
       comprovanteEnderecoComprador: atpveAnexos.at_comp_c || '',
+      // Sempre no campo de pessoa física: o servidor passa para o do
+      // representante legal quando o documento é CNPJ.
+      cnhPdfBase64Vendedor: atpveAnexos.at_cnh_v || '',
+      cnhPdfBase64Comprador: atpveAnexos.at_cnh_c || '',
     };
 
   if (inputType === 'venda') {
@@ -5327,11 +5334,14 @@ function validateParams(inputType, p) {
     if (!p.numeroComprador)     return 'Informe o número do endereço do comprador (se não houver, informe S/N).';
     if (!p.bairroComprador)     return 'Informe o bairro do comprador.';
     if (!p.cidadeComprador)     return 'Informe a cidade do comprador.';
-    if (p.dataEmissaoCrv && !/^\d{2}\/\d{2}\/\d{4}$/.test(p.dataEmissaoCrv))
-      return 'Data de emissão do CRV inválida. Use o formato DD/MM/AAAA.';
+    const crv = dig(p.numeroCrv);
+    if (crv.length < 9 || crv.length > 12) return 'Número do CRV inválido. Informe os 12 dígitos do CRV (impresso ou digital).';
+    if (!dig(p.numeroViaCrv)) return 'Informe o número da via do CRV (ex.: 1).';
     if (!p.crlvePdfBase64)               return 'Anexe o CRLV-e do veículo em PDF.';
     if (!p.comprovanteEnderecoVendedor)  return 'Anexe o comprovante de endereço do vendedor.';
     if (!p.comprovanteEnderecoComprador) return 'Anexe o comprovante de endereço do comprador.';
+    if (!p.cnhPdfBase64Vendedor)  return vDoc.length === 14 ? 'Anexe a CNH do representante legal da empresa vendedora.' : 'Anexe a CNH do vendedor.';
+    if (!p.cnhPdfBase64Comprador) return cDoc.length === 14 ? 'Anexe a CNH do representante legal da empresa compradora.' : 'Anexe a CNH do comprador.';
     return null;
   }
   if (inputType === 'declaracao_residencia') {
@@ -7449,10 +7459,11 @@ init();
         <p class="text-sm mt-1" style="color:#94a3b8;">Separe os arquivos agora — no meio do formulário o trabalho se perde.</p>
       </div>
 
-      <!-- Os três anexos, em cartões: é a informação que o despachante precisa
-           levar embora daqui, então ela vem antes de qualquer explicação. -->
+      <!-- Os cinco anexos, em cartões: é a informação que o despachante precisa
+           levar embora daqui, então ela vem antes de qualquer explicação. A CNH
+           das duas partes entrou na doc da Vistocar de 14/10/2026. -->
       <div>
-        <div class="text-xs font-bold uppercase tracking-wider mb-2" style="color:#fbbf24;">⚠️ 3 arquivos obrigatórios</div>
+        <div class="text-xs font-bold uppercase tracking-wider mb-2" style="color:#fbbf24;">⚠️ 5 arquivos obrigatórios</div>
         <div class="grid grid-cols-3 gap-2">
           <div class="atpve-anexo rounded-xl p-3 text-center" style="background:rgba(56,189,248,.12);border:1px solid rgba(56,189,248,.35);">
             <div class="text-2xl mb-1">🚗</div>
@@ -7470,6 +7481,19 @@ init();
             <div class="text-[10px] mt-0.5" style="color:#86efac;">do comprador</div>
           </div>
         </div>
+        <div class="grid grid-cols-2 gap-2 mt-2">
+          <div class="atpve-anexo rounded-xl p-3 text-center" style="background:rgba(251,146,60,.12);border:1px solid rgba(251,146,60,.35);">
+            <div class="text-2xl mb-1">🪪</div>
+            <div class="text-[11px] font-bold text-white leading-tight">CNH</div>
+            <div class="text-[10px] mt-0.5" style="color:#fdba74;">do vendedor</div>
+          </div>
+          <div class="atpve-anexo rounded-xl p-3 text-center" style="background:rgba(244,114,182,.12);border:1px solid rgba(244,114,182,.35);">
+            <div class="text-2xl mb-1">🪪</div>
+            <div class="text-[11px] font-bold text-white leading-tight">CNH</div>
+            <div class="text-[10px] mt-0.5" style="color:#f9a8d4;">do comprador</div>
+          </div>
+        </div>
+        <p class="text-[11px] mt-2" style="color:#94a3b8;">Empresa (CNPJ)? Vale a CNH do representante legal. Tenha também o <strong class="text-white">número do CRV e a via</strong> à mão.</p>
       </div>
 
       <div class="rounded-xl p-3 text-sm" style="background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.35);color:#d1fae5;">
@@ -7493,7 +7517,7 @@ init();
         <ol class="space-y-2.5 text-sm" style="color:#cbd5e1;">
           <li class="flex gap-3">
             <span class="atpve-num" style="background:linear-gradient(135deg,#0ea5e9,#2563eb);">1</span>
-            <span>Suba os <strong class="text-white">três arquivos</strong> no formulário.</span>
+            <span>Suba os <strong class="text-white">cinco arquivos</strong> no formulário.</span>
           </li>
           <li class="flex gap-3">
             <span class="atpve-num" style="background:linear-gradient(135deg,#6366f1,#a855f7);">2</span>

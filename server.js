@@ -418,7 +418,7 @@ function nomeArquivoVistocar(serviceId, sufixo) {
 
 // ATPV-e (Intenção de Venda) pela Vistocar — o único grupo do VISTOCAR_ENDPOINTS
 // que NÃO manda { plate }: o corpo é o cadastro inteiro da venda (vendedor,
-// comprador, veículo e três arquivos em base64), montado em montarCorpoAtpveVistocar.
+// comprador, veículo e cinco arquivos em base64 — CRLV-e, comprovantes e CNHs), montado em montarCorpoAtpveVistocar.
 // Vale para os dois estados; trocar de UF é só acrescentar a rota acima e o
 // serviço no SERVICES, porque o contrato é idêntico (conferido em 15/09/2026
 // contra atpve-rj e atpve-mg: a mesma lista de campos obrigatórios nos dois).
@@ -450,12 +450,50 @@ async function getVistocarToken() {
     body: JSON.stringify({ login: VISTOCAR_LOGIN, password: VISTOCAR_PASSWORD }),
   });
   const data = await r.json().catch(() => null);
+  if (data?.error === 'LOGIN_INATIVO') {
+    avisarCredencialVistocar('a credencial da API foi DESATIVADA (401 LOGIN_INATIVO). Não adianta tentar de novo: fale com o suporte da Vistocar.');
+    throw new Error('Credencial da Vistocar inativa.');
+  }
   if (!r.ok || !data?.data?.token) {
     throw new Error(data?.message || `Falha no login Vistocar (HTTP ${r.status}).`);
+  }
+  // Senha temporária (credencial nova ou redefinida): enquanto não for trocada,
+  // todas as outras rotas respondem 403 SENHA_TROCA_OBRIGATORIA. Usar o token
+  // só espalharia esse 403 por toda consulta, então o login já para aqui.
+  if (data.data.trocarSenha) {
+    avisarCredencialVistocar('a senha da API é TEMPORÁRIA e precisa ser trocada (endpoint "Trocar Senha" da Vistocar) antes de qualquer consulta. Depois, atualize VISTOCAR_PASSWORD na Vercel.');
+    throw new Error('A senha da Vistocar precisa ser trocada antes de usar a API.');
   }
   vistocarToken = data.data.token;
   vistocarTokenExpiresAt = Date.now() + 38 * 60 * 1000;
   return vistocarToken;
+}
+
+// Doc de 14/10/2026: credencial desativada no meio do uso faz QUALQUER rota
+// responder 401 LOGIN_INATIVO, e senha pendente de troca, 403
+// SENHA_TROCA_OBRIGATORIA. Nos dois casos o token em cache não serve mais, e
+// só o dono resolve — por isso o aviso no WhatsApp, no máximo um por hora
+// (cada consulta bateria no mesmo erro).
+let vistocarAvisoCredencialEm = 0;
+function avisarCredencialVistocar(texto) {
+  console.error(`[vistocar] ${texto}`);
+  if (!ADMIN_PHONE || Date.now() - vistocarAvisoCredencialEm < 3600 * 1000) return;
+  vistocarAvisoCredencialEm = Date.now();
+  sendWhatsApp(ADMIN_PHONE, `⚠️ *Vistocar fora do ar para nós*\n\nO login da API falhou: ${texto}\n\nATPV-e, CRLV-e Rio v2, CRLV-e SP e as demais consultas da Vistocar ficam recusadas até resolver.`).catch(() => {});
+}
+function credencialVistocarRecusada(http, data) {
+  const codigo = data?.error;
+  if (http === 401 && codigo === 'LOGIN_INATIVO') {
+    vistocarToken = null;
+    avisarCredencialVistocar('a credencial da API foi DESATIVADA (401 LOGIN_INATIVO). Não adianta tentar de novo: fale com o suporte da Vistocar.');
+    return true;
+  }
+  if (http === 403 && codigo === 'SENHA_TROCA_OBRIGATORIA') {
+    vistocarToken = null;
+    avisarCredencialVistocar('a senha da API precisa ser trocada (403 SENHA_TROCA_OBRIGATORIA). Depois, atualize VISTOCAR_PASSWORD na Vercel.');
+    return true;
+  }
+  return false;
 }
 
 // ── ATPV-e Vistocar: montagem e validação do corpo ───────────────────────────
@@ -480,13 +518,16 @@ function limparAnexoBase64(valor) {
   return String(valor || '').replace(/^data:[^,]*,/, '').replace(/\s+/g, '');
 }
 
+// O rótulo vem com o artigo ("o CRLV-e", "a CNH do vendedor"), porque a lista
+// tem palavra dos dois gêneros.
+const maiusculaInicial = t => t.charAt(0).toUpperCase() + t.slice(1);
 function validarAnexoAtpve(valor, rotulo) {
   const b64 = limparAnexoBase64(valor);
-  if (!b64) return { erro: `Anexe o ${rotulo}.` };
+  if (!b64) return { erro: `Anexe ${rotulo}.` };
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(b64) || b64.length < 100)
-    return { erro: `O ${rotulo} não é um arquivo válido. Selecione o arquivo novamente.` };
+    return { erro: `${maiusculaInicial(rotulo)} não é um arquivo válido. Selecione o arquivo novamente.` };
   if (Math.floor(b64.length * 3 / 4) > ATPVE_ANEXO_MAX_BYTES)
-    return { erro: `O ${rotulo} passa de 8 MB. Reduza o arquivo e tente de novo.` };
+    return { erro: `${maiusculaInicial(rotulo)} passa de 8 MB. Reduza o arquivo e tente de novo.` };
   return { b64 };
 }
 
@@ -520,9 +561,13 @@ function valorVendaParaNumero(valor) {
   return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
 }
 
-// Troca os três anexos em base64 por uma marca curta, para o pedido caber em
+// Troca os anexos em base64 por uma marca curta, para o pedido caber em
 // queries.params e na mensagem do admin sem carregar os megabytes do arquivo.
-const ATPVE_CAMPOS_ANEXO = ['crlvePdfBase64', 'comprovanteEnderecoVendedor', 'comprovanteEnderecoComprador'];
+const ATPVE_CAMPOS_ANEXO = [
+  'crlvePdfBase64', 'comprovanteEnderecoVendedor', 'comprovanteEnderecoComprador',
+  'cnhPdfBase64Vendedor', 'cnhRepresentanteLegalPdfBase64Vendedor',
+  'cnhPdfBase64Comprador', 'cnhRepresentanteLegalPdfBase64Comprador',
+];
 function paramsSemAnexosAtpve(params) {
   const limpo = { ...(params || {}) };
   for (const campo of ATPVE_CAMPOS_ANEXO) {
@@ -533,10 +578,55 @@ function paramsSemAnexosAtpve(params) {
   return limpo;
 }
 
+// A doc (14/10/2026) pede "a string Base64 de cada PDF", mas o painel aceita
+// foto do comprovante e da CNH — que é como o despachante recebe isso do cliente
+// no WhatsApp. Em vez de recusar a foto, ela vira um PDF de uma página aqui,
+// antes de sair. PDF segue como veio; o que não for PDF, JPEG nem PNG é recusado.
+async function anexoAtpveEmPdf(b64, rotulo) {
+  const buf = Buffer.from(b64, 'base64');
+  if (buf.slice(0, 4).toString() === '%PDF') return { b64 };
+  const jpeg = buf[0] === 0xFF && buf[1] === 0xD8;
+  const png  = buf.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]));
+  if (!jpeg && !png) return { erro: `${maiusculaInicial(rotulo)} precisa ser PDF, JPG ou PNG.` };
+  try {
+    const doc = await PDFLibDocument.create();
+    const img = jpeg ? await doc.embedJpg(buf) : await doc.embedPng(buf);
+    // A4 em pontos, com 20pt de margem; a imagem nunca é ampliada.
+    const [W, H, M] = [595.28, 841.89, 20];
+    const escala = Math.min(1, (W - 2 * M) / img.width, (H - 2 * M) / img.height);
+    const w = img.width * escala, h = img.height * escala;
+    doc.addPage([W, H]).drawImage(img, { x: (W - w) / 2, y: H - M - h, width: w, height: h });
+    return { b64: Buffer.from(await doc.save()).toString('base64') };
+  } catch (e) {
+    return { erro: `Não foi possível ler ${rotulo}. Envie um PDF ou outra foto.` };
+  }
+}
+
+// A doc pede nome, endereço e cidades "sem acento ou caractere especial".
+// Tira o acento (ç → c) e troca o resto que não é letra, número, hífen ou a
+// barra do "S/N" por espaço — "D'Ávila" vira "D Avila", e não "Dvila". Ponto e
+// vírgula também saem: na leitura estrita da doc são caractere especial, e
+// "Av. Rio Branco, 1" não perde nada sem eles.
+const textoSemAcentoAtpve = v => String(v ?? '')
+  .normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .replace(/[^A-Za-z0-9 \-\/]/g, ' ')
+  .replace(/\s+/g, ' ').trim();
+
 // Devolve { body } ou { erro } — nunca as duas coisas. O tipo de pessoa é
 // deduzido do documento (11 dígitos = F, 14 = J), como no "venda" da comunicação
 // de venda: o cliente não escolhe pessoa física/jurídica numa aba à parte.
-function montarCorpoAtpveVistocar(service, params) {
+//
+// Contrato revisto contra a doc de 14/10/2026 (RJ e MG idênticos):
+//  - CNH entrou: a do próprio vendedor/comprador se pessoa física
+//    (cnhPdfBase64...), a do representante legal se jurídica
+//    (cnhRepresentanteLegalPdfBase64...). Nunca as duas no mesmo lado.
+//  - Número do CRV (12 dígitos) e número da via passaram a obrigatórios; o
+//    código de segurança e a data de emissão do CRV saíram do contrato.
+//  - dataVenda em dd/MM/yyyy e valorVenda como texto com vírgula decimal
+//    ("25000,00"). Até aqui iam AAAA-MM-DD e número, que era o que a Vistocar
+//    devolvia no eco do cadastro.
+//  - Nome, logradouro, bairro e cidades sem acento.
+async function montarCorpoAtpveVistocar(service, params) {
   const p = params || {};
   const txt   = v => String(v ?? '').trim();
   const dig   = v => txt(v).replace(/\D/g, '');
@@ -547,23 +637,42 @@ function montarCorpoAtpveVistocar(service, params) {
   if (!/^[A-Z]{3}[0-9][A-Z0-9][0-9]{2}$/.test(placa))
     return { erro: 'Placa inválida. Informe no formato ABC1D23 ou ABC1234.' };
 
-  const renavam = dig(p.renavam);
-  if (renavam.length < 9 || renavam.length > 11)
+  // A doc pede 11 dígitos; renavam antigo de 9 ou 10 ganha os zeros à esquerda,
+  // como no Importar CRLV-e.
+  const renavamDig = dig(p.renavam);
+  if (renavamDig.length < 9 || renavamDig.length > 11)
     return { erro: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' };
+  const renavam = renavamDig.padStart(11, '0');
 
   const anoFabricacao = dig(p.anoFabricacao);
   const anoModelo     = dig(p.anoModelo);
   if (!/^\d{4}$/.test(anoFabricacao)) return { erro: 'Ano de fabricação inválido. Informe os 4 dígitos.' };
   if (!/^\d{4}$/.test(anoModelo))     return { erro: 'Ano do modelo inválido. Informe os 4 dígitos.' };
 
-  const dataVenda = dataBrParaIso(p.dataVenda);
-  if (!dataVenda) return { erro: 'Data da venda inválida. Use o formato DD/MM/AAAA.' };
-  const valorVenda = valorVendaParaNumero(p.valorVenda);
-  if (valorVenda === null) return { erro: 'Valor da venda inválido. Informe um valor maior que zero.' };
+  const chassi = txt(p.chassi).toUpperCase().replace(/[\s-]/g, '');
+  if (chassi && !/^[A-HJ-NPR-Z0-9]{17}$/.test(chassi))
+    return { erro: 'Chassi inválido. Informe os 17 caracteres (sem I, O ou Q) ou deixe em branco.' };
+
+  // Número do CRV: 12 dígitos na doc. O impresso às vezes aparece sem os zeros
+  // à esquerda, então de 9 a 12 é completado; menos que isso é erro de digitação.
+  const numeroCrvDig = dig(p.numeroCrv);
+  if (numeroCrvDig.length < 9 || numeroCrvDig.length > 12)
+    return { erro: 'Número do CRV inválido. Informe os 12 dígitos do CRV (impresso ou digital).' };
+  const numeroCrv = numeroCrvDig.padStart(12, '0');
+  const numeroViaCrv = dig(p.numeroViaCrv).replace(/^0+(?=\d)/, '');
+  if (!numeroViaCrv || numeroViaCrv.length > 2)
+    return { erro: 'Informe o número da via do CRV (ex.: 1).' };
+
+  const dataVendaIso = dataBrParaIso(p.dataVenda);
+  if (!dataVendaIso) return { erro: 'Data da venda inválida. Use o formato DD/MM/AAAA.' };
+  const dataVenda = dataVendaIso.split('-').reverse().join('/');
+  const valorNum = valorVendaParaNumero(p.valorVenda);
+  if (valorNum === null) return { erro: 'Valor da venda inválido. Informe um valor maior que zero.' };
+  const valorVenda = valorNum.toFixed(2).replace('.', ',');
 
   const ufVenda = uf(p.ufVenda) || ufCrv;
   if (!ATPVE_UFS_VALIDAS.has(ufVenda)) return { erro: 'UF do local da venda inválida.' };
-  const cidadeVenda = txt(p.cidadeVenda);
+  const cidadeVenda = textoSemAcentoAtpve(p.cidadeVenda);
   if (!cidadeVenda) return { erro: 'Informe a cidade do local da venda.' };
 
   const documentoVendedor  = dig(p.documentoVendedor);
@@ -572,17 +681,19 @@ function montarCorpoAtpveVistocar(service, params) {
     return { erro: 'CPF/CNPJ do vendedor inválido. Informe 11 dígitos (CPF) ou 14 (CNPJ).' };
   if (documentoComprador.length !== 11 && documentoComprador.length !== 14)
     return { erro: 'CPF/CNPJ do comprador inválido. Informe 11 dígitos (CPF) ou 14 (CNPJ).' };
-  const nomeVendedor  = txt(p.nomeVendedor);
-  const nomeComprador = txt(p.nomeComprador);
+  const nomeVendedor  = textoSemAcentoAtpve(p.nomeVendedor);
+  const nomeComprador = textoSemAcentoAtpve(p.nomeComprador);
   if (nomeVendedor.length  < 3) return { erro: 'Informe o nome (ou razão social) do vendedor.' };
   if (nomeComprador.length < 3) return { erro: 'Informe o nome (ou razão social) do comprador.' };
+  const tipoPessoaVendedor  = documentoVendedor.length  === 14 ? 'J' : 'F';
+  const tipoPessoaComprador = documentoComprador.length === 14 ? 'J' : 'F';
 
   const cepComprador = dig(p.cepComprador);
   if (cepComprador.length !== 8) return { erro: 'CEP do comprador inválido. Informe os 8 dígitos.' };
-  const logradouroComprador = txt(p.logradouroComprador);
-  const numeroComprador     = txt(p.numeroComprador);
-  const bairroComprador     = txt(p.bairroComprador);
-  const cidadeComprador     = txt(p.cidadeComprador);
+  const logradouroComprador = textoSemAcentoAtpve(p.logradouroComprador);
+  const numeroComprador     = textoSemAcentoAtpve(p.numeroComprador);
+  const bairroComprador     = textoSemAcentoAtpve(p.bairroComprador);
+  const cidadeComprador     = textoSemAcentoAtpve(p.cidadeComprador);
   const ufComprador         = uf(p.ufComprador);
   if (!logradouroComprador) return { erro: 'Informe o logradouro do comprador.' };
   if (!numeroComprador)     return { erro: 'Informe o número do endereço do comprador (se não houver, informe S/N).' };
@@ -590,43 +701,49 @@ function montarCorpoAtpveVistocar(service, params) {
   if (!cidadeComprador)     return { erro: 'Informe a cidade do comprador.' };
   if (!ATPVE_UFS_VALIDAS.has(ufComprador)) return { erro: 'UF do comprador inválida.' };
 
-  const crlve       = validarAnexoAtpve(p.crlvePdfBase64, 'CRLV-e em PDF');
-  if (crlve.erro) return { erro: crlve.erro };
-  const compVend    = validarAnexoAtpve(p.comprovanteEnderecoVendedor, 'comprovante de endereço do vendedor');
-  if (compVend.erro) return { erro: compVend.erro };
-  const compCompr   = validarAnexoAtpve(p.comprovanteEnderecoComprador, 'comprovante de endereço do comprador');
-  if (compCompr.erro) return { erro: compCompr.erro };
+  // A CNH é "obrigatória somente se" o tipo de pessoa pede aquele campo — na
+  // prática, sempre uma das duas de cada lado. O painel manda a CNH no campo de
+  // pessoa física; quem chama pela API pode usar qualquer um dos dois nomes, e
+  // o que vale é o tipo de pessoa deduzido do documento.
+  const cnhDe = lado => p[`cnhPdfBase64${lado}`] || p[`cnhRepresentanteLegalPdfBase64${lado}`];
+  const rotuloCnh = (lado, tipo) => tipo === 'J'
+    ? `a CNH do representante legal da empresa ${lado === 'Vendedor' ? 'vendedora' : 'compradora'}`
+    : `a CNH do ${lado === 'Vendedor' ? 'vendedor' : 'comprador'}`;
 
-  // Campos do CRV impresso: a API aceita sem eles, e nem todo veículo tem CRV em
-  // papel (CRV digital), então ficam opcionais — só vão quando preenchidos.
-  const dataEmissaoCrv = p.dataEmissaoCrv ? dataBrParaIso(p.dataEmissaoCrv) : null;
-  if (p.dataEmissaoCrv && !dataEmissaoCrv)
-    return { erro: 'Data de emissão do CRV inválida. Use o formato DD/MM/AAAA.' };
+  const anexos = [
+    ['crlvePdfBase64',               p.crlvePdfBase64,               'o CRLV-e em PDF'],
+    ['comprovanteEnderecoVendedor',  p.comprovanteEnderecoVendedor,  'o comprovante de endereço do vendedor'],
+    ['comprovanteEnderecoComprador', p.comprovanteEnderecoComprador, 'o comprovante de endereço do comprador'],
+    [tipoPessoaVendedor  === 'J' ? 'cnhRepresentanteLegalPdfBase64Vendedor'  : 'cnhPdfBase64Vendedor',
+      cnhDe('Vendedor'),  rotuloCnh('Vendedor', tipoPessoaVendedor)],
+    [tipoPessoaComprador === 'J' ? 'cnhRepresentanteLegalPdfBase64Comprador' : 'cnhPdfBase64Comprador',
+      cnhDe('Comprador'), rotuloCnh('Comprador', tipoPessoaComprador)],
+  ];
+  const arquivos = {};
+  for (const [campo, valor, rotulo] of anexos) {
+    const v = validarAnexoAtpve(valor, rotulo);
+    if (v.erro) return { erro: v.erro };
+    const pdf = await anexoAtpveEmPdf(v.b64, rotulo);
+    if (pdf.erro) return { erro: pdf.erro };
+    arquivos[campo] = pdf.b64;
+  }
 
   const body = {
     placa, renavam, dataVenda, valorVenda,
     cidadeVenda, ufVenda, ufEmissaoCrv: ufCrv,
-    anoFabricacao, anoModelo,
-    tipoPessoaVendedor:  documentoVendedor.length === 14 ? 'J' : 'F',
-    documentoVendedor, nomeVendedor,
-    tipoPessoaComprador: documentoComprador.length === 14 ? 'J' : 'F',
-    documentoComprador, nomeComprador,
+    anoFabricacao, anoModelo, numeroCrv, numeroViaCrv,
+    tipoPessoaVendedor, documentoVendedor, nomeVendedor,
+    tipoPessoaComprador, documentoComprador, nomeComprador,
     cepComprador, logradouroComprador, numeroComprador, bairroComprador,
     cidadeComprador, ufComprador,
-    crlvePdfBase64: crlve.b64,
-    comprovanteEnderecoVendedor: compVend.b64,
-    comprovanteEnderecoComprador: compCompr.b64,
+    ...arquivos,
   };
   const opcionais = {
-    complementoComprador: txt(p.complementoComprador),
+    complementoComprador: textoSemAcentoAtpve(p.complementoComprador),
     emailVendedor: txt(p.emailVendedor),
     emailComprador: txt(p.emailComprador),
-    chassi: txt(p.chassi).toUpperCase(),
+    chassi,
     kilometragem: dig(p.kilometragem),
-    numeroCrv: dig(p.numeroCrv),
-    codigoSegurancaCrv: dig(p.codigoSegurancaCrv),
-    numeroViaCrv: dig(p.numeroViaCrv),
-    dataEmissaoCrv,
   };
   for (const [k, v] of Object.entries(opcionais)) if (v) body[k] = v;
   return { body };
@@ -8550,7 +8667,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       method = 'POST';
       if (VISTOCAR_ATPVE_SVCS.has(serviceId)) {
         // ATPV-e: corpo próprio (o cadastro inteiro da venda), não { plate }.
-        const montado = montarCorpoAtpveVistocar(service, params);
+        const montado = await montarCorpoAtpveVistocar(service, params);
         if (montado.erro) return res.status(400).json({ error: montado.erro });
         body = montado.body;
         // Com o corpo montado, os anexos já cumpriram o papel deles. Daqui para
@@ -8858,6 +8975,10 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           if (VISTOCAR_ENDPOINTS[serviceId]) {
             const motivo = String(errData?.response?.error || errData?.response?.msg || '').trim();
             if (motivo) errMsg = motivo;
+            // Credencial desativada ou com senha a trocar: problema nosso, não
+            // do pedido do cliente — o texto cru ("LOGIN_INATIVO") não diz nada a ele.
+            if (credencialVistocarRecusada(apiRes.status, errData))
+              errMsg = 'Serviço temporariamente indisponível. Nada foi cobrado — tente novamente mais tarde.';
             console.error(`[${serviceId}] recusa Vistocar: message=${JSON.stringify(errData?.message)} error=${JSON.stringify(errData?.response?.error)} msg=${JSON.stringify(errData?.response?.msg)} paid=${errData?.response?.paid ?? errData?.paid}`);
           }
           // DEBUG temporário — corpo bruto do erro upstream, para achar campos
@@ -11907,7 +12028,7 @@ function validarAssinaturaVistocar(rawBody, timestamp, chave, assinaturaRecebida
 // painel nem esconde um botão que funcionaria.
 //
 // A rota de alteração não está aqui de propósito: ela exige o corpo inteiro do
-// cadastro, e os três anexos em base64 são descartados na hora de gravar
+// cadastro, e os anexos em base64 são descartados na hora de gravar
 // (paramsSemAnexosAtpve) — não temos como remontar o pedido. Corrigir um
 // cadastro errado é excluir e cadastrar de novo.
 async function chamarAtpveVistocar(serviceId, metodo, sufixo, body) {
@@ -11919,17 +12040,26 @@ async function chamarAtpveVistocar(serviceId, metodo, sufixo, body) {
     body: JSON.stringify(body || {}),
   });
   const data = await r.json().catch(() => null);
+  credencialVistocarRecusada(r.status, data);
   const resp = data?.response || {};
   // A recusa chega de duas formas e as duas precisam ser tratadas como erro: HTTP
-  // 400 com a explicação em "message" (ex.: "Protocolo não encontrado") e HTTP 200
-  // com success:true mas "error" preenchido, que é como a Vistocar repassa o texto
-  // do fornecedor (ex.: "0-ENTIDADE NAO POSSUI CONFIGURACOES..."). Olhar só o
-  // status HTTP daria sucesso para um pedido que não andou.
-  const textoErro = (resp.error || '').trim() || null;
-  const erro = (!r.ok || textoErro)
-    ? (textoErro || resp.msg || data?.message || `HTTP ${r.status} na Vistocar`)
-    : null;
-  return { ok: !erro, erro, http: r.status, resp };
+  // 400 com o corpo completo (response.msg pronto para exibir, response.error com
+  // o texto original do órgão — doc de 14/10/2026) e HTTP 200 com success:true
+  // mas "error" preenchido, que é como a Vistocar repassava o texto do fornecedor
+  // (ex.: "0-ENTIDADE NAO POSSUI CONFIGURACOES..."). Olhar só o status HTTP daria
+  // sucesso para um pedido que não andou.
+  const textoErro = String(resp.error || '').trim() || null;
+  const textoMsg  = String(resp.msg || '').trim() || null;
+  const erro = !r.ok
+    ? (textoMsg || textoErro || data?.message || `HTTP ${r.status} na Vistocar`)
+    : (textoErro || null);
+  // Detran recusou o registro: a Vistocar já estornou, a consulta deles vai a
+  // status 3 e aquele protocolo morreu — registrar ou alterar de novo volta
+  // "Processo encerrado e estornado. Inicie uma nova ATPV-e.". As duas formas
+  // contam como encerrado, porque a segunda é o que chega depois da primeira.
+  const encerrado = resp.processoEncerrado === true
+    || /processo encerrado/i.test(`${textoMsg || ''} ${data?.message || ''}`);
+  return { ok: !erro, erro, http: r.status, resp, encerrado };
 }
 
 async function consultarSituacaoAtpve(serviceId, protocolo) {
@@ -11938,6 +12068,7 @@ async function consultarSituacaoAtpve(serviceId, protocolo) {
   return {
     ok: r.ok,
     erro: r.erro,
+    encerrado: r.encerrado,
     codigo: (codigo === null || codigo === undefined || codigo === '') ? null : String(codigo),
     descricao: String(r.resp?.situacaoDescricao || '').trim() || null,
     motivo: String(r.resp?.motivoSituacao || '').trim() || null,
@@ -11969,6 +12100,9 @@ async function buscarDocumentoVistocar(pend) {
     let s;
     try { s = await consultarSituacaoAtpve(pend.service_id, pend.protocolo); }
     catch (e) { return { motivo: `falha ao consultar a situação: ${e.message}` }; }
+    // Processo encerrado (registro recusado e estornado do lado deles): a
+    // situação volta em HTTP 400 com o erro gravado, e nada mais vai sair dali.
+    if (s.encerrado) return { motivo: s.erro || 'processo encerrado', situacao: s, encerrado: true };
     if (!s.ok) return { motivo: s.erro || 'não foi possível consultar a situação', situacao: s };
     // Sem PDF é o caso normal de quem ainda não registrou: o documento só passa
     // a existir depois do PUT de registro.
@@ -12045,6 +12179,19 @@ async function registrarAtpvePendencia(pend) {
   }
   if (pend.registrado_em) return { ok: false, erro: 'Este ATPV-e já foi registrado no Detran.' };
   const r = await registrarAtpveVistocar(pend.service_id, pend.protocolo);
+  // Recusado pelo Detran: o protocolo não serve mais para nada (a Vistocar já
+  // estornou e manda iniciar uma ATPV-e nova). Encerra a pendência sem cobrar,
+  // em vez de deixar o botão "Registrar" convidando a repetir o que não anda.
+  if (r.encerrado) {
+    const motivo = `o Detran recusou o registro${r.erro ? ` (${r.erro})` : ''}. Confira os dados e cadastre uma nova ATPV-e`;
+    await cancelarPendenciaVistocar(pend, motivo);
+    return { ok: false, encerrado: true, erro: `O Detran recusou o registro${r.erro ? `: ${r.erro}` : '.'} Este cadastro foi encerrado e você não foi cobrado — confira os dados e faça um novo pedido.` };
+  }
+  // HTTP 400 SEM processoEncerrado pode ser "resultado não confirmado"
+  // (instabilidade com o Detran): a doc manda NÃO repetir, porque o resultado
+  // chega depois pelo webhook ou pela situação. Não dá para separar esse caso
+  // de uma recusa comum pelo corpo, então o texto deles vai para a tela como
+  // veio — e a pendência segue de pé, com o cron consultando a situação.
   if (!r.ok) return { ok: false, erro: r.erro };
   await pool.query('UPDATE vistocar_pending SET registrado_em=NOW() WHERE movement_id=$1', [pend.movement_id]);
   console.log(`✅ ATPV-e registrado no Detran [protocolo ${pend.protocolo}, query ${pend.query_id}]`);
@@ -12085,6 +12232,13 @@ async function entregarResultadoVistocar(pend) {
   // pedidos #2419, #2421 e #2424 (01/10/2026) — o do #2419 o cliente já tinha
   // cadastrado de novo e recebido, e o painel seguia mostrando o antigo como
   // não entregue. A Vistocar devolve motivoSituacao vazio nesses casos.
+  // Mesmo destino para o processo encerrado da doc de 14/10/2026 (registro
+  // recusado e já estornado pela Vistocar), que chega pela situação em HTTP 400.
+  if (!achado.b64 && achado.encerrado) {
+    const erroOrgao = achado.situacao?.erro;
+    await cancelarPendenciaVistocar(pend, `o Detran recusou o registro${erroOrgao ? ` (${erroOrgao})` : ''}. Confira os dados e cadastre uma nova ATPV-e`);
+    return { entregue: false, cancelado: true, motivo: 'cancelado: processo encerrado e estornado pela Vistocar', situacao: achado.situacao };
+  }
   if (!achado.b64 && situacaoAtpveErro(achado.situacao)) {
     const motivo = achado.situacao.motivo
       ? `o Detran recusou o pedido (${achado.situacao.motivo})`
