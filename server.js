@@ -612,6 +612,72 @@ const textoSemAcentoAtpve = v => String(v ?? '')
   .replace(/[^A-Za-z0-9 \-\/]/g, ' ')
   .replace(/\s+/g, ' ').trim();
 
+// O Detran confere a cidade pela tabela de municípios do RENAVAM, que é a do
+// TOM/Serpro — e ela não acompanhou várias renomeações do IBGE. O CEP do
+// comprador é preenchido pelo ViaCEP, que dá o nome do IBGE, e a Vistocar
+// recusava: "PARATY/RJ DO COMPRADOR NAO LOCALIZADO" (15/10/2026 — no TOM é
+// PARATI). Lista tirada da comparação das duas tabelas inteiras (IBGE x TOM da
+// SEF-MG, 15/10/2026); município criado depois disso não está no TOM antigo e
+// fica fora, com o nome novo. Chave: UF + nome do IBGE em textoSemAcentoAtpve
+// maiúsculo. Só é usada no reenvio depois de um "NAO LOCALIZADO" (ver
+// nomesDetranAtpve), porque não dá para provar que o Detran não atualizou
+// algum desses nomes — e a recusa da cidade vem antes do registro, sem cobrar.
+const MUNICIPIOS_NOME_DETRAN = {
+  'BA|LAJEDO DO TABOCAL': 'LAGEDO DO TABOCAL',
+  'BA|SANTA TEREZINHA': 'SANTA TERESINHA',
+  'CE|ITAPAJE': 'ITAPAGE',
+  'MG|AMPARO DO SERRA': 'AMPARO DA SERRA',
+  'MG|BARAO DO MONTE ALTO': 'BARAO DE MONTE ALTO',
+  'MG|BRAZOPOLIS': 'BRASOPOLIS',
+  'MG|GOUVEIA': 'GOUVEA',
+  'MT|POXOREU': 'POXOREO',
+  'MT|SANTA CARMEM': 'SANTA CARMEN',
+  'MT|SANTO ANTONIO DE LEVERGER': 'SANTO ANTONIO DO LEVERGER',
+  'PA|ELDORADO DO CARAJAS': 'ELDORADO DOS CARAJAS',
+  'PA|SANTA IZABEL DO PARA': 'SANTA ISABEL DO PARA',
+  'PB|JOCA CLAUDINO': 'SANTAREM',
+  'PB|SAO DOMINGOS': 'SAO DOMINGOS DE POMBAL',
+  'PB|SAO VICENTE DO SERIDO': 'SERIDO',
+  'PE|BELEM DO SAO FRANCISCO': 'BELEM DE SAO FRANCISCO',
+  'PE|IGUARACY': 'IGUARACI',
+  'PE|LAGOA DE ITAENGA': 'LAGOA DO ITAENGA',
+  'PR|BELA VISTA DA CAROBA': 'BELA VISTA DO CAROBA',
+  'PR|PINHAL DE SAO BENTO': 'PINHAL DO SAO BENTO',
+  'PR|SANTA CRUZ DE MONTE CASTELO': 'SANTA CRUZ DO MONTE CASTELO',
+  'RJ|ARMACAO DOS BUZIOS': 'ARMACAO DE BUZIOS',
+  'RJ|PARATY': 'PARATI',
+  'RJ|TRAJANO DE MORAES': 'TRAJANO DE MORAIS',
+  'RN|AREZ': 'ARES',
+  'RR|SAO LUIZ DO ANAUA': 'SAO LUIZ',
+  'RS|SANT ANA DO LIVRAMENTO': 'SANTANA DO LIVRAMENTO',
+  'SC|LAJEADO GRANDE': 'LAGEADO GRANDE',
+  'SC|BALNEARIO PICARRAS': 'BALNEARIO DE PICARRAS',
+  'SC|PRESIDENTE CASTELLO BRANCO': 'PRESIDENTE CASTELO BRANCO',
+  'SC|SAO LOURENCO DO OESTE': 'SAO LOURENCO D OESTE',
+  'SC|SAO MIGUEL DO OESTE': 'SAO MIGUEL D OESTE',
+  'SE|AMPARO DO SAO FRANCISCO': 'AMPARO DE SAO FRANCISCO',
+  'SP|EMBU DAS ARTES': 'EMBU',
+  'SP|SAO LUIZ DO PARAITINGA': 'SAO LUIS DO PARAITINGA',
+  'TO|COUTO MAGALHAES': 'COUTO DE MAGALHAES',
+  'TO|TABOCAO': 'FORTALEZA DO TABOCAO',
+  'TO|SAO VALERIO': 'SAO VALERIO DA NATIVIDADE',
+};
+
+// Corpo do reenvio com as cidades (comprador e venda) trocadas pelo nome do
+// Detran, ou null quando nenhuma das duas tem nome diferente lá.
+function nomesDetranAtpve(body) {
+  const nomeDetran = (cidade, uf) =>
+    MUNICIPIOS_NOME_DETRAN[`${uf}|${String(cidade || '').toUpperCase()}`] || null;
+  const comprador = nomeDetran(body.cidadeComprador, body.ufComprador);
+  const venda     = nomeDetran(body.cidadeVenda, body.ufVenda);
+  if (!comprador && !venda) return null;
+  return {
+    ...body,
+    ...(comprador ? { cidadeComprador: comprador } : {}),
+    ...(venda ? { cidadeVenda: venda } : {}),
+  };
+}
+
 // Devolve { body } ou { erro } — nunca as duas coisas. O tipo de pessoa é
 // deduzido do documento (11 dígitos = F, 14 = J), como no "venda" da comunicação
 // de venda: o cliente não escolhe pessoa física/jurídica numa aba à parte.
@@ -8961,7 +9027,20 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     } else if (body !== null) {
       fetchOpts.body = JSON.stringify(body);
     }
-    const apiRes = await fetch(apiUrl, fetchOpts);
+    let apiRes = await fetch(apiUrl, fetchOpts);
+    // ATPV-e: cidade recusada pelo nome do IBGE ("PARATY/RJ DO COMPRADOR NAO
+    // LOCALIZADO") vai de novo com o nome da tabela do Detran — ver
+    // MUNICIPIOS_NOME_DETRAN. A recusa da cidade vem antes do registro e não cobra.
+    if (!apiRes.ok && VISTOCAR_ATPVE_SVCS.has(serviceId)) {
+      const erroTxt = await apiRes.clone().text().catch(() => '');
+      const reenvio = /N[AÃ]O LOCALIZAD/i.test(erroTxt) ? nomesDetranAtpve(body) : null;
+      if (reenvio) {
+        console.log(`[${serviceId}] cidade recusada; reenviando com o nome do Detran: comprador=${reenvio.cidadeComprador}/${reenvio.ufComprador} venda=${reenvio.cidadeVenda}/${reenvio.ufVenda}`);
+        body = reenvio;
+        fetchOpts.body = JSON.stringify(body);
+        apiRes = await fetch(apiUrl, fetchOpts);
+      }
+    }
     const ct = apiRes.headers.get('content-type') || '';
 
     // consultar-Numero-ATPVE: erro da Consultas Fácil não encerra a consulta — a
