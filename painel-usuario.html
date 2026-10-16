@@ -4790,9 +4790,13 @@ const ATPVE_CORPO_MAX_BASE64 = 4.2 * 1024 * 1024;
 function mensagemAnexoGrandeAtpve() {
   const rotulos = { at_crlve: 'CRLV-e', at_comp_v: 'comprovante do vendedor', at_comp_c: 'comprovante do comprador', at_cnh_v: 'CNH do vendedor', at_cnh_c: 'CNH do comprador' };
   const [campo, b64] = Object.entries(atpveAnexos).sort((a, b) => (b[1] || '').length - (a[1] || '').length)[0];
-  const mb = ((b64 || '').length * 3 / 4 / 1024 / 1024).toFixed(1).replace('.', ',');
+  const fmt = len => (len * 3 / 4 / 1024 / 1024).toFixed(1).replace('.', ',');
+  // Quanto sobra para ele depois dos outros anexos — é esse o tamanho que cabe.
+  const outros = Object.entries(atpveAnexos).reduce((s, [c, b]) => s + (c === campo ? 0 : (b || '').length), 0);
+  const cabe = Math.max(0, ATPVE_CORPO_MAX_BASE64 - outros);
+  const maxMb = (Math.floor(cabe * 3 / 4 / 1024 / 1024 * 10) / 10).toFixed(1).replace('.', ',');
   const nome = atpveAnexosNomes[campo] ? `"${atpveAnexosNomes[campo]}" (${rotulos[campo]})` : rotulos[campo];
-  return `Arquivo ${nome} grande demais (${mb} MB). Diminua o tamanho do arquivo e anexe de novo.`;
+  return `Arquivo ${nome} grande demais (${fmt((b64 || '').length)} MB). O arquivo deve ter no máximo ${maxMb} MB — diminua o tamanho e anexe de novo.`;
 }
 
 async function carregarPdfLib() {
@@ -4852,7 +4856,7 @@ function handleAnexoAtpve(input, campo) {
   }
   if (file.size > ATPVE_ANEXO_MAX_MB * 1024 * 1024) {
     limpar(); input.value = '';
-    setStatus(`Arquivo "${file.name}" grande demais (${(file.size / 1024 / 1024).toFixed(1).replace('.', ',')} MB; o limite é ${ATPVE_ANEXO_MAX_MB} MB). Diminua o tamanho do arquivo.`, 'text-red-500');
+    setStatus(`Arquivo "${file.name}" grande demais (${(file.size / 1024 / 1024).toFixed(1).replace('.', ',')} MB). O arquivo deve ter no máximo ${ATPVE_ANEXO_MAX_MB} MB — diminua o tamanho e anexe de novo.`, 'text-red-500');
     return;
   }
 
