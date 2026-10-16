@@ -4772,6 +4772,54 @@ function handleArquivoAssinatura(input) {
 // <input type="file">, porque é isso que vai no corpo JSON de /api/query.
 let atpveAnexos = { at_crlve: '', at_comp_v: '', at_comp_c: '', at_cnh_v: '', at_cnh_c: '' };
 const ATPVE_ANEXO_MAX_MB = 8;
+// Os cinco anexos vão juntos num POST só, e na Vercel o corpo da requisição tem
+// teto de 4,5 MB — o "50mb" do express.json nunca chega a valer lá. Acima disso
+// a Vercel responde 413 em texto puro e o painel mostrava "Erro de conexão"
+// (CNH escaneada de 7,7 MB, 15/10/2026). Por isso PDF pesado é redesenhado
+// página a página em JPEG (mesmo 1800px das fotos) e remontado em PDF, e o
+// total é conferido antes de enviar. O teto aqui deixa folga para o resto do
+// formulário e para o inchaço de 33% do base64.
+const ATPVE_PDF_COMPRIMIR_ACIMA = 700 * 1024;
+const ATPVE_CORPO_MAX_BASE64 = 4.2 * 1024 * 1024;
+
+async function carregarPdfLib() {
+  if (window.PDFLib) return;
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js';
+    s.onload  = resolve;
+    s.onerror = () => reject(new Error('pdf-lib não carregou.'));
+    document.head.appendChild(s);
+  });
+}
+
+// Devolve o base64 do PDF remontado. O texto deixa de ser selecionável — para
+// CNH e comprovante, que vão anexados ao Detran como imagem de documento, não
+// faz diferença.
+async function reduzirPdfAtpve(file) {
+  if (typeof pdfjsLib === 'undefined') throw new Error('PDF.js não carregado.');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@3.4.120/build/pdf.worker.min.js';
+  await carregarPdfLib();
+  const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+  const novo = await PDFLib.PDFDocument.create();
+  for (let n = 1; n <= pdf.numPages; n++) {
+    const page = await pdf.getPage(n);
+    const base = page.getViewport({ scale: 1 });
+    const escala = Math.min(2, 1800 / Math.max(base.width, base.height));
+    const vp = page.getViewport({ scale: escala });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(vp.width);
+    canvas.height = Math.round(vp.height);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    const jpg = await novo.embedJpg(canvas.toDataURL('image/jpeg', 0.75));
+    // Página do tamanho original (em pontos), com a imagem cobrindo tudo.
+    novo.addPage([base.width, base.height]).drawImage(jpg, { x: 0, y: 0, width: base.width, height: base.height });
+  }
+  return novo.saveAsBase64();
+}
 
 function handleAnexoAtpve(input, campo) {
   const statusEl = document.getElementById(`f-${campo}-status`);
@@ -4803,9 +4851,22 @@ function handleAnexoAtpve(input, campo) {
   };
 
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     const ehPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
-    if (ehPdf) { guardar(String(reader.result).split(',')[1] || '', `${(file.size / 1024).toFixed(0)} KB`); return; }
+    if (ehPdf) {
+      const original = String(reader.result).split(',')[1] || '';
+      if (file.size <= ATPVE_PDF_COMPRIMIR_ACIMA) { guardar(original, `${(file.size / 1024).toFixed(0)} KB`); return; }
+      setStatus('⏳ Reduzindo o PDF…', 'text-gray-500');
+      try {
+        const reduzido = await reduzirPdfAtpve(file);
+        if (reduzido.length < original.length) {
+          guardar(reduzido, `reduzido de ${(file.size / 1024).toFixed(0)} KB para ${(reduzido.length * 3 / 4 / 1024).toFixed(0)} KB`);
+          return;
+        }
+      } catch (e) { console.warn('[atpve] não reduziu o PDF:', e); }
+      guardar(original, `${(file.size / 1024).toFixed(0)} KB`);
+      return;
+    }
     // Foto de comprovante tirada no celular passa de 5 MB com facilidade, e são
     // cinco anexos numa requisição só — reduz para 1800px no maior lado antes de
     // virar base64, que é o mesmo tratamento da digitalização da carteirinha na
@@ -4961,6 +5022,15 @@ async function submitQuery(e) {
       // após o download.
       await Promise.all([loadStats(), loadQueries(), loadAssinaturaStatus()]);
     } else {
+      // Resposta que não é JSON não é falta de internet: é a Vercel recusando
+      // antes de chegar ao servidor (413 = corpo acima de 4,5 MB, 504 = tempo
+      // esgotado). Sem isto o res.json() estourava e caía no "Erro de conexão".
+      if (!ct.includes('application/json')) {
+        showFormError(res.status === 413
+          ? 'Os arquivos anexados passam do limite de envio. Envie fotos ou PDFs menores e tente de novo.'
+          : `O servidor não respondeu a tempo (HTTP ${res.status}). Confira o Histórico antes de tentar de novo — a consulta pode ter sido concluída.`);
+        return;
+      }
       const data = await res.json();
       if (!res.ok) {
         // 402 = paywall da aba "Coisas de Despachantes". Abre o popup de
@@ -5342,6 +5412,14 @@ function validateParams(inputType, p) {
     if (!p.comprovanteEnderecoComprador) return 'Anexe o comprovante de endereço do comprador.';
     if (!p.cnhPdfBase64Vendedor)  return vDoc.length === 14 ? 'Anexe a CNH do representante legal da empresa vendedora.' : 'Anexe a CNH do vendedor.';
     if (!p.cnhPdfBase64Comprador) return cDoc.length === 14 ? 'Anexe a CNH do representante legal da empresa compradora.' : 'Anexe a CNH do comprador.';
+    // Teto da Vercel para o corpo da requisição — ver ATPVE_CORPO_MAX_BASE64.
+    const rotulosAnexo = { at_crlve: 'CRLV-e', at_comp_v: 'comprovante do vendedor', at_comp_c: 'comprovante do comprador', at_cnh_v: 'CNH do vendedor', at_cnh_c: 'CNH do comprador' };
+    const totalAnexos = Object.values(atpveAnexos).reduce((s, b) => s + (b || '').length, 0);
+    if (totalAnexos > ATPVE_CORPO_MAX_BASE64) {
+      const [maior] = Object.entries(atpveAnexos).sort((a, b) => (b[1] || '').length - (a[1] || '').length);
+      const mb = v => (v * 3 / 4 / 1024 / 1024).toFixed(1).replace('.', ',');
+      return `Os anexos somam ${mb(totalAnexos)} MB e o limite do envio é ${mb(ATPVE_CORPO_MAX_BASE64)} MB. O maior é ${rotulosAnexo[maior[0]]} (${mb(maior[1].length)} MB) — envie uma foto ou um PDF menor dele.`;
+    }
     return null;
   }
   if (inputType === 'declaracao_residencia') {
