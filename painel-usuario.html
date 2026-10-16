@@ -314,6 +314,10 @@
         <!-- No celular a fila de categorias rola na horizontal em vez de quebrar
              em 8 linhas e empurrar os cards para fora da tela. -->
         <div id="catalog-filters" class="flex gap-2 mb-5 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible"></div>
+        <!-- Consultas Especiais (DirectData) em faixa própria, acima do Recurso
+             de Multa (pedido do dono, 16/10/2026). Preenchido por
+             renderEspeciaisDestaque(); o clique filtra a grade pelo grupo. -->
+        <div id="catalog-especiais-destaque" class="hidden mb-4"></div>
         <!-- Recurso de Multa com IA em faixa própria, acima da Assinatura
              Digital (pedido do dono). Preenchido por renderRecursoDestaque(). -->
         <div id="catalog-recurso-destaque" class="hidden mb-4"></div>
@@ -2190,6 +2194,7 @@ function renderPrices() {
     'CNH':                     '🪪',
     'Para os Despachantes':    '🧑‍💼',
     'Recurso de Multas':       '⚖️',
+    'Consultas Especiais Veículos e etc': '🔎',
   };
 
   document.getElementById('prices-content').innerHTML = Object.entries(groups).map(([group, svcs]) => `
@@ -2260,6 +2265,8 @@ function inputTypeLabel(t) {
     cnh_se:              'Entrada: CNH + Registro + Nascimento',
     cnh_cpf_nascimento:  'Entrada: CPF + Nascimento',
     veiculos_documento:  'Entrada: CPF/CNPJ',
+    antt_ciot:           'Entrada: RNTRC + Renavam',
+    antt_regularidade:   'Entrada: CPF/CNPJ + RNTRC',
     declaracao_residencia: 'Entrada: CPF (com busca automática)',
     contrato_aluguel:    'Entrada: Tipo + CPF/CNPJ Locador/Locatário + Endereço + Datas + Valor',
     procuracao_veicular: 'Entrada: Placa + CPF/CNPJ do Outorgado (com busca automática)',
@@ -2350,6 +2357,8 @@ function apiExampleParams(inputType) {
     cnh_se:              { cnh: '00000000000', registro: '00000000000', data_nascimento: '01/01/1990' },
     cnh_cpf_nascimento:  { cpf: '00000000000', data_nascimento: '01/01/1990' },
     veiculos_documento:  { documento: '00000000000' },
+    antt_ciot:           { rntrc: '000000000', renavam: '00000000000' },
+    antt_regularidade:   { documento: '00000000000000', rntrc: '000000000' },
     venda: {
       vendedor:  { tipo_pessoa: 'F', cpf: '00000000000', nome: 'NOME DO VENDEDOR' },
       comprador: {
@@ -2541,6 +2550,7 @@ const CATALOG_GROUP_ORDER = [
   'Consultas Básicas',
   'Consulta Completa',
   'Para os Despachantes',
+  'Consultas Especiais Veículos e etc',
   'Recurso de Multas',
   'Comunicação Venda',
   'CRV',
@@ -2574,6 +2584,7 @@ const CATALOG_GROUP_META = {
   'Óbito':                  { icon:'⚰️' },
   'Procurações e Contratos':{ icon:'📜' },
   'Recurso de Multas':      { icon:'⚖️', badge:'🤖 Com IA', badgeClass:'bg-indigo-100 text-indigo-700' },
+  'Consultas Especiais Veículos e etc': { icon:'🔎', badge:'⚡ Na hora', badgeClass:'bg-sky-100 text-sky-700' },
 };
 
 // Selo por serviço, para quando o do grupo mentiria — por exemplo um serviço que
@@ -2680,6 +2691,46 @@ function renderAssinaturaDestaque(svcsVisiveis) {
     </button>`;
 }
 
+// Faixa das Consultas Especiais (DirectData), acima do Recurso de Multa. É um
+// grupo inteiro, não um serviço: o clique filtra a grade por ele em vez de
+// abrir um formulário. Some quando a busca atual não acha nenhuma delas.
+const GRUPO_ESPECIAIS = 'Consultas Especiais Veículos e etc';
+function renderEspeciaisDestaque(svcsVisiveis) {
+  const wrap = document.getElementById('catalog-especiais-destaque');
+  if (!wrap) return;
+  const doGrupo = (svcsVisiveis || []).filter(s => s.group === GRUPO_ESPECIAIS);
+  if (!doGrupo.length) { wrap.classList.add('hidden'); wrap.innerHTML = ''; return; }
+  const filtrado = catalogFilter === GRUPO_ESPECIAIS;
+  const menor = Math.min(...doGrupo.map(s => Number(s.price) || 0));
+  wrap.classList.remove('hidden');
+  wrap.innerHTML = `
+    <button type="button" onclick="${filtrado ? 'setCatalogFilter(\'all\')' : 'abrirEspeciais()'}"
+      class="w-full text-left bg-gradient-to-r from-sky-50 to-white border border-sky-200 rounded-xl p-4 sm:p-5 hover:border-sky-400 hover:shadow-md transition-all">
+      <div class="flex items-center gap-4">
+        <div class="w-12 h-12 bg-sky-100 rounded-full flex items-center justify-center text-2xl flex-shrink-0">🔎</div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="font-bold text-gray-800">${escapeHtml(GRUPO_ESPECIAIS)}</span>
+            <span class="svc-badge bg-sky-100 text-sky-700">${doGrupo.length} consultas</span>
+          </div>
+          <p class="text-xs text-gray-600 mt-1 leading-snug">
+            Gravame, Renajud, Roubo e Furto, Leilão, Recall, FIPE, histórico de proprietários,
+            veículos por CPF/CNPJ, multas Renainf/PRF/radar e ANTT — relatório em PDF na hora.
+          </p>
+        </div>
+        <div class="flex flex-col items-end gap-1 flex-shrink-0">
+          ${menor ? `<span class="text-[11px] text-gray-500">a partir de</span><span class="price-tag text-sm">${fmtPrice(menor)}</span>` : ''}
+          <span class="svc-cta">${filtrado ? 'Ver todas' : 'Ver consultas'}</span>
+        </div>
+      </div>
+    </button>`;
+}
+
+function abrirEspeciais() {
+  setCatalogFilter(GRUPO_ESPECIAIS);
+  document.getElementById('catalog-grid')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 // Faixa do Recurso de Multa com IA, logo acima da Assinatura Digital. Mesma
 // regra dela: some quando a busca/filtro atual não inclui o serviço.
 function renderRecursoDestaque(svcsVisiveis) {
@@ -2716,6 +2767,7 @@ function renderCatalog() {
   if (!grid) return;
   const termo = document.getElementById('catalog-search')?.value.trim() || '';
   const svcs  = catalogFiltered();
+  renderEspeciaisDestaque(svcs);
   renderRecursoDestaque(svcs);
   renderAssinaturaDestaque(svcs);
 
@@ -4067,6 +4119,16 @@ function renderFormFields(inputType, svc) {
       </div>`,
 
     veiculos_documento: field('documento', 'CPF ou CNPJ', 'text', '000.000.000-00 ou 00.000.000/0001-00'),
+    antt_ciot: `
+      <div class="grid grid-cols-2 gap-3">
+        ${field('rntrc', 'RNTRC (registro na ANTT)', 'text', '000000000')}
+        ${renavamField}
+      </div>`,
+    antt_regularidade: `
+      <div class="grid grid-cols-2 gap-3">
+        ${field('documento', 'CPF ou CNPJ da transportadora', 'text', '000.000.000-00 ou 00.000.000/0001-00')}
+        ${field('rntrc', 'RNTRC (registro na ANTT)', 'text', '000000000')}
+      </div>`,
   };
 
   wrap.innerHTML = templates[inputType] || placaField;
@@ -5156,6 +5218,8 @@ function buildParams(inputType) {
   if (inputType === 'cnh_cpf_nascimento') return { cpf: g('cpf'), data_nascimento: g('data_nascimento') };
 
   if (inputType === 'veiculos_documento') return { documento: cd(g('documento')) };
+  if (inputType === 'antt_ciot')         return { rntrc: g('rntrc').replace(/\D/g, ''), renavam: g('renavam').replace(/\D/g, '') };
+  if (inputType === 'antt_regularidade') return { documento: g('documento').replace(/\D/g, ''), rntrc: g('rntrc').replace(/\D/g, '') };
 
   if (inputType === 'declaracao_residencia')
     return {
@@ -5391,10 +5455,16 @@ function validateParams(inputType, p) {
     if (!p.nome || p.nome.length < 3) return 'Informe o nome completo de quem vai assinar.';
     if (!p.email && !p.whatsapp)
       return 'Informe o e-mail ou o WhatsApp de quem vai assinar — é por onde o pedido de assinatura chega.';
-    if (p.email && !/^[^s@]+@[^s@]+.[^s@]{2,}$/.test(p.email)) return 'E-mail do signatário inválido.';
-    const w = String(p.whatsapp || '').replace(/D/g, '');
+    if (p.email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(p.email)) return 'E-mail do signatário inválido.';
+    const w = String(p.whatsapp || '').replace(/\D/g, '');
     if (w && (w.length < 10 || w.length > 13))
       return 'WhatsApp do signatário inválido. Informe DDD + número (ex.: 22999951574).';
+    return null;
+  }
+  if (inputType === 'antt_ciot' || inputType === 'antt_regularidade') {
+    if (p.rntrc.length < 6 || p.rntrc.length > 14) return 'RNTRC inválido. Informe só os números do registro na ANTT.';
+    if (inputType === 'antt_ciot' && (p.renavam.length < 9 || p.renavam.length > 11)) return 'Renavam inválido. Deve ter entre 9 e 11 dígitos.';
+    if (inputType === 'antt_regularidade' && p.documento.length !== 11 && p.documento.length !== 14) return 'CPF (11 dígitos) ou CNPJ (14 dígitos) da transportadora inválido.';
     return null;
   }
   // ATPV-e: conferência só do que dá para ver daqui, para o cliente corrigir sem

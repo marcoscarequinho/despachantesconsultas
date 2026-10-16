@@ -112,6 +112,9 @@
     <div class="nav-item" data-section="pos-pago" onclick="showSection('pos-pago')">
       <span class="text-lg">🧮</span> Clientes Pós-pago
     </div>
+    <div class="nav-item" data-section="directdata" onclick="showSection('directdata')">
+      <span class="text-lg">🔎</span> Saldo DirectData
+    </div>
     <div class="nav-item" data-section="video" onclick="showSection('video')">
       <span class="text-lg">🎬</span> Vídeo de Apresentação
     </div>
@@ -699,6 +702,84 @@
       <div id="mensagens-lista" class="space-y-2"></div>
     </section>
 
+    <section id="section-directdata" class="admin-section hidden space-y-4">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Saldo DirectData (pré-pago)</h2>
+        <p class="text-sm text-gray-500">
+          Fornecedor das <strong>Consultas Especiais Veículos e etc</strong>. A DirectData não tem rota para consultar o saldo,
+          então o valor abaixo é <strong>estimado</strong>: o último saldo informado menos o custo de cada consulta com sucesso desde então.
+          Depois de recarregar, informe aqui o saldo que aparece no painel deles. Abaixo do valor de alerta, o WhatsApp do admin é avisado uma vez.
+        </p>
+      </div>
+
+      <div id="dd-avisos" class="space-y-2"></div>
+
+      <div class="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        <div class="stat-card border-l-blue-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Saldo estimado</div>
+          <div id="dd-saldo" class="text-2xl font-bold text-gray-800">—</div>
+          <div id="dd-saldo-base" class="text-xs text-gray-400 mt-0.5"></div>
+        </div>
+        <div class="stat-card border-l-amber-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Gasto hoje</div>
+          <div id="dd-hoje" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">custo DirectData</div>
+        </div>
+        <div class="stat-card border-l-purple-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Gasto no mês</div>
+          <div id="dd-mes" class="text-2xl font-bold text-gray-800">—</div>
+          <div id="dd-mes-n" class="text-xs text-gray-400 mt-0.5"></div>
+        </div>
+        <div class="stat-card border-l-red-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Alerta abaixo de</div>
+          <div id="dd-alerta" class="text-2xl font-bold text-gray-800">—</div>
+          <div id="dd-alerta-status" class="text-xs text-gray-400 mt-0.5"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="flex flex-wrap items-end gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Saldo atual no painel da DirectData (R$)</label>
+            <input id="dd-input-saldo" type="text" inputmode="decimal" class="input-field w-48" placeholder="ex.: 500,00">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Avisar quando ficar abaixo de (R$)</label>
+            <input id="dd-input-alerta" type="text" inputmode="decimal" class="input-field w-48" placeholder="ex.: 50,00">
+          </div>
+          <button onclick="salvarSaldoDirectData()" class="btn-primary">💾 Salvar</button>
+          <button onclick="loadDirectData()" class="btn-secondary">🔄 Atualizar</button>
+          <a href="https://app.directd.com.br" target="_blank" rel="noopener" class="text-sm text-blue-600 hover:underline ml-auto">Abrir painel da DirectData ↗</a>
+        </div>
+      </div>
+
+      <div class="card p-0 overflow-hidden">
+        <div class="px-4 py-3 border-b border-gray-100 font-semibold text-gray-700">Últimas chamadas</div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Quando</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Consulta</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">Cliente</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Resultado</th>
+                <th class="px-4 py-3 text-right font-semibold text-gray-600">Custo</th>
+              </tr>
+            </thead>
+            <tbody id="dd-consumo-tbody" class="divide-y divide-gray-50"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card p-0 overflow-hidden">
+        <div class="px-4 py-3 border-b border-gray-100">
+          <div class="font-semibold text-gray-700">Avisos recebidos no webhook</div>
+          <div class="text-xs text-gray-500">Endereço cadastrado na DirectData: <code>https://www.despachantesconsultas.com.br/webhook</code>. Evento com assinatura válida que traga um campo de saldo atualiza o saldo acima.</div>
+        </div>
+        <div id="dd-eventos" class="divide-y divide-gray-50 text-sm"></div>
+      </div>
+    </section>
+
     <section id="section-pos-pago" class="admin-section hidden space-y-4">
       <div>
         <h2 class="text-xl font-bold text-gray-800">Clientes Pós-pago</h2>
@@ -1230,7 +1311,7 @@ const fmt = v => 'R$ ' + parseFloat(v||0).toLocaleString('pt-BR',{minimumFractio
 const fmtDate = s => { const d=new Date(s); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
 
 let allUsers = [], allTx = [], allQueries = [], allServices = [], allManualQueries = [];
-const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API', 'assinantes':'Lista de Assinantes Cadastrados', 'atpve':'Pedidos de ATPV-e', 'pos-pago':'Clientes Pós-pago', video:'Vídeo de Apresentação', mensagens:'Mensagens de clientes' };
+const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API', 'assinantes':'Lista de Assinantes Cadastrados', 'atpve':'Pedidos de ATPV-e', 'pos-pago':'Clientes Pós-pago', directdata:'Saldo DirectData', video:'Vídeo de Apresentação', mensagens:'Mensagens de clientes' };
 
 function toast(msg, type='success') {
   const el = document.getElementById('toast');
@@ -1263,6 +1344,7 @@ function showSection(id) {
   if (id === 'assinantes') loadAssinantes();
   if (id === 'atpve') loadAtpvePedidos();
   if (id === 'pos-pago') loadPosPago();
+  if (id === 'directdata') loadDirectData();
   if (id === 'mensagens') loadMensagensAdmin();
   if (id === 'video') loadVideoApresentacao();
 }
@@ -1283,6 +1365,7 @@ function refreshCurrentSection() {
   if (id === 'assinantes')    loadAssinantes();
   if (id === 'atpve')         loadAtpvePedidos();
   if (id === 'pos-pago')      loadPosPago();
+  if (id === 'directdata')    loadDirectData();
   if (id === 'mensagens')     loadMensagensAdmin();
 }
 
@@ -1944,6 +2027,74 @@ async function baixarVideoApresentacao() {
   } finally {
     btn.disabled = false; btn.textContent = txt;
   }
+}
+
+// ── Saldo DirectData ─────────────────────────────────────────────────────────
+async function loadDirectData() {
+  try {
+    const r = await fetch('/api/admin/directdata');
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || 'Erro ao carregar o saldo da DirectData.', 'error'); return; }
+    const s = d.saldo;
+    const baixo = s.saldoEstimado < s.alertaAbaixo;
+    const elSaldo = document.getElementById('dd-saldo');
+    elSaldo.textContent = fmt(s.saldoEstimado);
+    elSaldo.className = `text-2xl font-bold ${baixo ? 'text-red-600' : 'text-gray-800'}`;
+    document.getElementById('dd-saldo-base').textContent =
+      `${fmt(s.saldoBase)} informado em ${fmtDate(s.baseEm)}${s.origem === 'WEBHOOK' ? ' (webhook)' : ''} − ${fmt(s.gastoDesdeBase)} em ${s.consultasDesdeBase} consulta(s)`;
+    document.getElementById('dd-hoje').textContent = fmt(d.hoje);
+    document.getElementById('dd-mes').textContent = fmt(d.mes);
+    document.getElementById('dd-mes-n').textContent = `${d.mesConsultas} consulta(s) com sucesso`;
+    document.getElementById('dd-alerta').textContent = fmt(s.alertaAbaixo);
+    document.getElementById('dd-alerta-status').textContent = s.alertaEnviadoEm ? `aviso enviado em ${fmtDate(s.alertaEnviadoEm)}` : 'aviso armado';
+    document.getElementById('dd-input-alerta').placeholder = String(s.alertaAbaixo.toFixed(2)).replace('.', ',');
+
+    const avisos = [];
+    if (!d.tokenConfigurado) avisos.push('DIRECTDATA_TOKEN não está configurado no servidor — as consultas vão falhar.');
+    if (!d.webhookConfigurado) avisos.push('DIRECTDATA_WEBHOOK_SECRET não está configurado — nenhum aviso do webhook será tido como verificado.');
+    if (baixo) avisos.push(`Saldo estimado abaixo de ${fmt(s.alertaAbaixo)}. Recarregue no painel da DirectData e informe o saldo novo aqui.`);
+    document.getElementById('dd-avisos').innerHTML = avisos.map(a =>
+      `<div class="bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-4 py-2">⚠️ ${escMsg(a)}</div>`).join('');
+
+    const nomes = Object.fromEntries((d.servicos || []).map(x => [x.id, x.name]));
+    document.getElementById('dd-consumo-tbody').innerHTML = d.consumo.length ? d.consumo.map(c => `
+      <tr>
+        <td class="px-4 py-2 text-gray-600 whitespace-nowrap">${fmtDate(c.created_at)}</td>
+        <td class="px-4 py-2">${escMsg(nomes[c.service_id] || c.service_id)}${c.query_id ? ` <span class="text-xs text-gray-400">#${c.query_id}</span>` : ''}</td>
+        <td class="px-4 py-2 hidden md:table-cell text-gray-600">${escMsg(c.cliente || '—')}</td>
+        <td class="px-4 py-2"><span class="text-xs px-2 py-0.5 rounded-full ${c.resultado_id === 1 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}">${escMsg(c.resultado || '—')}</span></td>
+        <td class="px-4 py-2 text-right font-medium">${c.custo ? fmt(c.custo) : '—'}</td>
+      </tr>`).join('') : '<tr><td colspan="5" class="px-4 py-6 text-center text-gray-400">Nenhuma consulta ainda.</td></tr>';
+
+    document.getElementById('dd-eventos').innerHTML = d.eventos.length ? d.eventos.map(e => `
+      <details class="px-4 py-2">
+        <summary class="cursor-pointer">
+          <span class="text-gray-600">${fmtDate(e.created_at)}</span>
+          <span class="ml-2 text-xs px-2 py-0.5 rounded-full ${e.verificado ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">${e.verificado ? 'assinatura válida' : 'sem assinatura válida'}</span>
+          <span class="ml-2 text-gray-700">${escMsg(e.tipo || '')}</span>
+        </summary>
+        <pre class="mt-2 text-xs bg-gray-50 rounded p-2 overflow-x-auto whitespace-pre-wrap">${escMsg(e.payload || '')}</pre>
+      </details>`).join('') : '<div class="px-4 py-6 text-center text-gray-400">Nenhum aviso recebido ainda.</div>';
+  } catch { toast('Erro de conexão ao carregar o saldo da DirectData.', 'error'); }
+}
+
+async function salvarSaldoDirectData() {
+  const saldo = document.getElementById('dd-input-saldo').value.trim();
+  const alertaAbaixo = document.getElementById('dd-input-alerta').value.trim();
+  if (!saldo && !alertaAbaixo) { toast('Informe o saldo ou o valor do alerta.', 'error'); return; }
+  const num = v => v ? v.replace(/\./g, '').replace(',', '.') : undefined;
+  try {
+    const r = await fetch('/api/admin/directdata/saldo', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ saldo: num(saldo), alertaAbaixo: num(alertaAbaixo) }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || 'Erro ao salvar.', 'error'); return; }
+    document.getElementById('dd-input-saldo').value = '';
+    document.getElementById('dd-input-alerta').value = '';
+    toast('Saldo da DirectData atualizado.');
+    loadDirectData();
+  } catch { toast('Erro de conexão.', 'error'); }
 }
 
 async function loadPosPago() {

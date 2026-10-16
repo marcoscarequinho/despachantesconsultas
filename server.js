@@ -139,6 +139,48 @@ const ADMIN_PHONE        = process.env.ADMIN_PHONE        || '';
 // corpo a resposta é o PDF em bytes, e erro é sempre JSON 400/500 ({ error }).
 const CONSULTASFACIL_BASE_URL = 'https://www.consultasfacil.net';
 const CONSULTASFACIL_KEY      = process.env.CONSULTASFACIL_KEY || '';
+// ── DirectData (apiv3.directd.com.br) — grupo "Consultas Especiais Veículos e etc" ──
+// Entrou em 16/10/2026. Contrato: GET /api/<Endpoint>?<params>&TOKEN=<chave>,
+// resposta { metaDados, retorno } síncrona (assincrono:false e ~3s na placa
+// TTT7A54). metaDados.resultadoId 1 = "Sucesso"; 7 = entrada inválida e 8 =
+// parâmetros não suportados vêm com HTTP 400 e não custam nada. O token vai na
+// URL (é assim que eles autenticam) — por isso a URL nunca é logada inteira.
+// Preço de venda: custo do cardápio (V5.7) + 60%, decisão do dono.
+const DIRECTDATA_BASE_URL       = 'https://apiv3.directd.com.br/api';
+const DIRECTDATA_TOKEN          = process.env.DIRECTDATA_TOKEN || '';
+const DIRECTDATA_WEBHOOK_SECRET = process.env.DIRECTDATA_WEBHOOK_SECRET || '';
+const DIRECTDATA_MARKUP         = 1.60;
+const DIRECTDATA_GRUPO          = 'Consultas Especiais Veículos e etc';
+// O endereço cadastrado na DirectData é www.despachantesconsultas.com.br/webhook;
+// o segundo caminho segue o padrão dos outros webhooks do site.
+const DIRECTDATA_WEBHOOK_PATHS  = ['/webhook', '/api/webhooks/directdata'];
+// entrada → campos do formulário (inputType do painel) e query string da API.
+// "documento" manda Cpf OU Cnpj conforme o tamanho: os endpoints por documento
+// têm os dois parâmetros e recusam o CPF no campo do CNPJ.
+const DIRECTDATA_SVCS = {
+  'dd-veicular-nacional':      { endpoint: 'ConsultaVeicular',                       custo: 1.10, entrada: 'placa',     name: 'Consulta Veicular Nacional',                 icon: '🚗' },
+  'dd-veicular-estadual':      { endpoint: 'ConsultaVeicularEstadual',               custo: 1.90, entrada: 'placa',     name: 'Consulta Veicular Estadual (Detran)',        icon: '🏛️' },
+  'dd-proprietario-atual':     { endpoint: 'ConsultaVeicularProprietarioAtual',      custo: 0.90, entrada: 'placa',     name: 'Proprietário Atual',                         icon: '👤' },
+  'dd-historico-proprietarios':{ endpoint: 'ConsultaVeicularHistoricoProprietarios', custo: 4.10, entrada: 'placa',     name: 'Histórico de Proprietários',                 icon: '📜' },
+  'dd-gravame':                { endpoint: 'ConsultaVeicularGravame',                custo: 1.80, entrada: 'placa',     name: 'Gravame',                                    icon: '🏦' },
+  'dd-renajud':                { endpoint: 'ConsultaVeicularRenajud',                custo: 1.90, entrada: 'placa',     name: 'Renajud',                                    icon: '⚖️' },
+  'dd-renainf':                { endpoint: 'ConsultaVeicularRenainf',                custo: 2.10, entrada: 'placa',     name: 'Renainf (multas de outros estados)',         icon: '🚦' },
+  'dd-roubo-furto':            { endpoint: 'ConsultaVeicularRouboFurto',             custo: 1.45, entrada: 'placa',     name: 'Roubo e Furto',                              icon: '🚨' },
+  'dd-recall':                 { endpoint: 'ConsultaVeicularRecall',                 custo: 1.20, entrada: 'placa',     name: 'Recall',                                     icon: '🔧' },
+  'dd-leilao':                 { endpoint: 'ConsultaLeilaoVeicular',                 custo: 12.00, entrada: 'placa',    name: 'Leilão Veicular',                            icon: '🔨' },
+  'dd-fipe':                   { endpoint: 'ConsultaVeicularFipe',                   custo: 3.98, entrada: 'placa',     name: 'Veículo + Tabela FIPE',                      icon: '💰' },
+  'dd-crlv-sp':                { endpoint: 'ConsultaVeicularCrlvSP',                 custo: 12.00, entrada: 'placa',    name: 'CRLV-e São Paulo (DirectData)',              icon: '📄' },
+  'dd-multas-radar':           { endpoint: 'ConsultaSerproMultasRadar',              custo: 0.36, entrada: 'placa_renavam', name: 'Multas Radar (Serpro)',                  icon: '📸' },
+  'dd-prf-infracoes':          { endpoint: 'PRFInfracoes',                           custo: 0.36, entrada: 'placa_renavam', name: 'Infrações PRF',                          icon: '🚓' },
+  'dd-veiculos-documento':     { endpoint: 'HistoricoVeiculosNacional',              custo: 1.80, entrada: 'documento', name: 'Veículos por CPF/CNPJ (Nacional)',           icon: '🗂️' },
+  'dd-veiculos-documento-sp':  { endpoint: 'HistoricoVeiculos',                      custo: 0.36, entrada: 'documento', name: 'Veículos por CPF/CNPJ (São Paulo)',          icon: '🗂️' },
+  'dd-frotas-nacional':        { endpoint: 'ConsultaVeicularFrotasNacional',         custo: 4.55, entrada: 'documento', name: 'Frotas por CPF/CNPJ (Nacional)',             icon: '🚚' },
+  'dd-antt-ciot':              { endpoint: 'ANTTConsultaCodigoIdentificadorOperacaoTransporte', custo: 0.36, entrada: 'antt_ciot', name: 'ANTT — Operação de Transporte (CIOT)', icon: '🚛' },
+  'dd-antt-regularidade':      { endpoint: 'ANTTConsultaRegularidadeTransportadora', custo: 0.36, entrada: 'antt_regularidade', name: 'ANTT — Regularidade da Transportadora', icon: '🚛' },
+};
+const DIRECTDATA_INPUT_TYPES = { placa: 'placa', placa_renavam: 'placa_renavam', documento: 'veiculos_documento', antt_ciot: 'antt_ciot', antt_regularidade: 'antt_regularidade' };
+const directDataPreco = custo => Math.round(custo * DIRECTDATA_MARKUP * 100) / 100;
+
 // API despbrasil.com.br — auth por header chaveAcesso (fixo); resposta traz a URL
 // do PDF pronto em "arquivo_url" (buscamos o arquivo no processCatalogQuery, ver
 // DESPBRASIL_SVCS). Mapeia serviceId para o "servico" da despbrasil (campo "extra"
@@ -1202,6 +1244,13 @@ const SERVICES = [
   // próprio e PAGO: o grupo "Para os Despachantes" é gratuito por regra
   // (FREE_SERVICE_GROUPS), e cada recurso custa chamada de IA. No painel ele
   // tem faixa própria na Visão Geral, acima da Assinatura Digital.
+  // Consultas Especiais (DirectData) — ver DIRECTDATA_SVCS. Preço fixo = custo
+  // + 60%, por isso noMarkup. No painel o grupo tem faixa própria na Visão
+  // Geral, acima do Recurso de Multa.
+  ...Object.entries(DIRECTDATA_SVCS).map(([id, s]) => ({
+    id, name: s.name, group: DIRECTDATA_GRUPO, basePrice: directDataPreco(s.custo), noMarkup: true,
+    inputType: DIRECTDATA_INPUT_TYPES[s.entrada], icon: s.icon,
+  })),
   { id:'recurso-multa-ia', name:'Recurso de Multa com IA', group:'Recurso de Multas', basePrice:80, noMarkup:true, inputType:'recurso_multa', icon:'⚖️',
     slowNote:'Envie a foto ou o PDF da notificação, confira os dados e responda as perguntas. A IA redige a defesa prévia ou o recurso à JARI em PDF, pronto para assinar e protocolar (leva cerca de 1 minuto). Só é cobrado se o PDF for gerado.' },
   // ── CRLV-e Rio de Janeiro (destaque no topo da Nova Consulta) ──
@@ -1814,6 +1863,45 @@ async function initDB() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_recurso_multa_leituras_user ON recurso_multa_leituras(user_id, created_at);`);
+  // DirectData: a API não tem rota de saldo (16/10/2026: Saldo, ConsultaSaldo,
+  // Usuario/Saldo e Conta/Saldo dão 404), então o saldo do admin é ESTIMADO —
+  // o valor que o admin informa ao recarregar (directdata_saldo) menos o custo
+  // de cada consulta com sucesso feita depois disso (directdata_consumo).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS directdata_consumo (
+      id            SERIAL PRIMARY KEY,
+      service_id    VARCHAR(80),
+      endpoint      VARCHAR(120),
+      custo         NUMERIC(10,2) DEFAULT 0,
+      resultado_id  INTEGER,
+      resultado     VARCHAR(200),
+      consulta_uid  VARCHAR(80),
+      query_id      INTEGER,
+      user_id       INTEGER,
+      created_at    TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_directdata_consumo_data ON directdata_consumo(created_at);`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS directdata_saldo (
+      id                INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      saldo_base        NUMERIC(12,2) NOT NULL DEFAULT 0,
+      base_em           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      origem            VARCHAR(20) DEFAULT 'MANUAL',
+      alerta_abaixo     NUMERIC(12,2) NOT NULL DEFAULT 50,
+      alerta_enviado_em TIMESTAMPTZ
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS directdata_webhook_eventos (
+      id          SERIAL PRIMARY KEY,
+      webhook_id  VARCHAR(120),
+      verificado  BOOLEAN DEFAULT false,
+      tipo        VARCHAR(120),
+      payload     TEXT,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS whatsapp_inbox (
       id           SERIAL PRIMARY KEY,
@@ -2113,6 +2201,9 @@ app.use(express.json({
   verify: (req, res, buf) => {
     const url = req.originalUrl || '';
     if (VISTOCAR_WEBHOOK_PATHS.some(p => url.startsWith(p))) req.rawBody = buf;
+    // DirectData: a assinatura (whsec_) é sobre o corpo bruto. Comparação
+    // exata do caminho — "/webhook" é prefixo de "/webhooks/vistocar".
+    if (DIRECTDATA_WEBHOOK_PATHS.includes(url.split('?')[0])) req.rawBody = buf;
   },
 }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -7530,6 +7621,201 @@ async function assinaturaGateDespachantes(userId, serviceId) {
   return { ok: true, assinatura };
 }
 
+// ── DirectData — chamada, relatório, consumo e saldo (ver DIRECTDATA_SVCS) ────
+
+// Valida a entrada do formulário e devolve a query string da API, ou { erro }.
+function montarConsultaDirectData(svc, params) {
+  const placa   = String(params?.placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const renavam = String(params?.renavam || '').replace(/\D/g, '');
+  const doc     = String(params?.documento || params?.cpfCnpj || '').replace(/\D/g, '');
+  const rntrc   = String(params?.rntrc || '').replace(/\D/g, '');
+  const okPlaca = () => /^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa);
+  const okRenavam = () => renavam.length >= 9 && renavam.length <= 11;
+  const okDoc = () => (doc.length === 11 || doc.length === 14) && isValidDoc(doc);
+  const docQuery = () => doc.length === 11 ? { Cpf: doc } : { Cnpj: doc };
+  // No log, CPF/CNPJ mascarado (convenção do projeto); no PDF, o documento
+  // consultado sai inteiro — é o próprio cliente que pediu.
+  const docMask = doc.replace(/\d(?=\d{4})/g, '*');
+  switch (svc.entrada) {
+    case 'placa':
+      if (!okPlaca()) return { erro: 'Placa inválida. Informe no formato ABC1D23.' };
+      return { query: { Placa: placa }, rotulo: placa, log: { placa } };
+    case 'placa_renavam':
+      if (!okPlaca()) return { erro: 'Placa inválida. Informe no formato ABC1D23.' };
+      if (!okRenavam()) return { erro: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' };
+      return { query: { Placa: placa, Renavam: renavam.padStart(11, '0') }, rotulo: placa, log: { placa, renavam } };
+    case 'documento':
+      if (!okDoc()) return { erro: 'CPF ou CNPJ inválido. Confira os dígitos.' };
+      return { query: docQuery(), rotulo: docMask, log: { documento: docMask }, pdf: { documento: maskDocDisplay(doc) } };
+    case 'antt_ciot':
+      if (rntrc.length < 6 || rntrc.length > 14) return { erro: 'RNTRC inválido. Informe só os números do registro na ANTT.' };
+      if (!okRenavam()) return { erro: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' };
+      return { query: { RNTRC: rntrc, RENAVAM: renavam.padStart(11, '0') }, rotulo: rntrc, log: { rntrc, renavam } };
+    case 'antt_regularidade':
+      if (!okDoc()) return { erro: 'CPF ou CNPJ da transportadora inválido. Confira os dígitos.' };
+      if (rntrc.length < 6 || rntrc.length > 14) return { erro: 'RNTRC inválido. Informe só os números do registro na ANTT.' };
+      return { query: { ...(doc.length === 11 ? { CPF: doc } : { CNPJ: doc }), RNTRC: rntrc }, rotulo: docMask, log: { documento: docMask, rntrc }, pdf: { documento: maskDocDisplay(doc), rntrc } };
+  }
+  return { erro: 'Entrada não suportada para essa consulta.' };
+}
+
+async function chamarDirectData(endpoint, query) {
+  if (!DIRECTDATA_TOKEN) throw Object.assign(new Error('DIRECTDATA_TOKEN ausente'), { semChave: true });
+  const qs = new URLSearchParams({ ...query, TOKEN: DIRECTDATA_TOKEN });
+  const r = await fetch(`${DIRECTDATA_BASE_URL}/${endpoint}?${qs}`, { signal: AbortSignal.timeout(120000) });
+  const texto = await r.text();
+  let json = null;
+  try { json = JSON.parse(texto); } catch {}
+  return { status: r.status, json, texto };
+}
+
+// Booleano vira Sim/Não e vazio vira "Nada consta" — o relatório não pode
+// deixar o cliente achando que um indicador falso é campo sem dado.
+function valorDirectData(v) {
+  if (v === true) return 'Sim';
+  if (v === false) return 'Não';
+  if (v === null || v === undefined || v === '') return 'Nada consta';
+  return String(v);
+}
+
+// pdfRenderGenericObject só desce um nível; a resposta da DirectData aninha
+// mais (retorno.veiculo.indicadores, .faturado, .importacao), e esses blocos
+// sumiriam do relatório.
+function pdfRenderDirectData(doc, obj, profundidade = 0) {
+  if (obj === null || obj === undefined || (typeof obj === 'object' && !Object.keys(obj).length)) {
+    pdfEmptyNotice(doc); return;
+  }
+  if (typeof obj !== 'object') { pdfFieldGrid(doc, [['Resultado', valorDirectData(obj)]]); return; }
+  if (Array.isArray(obj)) {
+    if (!obj.length) { pdfEmptyNotice(doc); return; }
+    if (obj.every(v => v === null || typeof v !== 'object')) {
+      pdfFieldGrid(doc, obj.map((v, i) => [String(i + 1), valorDirectData(v)]));
+      return;
+    }
+    obj.forEach((item, i) => {
+      pdfSubBar(doc, `Registro ${i + 1}`);
+      pdfRenderDirectData(doc, item, profundidade + 1);
+      doc.moveDown(0.3);
+    });
+    return;
+  }
+  const escalares = Object.entries(obj).filter(([, v]) => v === null || typeof v !== 'object');
+  if (escalares.length) pdfFieldGrid(doc, escalares.map(([k, v]) => [humanizeKey(k), valorDirectData(v)]));
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === null || typeof v !== 'object') continue;
+    doc.moveDown(0.3);
+    if (profundidade === 0) pdfBar(doc, humanizeKey(k).toUpperCase());
+    else pdfSubBar(doc, humanizeKey(k));
+    pdfRenderDirectData(doc, v, profundidade + 1);
+  }
+}
+
+function buildDirectDataPdfBuffer(service, meta, retorno, entradaLog) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+      pdfReportHeader(doc, service.name.toUpperCase(), now);
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      const pares = Object.entries(entradaLog).map(([k, v]) => [humanizeKey(k), k === 'placa' ? maskPlacaDisplay(v) : String(v)]);
+      if (meta?.consultaUid) pares.push(['Protocolo', meta.consultaUid]);
+      pdfFieldGrid(doc, pares);
+      doc.moveDown(0.4);
+      pdfBar(doc, 'RESULTADO');
+      pdfRenderDirectData(doc, retorno);
+      doc.moveDown(0.4);
+      pdfReportFooter(doc, now);
+      doc.end();
+    } catch (e) { reject(e); }
+  });
+}
+
+// O CRLV-e SP é um documento: se o retorno trouxer o PDF (base64 ou link),
+// entregamos ele em vez do relatório. Formato não conferido (a consulta custa
+// R$ 12,00) — por isso a busca é por conteúdo e não por nome de campo.
+function acharPdfDirectData(obj, prof = 0) {
+  if (!obj || prof > 5) return null;
+  if (typeof obj === 'string') {
+    const s = obj.trim();
+    if (s.startsWith('JVBER')) return { b64: s };
+    if (/^https?:\/\/\S+/i.test(s) && /pdf|comprovante|documento|crlv/i.test(s)) return { url: s };
+    return null;
+  }
+  if (typeof obj !== 'object') return null;
+  for (const v of Object.values(obj)) { const achou = acharPdfDirectData(v, prof + 1); if (achou) return achou; }
+  return null;
+}
+
+async function saldoDirectData() {
+  await pool.query(`INSERT INTO directdata_saldo (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+  const { rows: [s] } = await pool.query(`SELECT * FROM directdata_saldo WHERE id = 1`);
+  const { rows: [c] } = await pool.query(
+    `SELECT COALESCE(SUM(custo),0)::float AS gasto, COUNT(*) FILTER (WHERE custo > 0)::int AS n
+       FROM directdata_consumo WHERE created_at >= $1`, [s.base_em]);
+  return {
+    saldoBase: Number(s.saldo_base), baseEm: s.base_em, origem: s.origem,
+    gastoDesdeBase: c.gasto, consultasDesdeBase: c.n,
+    saldoEstimado: Math.round((Number(s.saldo_base) - c.gasto) * 100) / 100,
+    alertaAbaixo: Number(s.alerta_abaixo), alertaEnviadoEm: s.alerta_enviado_em,
+  };
+}
+
+// Grava a chamada e, se o saldo estimado cruzou o limite, avisa o ADMIN_PHONE
+// uma vez — o aviso só rearma quando o admin informa um saldo novo.
+async function registrarConsumoDirectData({ serviceId, svc, meta, custo, queryId, userId }) {
+  try {
+    await pool.query(
+      `INSERT INTO directdata_consumo (service_id, endpoint, custo, resultado_id, resultado, consulta_uid, query_id, user_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [serviceId, svc.endpoint, custo, meta?.resultadoId ?? null, String(meta?.resultado || meta?.mensagem || '').slice(0, 200),
+       meta?.consultaUid || null, queryId || null, userId || null]);
+    if (!custo) return;
+    const s = await saldoDirectData();
+    if (s.saldoEstimado < s.alertaAbaixo && !s.alertaEnviadoEm) {
+      const marcou = await pool.query(
+        `UPDATE directdata_saldo SET alerta_enviado_em = NOW() WHERE id = 1 AND alerta_enviado_em IS NULL RETURNING id`);
+      if (marcou.rowCount && ADMIN_PHONE)
+        await sendWhatsApp(ADMIN_PHONE, `⚠️ *Saldo DirectData baixo*\nSaldo estimado: ${fmtMoneyBRL(s.saldoEstimado)} (alerta abaixo de ${fmtMoneyBRL(s.alertaAbaixo)}).\n\nRecarregue no painel da DirectData e informe o saldo novo no admin, em *Saldo DirectData*.`).catch(() => {});
+    }
+  } catch (e) { console.error('[directdata] erro ao registrar consumo:', e.message); }
+}
+
+// Assinatura no padrão Standard Webhooks/Svix (segredo "whsec_<base64>"):
+// HMAC-SHA256 de "<id>.<timestamp>.<corpo>", base64, no header
+// webhook-signature (ou svix-signature) como "v1,<assinatura>" — pode vir mais
+// de uma, separadas por espaço. Timestamp com mais de 5 min é recusado (replay).
+function verificarAssinaturaDirectData(req) {
+  const h = n => req.headers[`webhook-${n}`] || req.headers[`svix-${n}`] || '';
+  const id = h('id'), ts = h('timestamp'), assinaturas = h('signature');
+  if (!DIRECTDATA_WEBHOOK_SECRET || !id || !ts || !assinaturas || !req.rawBody) return false;
+  if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) return false;
+  const chave = Buffer.from(DIRECTDATA_WEBHOOK_SECRET.replace(/^whsec_/, ''), 'base64');
+  const esperada = crypto.createHmac('sha256', chave).update(`${id}.${ts}.${req.rawBody.toString('utf8')}`).digest();
+  return String(assinaturas).split(' ').some(p => {
+    const sig = Buffer.from(p.split(',')[1] || '', 'base64');
+    return sig.length === esperada.length && crypto.timingSafeEqual(sig, esperada);
+  });
+}
+
+// Procura um valor de saldo no evento — o formato do webhook da DirectData não
+// é documentado, então qualquer campo "saldo"/"balance" numérico serve.
+function acharSaldoNoEvento(obj, prof = 0) {
+  if (!obj || typeof obj !== 'object' || prof > 4) return null;
+  for (const [k, v] of Object.entries(obj)) {
+    if (/^(saldo|saldoatual|saldo_atual|balance|creditos?)$/i.test(k)) {
+      const n = typeof v === 'number' ? v : Number(String(v).replace(/[^\d,.-]/g, '').replace(/\.(?=\d{3}\b)/g, '').replace(',', '.'));
+      if (Number.isFinite(n)) return n;
+    }
+    const dentro = acharSaldoNoEvento(v, prof + 1);
+    if (dentro !== null) return dentro;
+  }
+  return null;
+}
+
 async function processCatalogQuery(userId, serviceId, params, res) {
   if (!serviceId) return res.status(400).json({ error: 'Serviço não informado.' });
 
@@ -7648,6 +7934,79 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         },
         charged: 0,
       });
+    }
+
+    // ── Consultas Especiais — DirectData (ver DIRECTDATA_SVCS) ─────────────────
+    // Relatório PDF no padrão do site montado do JSON (ou o PDF do próprio
+    // retorno, no CRLV-e SP). Só cobra com resultadoId 1 ("Sucesso").
+    if (DIRECTDATA_SVCS[serviceId]) {
+      const svc = DIRECTDATA_SVCS[serviceId];
+      const m = montarConsultaDirectData(svc, params);
+      if (m.erro) return res.status(400).json({ error: m.erro });
+
+      let resp;
+      try {
+        resp = await chamarDirectData(svc.endpoint, m.query);
+      } catch (e) {
+        console.error(`[${serviceId}] falha na chamada DirectData:`, e.semChave ? 'sem DIRECTDATA_TOKEN' : e.message);
+        return res.status(502).json({ error: 'O sistema do fornecedor não respondeu. Nada foi cobrado — tente novamente em alguns minutos.' });
+      }
+      const meta = resp.json?.metaDados || {};
+      const retorno = resp.json?.retorno;
+      console.log(`[${serviceId}] DirectData HTTP ${resp.status} resultadoId=${meta.resultadoId} resultado=${JSON.stringify(meta.resultado)} uid=${meta.consultaUid} ${meta.tempoExecucaoMs}ms`);
+      if (!resp.json) {
+        console.error(`[${serviceId}] resposta não-JSON: ${resp.texto.slice(0, 300)}`);
+        return res.status(502).json({ error: 'O sistema do fornecedor respondeu de forma inesperada. Nada foi cobrado — tente novamente em alguns minutos.' });
+      }
+      if (meta.resultadoId !== 1 || retorno === undefined || retorno === null) {
+        await registrarConsumoDirectData({ serviceId, svc, meta, custo: 0, userId });
+        const msg = String(meta.mensagem || meta.resultado || '').trim();
+        return res.status(422).json({ error: `${msg || 'Consulta sem resultado.'} Nada foi cobrado.` });
+      }
+
+      let pdfBuf = null;
+      const pdfPronto = serviceId === 'dd-crlv-sp' ? acharPdfDirectData(retorno) : null;
+      if (pdfPronto?.b64) pdfBuf = Buffer.from(pdfPronto.b64, 'base64');
+      else if (pdfPronto?.url) {
+        try {
+          const r = await fetch(pdfPronto.url, { signal: AbortSignal.timeout(60000) });
+          const b = Buffer.from(await r.arrayBuffer());
+          if (b.slice(0, 4).toString() === '%PDF') pdfBuf = b;
+        } catch (e) { console.error(`[${serviceId}] não baixou o PDF do retorno:`, e.message); }
+      }
+      if (!pdfBuf) {
+        try {
+          pdfBuf = await buildDirectDataPdfBuffer(service, meta, retorno, m.pdf || m.log);
+        } catch (e) {
+          console.error(`[${serviceId}] erro ao gerar PDF:`, e.message);
+          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório. Nada foi cobrado.' });
+        }
+      }
+
+      await debitarConsulta(userId, price);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name} — ${m.rotulo}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify({ ...m.log, consultaUid: meta.consultaUid }), price, txRow.rows[0].id]
+      );
+      await registrarConsumoDirectData({ serviceId, svc, meta, custo: svc.custo, queryId: qRow.rows[0].id, userId });
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, m.log);
+      const nomeArq = `mcdespachadoria-${serviceId.replace(/^dd-/, '')}-${String(m.rotulo).replace(/[^A-Za-z0-9]/g, '')}.pdf`;
+      if (user.phone)
+        await sendWhatsAppPdf(user.phone, pdfBuf, nomeArq, `✅ *${service.name}*\n🔎 ${m.rotulo}`).catch(() => {});
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
+      return res.send(pdfBuf);
     }
 
     // ── Recurso de Multa com IA (ver recurso-multa.js) ────────────────────────
@@ -14098,6 +14457,86 @@ app.post('/api/mensagens', requireAuth, async (req, res) => {
 // fechado esperando pagamento e desde quando. A virada de ciclo de cada um
 // acontece na leitura (garantirCicloPosPago) — abrir a página põe todo mundo
 // em dia, que é o que faz o bloqueio por atraso valer sem cron.
+// ── DirectData: webhook e saldo (admin "Saldo DirectData") ──────────────────
+// O formato dos eventos não é documentado publicamente: tudo que chega é
+// gravado (para o admin ver o que a DirectData manda) e só evento com
+// assinatura válida pode mexer no saldo. Responde 200 mesmo sem assinatura
+// válida para o remetente não ficar reenviando — o evento fica marcado.
+app.post(DIRECTDATA_WEBHOOK_PATHS, async (req, res) => {
+  const verificado = verificarAssinaturaDirectData(req);
+  const corpo = req.body && typeof req.body === 'object' ? req.body : {};
+  const tipo = String(corpo.type || corpo.tipo || corpo.event || corpo.evento || corpo.metaDados?.consultaNome || '').slice(0, 120);
+  const webhookId = String(req.headers['webhook-id'] || req.headers['svix-id'] || '').slice(0, 120);
+  try {
+    if (webhookId) {
+      const dup = await pool.query(`SELECT 1 FROM directdata_webhook_eventos WHERE webhook_id = $1 LIMIT 1`, [webhookId]);
+      if (dup.rowCount) return res.json({ ok: true, duplicado: true });
+    }
+    await pool.query(
+      `INSERT INTO directdata_webhook_eventos (webhook_id, verificado, tipo, payload) VALUES ($1,$2,$3,$4)`,
+      [webhookId || null, verificado, tipo || null, (req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(corpo)).slice(0, 20000)]);
+    console.log(`[directdata-webhook] id=${webhookId || '-'} tipo=${tipo || '-'} verificado=${verificado}`);
+    const saldo = verificado ? acharSaldoNoEvento(corpo) : null;
+    if (saldo !== null) {
+      await pool.query(`INSERT INTO directdata_saldo (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+      await pool.query(
+        `UPDATE directdata_saldo SET saldo_base = $1, base_em = NOW(), origem = 'WEBHOOK',
+           alerta_enviado_em = CASE WHEN $1 >= alerta_abaixo THEN NULL ELSE alerta_enviado_em END WHERE id = 1`, [saldo]);
+      console.log(`[directdata-webhook] saldo informado pela DirectData: ${saldo}`);
+    }
+  } catch (e) { console.error('[directdata-webhook] erro:', e.message); }
+  res.json({ ok: true });
+});
+
+app.get('/api/admin/directdata', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const saldo = await saldoDirectData();
+    const { rows: [periodo] } = await pool.query(`
+      SELECT COALESCE(SUM(custo) FILTER (WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'),0)::float AS hoje,
+             COALESCE(SUM(custo) FILTER (WHERE created_at >= date_trunc('month', NOW() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'),0)::float AS mes,
+             COUNT(*) FILTER (WHERE custo > 0 AND created_at >= date_trunc('month', NOW() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo')::int AS mes_n
+        FROM directdata_consumo`);
+    const { rows: consumo } = await pool.query(`
+      SELECT c.id, c.service_id, c.endpoint, c.custo::float AS custo, c.resultado_id, c.resultado, c.query_id, c.created_at, u.name AS cliente
+        FROM directdata_consumo c LEFT JOIN users u ON u.id = c.user_id
+       ORDER BY c.created_at DESC LIMIT 50`);
+    const { rows: eventos } = await pool.query(
+      `SELECT id, webhook_id, verificado, tipo, LEFT(payload, 2000) AS payload, created_at
+         FROM directdata_webhook_eventos ORDER BY created_at DESC LIMIT 20`);
+    res.json({
+      saldo, hoje: periodo.hoje, mes: periodo.mes, mesConsultas: periodo.mes_n, consumo, eventos,
+      tokenConfigurado: !!DIRECTDATA_TOKEN, webhookConfigurado: !!DIRECTDATA_WEBHOOK_SECRET,
+      servicos: Object.entries(DIRECTDATA_SVCS).map(([id, s]) => ({ id, name: s.name, custo: s.custo, preco: directDataPreco(s.custo) })),
+    });
+  } catch (e) {
+    console.error('[admin/directdata] erro:', e.message);
+    res.status(500).json({ error: 'Erro ao carregar o saldo da DirectData.' });
+  }
+});
+
+// Admin informa o saldo que aparece no painel da DirectData (depois de uma
+// recarga, por exemplo) e/ou o valor do alerta. Informar saldo rearma o aviso.
+app.post('/api/admin/directdata/saldo', requireAuth, requireSuperAdmin, async (req, res) => {
+  const num = v => (v === undefined || v === null || v === '') ? null : Number(String(v).replace(',', '.'));
+  const saldo = num(req.body?.saldo), alerta = num(req.body?.alertaAbaixo);
+  if (saldo !== null && (!Number.isFinite(saldo) || saldo < 0 || saldo > 1e7))
+    return res.status(400).json({ error: 'Saldo inválido.' });
+  if (alerta !== null && (!Number.isFinite(alerta) || alerta < 0 || alerta > 1e6))
+    return res.status(400).json({ error: 'Valor do alerta inválido.' });
+  if (saldo === null && alerta === null) return res.status(400).json({ error: 'Informe o saldo ou o valor do alerta.' });
+  try {
+    await pool.query(`INSERT INTO directdata_saldo (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+    if (saldo !== null)
+      await pool.query(`UPDATE directdata_saldo SET saldo_base = $1, base_em = NOW(), origem = 'MANUAL', alerta_enviado_em = NULL WHERE id = 1`, [saldo]);
+    if (alerta !== null)
+      await pool.query(`UPDATE directdata_saldo SET alerta_abaixo = $1 WHERE id = 1`, [alerta]);
+    res.json({ ok: true, saldo: await saldoDirectData() });
+  } catch (e) {
+    console.error('[admin/directdata/saldo] erro:', e.message);
+    res.status(500).json({ error: 'Erro ao salvar.' });
+  }
+});
+
 app.get('/api/admin/pos-pago', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     const ids = await pool.query('SELECT id FROM users WHERE pos_pago=true ORDER BY id');
