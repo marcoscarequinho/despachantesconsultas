@@ -4848,17 +4848,54 @@ const ATPVE_ANEXO_MAX_MB = 8;
 const ATPVE_PDF_COMPRIMIR_ACIMA = 700 * 1024;
 const ATPVE_CORPO_MAX_BASE64 = 4.2 * 1024 * 1024;
 
-// O maior anexo é quem estoura o limite na prática — a mensagem aponta ele.
-function mensagemAnexoGrandeAtpve() {
+const atpveTotalAnexos = () => Object.values(atpveAnexos).reduce((s, b) => s + (b || '').length, 0);
+
+// Aviso de anexo grande demais. Sem campo, aponta o maior — é quem estoura o
+// limite na prática. O máximo é o que sobra do envio depois dos outros
+// anexos; quando os outros sozinhos já não deixam espaço (0,0 MB não ajuda
+// ninguém), a mensagem lista os arquivos que precisam diminuir.
+function mensagemAnexoGrandeAtpve(campoAlvo) {
   const rotulos = { at_crlve: 'CRLV-e', at_comp_v: 'comprovante do vendedor', at_comp_c: 'comprovante do comprador', at_cnh_v: 'CNH do vendedor', at_cnh_c: 'CNH do comprador' };
-  const [campo, b64] = Object.entries(atpveAnexos).sort((a, b) => (b[1] || '').length - (a[1] || '').length)[0];
-  const fmt = len => (len * 3 / 4 / 1024 / 1024).toFixed(1).replace('.', ',');
-  // Quanto sobra para ele depois dos outros anexos — é esse o tamanho que cabe.
-  const outros = Object.entries(atpveAnexos).reduce((s, [c, b]) => s + (c === campo ? 0 : (b || '').length), 0);
-  const cabe = Math.max(0, ATPVE_CORPO_MAX_BASE64 - outros);
-  const maxMb = (Math.floor(cabe * 3 / 4 / 1024 / 1024 * 10) / 10).toFixed(1).replace('.', ',');
-  const nome = atpveAnexosNomes[campo] ? `"${atpveAnexosNomes[campo]}" (${rotulos[campo]})` : rotulos[campo];
-  return `Arquivo ${nome} grande demais (${fmt((b64 || '').length)} MB). O arquivo deve ter no máximo ${maxMb} MB — diminua o tamanho e anexe de novo.`;
+  const mb = len => (len * 3 / 4 / 1024 / 1024).toFixed(1).replace('.', ',');
+  const nomeDe = c => atpveAnexosNomes[c] ? `"${atpveAnexosNomes[c]}" (${rotulos[c]})` : rotulos[c];
+  const ordenados = Object.entries(atpveAnexos).filter(([, b]) => b).sort((a, b) => b[1].length - a[1].length);
+  const campo = campoAlvo || ordenados[0]?.[0];
+  const b64 = atpveAnexos[campo] || '';
+  const outros = atpveTotalAnexos() - b64.length;
+  const cabe = ATPVE_CORPO_MAX_BASE64 - outros;
+  if (cabe >= 300 * 1024 && campo === ordenados[0]?.[0]) {
+    const maxMb = (Math.floor(cabe * 3 / 4 / 1024 / 1024 * 10) / 10).toFixed(1).replace('.', ',');
+    return `Arquivo ${nomeDe(campo)} grande demais (${mb(b64.length)} MB). O arquivo deve ter no máximo ${maxMb} MB — diminua o tamanho e anexe de novo.`;
+  }
+  const maiores = ordenados.filter(([, b]) => b.length > 500 * 1024).map(([c, b]) => `${nomeDe(c)} com ${mb(b.length)} MB`);
+  const limite = (Math.floor(ATPVE_CORPO_MAX_BASE64 * 3 / 4 / 1024 / 1024 * 10) / 10).toFixed(1).replace('.', ',');
+  return `Os arquivos anexados passam do limite de envio: juntos têm ${mb(atpveTotalAnexos())} MB e o máximo é ${limite} MB. Diminua o tamanho destes arquivos e anexe de novo: ${maiores.join('; ')}.`;
+}
+
+// Mostra o aviso na hora em que o arquivo é anexado — no campo e na caixa
+// vermelha acima do botão —, e não só no clique em Emitir. A caixa some
+// sozinha quando um arquivo menor resolve, mas só se o erro nela for este.
+let atpveAvisoAnexoAtivo = false;
+function conferirLimiteAnexosAtpve(campo) {
+  if (atpveTotalAnexos() > ATPVE_CORPO_MAX_BASE64) {
+    const msg = mensagemAnexoGrandeAtpve(campo);
+    showFormError(msg);
+    atpveAvisoAnexoAtivo = true;
+    return msg;
+  }
+  if (atpveAvisoAnexoAtivo) {
+    document.getElementById('form-error')?.classList.add('hidden');
+    atpveAvisoAnexoAtivo = false;
+    // Campos que ficaram vermelhos por causa do total voltam ao normal.
+    for (const c of Object.keys(atpveAnexos)) {
+      const st = document.getElementById(`f-${c}-status`);
+      if (atpveAnexos[c] && st && st.textContent.startsWith('⚠️')) {
+        st.textContent = `✓ ${atpveAnexosNomes[c] || 'arquivo anexado'}`;
+        st.className = 'text-xs mt-1 text-green-600';
+      }
+    }
+  }
+  return null;
 }
 
 async function carregarPdfLib() {
@@ -4904,7 +4941,7 @@ function handleAnexoAtpve(input, campo) {
   const statusEl = document.getElementById(`f-${campo}-status`);
   const hiddenEl = document.getElementById(`f-${campo}`);
   const setStatus = (msg, cor) => { if (statusEl) { statusEl.textContent = msg; statusEl.className = `text-xs mt-1 ${cor}`; } };
-  const limpar = () => { atpveAnexos[campo] = ''; delete atpveAnexosNomes[campo]; if (hiddenEl) hiddenEl.value = ''; };
+  const limpar = () => { atpveAnexos[campo] = ''; delete atpveAnexosNomes[campo]; if (hiddenEl) hiddenEl.value = ''; conferirLimiteAnexosAtpve(); };
 
   const file = input.files && input.files[0];
   if (!file) { limpar(); setStatus('', 'text-gray-500'); return; }
@@ -4918,7 +4955,10 @@ function handleAnexoAtpve(input, campo) {
   }
   if (file.size > ATPVE_ANEXO_MAX_MB * 1024 * 1024) {
     limpar(); input.value = '';
-    setStatus(`Arquivo "${file.name}" grande demais (${(file.size / 1024 / 1024).toFixed(1).replace('.', ',')} MB). O arquivo deve ter no máximo ${ATPVE_ANEXO_MAX_MB} MB — diminua o tamanho e anexe de novo.`, 'text-red-500');
+    const msg = `Arquivo "${file.name}" grande demais (${(file.size / 1024 / 1024).toFixed(1).replace('.', ',')} MB). O arquivo deve ter no máximo ${ATPVE_ANEXO_MAX_MB} MB — diminua o tamanho e anexe de novo.`;
+    setStatus(`⚠️ ${msg}`, 'text-red-600 font-semibold');
+    showFormError(msg);
+    atpveAvisoAnexoAtivo = true;
     return;
   }
 
@@ -4927,7 +4967,11 @@ function handleAnexoAtpve(input, campo) {
     atpveAnexos[campo] = base64;
     atpveAnexosNomes[campo] = file.name;
     if (hiddenEl) hiddenEl.value = base64 ? '1' : '';   // só marca "tem anexo": o base64 mesmo fica em atpveAnexos
-    setStatus(`✓ ${file.name} (${rotulo})`, 'text-green-600');
+    // Fica guardado mesmo passando do limite (a conta do aviso precisa dele, e
+    // o Emitir barra na validação); o que muda é a tela, que fica vermelha.
+    const aviso = conferirLimiteAnexosAtpve(campo);
+    if (aviso) setStatus(`⚠️ ${aviso}`, 'text-red-600 font-semibold');
+    else setStatus(`✓ ${file.name} (${rotulo})`, 'text-green-600');
   };
 
   const reader = new FileReader();
@@ -4940,7 +4984,7 @@ function handleAnexoAtpve(input, campo) {
       try {
         const reduzido = await reduzirPdfAtpve(file);
         if (reduzido.length < original.length) {
-          guardar(reduzido, `reduzido de ${(file.size / 1024).toFixed(0)} KB para ${(reduzido.length * 3 / 4 / 1024).toFixed(0)} KB`);
+          guardar(reduzido, `arquivo grande, reduzido automaticamente de ${(file.size / 1024).toFixed(0)} KB para ${(reduzido.length * 3 / 4 / 1024).toFixed(0)} KB`);
           return;
         }
       } catch (e) { console.warn('[atpve] não reduziu o PDF:', e); }
@@ -7571,6 +7615,7 @@ async function anexarCrlveImportado(file) {
 
   atpveAnexos.at_crlve = base64;
   atpveAnexosNomes.at_crlve = file.name;
+  conferirLimiteAnexosAtpve('at_crlve');
   const hiddenEl = document.getElementById('f-at_crlve');
   if (hiddenEl) hiddenEl.value = '1';
   const statusEl = document.getElementById('f-at_crlve-status');
