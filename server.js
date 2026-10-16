@@ -2946,6 +2946,15 @@ function extractApiErrorMsg(data) {
       if (typeof texto === 'string' && texto.trim()) msg = texto.trim();
     } catch {}
   }
+  // O portal também repassa a página de erro do nginx do fornecedor dele dentro
+  // do JSON — no CRLV-e RJ (16/10/2026) veio HTTP 400 com {"error":"<html>…502
+  // Bad Gateway…</html>"} e o cliente lia o HTML na tela. Página HTML no lugar
+  // da mensagem é sempre fornecedor fora do ar.
+  if (typeof msg === 'string' && /^\s*(<!doctype|<html)/i.test(msg)) {
+    const titulo = (msg.match(/<title>([^<]*)<\/title>/i)?.[1] || '').trim();
+    console.error(`[extractApiErrorMsg] página HTML no lugar do erro${titulo ? `: ${titulo}` : ''}`);
+    msg = 'O sistema do fornecedor está fora do ar no momento. Nada foi cobrado — tente novamente em alguns minutos.';
+  }
   return msg || JSON.stringify(data);
 }
 
