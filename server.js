@@ -67,6 +67,7 @@ const ASSINATURA_SERVICE_IDS = [
   ASSINATURA_CRV_SERVICE_ID,
   ASSINATURA_DIGITAL_SERVICE_ID,
   ASSINATURA_VERIFICAR_CRLV_SERVICE_ID,
+  'assinatura-consulta-cnpj',   // = ASSINATURA_CNPJ_SERVICE_ID (declarada mais abaixo)
   'declaracao-residencia-detran-rj',
   'nota-prestacao-servicos-despachante',
   'gerar-asd',
@@ -194,6 +195,11 @@ const PRF_TIPOS = { EmAberto: 'Autuações/Multas em aberto', Pagas: 'Multas pag
 // Limite da pública: 5 consultas por minuto POR IP — e o IP é o da Vercel, ou
 // seja, o limite é do site inteiro. 429 vira aviso para esperar, sem erro.
 const CNPJ_GRATIS_SERVICE_ID = 'cnpj-gratis';
+// A mesma consulta também na aba dos assinantes (Coisas de Despachantes). Sem
+// cota própria: diferente do CRV/Verificar CRLV/Assinatura Digital, ela não
+// custa nada por chamada.
+const ASSINATURA_CNPJ_SERVICE_ID = 'assinatura-consulta-cnpj';
+const CNPJ_SERVICE_IDS = [CNPJ_GRATIS_SERVICE_ID, ASSINATURA_CNPJ_SERVICE_ID];
 const CNPJA_OPEN_URL = 'https://open.cnpja.com/office';
 const directDataPreco = custo => Math.round(custo * DIRECTDATA_MARKUP * 100) / 100;
 
@@ -1255,6 +1261,10 @@ const SERVICES = [
   // processCatalogQuery).
   { id:'assinatura-verificar-crlv-data-crv', name:'Verificar CRLV + Data CRV', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'placa', icon:'📅',
     slowNote:`Situação do CRLV, último licenciamento e a data de emissão do CRV, em PDF. Incluído na Assinatura Coisas de Despachantes, com cota própria de ${ASSINATURA_VERIFICAR_CRLV_COTA} consultas por período.` },
+  // Consulta CNPJ — a mesma do grupo Consultas Especiais (cnpj-gratis), aqui
+  // para o assinante. Sem cota: não custa nada por chamada (ver consultarCnpjGratis).
+  { id:ASSINATURA_CNPJ_SERVICE_ID, name:'Consulta CNPJ', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'cnpj', icon:'🏢',
+    slowNote:'Razão social, situação cadastral, endereço, atividades (CNAE), Simples/MEI, quadro societário e Suframa, em PDF. Incluída na Assinatura Coisas de Despachantes, sem limite de cota. A base pública aceita 5 consultas por minuto para todo o site — se der aviso de limite, aguarde um minuto.' },
   // Recurso de Multa com IA (ver recurso-multa.js) — defesa prévia ou recurso à
   // JARI em PDF, a partir da notificação e de perguntas objetivas. Grupo
   // próprio e PAGO: o grupo "Para os Despachantes" é gratuito por regra
@@ -8152,7 +8162,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     // ── Consulta CNPJ grátis (CNPJá público, ver consultarCnpjGratis) ──────────
     // Preço 0 no catálogo; se o admin der preço fixo a alguém, cobra como as
     // outras. Com preço 0 não grava transação — seria um R$ 0,00 no extrato.
-    if (serviceId === CNPJ_GRATIS_SERVICE_ID) {
+    if (CNPJ_SERVICE_IDS.includes(serviceId)) {
       const cnpj = String(params?.cnpj || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
       if (!cnpjValido(cnpj))
         return res.status(400).json({ error: 'CNPJ inválido. Confira os 14 caracteres (números, ou letras e números no CNPJ alfanumérico).' });
