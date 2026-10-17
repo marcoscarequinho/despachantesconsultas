@@ -200,6 +200,15 @@ const CNPJ_GRATIS_SERVICE_ID = 'cnpj-gratis';
 // custa nada por chamada.
 const ASSINATURA_CNPJ_SERVICE_ID = 'assinatura-consulta-cnpj';
 const CNPJ_SERVICE_IDS = [CNPJ_GRATIS_SERVICE_ID, ASSINATURA_CNPJ_SERVICE_ID];
+// Consulta CNPJ Completa com Localização (17/10/2026, R$ 18,00, em Destaques):
+// API comercial do CNPJá, com chave (header Authorization, 73 caracteres). Além
+// do que a pública traz, tem inscrições estaduais (registrations=ORIGIN), as
+// coordenadas (geocoding=true) e duas imagens PNG: mapa aéreo (/map) e visão
+// da rua (/street). Cada parte consome créditos do plano deles. No .env local a
+// chave está como "cnpja"; CNPJA_API_KEY é o nome canônico (o da Vercel).
+const CNPJ_COMPLETO_SERVICE_ID = 'cnpj-completo';
+const CNPJA_API_URL = 'https://api.cnpja.com/office';
+const CNPJA_API_KEY = process.env.CNPJA_API_KEY || process.env.cnpja || '';
 const CNPJA_OPEN_URL = 'https://open.cnpja.com/office';
 const directDataPreco = custo => Math.round(custo * DIRECTDATA_MARKUP * 100) / 100;
 
@@ -1280,6 +1289,9 @@ const SERVICES = [
   // Consulta CNPJ grátis (17/10/2026), no mesmo grupo — ver consultarCnpjGratis.
   { id:CNPJ_GRATIS_SERVICE_ID, name:'Consulta CNPJ (Grátis)', group:DIRECTDATA_GRUPO, basePrice:0, noMarkup:true, inputType:'cnpj', icon:'🏢',
     slowNote:'Consulta gratuita: razão social, situação cadastral, endereço, atividades (CNAE), Simples/MEI, quadro societário e Suframa, em PDF. Limite da base pública: 5 consultas por minuto para todo o site — se der aviso de limite, aguarde um minuto.' },
+  // Versão paga e completa da Consulta CNPJ — ver CNPJ_COMPLETO_SERVICE_ID.
+  { id:CNPJ_COMPLETO_SERVICE_ID, name:'Consulta CNPJ Completa com Localização', group:DIRECTDATA_GRUPO, basePrice:18, noMarkup:true, inputType:'cnpj', icon:'📍',
+    slowNote:'Tudo da consulta de CNPJ (situação, endereço, CNAE, Simples/MEI, sócios, Suframa) mais as inscrições estaduais e a localização do estabelecimento: coordenadas, link do mapa, mapa aéreo e foto da fachada (visão da rua), em PDF. Só é cobrada se o relatório sair.' },
   { id:'recurso-multa-ia', name:'Recurso de Multa com IA', group:'Recurso de Multas', basePrice:80, noMarkup:true, inputType:'recurso_multa', icon:'⚖️',
     slowNote:'Envie a foto ou o PDF da notificação, confira os dados e responda as perguntas. A IA redige a defesa prévia ou o recurso à JARI em PDF, pronto para assinar e protocolar (leva cerca de 1 minuto). Só é cobrado se o PDF for gerado.' },
   // ── CRLV-e Rio de Janeiro (destaque no topo da Nova Consulta) ──
@@ -7882,7 +7894,64 @@ async function consultarCnpjGratis(cnpj) {
   return { dados: j };
 }
 
-function buildCnpjPdfBuffer(d) {
+// Avisa o ADMIN_PHONE quando a chave do CNPJá falha por conta (créditos ou
+// chave), no máximo uma vez por hora — o cliente só vê "indisponível".
+let cnpjaAvisoEm = 0;
+function avisarAdminCnpja(motivo) {
+  if (!ADMIN_PHONE || Date.now() - cnpjaAvisoEm < 3600 * 1000) return;
+  cnpjaAvisoEm = Date.now();
+  sendWhatsApp(ADMIN_PHONE, `⚠️ *CNPJá (Consulta CNPJ Completa)*\n${motivo}\n\nA consulta está recusando os clientes, sem cobrar, até isso ser resolvido.`).catch(() => {});
+}
+
+// A consulta da API comercial + as duas imagens. Devolve { dados, mapa, rua }
+// ou { status, error }. As imagens são complemento: se uma falhar, o relatório
+// sai sem ela (com aviso no PDF) — os dados são o que justifica a cobrança.
+async function consultarCnpjCompleto(cnpj) {
+  if (!CNPJA_API_KEY) {
+    console.error(`[${CNPJ_COMPLETO_SERVICE_ID}] sem CNPJA_API_KEY no ambiente.`);
+    return { status: 503, error: 'A Consulta CNPJ Completa está indisponível no momento. Nada foi cobrado.' };
+  }
+  const h = { Authorization: CNPJA_API_KEY, Accept: 'application/json' };
+  let r;
+  try {
+    r = await fetch(`${CNPJA_API_URL}/${cnpj}?simples=true&registrations=ORIGIN&suframa=true&geocoding=true`,
+      { headers: h, signal: AbortSignal.timeout(60000) });
+  } catch (e) {
+    console.error(`[${CNPJ_COMPLETO_SERVICE_ID}] CNPJá não respondeu:`, e.message);
+    return { status: 502, error: 'A base de CNPJ não respondeu. Nada foi cobrado — tente de novo em instantes.' };
+  }
+  const j = await r.json().catch(() => null);
+  if (r.status === 404) return { status: 404, error: 'CNPJ não encontrado na base da Receita Federal. Nada foi cobrado.' };
+  if (r.status === 429 && /credit/i.test(j?.message || '')) {
+    avisarAdminCnpja(`Sem créditos no plano (necessário ${j?.required ?? '?'}, restam ${j?.remaining ?? '?'}). Recarregue no painel do CNPJá.`);
+    return { status: 503, error: 'A Consulta CNPJ Completa está indisponível no momento. Nada foi cobrado.' };
+  }
+  if (r.status === 429) return { status: 429, error: 'Muitas consultas de CNPJ ao mesmo tempo. Aguarde um minuto e tente de novo. Nada foi cobrado.' };
+  if (r.status === 401) {
+    avisarAdminCnpja('A chave de API foi recusada (401). Confira a CNPJA_API_KEY na Vercel.');
+    return { status: 503, error: 'A Consulta CNPJ Completa está indisponível no momento. Nada foi cobrado.' };
+  }
+  if (!r.ok || !j?.taxId) {
+    console.error(`[${CNPJ_COMPLETO_SERVICE_ID}] HTTP ${r.status}: ${JSON.stringify(j).slice(0, 300)}`);
+    return { status: 502, error: 'A base de CNPJ respondeu de forma inesperada. Nada foi cobrado — tente de novo em instantes.' };
+  }
+  const imagem = async ep => {
+    try {
+      const ri = await fetch(`${CNPJA_API_URL}/${cnpj}/${ep}`, { headers: { Authorization: CNPJA_API_KEY }, signal: AbortSignal.timeout(30000) });
+      const b = Buffer.from(await ri.arrayBuffer());
+      // PNG começa com \x89PNG; qualquer outra coisa (JSON de erro) fica de fora.
+      if (ri.ok && b.slice(1, 4).toString('latin1') === 'PNG') return b;
+      console.error(`[${CNPJ_COMPLETO_SERVICE_ID}] /${ep} HTTP ${ri.status}: ${b.toString('utf8').slice(0, 200)}`);
+    } catch (e) { console.error(`[${CNPJ_COMPLETO_SERVICE_ID}] /${ep} falhou:`, e.message); }
+    return null;
+  };
+  const [mapa, rua] = await Promise.all([imagem('map'), imagem('street')]);
+  return { dados: j, mapa, rua };
+}
+
+// extras (só na Completa): { titulo, mapa, rua } — mapa/rua são PNG em Buffer.
+// Inscrições estaduais e coordenadas aparecem sempre que vierem nos dados.
+function buildCnpjPdfBuffer(d, extras = {}) {
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({ size: 'A4', margin: 50 });
@@ -7896,7 +7965,7 @@ function buildCnpjPdfBuffer(d) {
       const co = d.company || {};
       const a = d.address || {};
 
-      pdfReportHeader(doc, 'CONSULTA CNPJ', now);
+      pdfReportHeader(doc, extras.titulo || 'CONSULTA CNPJ', now);
       pdfBar(doc, 'IDENTIFICAÇÃO');
       pdfFieldGrid(doc, [
         ['CNPJ', fmtCnpj(String(d.taxId))],
@@ -7934,6 +8003,59 @@ function buildCnpjPdfBuffer(d) {
         ['Telefones', v((d.phones || []).map(p => `(${p.area}) ${String(p.number || '').replace(/(\d{4,5})(\d{4})$/, '$1-$2')}`).join('  ·  '))],
         ['E-mails', v((d.emails || []).map(e => e.address).join('  ·  '))],
       ]);
+
+      // ── Localização (só a API comercial traz coordenadas e imagens) ──
+      const temCoord = Number.isFinite(a.latitude) && Number.isFinite(a.longitude);
+      if (temCoord || extras.mapa || extras.rua || extras.titulo) {
+        doc.moveDown(0.4);
+        pdfBar(doc, 'LOCALIZAÇÃO');
+        if (temCoord) {
+          const lat = a.latitude.toFixed(6), lng = a.longitude.toFixed(6);
+          pdfFieldGrid(doc, [
+            ['Latitude / Longitude', `${lat}, ${lng}`],
+            ['Ver no mapa', `https://www.google.com/maps?q=${lat},${lng}`],
+          ]);
+        } else {
+          pdfNoteLine(doc, 'A base não tem as coordenadas deste endereço.');
+        }
+        const imgs = [['Mapa aéreo', extras.mapa], ['Visão da rua (fachada)', extras.rua]];
+        if (extras.titulo) {
+          const { left, width } = pdfContentBox(doc);
+          const gap = 12, lado = (width - gap) / 2;
+          pdfEnsureSpace(doc, lado + 30);
+          const y0 = doc.y + 4;
+          imgs.forEach(([rotulo, buf], i) => {
+            const x = left + i * (lado + gap);
+            doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#111827').text(rotulo, x, y0, { width: lado });
+            const yi = y0 + 14;
+            if (buf) {
+              try { doc.image(buf, x, yi, { fit: [lado, lado], align: 'center' }); }
+              catch { buf = null; }
+            }
+            doc.strokeColor('#e5e7eb').lineWidth(0.75).rect(x, yi, lado, lado).stroke();
+            if (!buf) doc.font('Helvetica').fontSize(9).fillColor('#6b7280')
+              .text('Imagem indisponível para este endereço.', x + 10, yi + lado / 2 - 6, { width: lado - 20, align: 'center' });
+          });
+          doc.x = left;
+          doc.y = y0 + 14 + lado + 8;
+          doc.fillColor('#111827').font('Helvetica').fontSize(10);
+        }
+      }
+
+      if (Array.isArray(d.registrations)) {
+        doc.moveDown(0.4);
+        pdfBar(doc, 'INSCRIÇÕES ESTADUAIS');
+        if (!d.registrations.length) pdfEmptyNotice(doc, 'Nenhuma inscrição estadual na UF do estabelecimento.');
+        d.registrations.forEach(ie => {
+          pdfSubBar(doc, `IE ${v(ie.number)} — ${v(ie.state)}`);
+          pdfFieldGrid(doc, [
+            ['Habilitada', ie.enabled ? 'Sim' : 'Não'],
+            ['Tipo', v(ie.type?.text)],
+            ['Situação', v(ie.status?.text)],
+            ['Desde', v(dataIsoBr(ie.statusDate))],
+          ]);
+        });
+      }
 
       doc.moveDown(0.4);
       pdfBar(doc, 'QUADRO SOCIETÁRIO');
@@ -8157,6 +8279,48 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         },
         charged: 0,
       });
+    }
+
+    // ── Consulta CNPJ Completa com Localização (CNPJá comercial, R$ 18,00) ─────
+    // Débito só com o PDF pronto; imagem que falhar sai como "indisponível"
+    // dentro do relatório, sem barrar a entrega.
+    if (serviceId === CNPJ_COMPLETO_SERVICE_ID) {
+      const cnpj = String(params?.cnpj || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
+      if (!cnpjValido(cnpj))
+        return res.status(400).json({ error: 'CNPJ inválido. Confira os 14 caracteres (números, ou letras e números no CNPJ alfanumérico).' });
+
+      const c = await consultarCnpjCompleto(cnpj);
+      if (!c.dados) return res.status(c.status).json({ error: c.error });
+
+      let pdfBuf;
+      try {
+        pdfBuf = await buildCnpjPdfBuffer(c.dados, { titulo: 'CONSULTA CNPJ COMPLETA COM LOCALIZAÇÃO', mapa: c.mapa, rua: c.rua });
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório. Nada foi cobrado.' });
+      }
+
+      await debitarConsulta(userId, price);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name} — ${fmtCnpj(cnpj)}`]);
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify({ cnpj }), price, txRow.rows[0].id]);
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, { cnpj: fmtCnpj(cnpj) });
+      const nomeArq = `mcdespachadoria-cnpj-completo-${cnpj}.pdf`;
+      if (user.phone)
+        await sendWhatsAppPdf(user.phone, pdfBuf, nomeArq, `✅ *${service.name}*\n🏢 ${c.dados.company?.name || ''}\n🔎 ${fmtCnpj(cnpj)}`).catch(() => {});
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
+      return res.send(pdfBuf);
     }
 
     // ── Consulta CNPJ grátis (CNPJá público, ver consultarCnpjGratis) ──────────
