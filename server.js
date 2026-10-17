@@ -170,7 +170,9 @@ const DIRECTDATA_SVCS = {
   'dd-leilao':                 { endpoint: 'ConsultaLeilaoVeicular',                 custo: 12.00, entrada: 'placa',    name: 'Leilão Veicular',                            icon: '🔨' },
   'dd-fipe':                   { endpoint: 'ConsultaVeicularFipe',                   custo: 3.98, entrada: 'placa',     name: 'Veículo + Tabela FIPE',                      icon: '💰' },
   'dd-crlv-sp':                { endpoint: 'ConsultaVeicularCrlvSP',                 custo: 12.00, entrada: 'placa',    name: 'CRLV-e São Paulo (DirectData)',              icon: '📄' },
-  'dd-multas-radar':           { endpoint: 'ConsultaSerproMultasRadar',              custo: 0.36, entrada: 'placa_renavam', name: 'Multas Radar (Serpro)',                  icon: '📸' },
+  // O cardápio diz ConsultaSerproMultasRadar, mas essa rota dá 404 vazio; a que
+  // responde é ConsultaVeicularMultasRadar (achada na API em 17/10/2026).
+  'dd-multas-radar':           { endpoint: 'ConsultaVeicularMultasRadar',            custo: 0.36, entrada: 'placa_renavam', name: 'Multas Radar (Serpro)',                  icon: '📸' },
   'dd-prf-infracoes':          { endpoint: 'PRFInfracoes',                           custo: 0.36, entrada: 'prf',       name: 'Polícia Rodoviária Federal - Infrações',     icon: '🚓' },
   'dd-veiculos-documento':     { endpoint: 'HistoricoVeiculosNacional',              custo: 1.80, entrada: 'documento', name: 'Veículos por CPF/CNPJ (Nacional)',           icon: '🗂️' },
   'dd-veiculos-documento-sp':  { endpoint: 'HistoricoVeiculos',                      custo: 0.36, entrada: 'documento', name: 'Veículos por CPF/CNPJ (São Paulo)',          icon: '🗂️' },
