@@ -171,14 +171,19 @@ const DIRECTDATA_SVCS = {
   'dd-fipe':                   { endpoint: 'ConsultaVeicularFipe',                   custo: 3.98, entrada: 'placa',     name: 'Veículo + Tabela FIPE',                      icon: '💰' },
   'dd-crlv-sp':                { endpoint: 'ConsultaVeicularCrlvSP',                 custo: 12.00, entrada: 'placa',    name: 'CRLV-e São Paulo (DirectData)',              icon: '📄' },
   'dd-multas-radar':           { endpoint: 'ConsultaSerproMultasRadar',              custo: 0.36, entrada: 'placa_renavam', name: 'Multas Radar (Serpro)',                  icon: '📸' },
-  'dd-prf-infracoes':          { endpoint: 'PRFInfracoes',                           custo: 0.36, entrada: 'placa_renavam', name: 'Infrações PRF',                          icon: '🚓' },
+  'dd-prf-infracoes':          { endpoint: 'PRFInfracoes',                           custo: 0.36, entrada: 'prf',       name: 'Polícia Rodoviária Federal - Infrações',     icon: '🚓' },
   'dd-veiculos-documento':     { endpoint: 'HistoricoVeiculosNacional',              custo: 1.80, entrada: 'documento', name: 'Veículos por CPF/CNPJ (Nacional)',           icon: '🗂️' },
   'dd-veiculos-documento-sp':  { endpoint: 'HistoricoVeiculos',                      custo: 0.36, entrada: 'documento', name: 'Veículos por CPF/CNPJ (São Paulo)',          icon: '🗂️' },
   'dd-frotas-nacional':        { endpoint: 'ConsultaVeicularFrotasNacional',         custo: 4.55, entrada: 'documento', name: 'Frotas por CPF/CNPJ (Nacional)',             icon: '🚚' },
   'dd-antt-ciot':              { endpoint: 'ANTTConsultaCodigoIdentificadorOperacaoTransporte', custo: 0.36, entrada: 'antt_ciot', name: 'ANTT — Operação de Transporte (CIOT)', icon: '🚛' },
   'dd-antt-regularidade':      { endpoint: 'ANTTConsultaRegularidadeTransportadora', custo: 0.36, entrada: 'antt_regularidade', name: 'ANTT — Regularidade da Transportadora', icon: '🚛' },
 };
-const DIRECTDATA_INPUT_TYPES = { placa: 'placa', placa_renavam: 'placa_renavam', documento: 'veiculos_documento', antt_ciot: 'antt_ciot', antt_regularidade: 'antt_regularidade' };
+const DIRECTDATA_INPUT_TYPES = { placa: 'placa', placa_renavam: 'placa_renavam', documento: 'veiculos_documento', antt_ciot: 'antt_ciot', antt_regularidade: 'antt_regularidade', prf: 'prf_infracoes' };
+// PRFInfracoes exige TIPO, que a doc deles não lista ("deve ser escolhido").
+// Os valores aceitos foram achados na API em 17/10/2026: são as três opções do
+// CPAG da PRF (cpag.prf.gov.br/multas) — "Todas" não existe lá. Qualquer outro
+// valor volta 400 resultadoId 8, igual a não mandar o TIPO.
+const PRF_TIPOS = { EmAberto: 'Autuações/Multas em aberto', Pagas: 'Multas pagas', Canceladas: 'Autuações/Multas canceladas' };
 const directDataPreco = custo => Math.round(custo * DIRECTDATA_MARKUP * 100) / 100;
 
 // API despbrasil.com.br — auth por header chaveAcesso (fixo); resposta traz a URL
@@ -7697,6 +7702,13 @@ function montarConsultaDirectData(svc, params) {
       if (!okPlaca()) return { erro: 'Placa inválida. Informe no formato ABC1D23.' };
       if (!okRenavam()) return { erro: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' };
       return { query: { Placa: placa, Renavam: renavam.padStart(11, '0') }, rotulo: placa, log: { placa, renavam } };
+    case 'prf': {
+      if (!okPlaca()) return { erro: 'Placa inválida. Informe no formato ABC1D23.' };
+      if (!okRenavam()) return { erro: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' };
+      const tipo = PRF_TIPOS[params?.tipo] ? params.tipo : 'EmAberto';
+      return { query: { Placa: placa, Renavam: renavam.padStart(11, '0'), TIPO: tipo }, rotulo: placa,
+        log: { placa, renavam, tipo }, pdf: { placa, renavam, tipoDeConsulta: PRF_TIPOS[tipo] } };
+    }
     case 'documento':
       if (!okDoc()) return { erro: 'CPF ou CNPJ inválido. Confira os dígitos.' };
       return { query: docQuery(), rotulo: docMask, log: { documento: docMask }, pdf: { documento: maskDocDisplay(doc) } };
@@ -8013,7 +8025,11 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       }
       if (meta.resultadoId !== 1 || retorno === undefined || retorno === null) {
         await registrarConsumoDirectData({ serviceId, svc, meta, custo: 0, userId });
-        const msg = String(meta.mensagem || meta.resultado || '').trim();
+        // resultadoId 6 vem como "Documento Entidade Não Encontrada. <motivo>" — o
+        // prefixo é jargão da API; o motivo é o que o cliente entende.
+        let msg = String(meta.mensagem || meta.resultado || '').trim()
+          .replace(/^Documento Entidade N[ãa]o Encontrada\.\s*(?=\S)/i, '');
+        if (msg && !/[.!?]$/.test(msg)) msg += '.';
         return res.status(422).json({ error: `${msg || 'Consulta sem resultado.'} Nada foi cobrado.` });
       }
 

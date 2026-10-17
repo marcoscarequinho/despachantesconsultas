@@ -2233,6 +2233,7 @@ function inputTypeLabel(t) {
     placa_uf_select:                 'Entrada: Placa + Estado',
     placa_renavam_cpfcnpj_uf_select: 'Entrada: Placa + Renavam + CPF/CNPJ + Estado',
     placa_renavam:       'Entrada: Placa + Renavam',
+    prf_infracoes:       'Entrada: Placa + Renavam + Tipo (em aberto, pagas ou canceladas)',
     placa_renavam_cpf:   'Entrada: Placa + Renavam + CPF/CNPJ',
     motor:               'Entrada: Número do Motor',
     chassi:              'Entrada: Chassi',
@@ -2314,6 +2315,7 @@ function apiExampleParams(inputType) {
     id_get:              { id: '12345' },
     pedido_id_get:       { pedido_id: '12345' },
     placa_renavam:       { placa: 'ABC1D23', renavam: '00000000000' },
+    prf_infracoes:       { placa: 'ABC1D23', renavam: '00000000000', tipo: 'EmAberto' },
     placa_renavam_cpf:   { placa: 'ABC1D23', renavam: '00000000000', cpf: '00000000000' },
     crlv_agendado_placa: { placa: 'ABC1D23' },
     crlv_agendado_cpf:   { placa: 'ABC1D23', renavam: '00000000000', cpf: '00000000000' },
@@ -3646,7 +3648,19 @@ function renderFormFields(inputType, svc) {
 
     placa_renavam_cpf: placaField + renavamField + cpfCnpjPropField,
 
-    placa_uf: placaField + field('uf', 'UF (Estado)', 'text', 'SP'),
+    // Polícia Rodoviária Federal - Infrações (DirectData): as mesmas três opções
+    // do site da PRF (cpag.prf.gov.br/multas) — a API não tem "todas".
+    prf_infracoes: placaField + renavamField + `
+      <div>
+        <label class="label">Tipo de consulta <span class="text-red-500">*</span></label>
+        <select id="f-tipo" class="input-field" required>
+          <option value="EmAberto">Autuações/Multas em aberto</option>
+          <option value="Pagas">Multas pagas</option>
+          <option value="Canceladas">Autuações/Multas canceladas</option>
+        </select>
+      </div>`,
+
+    placa_uf:placaField + field('uf', 'UF (Estado)', 'text', 'SP'),
 
     placa_uf_select: placaField + `
       <div>
@@ -5219,6 +5233,8 @@ function buildParams(inputType) {
 
   if (inputType === 'placa_renavam')
     return { placa: g('placa'), renavam: g('renavam') };
+  if (inputType === 'prf_infracoes')
+    return { placa: g('placa'), renavam: g('renavam'), tipo: g('tipo') };
 
   if (inputType === 'placa_renavam_cpf')
     return { placa: g('placa'), renavam: g('renavam'), cpf: cd(g('cpfprop')) };
