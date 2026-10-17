@@ -2266,6 +2266,7 @@ function inputTypeLabel(t) {
     cnh_se:              'Entrada: CNH + Registro + Nascimento',
     cnh_cpf_nascimento:  'Entrada: CPF + Nascimento',
     veiculos_documento:  'Entrada: CPF/CNPJ',
+    cnpj:                'Entrada: CNPJ',
     antt_ciot:           'Entrada: RNTRC + Renavam',
     antt_regularidade:   'Entrada: CPF/CNPJ + RNTRC',
     declaracao_residencia: 'Entrada: CPF (com busca automática)',
@@ -2359,6 +2360,7 @@ function apiExampleParams(inputType) {
     cnh_se:              { cnh: '00000000000', registro: '00000000000', data_nascimento: '01/01/1990' },
     cnh_cpf_nascimento:  { cpf: '00000000000', data_nascimento: '01/01/1990' },
     veiculos_documento:  { documento: '00000000000' },
+    cnpj:                { cnpj: '07526557011659' },
     antt_ciot:           { rntrc: '000000000', renavam: '00000000000' },
     antt_regularidade:   { documento: '00000000000000', rntrc: '000000000' },
     venda: {
@@ -2703,7 +2705,9 @@ function renderEspeciaisDestaque(svcsVisiveis) {
   const doGrupo = (svcsVisiveis || []).filter(s => s.group === GRUPO_ESPECIAIS);
   if (!doGrupo.length) { wrap.classList.add('hidden'); wrap.innerHTML = ''; return; }
   const filtrado = catalogFilter === GRUPO_ESPECIAIS;
-  const menor = Math.min(...doGrupo.map(s => Number(s.price) || 0));
+  // A Consulta CNPJ grátis (preço 0) não entra no "a partir de", senão ele sumiria.
+  const pagos = doGrupo.map(s => Number(s.price) || 0).filter(p => p > 0);
+  const menor = pagos.length ? Math.min(...pagos) : 0;
   wrap.classList.remove('hidden');
   wrap.innerHTML = `
     <button type="button" onclick="${filtrado ? 'setCatalogFilter(\'all\')' : 'abrirEspeciais()'}"
@@ -2718,6 +2722,7 @@ function renderEspeciaisDestaque(svcsVisiveis) {
           <p class="text-xs text-gray-600 mt-1 leading-snug">
             Gravame, Renajud, Roubo e Furto, Leilão, Recall, FIPE, histórico de proprietários,
             veículos por CPF/CNPJ, multas Renainf/PRF/radar e ANTT — relatório em PDF na hora.
+            <strong class="text-sky-700">Consulta CNPJ grátis.</strong>
           </p>
         </div>
         <div class="flex flex-col items-end gap-1 flex-shrink-0">
@@ -4133,6 +4138,7 @@ function renderFormFields(inputType, svc) {
       </div>`,
 
     veiculos_documento: field('documento', 'CPF ou CNPJ', 'text', '000.000.000-00 ou 00.000.000/0001-00'),
+    cnpj: field('cnpj', 'CNPJ', 'text', '00.000.000/0001-00', true, 'maxlength="18" autocapitalize="characters"'),
     antt_ciot: `
       <div class="grid grid-cols-2 gap-3">
         ${field('rntrc', 'RNTRC (registro na ANTT)', 'text', '000000000')}
@@ -5278,6 +5284,8 @@ function buildParams(inputType) {
   if (inputType === 'cnh_cpf_nascimento') return { cpf: g('cpf'), data_nascimento: g('data_nascimento') };
 
   if (inputType === 'veiculos_documento') return { documento: cd(g('documento')) };
+  // CNPJ alfanumérico (Receita, 2026) tem letras: tira só a pontuação.
+  if (inputType === 'cnpj')              return { cnpj: g('cnpj').toUpperCase().replace(/[^0-9A-Z]/g, '') };
   if (inputType === 'antt_ciot')         return { rntrc: g('rntrc').replace(/\D/g, ''), renavam: g('renavam').replace(/\D/g, '') };
   if (inputType === 'antt_regularidade') return { documento: g('documento').replace(/\D/g, ''), rntrc: g('rntrc').replace(/\D/g, '') };
 
@@ -5519,6 +5527,10 @@ function validateParams(inputType, p) {
     const w = String(p.whatsapp || '').replace(/\D/g, '');
     if (w && (w.length < 10 || w.length > 13))
       return 'WhatsApp do signatário inválido. Informe DDD + número (ex.: 22999951574).';
+    return null;
+  }
+  if (inputType === 'cnpj') {
+    if (!/^[0-9A-Z]{12}\d{2}$/.test(p.cnpj)) return 'CNPJ inválido. Informe os 14 caracteres (ex.: 07.526.557/0116-59).';
     return null;
   }
   if (inputType === 'antt_ciot' || inputType === 'antt_regularidade') {

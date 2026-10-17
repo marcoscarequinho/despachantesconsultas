@@ -186,6 +186,15 @@ const DIRECTDATA_INPUT_TYPES = { placa: 'placa', placa_renavam: 'placa_renavam',
 // CPAG da PRF (cpag.prf.gov.br/multas) — "Todas" não existe lá. Qualquer outro
 // valor volta 400 resultadoId 8, igual a não mandar o TIPO.
 const PRF_TIPOS = { EmAberto: 'Autuações/Multas em aberto', Pagas: 'Multas pagas', Canceladas: 'Autuações/Multas canceladas' };
+
+// Consulta CNPJ grátis — API pública do CNPJá (open.cnpja.com), sem chave. A
+// api.cnpja.com (com simples/registrations/suframa/geocoding na query) exige
+// chave paga e responde 401 "missing authentication"; a pública já traz
+// Simples/MEI e Suframa, só não traz inscrições estaduais nem geolocalização.
+// Limite da pública: 5 consultas por minuto POR IP — e o IP é o da Vercel, ou
+// seja, o limite é do site inteiro. 429 vira aviso para esperar, sem erro.
+const CNPJ_GRATIS_SERVICE_ID = 'cnpj-gratis';
+const CNPJA_OPEN_URL = 'https://open.cnpja.com/office';
 const directDataPreco = custo => Math.round(custo * DIRECTDATA_MARKUP * 100) / 100;
 
 // API despbrasil.com.br — auth por header chaveAcesso (fixo); resposta traz a URL
@@ -1258,6 +1267,9 @@ const SERVICES = [
     id, name: s.name, group: DIRECTDATA_GRUPO, basePrice: directDataPreco(s.custo), noMarkup: true,
     inputType: DIRECTDATA_INPUT_TYPES[s.entrada], icon: s.icon,
   })),
+  // Consulta CNPJ grátis (17/10/2026), no mesmo grupo — ver consultarCnpjGratis.
+  { id:CNPJ_GRATIS_SERVICE_ID, name:'Consulta CNPJ (Grátis)', group:DIRECTDATA_GRUPO, basePrice:0, noMarkup:true, inputType:'cnpj', icon:'🏢',
+    slowNote:'Consulta gratuita: razão social, situação cadastral, endereço, atividades (CNAE), Simples/MEI, quadro societário e Suframa, em PDF. Limite da base pública: 5 consultas por minuto para todo o site — se der aviso de limite, aguarde um minuto.' },
   { id:'recurso-multa-ia', name:'Recurso de Multa com IA', group:'Recurso de Multas', basePrice:80, noMarkup:true, inputType:'recurso_multa', icon:'⚖️',
     slowNote:'Envie a foto ou o PDF da notificação, confira os dados e responda as perguntas. A IA redige a defesa prévia ou o recurso à JARI em PDF, pronto para assinar e protocolar (leva cerca de 1 minuto). Só é cobrado se o PDF for gerado.' },
   // ── CRLV-e Rio de Janeiro (destaque no topo da Nova Consulta) ──
@@ -7817,6 +7829,140 @@ function acharPdfDirectData(obj, prof = 0) {
   return null;
 }
 
+// ── Consulta CNPJ grátis (CNPJá público — ver CNPJA_OPEN_URL) ────────────────
+
+// CNPJ numérico ou alfanumérico (Receita, a partir de julho/2026: 12 posições
+// de 0-9/A-Z + 2 dígitos verificadores). A conta do DV é a mesma; cada
+// caractere vale o código ASCII menos 48 — no numérico isso é o próprio dígito,
+// então o mesmo cálculo cobre os dois formatos.
+function cnpjValido(c) {
+  if (!/^[0-9A-Z]{12}\d{2}$/.test(c) || /^(.)\1+$/.test(c)) return false;
+  const dv = n => {
+    let soma = 0, peso = 2;
+    for (let i = n - 1; i >= 0; i--) { soma += (c.charCodeAt(i) - 48) * peso; peso = peso === 9 ? 2 : peso + 1; }
+    const r = soma % 11;
+    return r < 2 ? 0 : 11 - r;
+  };
+  return dv(12) === Number(c[12]) && dv(13) === Number(c[13]);
+}
+const fmtCnpj = c => `${c.slice(0, 2)}.${c.slice(2, 5)}.${c.slice(5, 8)}/${c.slice(8, 12)}-${c.slice(12)}`;
+// ISO "2023-07-31" (ou com hora) → "31/07/2023" sem passar por Date (fuso).
+const dataIsoBr = v => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v || '')); return m ? `${m[3]}/${m[2]}/${m[1]}` : ''; };
+// CNAE "1113502" → "11.13-5-02".
+const fmtCnae = id => { const s = String(id || '').padStart(7, '0'); return /^\d{7}$/.test(s) ? `${s.slice(0, 2)}.${s.slice(2, 4)}-${s.slice(4, 5)}-${s.slice(5)}` : String(id || ''); };
+
+// Devolve { dados } ou { status, error } — nunca lança.
+async function consultarCnpjGratis(cnpj) {
+  let r;
+  try {
+    r = await fetch(`${CNPJA_OPEN_URL}/${cnpj}`, { signal: AbortSignal.timeout(30000), headers: { Accept: 'application/json' } });
+  } catch (e) {
+    console.error(`[${CNPJ_GRATIS_SERVICE_ID}] CNPJá não respondeu:`, e.message);
+    return { status: 502, error: 'A base de CNPJ não respondeu. Tente de novo em instantes.' };
+  }
+  const j = await r.json().catch(() => null);
+  if (r.status === 429)
+    return { status: 429, error: 'A consulta grátis de CNPJ está no limite de 5 consultas por minuto. Aguarde um minuto e tente de novo.' };
+  if (r.status === 404)
+    return { status: 404, error: 'CNPJ não encontrado na base da Receita Federal.' };
+  if (!r.ok || !j?.taxId) {
+    console.error(`[${CNPJ_GRATIS_SERVICE_ID}] HTTP ${r.status}: ${JSON.stringify(j).slice(0, 300)}`);
+    return { status: 502, error: 'A base de CNPJ respondeu de forma inesperada. Tente de novo em instantes.' };
+  }
+  return { dados: j };
+}
+
+function buildCnpjPdfBuffer(d) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+      const v = x => (x === null || x === undefined || String(x).trim() === '') ? 'Nada consta' : String(x);
+      const simNao = o => o?.optant ? `Sim${o.since ? ` (desde ${dataIsoBr(o.since)})` : ''}` : 'Não';
+      const co = d.company || {};
+      const a = d.address || {};
+
+      pdfReportHeader(doc, 'CONSULTA CNPJ', now);
+      pdfBar(doc, 'IDENTIFICAÇÃO');
+      pdfFieldGrid(doc, [
+        ['CNPJ', fmtCnpj(String(d.taxId))],
+        ['Matriz / Filial', d.head ? 'Matriz' : 'Filial'],
+        ['Razão social', v(co.name)],
+        ['Nome fantasia', v(d.alias)],
+        ['Data de abertura', v(dataIsoBr(d.founded))],
+        ['Situação cadastral', `${v(d.status?.text)}${d.statusDate ? ` desde ${dataIsoBr(d.statusDate)}` : ''}`],
+        ...(d.reason?.text ? [['Motivo da situação', d.reason.text]] : []),
+        ...(d.special?.text ? [['Situação especial', `${d.special.text}${d.specialDate ? ` (${dataIsoBr(d.specialDate)})` : ''}`]] : []),
+        ['Natureza jurídica', v(co.nature ? `${co.nature.id} - ${co.nature.text}` : '')],
+        ['Porte', v(co.size?.text)],
+        // fmtMoneyBRL não separa milhar — capital de empresa grande ficava ilegível.
+        ['Capital social', co.equity != null ? Number(co.equity).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : 'Nada consta'],
+        ['Simples Nacional', simNao(co.simples)],
+        ['MEI (SIMEI)', simNao(co.simei)],
+      ]);
+
+      doc.moveDown(0.4);
+      pdfBar(doc, 'ATIVIDADES ECONÔMICAS (CNAE)');
+      pdfFieldGrid(doc, [['Atividade principal', d.mainActivity ? `${fmtCnae(d.mainActivity.id)} - ${d.mainActivity.text}` : 'Nada consta']]);
+      const sec = Array.isArray(d.sideActivities) ? d.sideActivities : [];
+      if (sec.length) pdfFieldGrid(doc, sec.map((s, i) => [`Secundária ${i + 1}`, `${fmtCnae(s.id)} - ${s.text}`]));
+
+      doc.moveDown(0.4);
+      pdfBar(doc, 'ENDEREÇO E CONTATO');
+      const cep = String(a.zip || '').replace(/\D/g, '');
+      pdfFieldGrid(doc, [
+        ['Logradouro', v([a.street, a.number].filter(Boolean).join(', '))],
+        ['Complemento', v(a.details)],
+        ['Bairro', v(a.district)],
+        ['Município / UF', v([a.city, a.state].filter(Boolean).join(' / '))],
+        ['CEP', cep.length === 8 ? `${cep.slice(0, 5)}-${cep.slice(5)}` : v(a.zip)],
+        ['País', v(a.country?.name)],
+        ['Telefones', v((d.phones || []).map(p => `(${p.area}) ${String(p.number || '').replace(/(\d{4,5})(\d{4})$/, '$1-$2')}`).join('  ·  '))],
+        ['E-mails', v((d.emails || []).map(e => e.address).join('  ·  '))],
+      ]);
+
+      doc.moveDown(0.4);
+      pdfBar(doc, 'QUADRO SOCIETÁRIO');
+      const membros = Array.isArray(co.members) ? co.members : [];
+      if (!membros.length) pdfEmptyNotice(doc, 'Nenhum sócio ou administrador informado.');
+      membros.forEach((m, i) => {
+        pdfSubBar(doc, `${i + 1}. ${v(m.person?.name)}`);
+        pdfFieldGrid(doc, [
+          ['Qualificação', v(m.role?.text)],
+          ['Desde', v(dataIsoBr(m.since))],
+          // A base já entrega o CPF mascarado ("***748919**") — sai como veio.
+          ['CPF / CNPJ', v(m.person?.taxId)],
+          ['Faixa etária', v(m.person?.age ? `${m.person.age} anos` : '')],
+        ]);
+      });
+
+      const suf = Array.isArray(d.suframa) ? d.suframa : [];
+      if (suf.length) {
+        doc.moveDown(0.4);
+        pdfBar(doc, 'SUFRAMA');
+        suf.forEach(s => {
+          pdfSubBar(doc, `Inscrição ${v(s.number)}`);
+          pdfFieldGrid(doc, [
+            ['Situação', v(s.status?.text)],
+            ['Desde', v(dataIsoBr(s.since))],
+            ['Projeto aprovado', s.approved ? `Sim${s.approvalDate ? ` (${dataIsoBr(s.approvalDate)})` : ''}` : 'Não'],
+            ...(s.incentives || []).map(inc => [`Incentivo ${inc.tribute}`, `${inc.benefit} — ${inc.purpose}${inc.basis ? ` (${inc.basis})` : ''}`]),
+          ]);
+        });
+      }
+
+      doc.moveDown(0.4);
+      pdfNoteLine(doc, `Fonte: dados públicos da Receita Federal (CNPJá), atualizados em ${dataIsoBr(d.updated) || 'data não informada'}.`);
+      pdfReportFooter(doc, now);
+      doc.end();
+    } catch (e) { reject(e); }
+  });
+}
+
 async function saldoDirectData() {
   await pool.query(`INSERT INTO directdata_saldo (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
   const { rows: [s] } = await pool.query(`SELECT * FROM directdata_saldo WHERE id = 1`);
@@ -8001,6 +8147,48 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         },
         charged: 0,
       });
+    }
+
+    // ── Consulta CNPJ grátis (CNPJá público, ver consultarCnpjGratis) ──────────
+    // Preço 0 no catálogo; se o admin der preço fixo a alguém, cobra como as
+    // outras. Com preço 0 não grava transação — seria um R$ 0,00 no extrato.
+    if (serviceId === CNPJ_GRATIS_SERVICE_ID) {
+      const cnpj = String(params?.cnpj || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
+      if (!cnpjValido(cnpj))
+        return res.status(400).json({ error: 'CNPJ inválido. Confira os 14 caracteres (números, ou letras e números no CNPJ alfanumérico).' });
+
+      const c = await consultarCnpjGratis(cnpj);
+      if (!c.dados) return res.status(c.status === 404 ? 404 : c.status === 429 ? 429 : 502).json({ error: c.error });
+
+      let pdfBuf;
+      try {
+        pdfBuf = await buildCnpjPdfBuffer(c.dados);
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+      }
+
+      let txId = null;
+      if (price > 0) {
+        await debitarConsulta(userId, price);
+        const txRow = await pool.query(
+          `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+          [userId, price, `Consulta: ${service.name} — ${fmtCnpj(cnpj)}`]);
+        txId = txRow.rows[0].id;
+      }
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify({ cnpj }), price, txId]);
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="mcdespachadoria-cnpj-${cnpj}.pdf"`);
+      return res.send(pdfBuf);
     }
 
     // ── Consultas Especiais — DirectData (ver DIRECTDATA_SVCS) ─────────────────
