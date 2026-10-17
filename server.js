@@ -1091,7 +1091,7 @@ const SERVICES = [
     modeloUrl:'/assets/modelo-atpve.pdf' },
   // CRLV-e Rio, com Comunicação de Venda (09/10/2026): Licenciamento + BIN e
   // Consulta Comunicado do portal montados no modelo do CRLV-e — ver
-  // gerarCrlveComunicacaoVenda. Só sai com comunicação de venda registrada.
+  // gerarCrlveComunicacaoVenda. Só sai com comunicação de venda, intenção de venda ou gravame.
   { id:'crlve-comunicacao-venda',         name:'CRLV-e Rio, com Comunicação de Venda', group:'Débitos e Documentação', basePrice:80.00, noMarkup:true, inputType:'placa', icon:'🚘',
     slowNote:'ATENÇÃO, ao inserir a placa você concorda com os termos: "Devido ao formato como este CRLVe é gerado, o QR Code não faz leitura — todas as demais informações deste documento são reais. Esse modelo de CRLVe serve para o Despachante usar para fins profissionais, quando necessita do CRLVe real e não tem as informações. O uso para mostrar na rua para a polícia como documento real fica por sua conta e risco."',
     noteStyle:'danger',
@@ -5457,11 +5457,12 @@ async function fetchComunicadoDataVenda(placa, renavam) {
 // antes da consulta (slowNote do serviço). O repositório é público: o modelo
 // foi limpo antes de entrar aqui e não carrega o dado de ninguém.
 //
-// Só sai documento de veículo COM comunicação de venda: sem ela a consulta
-// volta 422 com o aviso, sem cobrar (o custo das consultas fica conosco).
+// Só sai documento de veículo COM comunicação de venda, intenção de venda ou
+// gravame: sem nenhuma das três a consulta volta 422 com o aviso, sem cobrar
+// (o custo das consultas fica conosco).
 const CRLVE_COMUNICACAO_SERVICE_ID = 'crlve-comunicacao-venda';
 const CRLVE_TEMPLATE_PATH = path.join(__dirname, 'assets', 'crlve-template.pdf');
-const CRLVE_SEM_COMUNICACAO_MSG = 'Esse CRLV-e não tem comunicação de venda nem intenção de venda. Nada foi cobrado.';
+const CRLVE_SEM_COMUNICACAO_MSG = 'Esse CRLV-e não tem comunicação de venda, intenção de venda nem gravame. Nada foi cobrado.';
 
 // Restrições 1 a 4 do Licenciamento + BIN, normalizadas ("COMUNICACAO_DE_VENDA"
 // → "COMUNICACAO DE VENDA"), sem as vazias e sem "SEM RESTRICAO".
@@ -5587,7 +5588,8 @@ function quebrarLinhas(texto, largura) {
 // Junta as duas consultas nos campos do documento. Devolve { erro } quando
 // falta o que não pode faltar.
 // com = null quando o veículo só tem intenção de venda (sem comunicação).
-function montarCamposCrlve(placa, lic, com) {
+// gravame = o da DirectData (fetchGravameCrlve), só quando não há nenhuma das duas.
+function montarCamposCrlve(placa, lic, com, gravame = null) {
   const L = lic.campos;
   const comprador = com?.secoes.comprador || {};
   const venda = com ? (com.secoes.venda || com.campos) : {};
@@ -5605,7 +5607,10 @@ function montarCamposCrlve(placa, lic, com) {
   // restrições vem depois delas.
   const todas = crlveRestricoes(L);
   const intencao = todas.some(r => CRLVE_INTENCAO_RE.test(r));
-  const restricoes = todas.filter(r => !CRLVE_INTENCAO_RE.test(r) && !CRLVE_COMUNICACAO_RE.test(r));
+  // Com o gravame em bloco próprio, a "ALIENACAO FIDUCIARIA" das restrições
+  // repetiria a mesma informação.
+  const restricoes = todas.filter(r => !CRLVE_INTENCAO_RE.test(r) && !CRLVE_COMUNICACAO_RE.test(r)
+    && !(gravame && /ALIENACAO/.test(r)));
 
   const c = {
     uf,
@@ -5643,10 +5648,11 @@ function montarCamposCrlve(placa, lic, com) {
   // O CRLV-e sai todo em maiúscula e sem acento — e o portal manda coisas
   // como "NãO APLICAVEL" na carroceria.
   for (const k of Object.keys(c)) if (typeof c[k] === 'string') c[k] = semAcento(c[k]).trim();
+  c.gravame = gravame ? Object.fromEntries(Object.entries(gravame).map(([k, v]) => [k, semAcento(String(v || '')).trim()])) : null;
   for (const [k, rotulo] of [['renavam', 'renavam'], ['marcaModelo', 'marca/modelo'], ['chassi', 'chassi'], ['nome', 'nome do proprietário']])
     if (!c[k]) return { erro: rotulo };
-  // Regra do serviço: só sai com comunicação de venda, intenção de venda ou as duas.
-  if (!c.dataVenda && !c.intencao) return { erro: 'comunicação nem intenção de venda' };
+  // Regra do serviço: só sai com comunicação de venda, intenção de venda ou gravame.
+  if (!c.dataVenda && !c.intencao && !c.gravame) return { erro: 'comunicação, intenção de venda nem gravame' };
   return { campos: c };
 }
 
@@ -5725,6 +5731,11 @@ async function buildCrlveComunicacaoPdfBuffer(c, { ocultarPessoais = false } = {
     }
   }
   if (c.intencao) linhas.push('*INTENCAO DE VENDA'.padEnd(LARG, '*'));
+  if (c.gravame) {
+    linhas.push(`*${c.gravame.status || 'GRAVAME'}`.padEnd(LARG, '*').slice(0, LARG));
+    if (c.gravame.financeira) linhas.push(...quebrarLinhas(`FINANCEIRA: ${c.gravame.financeira}`, LARG));
+    if (c.gravame.data) linhas.push(`DATA DO GRAVAME: ${c.gravame.data}`);
+  }
   for (const r of c.restricoes) linhas.push(...quebrarLinhas(`*${r}*`, LARG));
   linhas.push('*'.repeat(LARG));
   linhas.slice(0, 18).forEach((l, i) => V(l, 28.08, 391.7 - i * 12, 222));
@@ -5764,6 +5775,40 @@ async function fetchNumeroCrvDigitalCrlve(placa) {
   }
 }
 
+// Gravame pela DirectData (o mesmo "Gravame" das Consultas Especiais, dd-gravame).
+// Só é chamada quando o veículo não tem comunicação nem intenção de venda — é a
+// 3ª condição que libera o documento (regra do dono, 17/10/2026). Conferido
+// contra a API real em 17/10/2026: com gravame vem statusDoVeiculo "ALIENACAO
+// FIDUCIARIA" e gravame.financeiraNome (FNY5J96, BANCO VOTORANTIM); sem, vem
+// statusDoVeiculo null e "NADA CONSTA" nos campos da financeira (TTT7A54).
+// Devolve { gravame } | { gravame: null } (consultou e não tem) | { erro }.
+async function fetchGravameCrlve(placa) {
+  const svc = DIRECTDATA_SVCS['dd-gravame'];
+  let resp;
+  try {
+    resp = await chamarDirectData(svc.endpoint, { Placa: placa });
+  } catch (e) {
+    console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Gravame DirectData falhou (placa ${placa}):`, e.semChave ? 'sem DIRECTDATA_TOKEN' : e.message);
+    return { erro: true };
+  }
+  const meta = resp.json?.metaDados || {};
+  const ret = resp.json?.retorno;
+  const ok = meta.resultadoId === 1 && ret;
+  await registrarConsumoDirectData({ serviceId: CRLVE_COMUNICACAO_SERVICE_ID, svc, meta, custo: ok ? svc.custo : 0 });
+  if (!ok) {
+    console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Gravame DirectData sem resultado (placa ${placa}): HTTP ${resp.status} resultadoId=${meta.resultadoId} ${String(meta.mensagem || resp.texto || '').slice(0, 200)}`);
+    // 7/8 = entrada recusada: a placa não tem como ter gravame lá. O resto é
+    // fornecedor fora do ar, e aí não dá para afirmar que não tem.
+    return [7, 8].includes(meta.resultadoId) ? { gravame: null } : { erro: true };
+  }
+  const util = v => { const s = String(v ?? '').trim(); return s && !/^nada consta$/i.test(s) && !semDadoUtil(s) ? s : ''; };
+  const g = ret.gravame || {};
+  const status = util(ret.statusDoVeiculo);
+  const financeira = util(g.financeiraNome);
+  if (!status && !financeira) return { gravame: null };
+  return { gravame: { status: status || 'GRAVAME', financeira, data: DATA_BR_RE.exec(String(g.dataGravame || ''))?.[1] || '' } };
+}
+
 // As duas consultas em sequência (a 2ª precisa do renavam da 1ª). Devolve
 // { pdf, campos } ou { status, error } — nunca cobra nada.
 async function gerarCrlveComunicacaoVenda(placa) {
@@ -5780,14 +5825,13 @@ async function gerarCrlveComunicacaoVenda(placa) {
     return { status: 422, error: 'Não encontramos o renavam desse veículo na base. Nada foi cobrado.' };
   }
   // Regra do serviço: o PDF só sai com comunicação de venda, intenção de venda
-  // ou as duas — em nenhuma outra circunstância. A intenção vem das restrições
-  // do Licenciamento; a comunicação é confirmada pela Consulta Comunicado
-  // (quem tem a data e o comprador). "COMUNICAÇÃO VENDA: Não" no Licenciamento
-  // poupa essa 2ª consulta; sem intenção, encerra ali mesmo.
+  // ou gravame (qualquer combinação) — em nenhuma outra circunstância. A
+  // intenção vem das restrições do Licenciamento; a comunicação é confirmada
+  // pela Consulta Comunicado (quem tem a data e o comprador); o gravame vem da
+  // DirectData e só é consultado quando faltam as duas primeiras.
+  // "COMUNICAÇÃO VENDA: Não" no Licenciamento poupa a Consulta Comunicado.
   const temIntencao = crlveRestricoes(licDados.campos).some(r => CRLVE_INTENCAO_RE.test(r));
   const semComunicacaoNoLic = /^n[aã]o$/i.test(String(licDados.campos.comunicacaovenda || '').trim());
-  const recusa = { status: 422, error: CRLVE_SEM_COMUNICACAO_MSG, code: 'SEM_COMUNICACAO_VENDA' };
-  if (semComunicacaoNoLic && !temIntencao) return recusa;
 
   let comDados = null;
   if (!semComunicacaoNoLic) {
@@ -5803,9 +5847,18 @@ async function gerarCrlveComunicacaoVenda(placa) {
       if (localizada) comDados = d;
     }
   }
-  if (!comDados && !temIntencao) return recusa;
+  let gravame = null;
+  if (!comDados && !temIntencao) {
+    const g = await fetchGravameCrlve(placa);
+    // Fora do ar não é "sem gravame": recusar dizendo que não tem seria afirmar
+    // o que não foi conferido.
+    if (g.erro)
+      return { status: 502, error: 'A consulta de gravame está indisponível agora. Nada foi cobrado — tente de novo em instantes.' };
+    if (!g.gravame) return { status: 422, error: CRLVE_SEM_COMUNICACAO_MSG, code: 'SEM_COMUNICACAO_VENDA' };
+    gravame = g.gravame;
+  }
 
-  const m = montarCamposCrlve(placa, licDados, comDados);
+  const m = montarCamposCrlve(placa, licDados, comDados, gravame);
   if (m.erro) {
     console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] sem ${m.erro} (placa ${placa}).`);
     return { status: 422, error: `A base não devolveu ${m.erro} desse veículo, e o CRLV-e não sai incompleto. Nada foi cobrado.` };
@@ -8188,7 +8241,9 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       const nomeArq = `mcdespachadoria-crlve-comunicacao-venda-${placa}.pdf`;
       if (user.phone) {
         const caption = `✅ *CRLV-e Rio, com Comunicação de Venda*\n🔤 Placa: ${placa}\n`
-          + (r.campos.dataVenda ? `📅 Venda comunicada em ${r.campos.dataVenda}` : '📝 Intenção de venda registrada');
+          + (r.campos.dataVenda ? `📅 Venda comunicada em ${r.campos.dataVenda}`
+            : r.campos.intencao ? '📝 Intenção de venda registrada'
+            : `🏦 Gravame: ${r.campos.gravame.status}`);
         await sendWhatsAppPdf(user.phone, r.pdf, nomeArq, caption).catch(() => {});
       }
       res.setHeader('Content-Type', 'application/pdf');
