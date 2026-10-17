@@ -1933,6 +1933,16 @@ async function initDB() {
       alerta_enviado_em TIMESTAMPTZ
     );
   `);
+  // Saldo de créditos do CNPJá (Consulta CNPJ Completa) — lido de GET /credit
+  // depois de cada consulta; ver conferirSaldoCnpja.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cnpja_saldo (
+      id                INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      creditos          INTEGER,
+      conferido_em      TIMESTAMPTZ,
+      alerta_enviado_em TIMESTAMPTZ
+    );
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS directdata_webhook_eventos (
       id          SERIAL PRIMARY KEY,
@@ -7903,6 +7913,32 @@ function avisarAdminCnpja(motivo) {
   sendWhatsApp(ADMIN_PHONE, `⚠️ *CNPJá (Consulta CNPJ Completa)*\n${motivo}\n\nA consulta está recusando os clientes, sem cobrar, até isso ser resolvido.`).catch(() => {});
 }
 
+// Saldo do CNPJá: GET /credit devolve { transient, perpetual } (créditos do
+// plano + avulsos; conferido em 17/10/2026: 4944 + 50). Abaixo de
+// CNPJA_ALERTA_CREDITOS o ADMIN_PHONE é avisado UMA vez; o aviso rearma quando
+// o saldo volta para cima do limite (recarga). O "já avisei" fica no banco
+// porque na Vercel a memória do processo não sobrevive entre chamadas.
+const CNPJA_ALERTA_CREDITOS = 1000;
+async function conferirSaldoCnpja() {
+  try {
+    const r = await fetch('https://api.cnpja.com/credit', { headers: { Authorization: CNPJA_API_KEY }, signal: AbortSignal.timeout(15000) });
+    const j = await r.json().catch(() => null);
+    if (!r.ok || j == null) { console.error(`[cnpja] /credit HTTP ${r.status}: ${JSON.stringify(j).slice(0, 200)}`); return; }
+    const creditos = (Number(j.transient) || 0) + (Number(j.perpetual) || 0);
+    await pool.query(`INSERT INTO cnpja_saldo (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+    if (creditos >= CNPJA_ALERTA_CREDITOS) {
+      await pool.query(`UPDATE cnpja_saldo SET creditos=$1, conferido_em=NOW(), alerta_enviado_em=NULL WHERE id=1`, [creditos]);
+      return;
+    }
+    await pool.query(`UPDATE cnpja_saldo SET creditos=$1, conferido_em=NOW() WHERE id=1`, [creditos]);
+    // Claim atômico: duas consultas simultâneas não mandam dois avisos.
+    const marcou = await pool.query(
+      `UPDATE cnpja_saldo SET alerta_enviado_em = NOW() WHERE id=1 AND alerta_enviado_em IS NULL RETURNING id`);
+    if (marcou.rowCount && ADMIN_PHONE)
+      await sendWhatsApp(ADMIN_PHONE, `⚠️ *Créditos do CNPJá abaixo de ${CNPJA_ALERTA_CREDITOS}*\nRestam ${creditos} créditos (${Number(j.transient) || 0} do plano + ${Number(j.perpetual) || 0} avulsos).\n\nCada Consulta CNPJ Completa com Localização consome créditos. Recarregue no painel do CNPJá — sem créditos a consulta para de sair (sem cobrar o cliente).`).catch(() => {});
+  } catch (e) { console.error('[cnpja] erro ao conferir saldo:', e.message); }
+}
+
 // A consulta da API comercial + as duas imagens. Devolve { dados, mapa, rua }
 // ou { status, error }. As imagens são complemento: se uma falhar, o relatório
 // sai sem ela (com aviso no PDF) — os dados são o que justifica a cobrança.
@@ -8315,6 +8351,9 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
 
       await notifyAdminNewQuery(user, service, price, { cnpj: fmtCnpj(cnpj) });
+      // Antes da resposta: na Vercel a função pode ser congelada logo depois do
+      // res.send, e uma promessa solta perderia o aviso. Nunca lança.
+      await conferirSaldoCnpja();
       const nomeArq = `mcdespachadoria-cnpj-completo-${cnpj}.pdf`;
       if (user.phone)
         await sendWhatsAppPdf(user.phone, pdfBuf, nomeArq, `✅ *${service.name}*\n🏢 ${c.dados.company?.name || ''}\n🔎 ${fmtCnpj(cnpj)}`).catch(() => {});
