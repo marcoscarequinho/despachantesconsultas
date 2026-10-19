@@ -190,7 +190,7 @@
         <div class="text-xs font-semibold text-gray-600">Atividades (CNAE) — a IA redige o objeto social a partir delas</div>
         ${cnaes || '<div class="text-xs text-gray-400">Nenhum CNAE ainda.</div>'}
         <div class="flex gap-2 items-end">
-          <div class="flex-1"><label class="label">Código CNAE</label><input id="cs-cnae-novo" class="input-field" placeholder="4520-0/01" maxlength="10" inputmode="numeric"></div>
+          <div class="flex-1"><label class="label flex items-center justify-between gap-2">Código CNAE <a href="https://cnae.ibge.gov.br/?option=com_cnae&view=atividades&Itemid=6160&tipo=cnae&chave=Consultoria&versao_classe=7.0.0&versao_subclasse=10.1.0" target="_blank" rel="noopener" class="text-xs font-normal text-indigo-600 hover:underline">🔎 Buscar CNAE no IBGE</a></label><input id="cs-cnae-novo" class="input-field" placeholder="4520-0/01" maxlength="10" inputmode="numeric"></div>
           <button type="button" data-acao="cnae-add" class="bg-gray-700 hover:bg-gray-800 text-white text-xs font-semibold px-3 py-2.5 rounded">+ Adicionar</button>
         </div>
         <div id="cs-cnae-status" class="text-xs text-gray-500"></div>
