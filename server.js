@@ -5694,7 +5694,10 @@ function montarCamposCrlve(placa, lic, com, gravame = null) {
     nome: L.nomedoproprietario || '',
     documento: L.documento || '',
     local: [L.municipio, uf].filter(Boolean).join(' '),
-    dataEmissao: DATA_BR_RE.exec(String(L.emissaodocrlv || ''))?.[1] || '',
+    // A célula DATA (ao lado de LOCAL) é a data do CRV, não a emissão do CRLV
+    // (dono, 19/10/2026 — o "EMISSÃO DO CRLV" do portal vinha "—" e a célula
+    // saía "***" com o "DATA DO CRV" logo abaixo no mesmo relatório).
+    dataEmissao: DATA_BR_RE.exec(String(L.datadocrv || ''))?.[1] || '',
     dataVenda,
     dataRegistro,
     compradorNome: comprador.nome || '',
@@ -5832,37 +5835,59 @@ async function fetchNumeroCrvDigitalCrlve(placa) {
   }
 }
 
-// Carroceria e exercício quando o Licenciamento do portal manda "—": o
-// verificar_crlv da despbrasil (R$ 1,30) traz os dois do sistema
-// (dados.Carroceria e dados.anoUltimoLicenciamento — na QNP9E31 o 2023 dela é o
-// certo, conferido pelo dono em 19/10/2026). Caminhão tem
-// carroceria atribuída e ela é a que vai no documento — o "NAO APLICAVEL" é só
-// para veículo de passageiro sem nada no sistema (regra do dono, 19/10/2026;
-// QNP9E31 veio "—" no portal e "NãO APLICAVEL" aqui). A rota às vezes leva mais
-// de um minuto ou cai em 524, daí o limite de 110 s (passando de 100 s ela mesma cai em 524; em 19/10/2026 levou 73 s); falha devolve campos vazios.
+// Carroceria, exercício e data do CRV quando o Licenciamento do portal manda
+// "—": o verificar_crlv da despbrasil (R$ 1,30 — o mesmo do "Verificar CRLV e
+// Último Licenciamento" do catálogo) traz os três do sistema (dados.Carroceria,
+// dados.anoUltimoLicenciamento — na QNP9E31 o 2023 dela é o certo, conferido
+// pelo dono em 19/10/2026 — e a data do CRV). Caminhão tem carroceria atribuída
+// e ela é a que vai no documento — o "NAO APLICAVEL" é só para quem não tem
+// (ver CRLVE_SEM_CARROCERIA_RE).
+// A rota leva de 10 a 100 s e, passando de 100 s, cai em 524; daí o limite de
+// 110 s. Uma segunda tentativa costuma responder na hora (a despbrasil termina a
+// consulta mesmo depois de nos cortar): na LPU3C91 a 1ª estourou os 110 s em
+// produção e a seguinte voltou em 10 s (19/10/2026). Falha devolve campos vazios.
+// Data do CRV: o JSON (dataEmissaoCrv, ISO) nem sempre vem; o PDF da resposta
+// tem "DATA DO CRV" UM DIA ANTES do portal (LPU3C91: 11/08/2019 no PDF, 12/08 no
+// portal) — o ISO desenhado no fuso do Brasil —, então a data do PDF leva +1 dia.
 async function fetchVerificarCrlvCrlve(placa) {
-  try {
-    const r = await fetch(DESPBRASIL_BASE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', chaveAcesso: DESPBRASIL_KEY },
-      body: JSON.stringify({ servico: DESPBRASIL_SVCS['verificar-crlv-data-crv'].servico, placa }),
-      signal: AbortSignal.timeout(110000),
-    });
-    const j = await r.json().catch(() => null);
-    if (!r.ok || !j?.sucesso) {
-      console.log(`[${CRLVE_COMUNICACAO_SERVICE_ID}] verificar_crlv sem resultado (placa ${placa}): ${JSON.stringify(j).slice(0, 200)}`);
-      return {};
+  let j = null;
+  for (let t = 1; t <= 2 && !j; t++) {
+    try {
+      const r = await fetch(DESPBRASIL_BASE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', chaveAcesso: DESPBRASIL_KEY },
+        body: JSON.stringify({ servico: DESPBRASIL_SVCS['verificar-crlv-data-crv'].servico, placa }),
+        signal: AbortSignal.timeout(110000),
+      });
+      const resp = await r.json().catch(() => null);
+      if (r.ok && resp?.sucesso) { j = resp; break; }
+      console.log(`[${CRLVE_COMUNICACAO_SERVICE_ID}] verificar_crlv sem resultado (placa ${placa}, tentativa ${t}/2): HTTP ${r.status} ${JSON.stringify(resp).slice(0, 200)}`);
+      // 4xx é resposta de negócio (placa que a base não tem): repetir não muda nada.
+      if (r.status >= 400 && r.status < 500) return {};
+    } catch (e) {
+      console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] verificar_crlv da despbrasil falhou (placa ${placa}, tentativa ${t}/2):`, e.message);
     }
-    const car = semAcento(String(j.dados?.Carroceria ?? '')).replace(/\s+/g, ' ').trim();
-    const ano = String(j.dados?.anoUltimoLicenciamento ?? '').trim();
-    return {
-      carroceria: car && !semDadoUtil(car) ? car : null,
-      exercicio: /^(19|20)\d{2}$/.test(ano) ? ano : null,
-    };
-  } catch (e) {
-    console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] verificar_crlv da despbrasil falhou (placa ${placa}):`, e.message);
-    return {};
   }
+  if (!j) return {};
+  const car = semAcento(String(j.dados?.Carroceria ?? '')).replace(/\s+/g, ' ').trim();
+  const ano = String(j.dados?.anoUltimoLicenciamento ?? '').trim();
+  let dataCrv = /^\d{2}\/\d{2}\/\d{4}$/.test(dataBRSimples(j.dados?.dataEmissaoCrv)) ? dataBRSimples(j.dados.dataEmissaoCrv) : null;
+  if (!dataCrv && j.arquivo_url) {
+    try {
+      const pdfRes = await fetch(j.arquivo_url, { signal: AbortSignal.timeout(30000) });
+      if (!pdfRes.ok) throw new Error(`HTTP ${pdfRes.status}`);
+      const { text } = await pdfParseTolerante(Buffer.from(await pdfRes.arrayBuffer()));
+      const m = /DATA DO CRV\s*:?\s*(\d{2}\/\d{2}\/\d{4})/i.exec(text || '');
+      if (m) dataCrv = somarUmDiaDataBr(m[1]);
+    } catch (e) {
+      console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] PDF do verificar_crlv ilegível (placa ${placa}):`, e.message);
+    }
+  }
+  return {
+    carroceria: car && !semDadoUtil(car) ? car : null,
+    exercicio: /^(19|20)\d{2}$/.test(ano) ? ano : null,
+    dataCrv,
+  };
 }
 
 // Gravame pela DirectData (o mesmo "Gravame" das Consultas Especiais, dd-gravame).
@@ -5935,6 +5960,7 @@ const ESTADUAL_CAMPOS_CRLVE = {
   documento:          r => r.documento,
   municipio:          r => String(r.municipio || '').replace(/\s*-\s*[A-Z]{2}$/, ''),
   ufjurisdicao:       r => r.uf,
+  datadocrv:          r => DATA_BR_RE.exec(String(r.dataEmissaoCrv || ''))?.[1],
 };
 
 // Completa licDados.campos no lugar. Falha da DirectData não recusa nada: o
@@ -5946,12 +5972,20 @@ async function completarCrlveComEstadual(placa, licDados) {
   if (!faltando.length || licDados.estadualConsultada) return;
   licDados.estadualConsultada = true;
   const svc = DIRECTDATA_SVCS['dd-veicular-estadual'];
+  // resultadoId 21 ("Falha Ao Realizar Consulta", HTTP 500) é falha do lado
+  // deles e não cobra: na LPU3C91 veio assim em produção e de novo minutos
+  // depois (19/10/2026). Tenta mais uma vez antes de desistir.
   let resp;
-  try {
-    resp = await chamarDirectData(svc.endpoint, { Placa: placa });
-  } catch (e) {
-    console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Consulta Estadual falhou (placa ${placa}):`, e.semChave ? 'sem DIRECTDATA_TOKEN' : e.message);
-    return;
+  for (let t = 1; t <= 2; t++) {
+    try {
+      resp = await chamarDirectData(svc.endpoint, { Placa: placa });
+    } catch (e) {
+      console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Consulta Estadual falhou (placa ${placa}, tentativa ${t}/2):`, e.semChave ? 'sem DIRECTDATA_TOKEN' : e.message);
+      if (e.semChave || t === 2) return;
+      continue;
+    }
+    if (resp.json?.metaDados?.resultadoId !== 21 && resp.status < 500) break;
+    if (t < 2) await new Promise(r => setTimeout(r, 3000));
   }
   const meta = resp.json?.metaDados || {};
   const ret = resp.json?.retorno;
@@ -6040,13 +6074,14 @@ async function gerarCrlveComunicacaoVenda(placa) {
   }
   // 3ª consulta, só depois de confirmada a comunicação/intenção (para não pagar por ela
   // quando o documento nem vai sair). Sem CRV Digital, a célula fica "***".
-  // Carroceria/exercício e número do CRV não dependem um do outro: saem juntos.
+  // Carroceria/exercício/data do CRV e número do CRV não dependem um do outro: saem juntos.
   const [numeroCrv, sistema] = await Promise.all([
     fetchNumeroCrvDigitalCrlve(placa),
-    m.campos.carroceria && m.campos.exercicio ? {} : fetchVerificarCrlvCrlve(placa),
+    m.campos.carroceria && m.campos.exercicio && m.campos.dataEmissao ? {} : fetchVerificarCrlvCrlve(placa),
   ]);
   m.campos.numeroCrv = numeroCrv;
   if (!m.campos.exercicio) m.campos.exercicio = sistema.exercicio || '';
+  if (!m.campos.dataEmissao) m.campos.dataEmissao = sistema.dataCrv || '';
   if (!m.campos.carroceria)
     m.campos.carroceria = sistema.carroceria || (CRLVE_SEM_CARROCERIA_RE.test(m.campos.especieTipo) ? 'NAO APLICAVEL' : '');
   // Com intenção de venda e sem CRV Digital, o número do CRV ainda sai pelo
