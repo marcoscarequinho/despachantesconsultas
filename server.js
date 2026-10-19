@@ -1124,7 +1124,7 @@ const SERVICES = [
   // Consulta Comunicado do portal montados no modelo do CRLV-e — ver
   // gerarCrlveComunicacaoVenda. Só sai com comunicação de venda, intenção de venda ou gravame.
   { id:'crlve-comunicacao-venda',         name:'CRLV-e Rio, com Comunicação de Venda e ou Intenção de Venda, ou Gravame', group:'Débitos e Documentação', basePrice:80.00, noMarkup:true, inputType:'placa', icon:'🚘',
-    slowNote:'ATENÇÃO, ao inserir a placa você concorda com os termos: "Devido ao formato como este CRLVe é gerado, o QR Code não faz leitura — todas as demais informações deste documento são reais. Esse modelo de CRLVe serve para o Despachante usar para fins profissionais, quando necessita do CRLVe real e não tem as informações. O uso para mostrar na rua para a polícia como documento real fica por sua conta e risco."',
+    slowNote:'ATENÇÃO, ao inserir a placa você concorda com os termos: "Devido ao formato como este CRLVe é gerado, o QR Code não faz leitura — todas as demais informações deste documento são reais. Esse modelo de CRLVe serve para o Despachante usar para fins profissionais, quando necessita do CRLVe real e não tem as informações. Obs.: mesmo que esteja com todos os débitos pagos, mas no sistema não tiver atualizado para o ano vigente, vai sair o último CRLVe que estiver no sistema."',
     noteStyle:'danger',
     modeloUrl:'/assets/modelo-crlve.pdf', modeloLabel:'Visualize modelo do CRLVe' },
   { id:'consultar-comunicado',            name:'Consulta Comunicado',          group:'Débitos e Documentação', basePrice:7.50,  inputType:'placa_renavam',icon:'📝' },
