@@ -13,6 +13,7 @@ const bwipjs = require('bwip-js');
 const pdfParse = require('pdf-parse');
 const { PDFDocument: PDFLibDocument, StandardFonts: PDFLibStandardFonts, rgb } = require('pdf-lib');
 const recursoMulta = require('./recurso-multa');
+const contratoSocial = require('./contrato-social');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1292,6 +1293,11 @@ const SERVICES = [
   // Versão paga e completa da Consulta CNPJ — ver CNPJ_COMPLETO_SERVICE_ID.
   { id:CNPJ_COMPLETO_SERVICE_ID, name:'Consulta CNPJ Completa com Localização', group:DIRECTDATA_GRUPO, basePrice:18, noMarkup:true, inputType:'cnpj', icon:'📍',
     slowNote:'Tudo da consulta de CNPJ (situação, endereço, CNAE, Simples/MEI, sócios, Suframa) mais as inscrições estaduais e a localização do estabelecimento: coordenadas, link do mapa, mapa aéreo e foto da fachada (visão da rua), em PDF. Só é cobrada se o relatório sair.' },
+  // Contrato Social LTDA com IA (19/10/2026, R$ 120,00): constituição e
+  // alteração/consolidação, ver contrato-social.js. Grupo próprio porque é pago
+  // (o "Para os Despachantes" zera o preço).
+  { id:'contrato-social-ltda', name:'Contrato Social LTDA com IA', group:'Documentos Empresariais', basePrice:120, noMarkup:true, inputType:'contrato_social', icon:'📑',
+    slowNote:'Constituição de sociedade limitada (inclusive unipessoal) ou alteração com consolidação do contrato, com quantos sócios forem precisos. Na alteração, o CNPJ preenche empresa e quadro de sócios. As cláusulas seguem o Código Civil; a IA redige só o objeto social a partir dos CNAEs. Sai em PDF pronto para assinar e registrar (cerca de 1 minuto). Só é cobrado se o PDF for gerado.' },
   { id:'recurso-multa-ia', name:'Recurso de Multa com IA', group:'Recurso de Multas', basePrice:80, noMarkup:true, inputType:'recurso_multa', icon:'⚖️',
     slowNote:'Envie a foto ou o PDF da notificação, confira os dados e responda as perguntas. A IA redige a defesa prévia ou o recurso à JARI em PDF, pronto para assinar e protocolar (leva cerca de 1 minuto). Só é cobrado se o PDF for gerado.' },
   // ── CRLV-e Rio de Janeiro (destaque no topo da Nova Consulta) ──
@@ -1904,6 +1910,17 @@ async function initDB() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_recurso_multa_leituras_user ON recurso_multa_leituras(user_id, created_at);`);
+  // Buscas de CNPJ do Contrato Social (modo alteração): grátis para o cliente,
+  // mas cada uma gasta crédito do CNPJá — só existe para o limite diário
+  // (CONTRATO_SOCIAL_BUSCAS_DIA).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS contrato_social_buscas (
+      id         SERIAL PRIMARY KEY,
+      user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_contrato_social_buscas_user ON contrato_social_buscas(user_id, created_at);`);
   // DirectData: a API não tem rota de saldo (16/10/2026: Saldo, ConsultaSaldo,
   // Usuario/Saldo e Conta/Saldo dão 404), então o saldo do admin é ESTIMADO —
   // o valor que o admin informa ao recarregar (directdata_saldo) menos o custo
@@ -8648,6 +8665,55 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       return res.send(pdfBuf);
     }
 
+    // ── Contrato Social LTDA com IA (ver contrato-social.js) ──────────────────
+    // Tudo que barra o pedido (quotas x capital, administrador, menor, cônjuges,
+    // cessões) é checado em prepararContrato, antes do IBGE e da IA; o débito
+    // só acontece com o PDF pronto.
+    if (serviceId === 'contrato-social-ltda') {
+      const prep = contratoSocial.prepararContrato(params || {}, { isValidDoc, cnpjValido });
+      if (prep.erro) return res.status(400).json({ error: prep.erro });
+      const c = prep.contrato;
+
+      let pdfBuf;
+      try {
+        const g = await contratoSocial.gerarContrato(c);
+        if (g.erro) return res.status(g.status || 502).json({ error: g.erro });
+        pdfBuf = g.pdf;
+      } catch (e) {
+        console.error(`[${serviceId}] falha ao gerar:`, e.semChave ? 'sem ANTHROPIC_API_KEY' : e.message, e.status === 401 ? `— chave: ${recursoMulta.digitalChave()}` : '');
+        return res.status(502).json({ error: 'Não foi possível gerar o contrato agora. Nada foi cobrado. Tente de novo em instantes.' });
+      }
+
+      // params sem CPF completo nem endereço — o documento inteiro fica no pdf_cache.
+      const paramsLog = contratoSocial.resumoLog(c);
+      const rotulo = c.empresa.nome || 'nova sociedade';
+      await debitarConsulta(userId, price);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name} — ${rotulo}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify(paramsLog), price, txRow.rows[0].id]
+      );
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, { empresa: rotulo, modo: c.modo });
+      const nomeArq = `mcdespachadoria-contrato-social-${(rotulo.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'ltda').slice(0, 40)}.pdf`;
+      if (user.phone) {
+        const caption = `✅ *${c.modo === 'alteracao' ? 'Alteração contratual' : 'Contrato social'} pronto!*\n🏢 ${rotulo}\n\nConfira os dados, colham as assinaturas e registre em até 30 dias. As orientações estão na última página.`;
+        await sendWhatsAppPdf(user.phone, pdfBuf, nomeArq, caption).catch(() => {});
+      }
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
+      return res.send(pdfBuf);
+    }
+
     // ── Recurso de Multa com IA (ver recurso-multa.js) ────────────────────────
     // Os dados já chegam conferidos pelo cliente (lidos da notificação em
     // /api/recurso-multa/ler-notificacao e editados no formulário). Tudo que
@@ -14529,6 +14595,109 @@ app.post('/api/recurso-multa/ler-notificacao', requireAuth, async (req, res) => 
   } catch (e) {
     console.error('[recurso-multa] leitura da notificação:', e.semChave ? 'sem ANTHROPIC_API_KEY' : e.message, e.status === 401 ? `— chave: ${recursoMulta.digitalChave()}` : '');
     return res.status(502).json({ error: 'Não foi possível ler a notificação agora. Preencha os campos à mão ou tente de novo.' });
+  }
+});
+
+// ── Contrato Social LTDA: apoio ao formulário ─────────────────────────────────
+// POST /api/contrato-social/buscar-cnpj — modo alteração. Busca a empresa na
+// API comercial do CNPJá (a mesma chave da Consulta CNPJ Completa, sem os
+// extras pagos de IE/mapa) e devolve o que dá para pré-preencher. O QSA da
+// Receita traz o CPF dos sócios MASCARADO ("***746608**") e não traz quotas —
+// conferido em 19/10/2026 —, então o painel preenche nome e papel e o cliente
+// completa CPF e quotas. Grátis para o cliente, com limite diário porque cada
+// busca gasta crédito do CNPJá.
+const CONTRATO_SOCIAL_BUSCAS_DIA = 10;
+// Naturezas jurídicas de limitada: 2062 empresária, 2240 simples, e as antigas
+// EIRELI (2305/2313), que a Lei 14.195/2021 transformou em limitada unipessoal.
+const NATUREZAS_LIMITADA = { 2062: 'empresaria', 2240: 'simples', 2305: 'empresaria', 2313: 'simples' };
+app.post('/api/contrato-social/buscar-cnpj', requireAuth, async (req, res) => {
+  const cnpj = String(req.body?.cnpj || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
+  if (!cnpjValido(cnpj)) return res.status(400).json({ error: 'CNPJ inválido.' });
+  if (!CNPJA_API_KEY) return res.status(503).json({ error: 'A busca por CNPJ está indisponível agora. Preencha os dados à mão.' });
+  try {
+    const usadas = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM contrato_social_buscas WHERE user_id=$1 AND created_at > NOW() - INTERVAL '1 day'`, [req.user.id]);
+    if (usadas.rows[0].n >= CONTRATO_SOCIAL_BUSCAS_DIA)
+      return res.status(429).json({ error: 'Você atingiu o limite de buscas por CNPJ de hoje. Preencha os dados à mão — o contrato sai do mesmo jeito.' });
+    await pool.query('INSERT INTO contrato_social_buscas (user_id) VALUES ($1)', [req.user.id]);
+
+    let r;
+    try {
+      r = await fetch(`${CNPJA_API_URL}/${cnpj}`, { headers: { Authorization: CNPJA_API_KEY, Accept: 'application/json' }, signal: AbortSignal.timeout(30000) });
+    } catch (e) {
+      console.error('[contrato-social] CNPJá não respondeu:', e.message);
+      return res.status(502).json({ error: 'A base de CNPJ não respondeu. Tente de novo ou preencha à mão.' });
+    }
+    const j = await r.json().catch(() => null);
+    if (r.status === 404) return res.status(404).json({ error: 'CNPJ não encontrado na base da Receita Federal.' });
+    if (r.status === 401 || (r.status === 429 && /credit/i.test(j?.message || ''))) {
+      avisarAdminCnpja(r.status === 401 ? 'A chave de API foi recusada (401). Confira a CNPJA_API_KEY na Vercel.' : 'Sem créditos no plano. Recarregue no painel do CNPJá.');
+      return res.status(503).json({ error: 'A busca por CNPJ está indisponível agora. Preencha os dados à mão.' });
+    }
+    if (!r.ok || !j?.taxId) {
+      console.error(`[contrato-social] CNPJá HTTP ${r.status}: ${JSON.stringify(j).slice(0, 300)}`);
+      return res.status(502).json({ error: 'A base de CNPJ respondeu de forma inesperada. Tente de novo ou preencha à mão.' });
+    }
+    await conferirSaldoCnpja();
+
+    const co = j.company || {};
+    const a = j.address || {};
+    const natureza = NATUREZAS_LIMITADA[co.nature?.id];
+    // Papel na Receita: "Sócio", "Sócio-Administrador", "Titular", "Sócio
+    // Pessoa Jurídica…" são sócios; "Administrador" sozinho é administrador
+    // não sócio.
+    const pessoas = (co.members || []).map(m => {
+      const papel = String(m.role?.text || '');
+      const socio = /s[óo]ci|titular/i.test(papel);
+      const pj = m.person?.type === 'LEGAL';
+      return {
+        nome: String(m.person?.name || '').toUpperCase(),
+        tipo: pj ? 'PJ' : 'PF',
+        // CNPJ vem inteiro; CPF vem mascarado e não serve.
+        documento: pj ? String(m.person?.taxId || '') : '',
+        papel: socio ? 'socio' : 'admin',
+        administrador: /administrador/i.test(papel),
+        papelReceita: papel,
+        exterior: !!(pj && m.person?.country?.id && m.person.country.id !== 76),
+      };
+    });
+    return res.json({
+      cnpj: j.taxId,
+      nome: String(co.name || '').toUpperCase(),
+      natureza: natureza || null, naturezaTexto: co.nature?.text || '',
+      ehLimitada: !!natureza,
+      situacao: j.status?.text || '',
+      capitalCentavos: Math.round(Number(co.equity || 0) * 100),
+      inicioAtividades: dataIsoBr(j.founded),
+      endereco: {
+        logradouro: a.street || '', numero: a.number || '', complemento: a.details || '',
+        bairro: a.district || '', cidade: a.city || '', uf: a.state || '', cep: a.zip || '',
+      },
+      cnaes: [
+        j.mainActivity && { codigo: String(j.mainActivity.id).padStart(7, '0'), descricao: j.mainActivity.text, principal: true },
+        ...(j.sideActivities || []).map(x => ({ codigo: String(x.id).padStart(7, '0'), descricao: x.text, principal: false })),
+      ].filter(Boolean),
+      pessoas,
+      restantes: CONTRATO_SOCIAL_BUSCAS_DIA - usadas.rows[0].n - 1,
+    });
+  } catch (e) {
+    console.error('[contrato-social] buscar-cnpj:', e.message);
+    return res.status(500).json({ error: 'Erro ao buscar o CNPJ. Preencha os dados à mão.' });
+  }
+});
+
+// GET /api/contrato-social/cnae/:codigo — descrição oficial do CNAE (IBGE),
+// para o cliente conferir o código no modo constituição.
+app.get('/api/contrato-social/cnae/:codigo', requireAuth, async (req, res) => {
+  const codigo = String(req.params.codigo || '').replace(/\D/g, '');
+  if (codigo.length !== 7) return res.status(400).json({ error: 'Use os 7 dígitos da subclasse (ex.: 4520-0/01).' });
+  try {
+    const descricao = await contratoSocial.descricaoCnae(codigo);
+    if (!descricao) return res.status(404).json({ error: `O CNAE ${contratoSocial.fmtCnae(codigo)} não existe na tabela do IBGE.` });
+    return res.json({ codigo, descricao });
+  } catch (e) {
+    console.error('[contrato-social] IBGE:', e.message);
+    return res.status(502).json({ error: 'A tabela de CNAE do IBGE não respondeu. Tente de novo.' });
   }
 });
 

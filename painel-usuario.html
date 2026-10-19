@@ -68,6 +68,8 @@
   <script src="/assets/tema.js"></script>
   <!-- Cartão de débito (Checkout Bricks do Mercado Pago) — ver assets/pagamento-cartao.js -->
   <script src="/assets/pagamento-cartao.js" defer></script>
+  <!-- Contrato Social LTDA com IA: formulário em etapas — ver assets/contrato-social.js -->
+  <script src="/assets/contrato-social.js" defer></script>
   <style>
     .metodo-btn { border: 2px solid #d1d5db; color: #374151; border-radius: .5rem; padding: .45rem .4rem; font-weight: 700; transition: .15s; background: white; }
     .metodo-btn:hover { border-color: #d97706; }
@@ -318,6 +320,9 @@
              de Multa (pedido do dono, 16/10/2026). Preenchido por
              renderEspeciaisDestaque(); o clique filtra a grade pelo grupo. -->
         <div id="catalog-especiais-destaque" class="hidden mb-4"></div>
+        <!-- Contrato Social LTDA com IA em faixa própria, acima do Recurso de
+             Multa. Preenchido por renderContratoDestaque(). -->
+        <div id="catalog-contrato-destaque" class="hidden mb-4"></div>
         <!-- Recurso de Multa com IA em faixa própria, acima da Assinatura
              Digital (pedido do dono). Preenchido por renderRecursoDestaque(). -->
         <div id="catalog-recurso-destaque" class="hidden mb-4"></div>
@@ -2194,6 +2199,7 @@ function renderPrices() {
     'CNH':                     '🪪',
     'Para os Despachantes':    '🧑‍💼',
     'Recurso de Multas':       '⚖️',
+    'Documentos Empresariais': '📑',
     'Consultas Especiais Veículos e etc': '🔎',
   };
 
@@ -2248,6 +2254,7 @@ function inputTypeLabel(t) {
     atpve_vistocar:      'Entrada: Dados da venda + CRLV-e, comprovantes e CNHs (assíncrono)',
     assinatura_digital:  'Entrada: PDF + dados de quem assina',
     recurso_multa:       'Entrada: Notificação da multa (foto ou PDF) + perguntas',
+    contrato_social:     'Entrada: Dados da empresa e dos sócios (constituição ou alteração)',
     cancelar_venda:      'Entrada: ID + Protocolo + Motivo',
     protocolo:           'Entrada: Protocolo',
     protocolo_get:       'Entrada: Protocolo (GET)',
@@ -2556,6 +2563,7 @@ const CATALOG_GROUP_ORDER = [
   'Consulta Completa',
   'Para os Despachantes',
   'Consultas Especiais Veículos e etc',
+  'Documentos Empresariais',
   'Recurso de Multas',
   'Comunicação Venda',
   'CRV',
@@ -2589,6 +2597,7 @@ const CATALOG_GROUP_META = {
   'Óbito':                  { icon:'⚰️' },
   'Procurações e Contratos':{ icon:'📜' },
   'Recurso de Multas':      { icon:'⚖️', badge:'🤖 Com IA', badgeClass:'bg-indigo-100 text-indigo-700' },
+  'Documentos Empresariais':{ icon:'📑', badge:'🤖 Com IA', badgeClass:'bg-indigo-100 text-indigo-700' },
   'Consultas Especiais Veículos e etc': { icon:'🔎', badge:'⚡ Na hora', badgeClass:'bg-sky-100 text-sky-700' },
 };
 
@@ -2739,6 +2748,37 @@ function abrirEspeciais() {
   document.getElementById('catalog-grid')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+// Faixa do Contrato Social LTDA com IA, logo acima do Recurso de Multa. Mesma
+// regra das outras faixas: some quando a busca/filtro atual não inclui o serviço.
+function renderContratoDestaque(svcsVisiveis) {
+  const wrap = document.getElementById('catalog-contrato-destaque');
+  if (!wrap) return;
+  const svc = (svcsVisiveis || []).find(s => s.id === 'contrato-social-ltda');
+  if (!svc) { wrap.classList.add('hidden'); wrap.innerHTML = ''; return; }
+  wrap.classList.remove('hidden');
+  wrap.innerHTML = `
+    <button type="button" onclick="openCatalogService('contrato-social-ltda')"
+      class="w-full text-left bg-gradient-to-r from-violet-50 to-white border border-violet-200 rounded-xl p-4 sm:p-5 hover:border-violet-400 hover:shadow-md transition-all">
+      <div class="flex items-center gap-4">
+        <div class="w-12 h-12 bg-violet-100 rounded-full flex items-center justify-center text-2xl flex-shrink-0">📑</div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="font-bold text-gray-800">${escapeHtml(svc.name)}</span>
+            <span class="svc-badge bg-violet-100 text-violet-700">🤖 Com IA</span>
+          </div>
+          <p class="text-xs text-gray-600 mt-1 leading-snug">
+            <strong>Constituição</strong> ou <strong>alteração com consolidação</strong> de LTDA, com quantos sócios precisar.
+            Na alteração, o CNPJ já preenche a empresa e o quadro de sócios. PDF pronto para assinar e levar à Junta.
+          </p>
+        </div>
+        <div class="flex flex-col items-end gap-1 flex-shrink-0">
+          <span class="price-tag text-sm">${fmtPrice(svc.price)}</span>
+          <span class="svc-cta">Gerar contrato</span>
+        </div>
+      </div>
+    </button>`;
+}
+
 // Faixa do Recurso de Multa com IA, logo acima da Assinatura Digital. Mesma
 // regra dela: some quando a busca/filtro atual não inclui o serviço.
 function renderRecursoDestaque(svcsVisiveis) {
@@ -2776,6 +2816,7 @@ function renderCatalog() {
   const termo = document.getElementById('catalog-search')?.value.trim() || '';
   const svcs  = catalogFiltered();
   renderEspeciaisDestaque(svcs);
+  renderContratoDestaque(svcs);
   renderRecursoDestaque(svcs);
   renderAssinaturaDestaque(svcs);
 
@@ -3454,11 +3495,15 @@ function queryActionLabel(inputType) {
   if (inputType === 'atpve_vistocar') return 'Emitir ATPV-e';
   if (inputType === 'assinatura_digital') return 'Enviar para Assinatura';
   if (inputType === 'recurso_multa') return 'Gerar Recurso';
+  if (inputType === 'contrato_social') return 'Gerar Contrato Social';
   return 'Realizar Consulta';
 }
 
 function renderFormFields(inputType, svc) {
   const wrap = document.getElementById('form-fields');
+  // O Contrato Social esconde o botão até a etapa de revisão; qualquer outro
+  // formulário volta a mostrá-lo.
+  document.getElementById('query-submit')?.classList.remove('hidden');
   const field = (id, label, type = 'text', placeholder = '', required = true, extra = '') =>
     `<div>
       <label class="label">${label}${required ? ' <span class="text-red-500">*</span>' : ''}</label>
@@ -4085,6 +4130,9 @@ function renderFormFields(inputType, svc) {
 
     recurso_multa: recursoMultaBody(field),
 
+    // Formulário em etapas, desenhado por assets/contrato-social.js.
+    contrato_social: '<div id="cs-root"></div>',
+
     debito_doc: placaField + renavamField +
       field('documento', 'CPF ou CNPJ do Proprietário', 'text', '000.000.000-00') +
       `<p class="text-xs text-blue-600 mt-1">ℹ️ Informe o CPF ou CNPJ do proprietário do veículo.</p>`,
@@ -4230,6 +4278,7 @@ function renderFormFields(inputType, svc) {
   // Assinatura Digital: o form.reset() limpa o <input type="file">, mas nao o
   // base64 ja lido — sem zerar aqui, reabrir mandaria o PDF do pedido anterior.
   if (inputType === 'assinatura_digital') assinaturaArquivo = { base64: '', nome: '' };
+  if (inputType === 'contrato_social') csIniciar();
   // Recurso de Multa: mesmo motivo — os arquivos lidos ficam em memória.
   if (inputType === 'recurso_multa') {
     recursoArquivos = [];
@@ -5108,6 +5157,7 @@ function resetForm(showCats = true) {
   document.getElementById('query-form').reset();
   document.getElementById('query-submit-text').textContent = 'Realizar Consulta';
   document.getElementById('query-submit').disabled = false;
+  document.getElementById('query-submit').classList.remove('hidden');
   if (showCats) {
     document.querySelectorAll('.service-cat').forEach(el => el.classList.remove('selected'));
   }
@@ -5398,6 +5448,7 @@ function buildParams(inputType) {
       carteirinhaVerso: asdCarteirinha.verso || '',
     };
 
+  if (inputType === 'contrato_social') return csParams();
   // Recurso de Multa: nomes iguais aos de CAMPOS_NOTIFICACAO (recurso-multa.js).
   // A notificação em si não vai — ela já foi lida; vai só o que o cliente conferiu.
   if (inputType === 'recurso_multa') {
@@ -5503,6 +5554,7 @@ function buildParams(inputType) {
 // Validação rápida no cliente antes de enviar (espelha as regras do servidor,
 // para dar feedback imediato sem depender da resposta da API externa).
 function validateParams(inputType, p) {
+  if (inputType === 'contrato_social') return csValidar(p);
   if (inputType === 'recurso_multa') {
     const d = p.dados;
     if (!d.orgao_autuador) return 'Informe o órgão autuador.';
@@ -5672,7 +5724,8 @@ function validateParams(inputType, p) {
 function setQueryLoading(on) {
   document.getElementById('query-submit').disabled = on;
   document.getElementById('query-submit-text').textContent = on
-    ? (selectedSvc?.inputType === 'recurso_multa' ? 'Redigindo o recurso com IA (cerca de 1 min)...' : 'Processando...')
+    ? (selectedSvc?.inputType === 'recurso_multa' ? 'Redigindo o recurso com IA (cerca de 1 min)...'
+      : selectedSvc?.inputType === 'contrato_social' ? 'Redigindo o contrato com IA (cerca de 1 min)...' : 'Processando...')
     : (editingComunicacaoVendaQueryId ? 'Salvar Alterações' : queryActionLabel(selectedSvc?.inputType));
   document.getElementById('query-spinner').classList.toggle('hidden', !on);
 }

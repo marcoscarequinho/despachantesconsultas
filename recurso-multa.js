@@ -413,4 +413,6 @@ async function gerarRecurso({ dados, respostas, req, tipoPeca, teses }) {
 module.exports = {
   CAMPOS_NOTIFICACAO, TESES, lerNotificacao, parseDataBR, hojeBR, diasEntre, digitalChave,
   tesesAplicaveis, prepararRecurso, gerarRecurso, montarPdf,
+  // Reaproveitados pelo contrato-social.js: mesma chave, mesmo cliente.
+  anthropic, textoDaResposta, RECURSO_MULTA_MODELO, FALLBACK_BETA,
 };
