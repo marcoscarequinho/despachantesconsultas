@@ -5685,7 +5685,7 @@ function montarCamposCrlve(placa, lic, com, gravame = null) {
     eixos: L.qtdeixos || '',
     lotacao: lotacao ? `${lotacao.padStart(2, '0')}P` : '',
     // Sem carroceria no Licenciamento ("—"), gerarCrlveComunicacaoVenda busca a
-    // do sistema (fetchCarroceriaCrlve) antes de cair no "NAO APLICAVEL".
+    // do sistema (fetchVerificarCrlvCrlve) antes de cair no "NAO APLICAVEL".
     carroceria: L.carroceria || '',
     nome: L.nomedoproprietario || '',
     documento: L.documento || '',
@@ -5828,30 +5828,36 @@ async function fetchNumeroCrvDigitalCrlve(placa) {
   }
 }
 
-// Carroceria quando o Licenciamento do portal manda "—": o verificar_crlv da
-// despbrasil (R$ 1,30) traz a do sistema (dados.Carroceria). Caminhão tem
+// Carroceria e exercício quando o Licenciamento do portal manda "—": o
+// verificar_crlv da despbrasil (R$ 1,30) traz os dois do sistema
+// (dados.Carroceria e dados.anoUltimoLicenciamento — na QNP9E31 o 2023 dela é o
+// certo, conferido pelo dono em 19/10/2026). Caminhão tem
 // carroceria atribuída e ela é a que vai no documento — o "NAO APLICAVEL" é só
 // para veículo de passageiro sem nada no sistema (regra do dono, 19/10/2026;
 // QNP9E31 veio "—" no portal e "NãO APLICAVEL" aqui). A rota às vezes leva mais
-// de um minuto ou cai em 524, daí o limite de 45 s; falha devolve null.
-async function fetchCarroceriaCrlve(placa) {
+// de um minuto ou cai em 524, daí o limite de 110 s (passando de 100 s ela mesma cai em 524; em 19/10/2026 levou 73 s); falha devolve campos vazios.
+async function fetchVerificarCrlvCrlve(placa) {
   try {
     const r = await fetch(DESPBRASIL_BASE_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', chaveAcesso: DESPBRASIL_KEY },
       body: JSON.stringify({ servico: DESPBRASIL_SVCS['verificar-crlv-data-crv'].servico, placa }),
-      signal: AbortSignal.timeout(45000),
+      signal: AbortSignal.timeout(110000),
     });
     const j = await r.json().catch(() => null);
-    const v = semAcento(String(j?.dados?.Carroceria ?? '')).replace(/s+/g, ' ').trim();
-    if (!r.ok || !j?.sucesso || !v || semDadoUtil(v)) {
-      console.log(`[${CRLVE_COMUNICACAO_SERVICE_ID}] verificar_crlv sem carroceria (placa ${placa}): ${JSON.stringify(j).slice(0, 200)}`);
-      return null;
+    if (!r.ok || !j?.sucesso) {
+      console.log(`[${CRLVE_COMUNICACAO_SERVICE_ID}] verificar_crlv sem resultado (placa ${placa}): ${JSON.stringify(j).slice(0, 200)}`);
+      return {};
     }
-    return v;
+    const car = semAcento(String(j.dados?.Carroceria ?? '')).replace(/\s+/g, ' ').trim();
+    const ano = String(j.dados?.anoUltimoLicenciamento ?? '').trim();
+    return {
+      carroceria: car && !semDadoUtil(car) ? car : null,
+      exercicio: /^(19|20)\d{2}$/.test(ano) ? ano : null,
+    };
   } catch (e) {
-    console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] carroceria pela despbrasil falhou (placa ${placa}):`, e.message);
-    return null;
+    console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] verificar_crlv da despbrasil falhou (placa ${placa}):`, e.message);
+    return {};
   }
 }
 
@@ -5945,14 +5951,15 @@ async function gerarCrlveComunicacaoVenda(placa) {
   }
   // 3ª consulta, só depois de confirmada a comunicação/intenção (para não pagar por ela
   // quando o documento nem vai sair). Sem CRV Digital, a célula fica "***".
-  // Carroceria e número do CRV não dependem um do outro: saem juntos.
-  const [numeroCrv, carroceria] = await Promise.all([
+  // Carroceria/exercício e número do CRV não dependem um do outro: saem juntos.
+  const [numeroCrv, sistema] = await Promise.all([
     fetchNumeroCrvDigitalCrlve(placa),
-    m.campos.carroceria ? null : fetchCarroceriaCrlve(placa),
+    m.campos.carroceria && m.campos.exercicio ? {} : fetchVerificarCrlvCrlve(placa),
   ]);
   m.campos.numeroCrv = numeroCrv;
+  if (!m.campos.exercicio) m.campos.exercicio = sistema.exercicio || '';
   if (!m.campos.carroceria)
-    m.campos.carroceria = carroceria || (/PASSAGEIRO/.test(m.campos.especieTipo) ? 'NAO APLICAVEL' : '');
+    m.campos.carroceria = sistema.carroceria || (/PASSAGEIRO/.test(m.campos.especieTipo) ? 'NAO APLICAVEL' : '');
   // Com intenção de venda e sem CRV Digital, o número do CRV ainda sai pelo
   // Número da ATPVe (Consultas Fácil, despbrasil de reserva) — dele só se usa
   // o número do CRV (FNY5J96, 13/10/2026). Falha aqui também vira "***".
