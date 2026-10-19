@@ -5684,7 +5684,10 @@ function montarCamposCrlve(placa, lic, com, gravame = null) {
     cmt: crlveDecimal(L.cmt),
     eixos: L.qtdeixos || '',
     lotacao: lotacao ? `${lotacao.padStart(2, '0')}P` : '',
-    carroceria: L.carroceria || '',
+    // Veículo de passageiro não tem carroceria: o CRLV-e imprime "NAO APLICAVEL".
+    // O Licenciamento às vezes manda "—" no lugar (QNP9E31, 19/10/2026 — o
+    // verificar_crlv da despbrasil confirmou NAO APLICAVEL), e a célula saía em branco.
+    carroceria: L.carroceria || (/PASSAGEIRO/i.test(semAcento(String(L.especie || ''))) ? 'NAO APLICAVEL' : ''),
     nome: L.nomedoproprietario || '',
     documento: L.documento || '',
     local: [L.municipio, uf].filter(Boolean).join(' '),
@@ -5733,7 +5736,7 @@ async function buildCrlveComunicacaoPdfBuffer(c, { ocultarPessoais = false } = {
   // Coluna esquerda
   V(oculto(c.renavam), 31.039, 733.039, 150);
   V(oculto(c.placa), 31.039, 706.79, 98);
-  V(c.exercicio, 102.643, 706.79, 150);
+  V(c.exercicio || '***', 102.643, 706.79, 150);   // "—" no Licenciamento: "***", não branco
   V(c.anoFabricacao, 31.039, 680.541, 98);
   V(c.anoModelo, 102.643, 680.541, 150);
   V(c.numeroCrv ? oculto(c.numeroCrv) : '***', 31.039, 654.292, 150);   // número do CRV (só CRV Digital)
@@ -5755,7 +5758,7 @@ async function buildCrlveComunicacaoPdfBuffer(c, { ocultarPessoais = false } = {
   V(c.cmt || '***', 453.515, 694.459, 500);
   V(c.eixos || '***', 504.3, 694.459, 535);
   V(c.lotacao, 538.4, 694.459, 572);
-  V(c.carroceria, 316.176, 668.2, 570);
+  V(c.carroceria || '***', 316.176, 668.2, 570);
   V(oculto(c.nome), 316.176, 643.6, 570);
   V(ocultarPessoais ? '***.***.***-**' : maskDocDisplay(c.documento), 462.9, 612, 572);
   V(c.local, 316.176, 576.7, 505);
