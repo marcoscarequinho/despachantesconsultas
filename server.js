@@ -5523,6 +5523,10 @@ const crlveRestricoes = L => ['restricao1', 'restricao2', 'restricao3', 'restric
   .filter(r => r && r !== 'SEM RESTRICAO');
 const CRLVE_INTENCAO_RE = /INTENCAO( DE)? VENDA/;
 const CRLVE_COMUNICACAO_RE = /COMUNICACAO( DE)? VENDA/;
+// Quem não tem carroceria quando nenhuma fonte diz qual é: o CRLV-e imprime
+// "NAO APLICAVEL" para veículo de passageiro e para caminhão trator (cavalo
+// mecânico) — caminhão comum tem carroceria atribuída e sai "***" (dono, 19/10/2026).
+const CRLVE_SEM_CARROCERIA_RE = /PASSAGEIRO|TRATOR/;
 
 // Os relatórios do portal são "RÓTULO:" numa linha e o valor na seguinte, mas
 // valor longo QUEBRA de linha — "GASOLINA/ALCOOL/GAS " + "NATURAL", "MARCELO
@@ -5916,7 +5920,7 @@ const ESTADUAL_CAMPOS_CRLVE = {
   especie:            r => r.veiculo?.especie,
   tipodeveiculo:      r => r.veiculo?.tipo,
   carroceria:         r => !/^INEXISTENTE$/i.test(String(r.veiculo?.carroceria || '').trim()) ? r.veiculo?.carroceria
-    : /PASSAGEIRO/i.test(String(r.veiculo?.especie || '')) ? 'NAO APLICAVEL' : '',
+    : CRLVE_SEM_CARROCERIA_RE.test(semAcento(`${r.veiculo?.especie || ''} ${r.veiculo?.tipo || ''}`)) ? 'NAO APLICAVEL' : '',
   cor:                r => r.veiculo?.cor,
   combustivel:        r => r.veiculo?.combustivel,
   categoria:          r => r.veiculo?.categoria,
@@ -6044,7 +6048,7 @@ async function gerarCrlveComunicacaoVenda(placa) {
   m.campos.numeroCrv = numeroCrv;
   if (!m.campos.exercicio) m.campos.exercicio = sistema.exercicio || '';
   if (!m.campos.carroceria)
-    m.campos.carroceria = sistema.carroceria || (/PASSAGEIRO/.test(m.campos.especieTipo) ? 'NAO APLICAVEL' : '');
+    m.campos.carroceria = sistema.carroceria || (CRLVE_SEM_CARROCERIA_RE.test(m.campos.especieTipo) ? 'NAO APLICAVEL' : '');
   // Com intenção de venda e sem CRV Digital, o número do CRV ainda sai pelo
   // Número da ATPVe (Consultas Fácil, despbrasil de reserva) — dele só se usa
   // o número do CRV (FNY5J96, 13/10/2026). Falha aqui também vira "***".
