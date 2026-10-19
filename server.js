@@ -5900,9 +5900,13 @@ async function fetchGravameCrlve(placa) {
 // R$ 1,90, ~0,1 s), pedido do dono em 19/10/2026. Só preenche campo VAZIO — o
 // que o portal trouxe continua valendo — e só é chamada quando falta algum dos
 // campos abaixo. Ela não tem o exercício nem a emissão do CRLV (o exercício
-// vem do verificar_crlv, fetchVerificarCrlvCrlve). Carroceria vem "INEXISTENTE"
-// em veículo sem carroceria, que no CRLV-e é "NAO APLICAVEL" (QNP9E31). CMT/PBT
-// ficam de fora: vieram "144" para um Versa, sem unidade que dê para afirmar.
+// vem do verificar_crlv, fetchVerificarCrlvCrlve). Carroceria "INEXISTENTE"
+// vem até para caminhão com carroceria (LIA6463: portal BASCULANTE), então só
+// vira "NAO APLICAVEL" em veículo de passageiro. CMT/PBT vêm em centésimos de
+// tonelada (Versa 144 = 1,44 t; caminhão LIA6463 pbt 1150 com o portal dizendo
+// 11 — o portal corta as casas). Capacidade de carga e eixos vieram 0 para o
+// caminhão, por isso "0" não conta como dado.
+const toneladasEstadual = v => /^\d+$/.test(String(v ?? '').trim()) && Number(v) > 0 ? (Number(v) / 100).toFixed(2) : '';
 const ESTADUAL_CAMPOS_CRLVE = {
   renavam:            r => r.renavam,
   chassi:             r => r.chassi,
@@ -5911,7 +5915,8 @@ const ESTADUAL_CAMPOS_CRLVE = {
   anodomodelo:        r => r.veiculo?.anoModelo,
   especie:            r => r.veiculo?.especie,
   tipodeveiculo:      r => r.veiculo?.tipo,
-  carroceria:         r => /^INEXISTENTE$/i.test(String(r.veiculo?.carroceria || '').trim()) ? 'NAO APLICAVEL' : r.veiculo?.carroceria,
+  carroceria:         r => !/^INEXISTENTE$/i.test(String(r.veiculo?.carroceria || '').trim()) ? r.veiculo?.carroceria
+    : /PASSAGEIRO/i.test(String(r.veiculo?.especie || '')) ? 'NAO APLICAVEL' : '',
   cor:                r => r.veiculo?.cor,
   combustivel:        r => r.veiculo?.combustivel,
   categoria:          r => r.veiculo?.categoria,
@@ -5920,7 +5925,8 @@ const ESTADUAL_CAMPOS_CRLVE = {
   motor:              r => r.veiculo?.motor,
   qtdeixos:           r => r.veiculo?.eixos,
   lotacao:            r => r.veiculo?.capacidadePassageiros,
-  cmc:                r => r.veiculo?.capacidadeCarga,
+  cmt:                r => toneladasEstadual(r.veiculo?.cmt),
+  pbt:                r => toneladasEstadual(r.veiculo?.pbt),
   nomedoproprietario: r => r.nomeRazaoSocial,
   documento:          r => r.documento,
   municipio:          r => String(r.municipio || '').replace(/\s*-\s*[A-Z]{2}$/, ''),
@@ -5954,9 +5960,18 @@ async function completarCrlveComEstadual(placa, licDados) {
   const preenchidos = [];
   for (const k of faltando) {
     const v = String(ESTADUAL_CAMPOS_CRLVE[k](ret) ?? '').trim();
-    if (!v || semDadoUtil(v) || /^nada consta$/i.test(v)) continue;
+    if (!v || v === '0' || semDadoUtil(v) || /^nada consta$/i.test(v)) continue;
     L[k] = v;
     preenchidos.push(k);
+  }
+  // Já paga a consulta, CMT/PBT inteiros do portal (cortados) ganham as casas
+  // da Estadual — só quando a parte inteira bate, para não trocar um pelo outro.
+  for (const k of ['cmt', 'pbt']) {
+    const t = ESTADUAL_CAMPOS_CRLVE[k](ret);
+    if (t && /^\d+$/.test(String(L[k] ?? '').trim()) && Math.floor(Number(t)) === Number(L[k])) {
+      L[k] = t;
+      preenchidos.push(`${k} (casas decimais)`);
+    }
   }
   console.log(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Consulta Estadual completou (placa ${placa}): ${preenchidos.join(', ') || 'nada'}`);
 }
