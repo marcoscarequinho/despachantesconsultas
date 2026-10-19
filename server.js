@@ -5895,6 +5895,72 @@ async function fetchGravameCrlve(placa) {
   return { gravame: { status: status || 'GRAVAME', financeira, data: DATA_BR_RE.exec(String(g.dataGravame || ''))?.[1] || '' } };
 }
 
+// Reserva das lacunas do Licenciamento do portal (que manda "—" no lugar do
+// dado): a Consulta Veicular Estadual da DirectData (dd-veicular-estadual,
+// R$ 1,90, ~0,1 s), pedido do dono em 19/10/2026. Só preenche campo VAZIO — o
+// que o portal trouxe continua valendo — e só é chamada quando falta algum dos
+// campos abaixo. Ela não tem o exercício nem a emissão do CRLV (o exercício
+// vem do verificar_crlv, fetchVerificarCrlvCrlve). Carroceria vem "INEXISTENTE"
+// em veículo sem carroceria, que no CRLV-e é "NAO APLICAVEL" (QNP9E31). CMT/PBT
+// ficam de fora: vieram "144" para um Versa, sem unidade que dê para afirmar.
+const ESTADUAL_CAMPOS_CRLVE = {
+  renavam:            r => r.renavam,
+  chassi:             r => r.chassi,
+  marcamodelo:        r => r.veiculo?.marcaModelo,
+  anodefabricacao:    r => r.veiculo?.anoFabricacao,
+  anodomodelo:        r => r.veiculo?.anoModelo,
+  especie:            r => r.veiculo?.especie,
+  tipodeveiculo:      r => r.veiculo?.tipo,
+  carroceria:         r => /^INEXISTENTE$/i.test(String(r.veiculo?.carroceria || '').trim()) ? 'NAO APLICAVEL' : r.veiculo?.carroceria,
+  cor:                r => r.veiculo?.cor,
+  combustivel:        r => r.veiculo?.combustivel,
+  categoria:          r => r.veiculo?.categoria,
+  potencia:           r => r.veiculo?.potencia,
+  cilindradas:        r => r.veiculo?.cilindrada,
+  motor:              r => r.veiculo?.motor,
+  qtdeixos:           r => r.veiculo?.eixos,
+  lotacao:            r => r.veiculo?.capacidadePassageiros,
+  cmc:                r => r.veiculo?.capacidadeCarga,
+  nomedoproprietario: r => r.nomeRazaoSocial,
+  documento:          r => r.documento,
+  municipio:          r => String(r.municipio || '').replace(/\s*-\s*[A-Z]{2}$/, ''),
+  ufjurisdicao:       r => r.uf,
+};
+
+// Completa licDados.campos no lugar. Falha da DirectData não recusa nada: o
+// campo segue vazio e cai no "***" (ou na regra de cada um), como antes.
+async function completarCrlveComEstadual(placa, licDados) {
+  const L = licDados.campos;
+  const faltando = Object.keys(ESTADUAL_CAMPOS_CRLVE).filter(k => !String(L[k] ?? '').trim());
+  // Uma vez por documento: a 2ª chamada (antes de montar) não paga de novo.
+  if (!faltando.length || licDados.estadualConsultada) return;
+  licDados.estadualConsultada = true;
+  const svc = DIRECTDATA_SVCS['dd-veicular-estadual'];
+  let resp;
+  try {
+    resp = await chamarDirectData(svc.endpoint, { Placa: placa });
+  } catch (e) {
+    console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Consulta Estadual falhou (placa ${placa}):`, e.semChave ? 'sem DIRECTDATA_TOKEN' : e.message);
+    return;
+  }
+  const meta = resp.json?.metaDados || {};
+  const ret = resp.json?.retorno;
+  const ok = meta.resultadoId === 1 && ret;
+  await registrarConsumoDirectData({ serviceId: CRLVE_COMUNICACAO_SERVICE_ID, svc, meta, custo: ok ? svc.custo : 0 });
+  if (!ok) {
+    console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Consulta Estadual sem resultado (placa ${placa}): HTTP ${resp.status} resultadoId=${meta.resultadoId}`);
+    return;
+  }
+  const preenchidos = [];
+  for (const k of faltando) {
+    const v = String(ESTADUAL_CAMPOS_CRLVE[k](ret) ?? '').trim();
+    if (!v || semDadoUtil(v) || /^nada consta$/i.test(v)) continue;
+    L[k] = v;
+    preenchidos.push(k);
+  }
+  console.log(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Consulta Estadual completou (placa ${placa}): ${preenchidos.join(', ') || 'nada'}`);
+}
+
 // As duas consultas em sequência (a 2ª precisa do renavam da 1ª). Devolve
 // { pdf, campos } ou { status, error } — nunca cobra nada.
 async function gerarCrlveComunicacaoVenda(placa) {
@@ -5905,6 +5971,8 @@ async function gerarCrlveComunicacaoVenda(placa) {
       : { status: 502, error: 'A consulta de Licenciamento está indisponível agora. Nada foi cobrado — tente de novo em instantes.' };
   }
   const licDados = await extractRelatorioPortal(lic.pdf);
+  // Sem renavam não dá nem para perguntar da comunicação: a Estadual entra já.
+  if (!String(licDados.campos.renavam || '').replace(/\D/g, '')) await completarCrlveComEstadual(placa, licDados);
   const renavam = String(licDados.campos.renavam || '').replace(/\D/g, '');
   if (!renavam) {
     console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Licenciamento sem renavam (placa ${placa}).`);
@@ -5944,6 +6012,8 @@ async function gerarCrlveComunicacaoVenda(placa) {
     gravame = g.gravame;
   }
 
+  // Só agora, com o documento liberado, para não pagar por ela quando ele nem sai.
+  await completarCrlveComEstadual(placa, licDados);
   const m = montarCamposCrlve(placa, licDados, comDados, gravame);
   if (m.erro) {
     console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] sem ${m.erro} (placa ${placa}).`);
