@@ -316,13 +316,14 @@
         <!-- No celular a fila de categorias rola na horizontal em vez de quebrar
              em 8 linhas e empurrar os cards para fora da tela. -->
         <div id="catalog-filters" class="flex gap-2 mb-5 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible"></div>
+        <!-- Contrato Social LTDA com IA em faixa própria, a primeira de todas,
+             acima das Consultas Especiais (pedido do dono, 19/10/2026).
+             Preenchido por renderContratoDestaque(). -->
+        <div id="catalog-contrato-destaque" class="hidden mb-4"></div>
         <!-- Consultas Especiais (DirectData) em faixa própria, acima do Recurso
              de Multa (pedido do dono, 16/10/2026). Preenchido por
              renderEspeciaisDestaque(); o clique filtra a grade pelo grupo. -->
         <div id="catalog-especiais-destaque" class="hidden mb-4"></div>
-        <!-- Contrato Social LTDA com IA em faixa própria, acima do Recurso de
-             Multa. Preenchido por renderContratoDestaque(). -->
-        <div id="catalog-contrato-destaque" class="hidden mb-4"></div>
         <!-- Recurso de Multa com IA em faixa própria, acima da Assinatura
              Digital (pedido do dono). Preenchido por renderRecursoDestaque(). -->
         <div id="catalog-recurso-destaque" class="hidden mb-4"></div>
@@ -2748,7 +2749,7 @@ function abrirEspeciais() {
   document.getElementById('catalog-grid')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-// Faixa do Contrato Social LTDA com IA, logo acima do Recurso de Multa. Mesma
+// Faixa do Contrato Social LTDA com IA, acima das Consultas Especiais. Mesma
 // regra das outras faixas: some quando a busca/filtro atual não inclui o serviço.
 function renderContratoDestaque(svcsVisiveis) {
   const wrap = document.getElementById('catalog-contrato-destaque');
