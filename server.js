@@ -5922,6 +5922,30 @@ async function fetchVerificarCrlvCrlve(placa) {
   };
 }
 
+// Reserva do EXERCÍCIO: o "Proprietário / Ano Último Licenciamento" da Datacube
+// (dc-proprietario-ano-lic, ~R$ 1,00, result.ultimo_licenciamento numérico). Na
+// QUJ4G00 (20/10/2026) as duas tentativas do verificar_crlv estouraram os 110 s
+// e o documento saiu com "***"; a Datacube devolveu 2023, o ano certo — mas em
+// 63 s. Por isso ela corre em PARALELO com o verificar_crlv (não soma tempo) e
+// só quando o portal não trouxe o exercício; a despbrasil continua na frente.
+async function fetchAnoLicenciamentoDatacube(placa) {
+  try {
+    const r = await fetch(`${DATACUBE_API_URL}/veiculos/proprietario-ano-licenciamento`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ auth_token: DATACUBE_TOKEN, placa }).toString(),
+      signal: AbortSignal.timeout(150000),
+    });
+    const j = await r.json().catch(() => null);
+    const ano = String(j?.result?.ultimo_licenciamento ?? '').trim();
+    if (r.ok && j?.status && /^(19|20)\d{2}$/.test(ano)) return ano;
+    console.log(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Datacube sem ano de licenciamento (placa ${placa}): HTTP ${r.status} ${String(j?.message || '').slice(0, 200)}`);
+  } catch (e) {
+    console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] ano de licenciamento da Datacube falhou (placa ${placa}):`, e.message);
+  }
+  return null;
+}
+
 // Gravame pela DirectData (o mesmo "Gravame" das Consultas Especiais, dd-gravame).
 // Só é chamada quando o veículo não tem comunicação nem intenção de venda — é a
 // 3ª condição que libera o documento (regra do dono, 17/10/2026). Conferido
@@ -6107,12 +6131,13 @@ async function gerarCrlveComunicacaoVenda(placa) {
   // 3ª consulta, só depois de confirmada a comunicação/intenção (para não pagar por ela
   // quando o documento nem vai sair). Sem CRV Digital, a célula fica "***".
   // Carroceria/exercício/data do CRV e número do CRV não dependem um do outro: saem juntos.
-  const [numeroCrv, sistema] = await Promise.all([
+  const [numeroCrv, sistema, anoDatacube] = await Promise.all([
     fetchNumeroCrvDigitalCrlve(placa),
     m.campos.carroceria && m.campos.exercicio && m.campos.dataEmissao ? {} : fetchVerificarCrlvCrlve(placa),
+    m.campos.exercicio ? null : fetchAnoLicenciamentoDatacube(placa),
   ]);
   m.campos.numeroCrv = numeroCrv;
-  if (!m.campos.exercicio) m.campos.exercicio = sistema.exercicio || '';
+  if (!m.campos.exercicio) m.campos.exercicio = sistema.exercicio || anoDatacube || '';
   if (!m.campos.dataEmissao) m.campos.dataEmissao = sistema.dataCrv || '';
   if (!m.campos.carroceria)
     m.campos.carroceria = sistema.carroceria || (CRLVE_SEM_CARROCERIA_RE.test(m.campos.especieTipo) ? 'NAO APLICAVEL' : '');
