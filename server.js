@@ -101,6 +101,21 @@ const MP_ACCESS_TOKEN = (process.env.MP_ACCESS_TOKEN || '')
 const MP_PUBLIC_KEY = (process.env.MP_PUBLIC_KEY || '')
   .split('').filter(c => c.charCodeAt(0) <= 127).join('').trim();
 const MP_BASE = 'https://api.mercadopago.com';
+// Pagamento TEMPORÁRIO por link do Mercado Pago (pedido do dono, 20/10/2026,
+// "depois vamos reverter"). Com o link preenchido, as rotas que cobram pela API
+// (PIX e cartão: recarga, assinatura, fatura pós-paga e consulta avulsa)
+// recusam com 503 e as telas trocam o QR/formulário por este link — o que é
+// pago por ele NÃO é creditado sozinho: o admin libera à mão pelo comprovante.
+// Para reverter: voltar para null. Nada mais muda.
+const PAGAMENTO_LINK_TEMPORARIO = 'https://link.mercadopago.com.br/mcdespachadoria';
+function bloquearApiPagamento(req, res, next) {
+  if (!PAGAMENTO_LINK_TEMPORARIO) return next();
+  return res.status(503).json({
+    error: 'O pagamento automático está temporariamente desativado. Pague pelo link do Mercado Pago e envie o comprovante para o suporte no WhatsApp para a liberação.',
+    code: 'PAGAMENTO_POR_LINK',
+    link: PAGAMENTO_LINK_TEMPORARIO,
+  });
+}
 const AUTOCRLV_KEY    = process.env.AUTOCRLV_KEY    || '';
 const PORTAL_DESP_KEY = process.env.PORTAL_DESP_KEY || '';
 const PORTAL_BASE_URL = 'https://portaldespachantes.online';
@@ -11938,7 +11953,7 @@ async function registrarPedidoAvulso({ ped, gatewayId, method, chargedAmount }) 
   return token;
 }
 
-app.post('/api/public/pedido', async (req, res) => {
+app.post('/api/public/pedido', bloquearApiPagamento, async (req, res) => {
   const ped = await validarPedidoAvulso(req.body);
   if (ped.erro) return res.status(ped.erro.status).json({ error: ped.erro.msg });
 
@@ -11979,7 +11994,7 @@ app.post('/api/public/pedido', async (req, res) => {
 // do PIX: ele pergunta o status do pagamento ao Mercado Pago e só executa a
 // consulta depois de aprovado — o que também cobre o intervalo em que o
 // pagamento fica pendente esperando o cliente terminar o desafio do 3DS.
-app.post('/api/public/pedido/cartao', async (req, res) => {
+app.post('/api/public/pedido/cartao', bloquearApiPagamento, async (req, res) => {
   const ped = await validarPedidoAvulso(req.body);
   if (ped.erro) return res.status(ped.erro.status).json({ error: ped.erro.msg });
 
@@ -12212,6 +12227,8 @@ app.get('/api/pagamento/config', async (req, res) => {
     tipos,
     acrescimos: { debito: CARTAO_ACRESCIMOS.debit_card, credito: CARTAO_ACRESCIMOS.credit_card },
     maxParcelas: CARTAO_MAX_PARCELAS,
+    // Preenchido = as telas mostram só o link (ver PAGAMENTO_LINK_TEMPORARIO).
+    linkPagamento: PAGAMENTO_LINK_TEMPORARIO || null,
   });
 });
 
@@ -12376,7 +12393,7 @@ function payerCartao({ email, nome, docCadastro, identificationBrick }) {
 // value = crédito e charged_value = cobrado, então todo o resto do sistema
 // (polling, webhook, cron de reconciliação) credita o valor certo sem saber que
 // o meio mudou.
-app.post('/api/cartao/recarga', requireAuth, async (req, res) => {
+app.post('/api/cartao/recarga', requireAuth, bloquearApiPagamento, async (req, res) => {
   const value = parseFloat(req.body?.value);
   if (!value || value < 5 || value > 10000)
     return res.status(400).json({ error: 'Valor inválido. Mínimo R$ 5,00, máximo R$ 10.000,00.' });
@@ -12429,7 +12446,7 @@ app.post('/api/cartao/recarga', requireAuth, async (req, res) => {
 // ── POST /api/cartao/assinatura ──────────────────────────────────────────────
 // Mesma assinatura de R$ 30,00 do PIX, cobrada com o acréscimo de 5%. O período
 // é aberto por creditPixPaymentIfApproved graças ao purpose='ASSINATURA'.
-app.post('/api/cartao/assinatura', requireAuth, async (req, res) => {
+app.post('/api/cartao/assinatura', requireAuth, bloquearApiPagamento, async (req, res) => {
   try {
     const cartao = await validarCartao(req.body);
     const ur = await pool.query('SELECT id, name, email, cpf_cnpj, active FROM users WHERE id=$1', [req.user.id]);
@@ -12481,7 +12498,7 @@ app.post('/api/cartao/assinatura', requireAuth, async (req, res) => {
 });
 
 // ── POST /api/pix/criar ───────────────────────────────────────────────────────
-app.post('/api/pix/criar', requireAuth, async (req, res) => {
+app.post('/api/pix/criar', requireAuth, bloquearApiPagamento, async (req, res) => {
   const value = parseFloat(req.body.value);
   if (!value || value < 5 || value > 10000)
     return res.status(400).json({ error: 'Valor inválido. Mínimo R$ 5,00, máximo R$ 10.000,00.' });
@@ -12604,7 +12621,7 @@ app.get('/api/assinatura/status', requireAuth, async (req, res) => {
 // purpose='ASSINATURA', que é o que faz creditPixPaymentIfApproved abrir um
 // período em vez de creditar saldo. A confirmação reaproveita todo o caminho já
 // existente: polling em /api/pix/status/:id, webhook e cron de reconciliação.
-app.post('/api/assinatura/pix', requireAuth, async (req, res) => {
+app.post('/api/assinatura/pix', requireAuth, bloquearApiPagamento, async (req, res) => {
   try {
     const ur = await pool.query('SELECT id, name, email, cpf_cnpj, active FROM users WHERE id=$1', [req.user.id]);
     const user = ur.rows[0];
@@ -12714,7 +12731,7 @@ app.get('/api/pos-pago/resumo', requireAuth, async (req, res) => {
 // feita com o QR na tela entra no ciclo seguinte, em vez de ficar sem cobrança.
 // Pagar adiantado não muda o dia 30: o vencimento da fatura nova é o mesmo de
 // sempre. A confirmação reaproveita /api/pix/status/:id, o webhook e o cron.
-app.post('/api/pos-pago/pix', requireAuth, async (req, res) => {
+app.post('/api/pos-pago/pix', requireAuth, bloquearApiPagamento, async (req, res) => {
   try {
     const ur = await pool.query(
       'SELECT id, name, email, cpf_cnpj, active, pos_pago FROM users WHERE id=$1', [req.user.id]

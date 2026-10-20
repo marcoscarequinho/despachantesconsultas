@@ -211,6 +211,32 @@
       return this.config;
     },
 
+    // Pagamento temporário por link (PAGAMENTO_LINK_TEMPORARIO no server.js):
+    // com ele preenchido, cada tela esconde PIX/cartão e o botão de pagar abre
+    // o link. `botao` recebe o novo texto; o aviso entra logo depois dele.
+    aplicarModoLink(botao, blocoMetodo) {
+      const link = this.config?.linkPagamento;
+      if (!link || !botao) return false;
+      blocoMetodo?.classList.add('hidden');
+      botao.textContent = '💳 Pagar pelo link do Mercado Pago';
+      if (!botao.parentNode.querySelector('.aviso-link-pagamento')) {
+        const aviso = document.createElement('div');
+        aviso.className = 'aviso-link-pagamento mt-3 text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-3';
+        aviso.innerHTML = 'O pagamento automático está temporariamente desativado. Pague pelo ' +
+          '<a href="' + link + '" target="_blank" rel="noopener" class="font-semibold underline">link do Mercado Pago</a>' +
+          ' e envie o comprovante para o nosso suporte no WhatsApp — a liberação é feita manualmente.';
+        botao.insertAdjacentElement('afterend', aviso);
+      }
+      return true;
+    },
+
+    abrirLinkPagamento() {
+      const link = this.config?.linkPagamento;
+      if (!link) return false;
+      window.open(link, '_blank', 'noopener');
+      return true;
+    },
+
     percentual(tipo) {
       return this.config?.acrescimos?.[tipo === 'credito' ? 'credito' : 'debito'] ?? (tipo === 'credito' ? 0.07 : 0.05);
     },

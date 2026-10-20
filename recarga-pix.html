@@ -312,6 +312,12 @@
     // cartão — nesse caso a opção some e a tela segue só com PIX.
     window.addEventListener('load', async () => {
       const cfg = await PagamentoCartao.carregarConfig();
+      if (PagamentoCartao.aplicarModoLink(document.getElementById('btn-gerar'), document.getElementById('bloco-metodo'))) {
+        metodo = 'link';
+        document.querySelector('#titulo-recarga p').textContent = 'Pagamento pelo link do Mercado Pago, com liberação manual.';
+        document.getElementById('info-rapida').classList.add('hidden');
+        return;
+      }
       // Só ficam os tipos que a conta do Mercado Pago processa: oferecer débito
       // com a conta sem débito habilitado fazia todo cartão de débito ser lido
       // como crédito e o cliente levava a recusa na cara.
@@ -324,6 +330,7 @@
     });
 
     function pagar() {
+      if (PagamentoCartao.abrirLinkPagamento()) return;
       return metodo === 'pix' ? gerarPix() : pagarComCartao();
     }
 

@@ -1742,6 +1742,7 @@ async function loadFatura() {
 }
 
 async function gerarPixFatura() {
+  if (window.PagamentoCartao && PagamentoCartao.abrirLinkPagamento()) return;
   const btn = document.getElementById('fatura-pagar-btn');
   const erro = document.getElementById('fatura-erro');
   btn.disabled = true;
@@ -3136,7 +3137,9 @@ let metodoAssinatura = 'pix';
 let ASSINATURA_PRECO = 30;
 
 const rotuloBotaoAssinatura = () =>
-  metodoAssinatura === 'pix'
+  metodoAssinatura === 'link'
+    ? '💳 Pagar pelo link do Mercado Pago'
+    : metodoAssinatura === 'pix'
     ? '💳 Assinar e pagar com PIX'
     : '💳 Assinar e pagar no ' + PagamentoCartao.rotuloTipo(metodoAssinatura);
 
@@ -3163,6 +3166,13 @@ document.addEventListener('DOMContentLoaded', () => {
 window.addEventListener('load', async () => {
   if (!window.PagamentoCartao) return;
   const cfg = await PagamentoCartao.carregarConfig();
+  // Pagamento temporário por link (PAGAMENTO_LINK_TEMPORARIO no server.js).
+  PagamentoCartao.aplicarModoLink(document.getElementById('fatura-pagar-btn'));
+  if (PagamentoCartao.aplicarModoLink(document.getElementById('assinatura-assinar-btn'),
+                                      document.getElementById('assinatura-bloco-metodo'))) {
+    metodoAssinatura = 'link';
+    return;
+  }
   const disponiveis = PagamentoCartao.aplicarTiposDisponiveis('#assinatura-bloco-metodo .metodo-btn');
   if (!cfg.cartaoDisponivel || disponiveis.length < 2) {
     document.getElementById('assinatura-bloco-metodo')?.classList.add('hidden');
@@ -3172,6 +3182,7 @@ window.addEventListener('load', async () => {
 });
 
 function pagarAssinatura() {
+  if (window.PagamentoCartao && PagamentoCartao.abrirLinkPagamento()) return;
   return metodoAssinatura === 'pix' ? gerarPixAssinatura() : pagarAssinaturaCartao();
 }
 
