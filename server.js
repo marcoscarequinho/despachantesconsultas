@@ -107,7 +107,7 @@ const MP_BASE = 'https://api.mercadopago.com';
 // recusam com 503 e as telas trocam o QR/formulário por este link — o que é
 // pago por ele NÃO é creditado sozinho: o admin libera à mão pelo comprovante.
 // Para reverter: voltar para null. Nada mais muda.
-const PAGAMENTO_LINK_TEMPORARIO = 'https://link.mercadopago.com.br/despachantemarcos';
+const PAGAMENTO_LINK_TEMPORARIO = null;
 function bloquearApiPagamento(req, res, next) {
   if (!PAGAMENTO_LINK_TEMPORARIO) return next();
   return res.status(503).json({
