@@ -5657,21 +5657,6 @@ const crlveDecimal = v => {
   return s.includes('.') ? s : `${s}.0`;
 };
 
-// Quebra o texto em linhas de "largura" caracteres (Courier: todo glifo tem a
-// mesma largura), sem cortar palavra quando dá.
-function quebrarLinhas(texto, largura) {
-  const linhas = [];
-  let atual = '';
-  for (const palavra of String(texto).split(/\s+/).filter(Boolean)) {
-    if (!atual) atual = palavra;
-    else if ((atual + ' ' + palavra).length <= largura) atual += ' ' + palavra;
-    else { linhas.push(atual); atual = palavra; }
-    while (atual.length > largura) { linhas.push(atual.slice(0, largura)); atual = atual.slice(largura); }
-  }
-  if (atual) linhas.push(atual);
-  return linhas;
-}
-
 // Junta as duas consultas nos campos do documento. Devolve { erro } quando
 // falta o que não pode faltar.
 // com = null quando o veículo só tem intenção de venda (sem comunicação).
@@ -5806,31 +5791,11 @@ async function buildCrlveComunicacaoPdfBuffer(c, { ocultarPessoais = false } = {
   for (const [x, y] of [[316.2, 512.7], [389, 512.7], [316.2, 475], [423.5, 475], [494.3, 475], [316.2, 434.3], [423.5, 434.3], [494.3, 434.3]])
     V('*', x, y, x + 10);
 
-  // Observações do veículo: é aqui que a comunicação de venda aparece.
-  // Courier 10 cabe 32 caracteres na caixa, como as linhas "*BIN...*" do
-  // documento original — por isso o preenchimento com "*".
-  const LARG = 32;
-  const linhas = [];
-  if (c.dataVenda) {
-    linhas.push('*COMUNICACAO DE VENDA'.padEnd(LARG, '*'));
-    linhas.push(`DATA DA VENDA: ${c.dataVenda}`);
-    if (c.dataRegistro) linhas.push(`DATA DO REGISTRO: ${c.dataRegistro}`);
-    if (c.compradorNome) linhas.push(...quebrarLinhas(`COMPRADOR: ${oculto(c.compradorNome)}`, LARG));
-    if (c.compradorDocumento) {
-      const dig = String(c.compradorDocumento).replace(/\D/g, '');
-      const rot = dig.length === 14 ? 'CNPJ' : 'CPF';
-      linhas.push(`${rot}: ${ocultarPessoais ? '***.***.***-**' : maskDocDisplay(dig)}`);
-    }
-  }
-  if (c.intencao) linhas.push('*INTENCAO DE VENDA'.padEnd(LARG, '*'));
-  if (c.gravame) {
-    linhas.push(`*${c.gravame.status || 'GRAVAME'}`.padEnd(LARG, '*').slice(0, LARG));
-    if (c.gravame.financeira) linhas.push(...quebrarLinhas(`FINANCEIRA: ${c.gravame.financeira}`, LARG));
-    if (c.gravame.data) linhas.push(`DATA DO GRAVAME: ${c.gravame.data}`);
-  }
-  for (const r of c.restricoes) linhas.push(...quebrarLinhas(`*${r}*`, LARG));
-  linhas.push('*'.repeat(LARG));
-  linhas.slice(0, 18).forEach((l, i) => V(l, 28.08, 391.7 - i * 12, 222));
+  // "OBSERVAÇÕES DO VEÍCULO" fica EM BRANCO de propósito (pedido do dono,
+  // 21/10/2026): nada é impresso nessa caixa. Até ali saíam a comunicação de
+  // venda (data, registro, comprador), a intenção, o gravame e as restrições.
+  // Comunicação/intenção/gravame continuam decidindo se o documento sai
+  // (gerarCrlveComunicacaoVenda) — só não são escritos aqui.
 
   const agora = new Date(Date.now() - TZ_BR_OFFSET_MS);
   const p2 = n => String(n).padStart(2, '0');
@@ -6128,11 +6093,27 @@ async function gerarCrlveComunicacaoVenda(placa) {
     console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] sem ${m.erro} (placa ${placa}).`);
     return { status: 422, error: `A base não devolveu ${m.erro} desse veículo, e o CRLV-e não sai incompleto. Nada foi cobrado.` };
   }
-  // 3ª consulta, só depois de confirmada a comunicação/intenção (para não pagar por ela
-  // quando o documento nem vai sair). Sem CRV Digital, a célula fica "***".
-  // Carroceria/exercício/data do CRV e número do CRV não dependem um do outro: saem juntos.
+  // Número do CRV, só depois de confirmada a comunicação/intenção/gravame (para
+  // não pagar quando o documento nem vai sair). Fonte principal: o "Numero
+  // ATPVe Brasil" da Consultas Fácil (POST /consultar-Numero-ATPVE, PDF com
+  // "Numero C R V"), por decisão do dono em 21/10/2026 — responde em ~5 s. Só
+  // o número do CRV é aproveitado dele. Reserva: o CRV Digital da despbrasil
+  // (na PVI5B13 deu 524 depois de 127 s, duas vezes). A ATPVe da despbrasil não
+  // entra aqui: na KPP9F47 levou 126 s para dar 500. Sem nenhum, "***".
+  // Carroceria/exercício/data do CRV não dependem do número: saem juntos.
+  const numeroCrvPromise = (async () => {
+    try {
+      const atpve = await fetchAndExtractAtpveFromConsultasFacil(placa);
+      const n = String(atpve?.numerocrv || '').replace(/\D/g, '');
+      if (n) return n;
+      console.log(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Número da ATPVe (Consultas Fácil) sem número do CRV (placa ${placa}).`);
+    } catch (e) {
+      console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Número da ATPVe (Consultas Fácil) falhou (placa ${placa}):`, e.message);
+    }
+    return fetchNumeroCrvDigitalCrlve(placa);
+  })();
   const [numeroCrv, sistema, anoDatacube] = await Promise.all([
-    fetchNumeroCrvDigitalCrlve(placa),
+    numeroCrvPromise,
     m.campos.carroceria && m.campos.exercicio && m.campos.dataEmissao ? {} : fetchVerificarCrlvCrlve(placa),
     m.campos.exercicio ? null : fetchAnoLicenciamentoDatacube(placa),
   ]);
@@ -6141,22 +6122,6 @@ async function gerarCrlveComunicacaoVenda(placa) {
   if (!m.campos.dataEmissao) m.campos.dataEmissao = sistema.dataCrv || '';
   if (!m.campos.carroceria)
     m.campos.carroceria = sistema.carroceria || (CRLVE_SEM_CARROCERIA_RE.test(m.campos.especieTipo) ? 'NAO APLICAVEL' : '');
-  // Sem o número pelo CRV Digital, ele ainda sai pelo Número da ATPVe
-  // (Consultas Fácil, despbrasil de reserva) — dele só se usa o número do CRV
-  // (FNY5J96, 13/10/2026). Vale para qualquer caso, não só intenção de venda:
-  // na PVI5B13 (comunicação de venda, 21/10/2026) o CRV Digital deu 524 depois
-  // de 127 s duas vezes seguidas e o documento saía "***", enquanto a ATPVe
-  // trazia o número em 5 s. Falha aqui também vira "***".
-  if (!m.campos.numeroCrv) {
-    try {
-      const atpve = await obterCamposAtpveComunicacaoVenda(placa, CRLVE_COMUNICACAO_SERVICE_ID);
-      const n = String(atpve?.numerocrv || '').replace(/\D/g, '');
-      if (n) m.campos.numeroCrv = n;
-      else console.log(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Número da ATPVe sem número do CRV (placa ${placa}).`);
-    } catch (e) {
-      console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Número da ATPVe falhou (placa ${placa}):`, e.message);
-    }
-  }
   return { pdf: await buildCrlveComunicacaoPdfBuffer(m.campos), campos: m.campos };
 }
 
