@@ -5810,16 +5810,27 @@ async function buildCrlveComunicacaoPdfBuffer(c, { ocultarPessoais = false } = {
 // de recibo em papel a despbrasil recusa com 400 ("Este veículo não possui CRV
 // Digital"). Qualquer falha aqui devolve null e a célula sai "***", como no
 // CRLV-e oficial — o número é complemento, não motivo para recusar o documento.
-async function fetchNumeroCrvDigitalCrlve(placa) {
+// V2 (servico "numero_crv_digital_v2", placa + renavam, R$ 5,50): PDF de uma
+// página com o número em "NÚMERO DO CERTIFICADO DE REGISTRO DE VEÍCULO (CRV)" —
+// o mesmo layout que extractNumeroCrvDigitalFromPdf já lê. Conferido na API
+// real em 21/10/2026: ~12 s, PVI5B13 com o mesmo número da Consultas Fácil e
+// KPP9F47 com número (o V1 dizia "não possui CRV Digital" e a Consultas Fácil
+// dava 500). O "numero_crv_digital" sem V2 da doc responde 400 "Serviço não
+// reconhecido" na nossa chave — o V1 continua pela consulta_generica.
+async function fetchNumeroCrvDigitalCrlve(placa, renavam = null) {
+  const corpo = renavam
+    ? { servico: 'numero_crv_digital_v2', placa, renavam }
+    : { servico: DESPBRASIL_SVCS['numero-crv-digital'].servico, placa, ...DESPBRASIL_SVCS['numero-crv-digital'].extra };
+  const versao = renavam ? 'V2' : 'V1';
   try {
     const r = await fetch(DESPBRASIL_BASE_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', chaveAcesso: DESPBRASIL_KEY },
-      body: JSON.stringify({ servico: DESPBRASIL_SVCS['numero-crv-digital'].servico, placa, ...DESPBRASIL_SVCS['numero-crv-digital'].extra }),
+      body: JSON.stringify(corpo),
     });
     const j = await r.json().catch(() => null);
     if (!r.ok || !j?.sucesso || !j?.arquivo_url) {
-      console.log(`[${CRLVE_COMUNICACAO_SERVICE_ID}] sem CRV Digital (placa ${placa}): ${JSON.stringify(j).slice(0, 200)}`);
+      console.log(`[${CRLVE_COMUNICACAO_SERVICE_ID}] sem CRV Digital ${versao} (placa ${placa}): ${JSON.stringify(j).slice(0, 200)}`);
       return null;
     }
     const pdfRes = await fetch(j.arquivo_url);
@@ -5827,7 +5838,7 @@ async function fetchNumeroCrvDigitalCrlve(placa) {
     const { numeroCrv } = await extractNumeroCrvDigitalFromPdf(Buffer.from(await pdfRes.arrayBuffer()));
     return numeroCrv ? String(numeroCrv).trim() : null;
   } catch (e) {
-    console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Número do CRV Digital falhou (placa ${placa}):`, e.message);
+    console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] Número do CRV Digital ${versao} falhou (placa ${placa}):`, e.message);
     return null;
   }
 }
@@ -6094,14 +6105,23 @@ async function gerarCrlveComunicacaoVenda(placa) {
     return { status: 422, error: `A base não devolveu ${m.erro} desse veículo, e o CRLV-e não sai incompleto. Nada foi cobrado.` };
   }
   // Número do CRV, só depois de confirmada a comunicação/intenção/gravame (para
-  // não pagar quando o documento nem vai sair). Fonte principal: o "Numero
-  // ATPVe Brasil" da Consultas Fácil (POST /consultar-Numero-ATPVE, PDF com
-  // "Numero C R V"), por decisão do dono em 21/10/2026 — responde em ~5 s. Só
-  // o número do CRV é aproveitado dele. Reserva: o CRV Digital da despbrasil
-  // (na PVI5B13 deu 524 depois de 127 s, duas vezes). A ATPVe da despbrasil não
-  // entra aqui: na KPP9F47 levou 126 s para dar 500. Sem nenhum, "***".
+  // não pagar quando o documento nem vai sair). Três fontes, em ordem, a
+  // seguinte só se a anterior não der o número (decisão do dono, 21/10/2026):
+  //   1. Número do CRV Digital V2 da despbrasil (placa + renavam, ~12 s) — a
+  //      única que deu o da KPP9F47;
+  //   2. "Numero ATPVe Brasil" da Consultas Fácil (POST /consultar-Numero-ATPVE,
+  //      "Numero C R V" do PDF, ~5 s) — só o número do CRV é aproveitado;
+  //   3. Número do CRV Digital V1 da despbrasil (na PVI5B13 deu 524 depois de
+  //      127 s, duas vezes).
+  // A ATPVe da despbrasil não entra (na KPP9F47 levou 126 s para dar 500), nem
+  // o security-code-crv da Vistocar (cobra e só devolve "Solicitação de Número
+  // CRV…": as de 25/09/2026 seguiam assim quase um mês depois). Sem nenhum, "***".
   // Carroceria/exercício/data do CRV não dependem do número: saem juntos.
   const numeroCrvPromise = (async () => {
+    if (m.campos.renavam) {
+      const v2 = await fetchNumeroCrvDigitalCrlve(placa, m.campos.renavam);
+      if (v2) return v2;
+    }
     try {
       const atpve = await fetchAndExtractAtpveFromConsultasFacil(placa);
       const n = String(atpve?.numerocrv || '').replace(/\D/g, '');
