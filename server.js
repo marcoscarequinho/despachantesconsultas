@@ -6141,10 +6141,13 @@ async function gerarCrlveComunicacaoVenda(placa) {
   if (!m.campos.dataEmissao) m.campos.dataEmissao = sistema.dataCrv || '';
   if (!m.campos.carroceria)
     m.campos.carroceria = sistema.carroceria || (CRLVE_SEM_CARROCERIA_RE.test(m.campos.especieTipo) ? 'NAO APLICAVEL' : '');
-  // Com intenção de venda e sem CRV Digital, o número do CRV ainda sai pelo
-  // Número da ATPVe (Consultas Fácil, despbrasil de reserva) — dele só se usa
-  // o número do CRV (FNY5J96, 13/10/2026). Falha aqui também vira "***".
-  if (!m.campos.numeroCrv && m.campos.intencao) {
+  // Sem o número pelo CRV Digital, ele ainda sai pelo Número da ATPVe
+  // (Consultas Fácil, despbrasil de reserva) — dele só se usa o número do CRV
+  // (FNY5J96, 13/10/2026). Vale para qualquer caso, não só intenção de venda:
+  // na PVI5B13 (comunicação de venda, 21/10/2026) o CRV Digital deu 524 depois
+  // de 127 s duas vezes seguidas e o documento saía "***", enquanto a ATPVe
+  // trazia o número em 5 s. Falha aqui também vira "***".
+  if (!m.campos.numeroCrv) {
     try {
       const atpve = await obterCamposAtpveComunicacaoVenda(placa, CRLVE_COMUNICACAO_SERVICE_ID);
       const n = String(atpve?.numerocrv || '').replace(/\D/g, '');
