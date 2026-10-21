@@ -1409,7 +1409,7 @@ const SERVICES = [
   //
   // R$ 14,00 FIXO (noMarkup), segurado por decisão do dono — não é o custo
   // mais markup. Custo real na despbrasil: R$ 7,50.
-  { id:'numero-crv-digital', name:'Número do CRV Digital', group:'CRV', basePrice:14.00, noMarkup:true, inputType:'placa', icon:'🔢' },
+  { id:'numero-crv-digital', name:'Número do CRV Digital', group:'CRV', basePrice:14.00, noMarkup:true, inputType:'placa_renavam', icon:'🔢' },
   // ── Análise de Crédito ──
   { id:'consultar-spc', name:'Consulta SPC/Crédito', group:'Análise de Crédito', basePrice:15.00, inputType:'cpfcnpj', icon:'📊' },
   // ── Óbito ──
@@ -9807,6 +9807,15 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       apiUrl = DESPBRASIL_BASE_URL;
       method = 'POST';
       body   = { servico: DESPBRASIL_SVCS[serviceId].servico, placa, ...(DESPBRASIL_SVCS[serviceId].extra || {}) };
+      // Número do CRV Digital: com renavam, a 1ª chamada é o V2 (placa + renavam,
+      // 21/10/2026); o V1 acima fica de reserva, logo depois do fetch. Sem
+      // renavam (chave de API antiga, que só manda a placa), vai direto ao V1.
+      if (serviceId === 'numero-crv-digital') {
+        const renavam = String(params?.renavam || '').replace(/\D/g, '');
+        if (renavam && (renavam.length < 9 || renavam.length > 11))
+          return res.status(400).json({ error: 'Renavam inválido. Deve ter entre 9 e 11 dígitos.' });
+        if (renavam) body = { servico: 'numero_crv_digital_v2', placa, renavam: renavam.padStart(11, '0') };
+      }
       // ATPVe com Comunicação de Venda: a 1ª tentativa é na Consultas Fácil
       // (29/09/2026); a despbrasil fica de 2ª, chamada no bloco do serviço mais
       // abaixo. O id continua em DESPBRASIL_SVCS por causa dessa reserva e do
@@ -10140,6 +10149,17 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       if (reenvio) {
         console.log(`[${serviceId}] cidade recusada; reenviando com o nome do Detran: comprador=${reenvio.cidadeComprador}/${reenvio.ufComprador} venda=${reenvio.cidadeVenda}/${reenvio.ufVenda}`);
         body = reenvio;
+        fetchOpts.body = JSON.stringify(body);
+        apiRes = await fetch(apiUrl, fetchOpts);
+      }
+    }
+    // Número do CRV Digital: V2 sem PDF (erro, "não localizado", fora do ar) vai
+    // de novo pelo V1, só com a placa. O V2 que não cobra não deixa rastro.
+    if (serviceId === 'numero-crv-digital' && body?.servico === 'numero_crv_digital_v2') {
+      const v2 = await apiRes.clone().json().catch(() => null);
+      if (!apiRes.ok || !v2?.sucesso || !v2?.arquivo_url) {
+        console.log(`[${serviceId}] V2 sem PDF (HTTP ${apiRes.status}: ${JSON.stringify(v2).slice(0, 200)}) — tentando o V1.`);
+        body = { servico: DESPBRASIL_SVCS[serviceId].servico, placa: body.placa, ...DESPBRASIL_SVCS[serviceId].extra };
         fetchOpts.body = JSON.stringify(body);
         apiRes = await fetch(apiUrl, fetchOpts);
       }
