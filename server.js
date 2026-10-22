@@ -14,6 +14,7 @@ const pdfParse = require('pdf-parse');
 const { PDFDocument: PDFLibDocument, StandardFonts: PDFLibStandardFonts, rgb } = require('pdf-lib');
 const recursoMulta = require('./recurso-multa');
 const contratoSocial = require('./contrato-social');
+const arrendamentoVeicular = require('./arrendamento-veicular');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -223,6 +224,7 @@ const CNPJ_SERVICE_IDS = [CNPJ_GRATIS_SERVICE_ID, ASSINATURA_CNPJ_SERVICE_ID];
 // da rua (/street). Cada parte consome créditos do plano deles. No .env local a
 // chave está como "cnpja"; CNPJA_API_KEY é o nome canônico (o da Vercel).
 const CNPJ_COMPLETO_SERVICE_ID = 'cnpj-completo';
+const ARRENDAMENTO_SERVICE_ID = 'contrato-arrendamento-veicular';
 const CNPJA_API_URL = 'https://api.cnpja.com/office';
 const CNPJA_API_KEY = process.env.CNPJA_API_KEY || process.env.cnpja || '';
 const CNPJA_OPEN_URL = 'https://open.cnpja.com/office';
@@ -1196,6 +1198,12 @@ const SERVICES = [
   // buildProcuracaoVeicularPdfBuffer (modelo padrão de procuração, sem
   // overlay de PDF oficial). Preço fixo cobrindo os 3 endpoints usados.
   { id:'procuracao-veicular', name:'Gerar Procuração Veicular', group:'Procurações e Contratos', basePrice:22.00, noMarkup:true, inputType:'procuracao_veicular', icon:'🖊️' },
+  // Contrato de Arrendamento Veicular com IA (22/10/2026, R$ 70,00) — ver
+  // arrendamento-veicular.js. A placa preenche o veículo pela Consulta Veicular
+  // Estadual da DirectData (Nacional de reserva) e o CPF/CNPJ preenche as partes
+  // (Datacube /pessoas/localizacao e CNPJá), em POST /api/arrendamento-veicular/*.
+  { id:ARRENDAMENTO_SERVICE_ID, name:'Contrato de Arrendamento Veicular com IA', group:'Procurações e Contratos', basePrice:70, noMarkup:true, inputType:'arrendamento_veicular', icon:'🚙',
+    slowNote:'A placa preenche os dados do veículo e o CPF/CNPJ preenche arrendador e arrendatário. Você escolhe prazo, aluguel, caução, quilometragem e quem paga seguro, IPVA e manutenção; a IA redige as condições específicas de uso. Sai em PDF com termo de vistoria, pronto para assinar (cerca de 1 minuto). Só é cobrado se o PDF for gerado.' },
   // ── Para os Despachantes ──────────────────────────────────────────────────
   // Grupo exclusivo da aba "Coisas de Despachantes" do painel (ver
   // section-despachantes em painel-usuario.html): documentos que o próprio
@@ -1936,6 +1944,18 @@ async function initDB() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_contrato_social_buscas_user ON contrato_social_buscas(user_id, created_at);`);
+  // Buscas de placa e de CPF/CNPJ do Contrato de Arrendamento Veicular: grátis
+  // para o cliente, mas cada uma custa (DirectData, Datacube, CNPJá) — só
+  // existe para o limite diário (ARRENDAMENTO_BUSCAS_DIA).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS arrendamento_buscas (
+      id         SERIAL PRIMARY KEY,
+      user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      tipo       TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_arrendamento_buscas_user ON arrendamento_buscas(user_id, created_at);`);
   // DirectData: a API não tem rota de saldo (16/10/2026: Saldo, ConsultaSaldo,
   // Usuario/Saldo e Conta/Saldo dão 404), então o saldo do admin é ESTIMADO —
   // o valor que o admin informa ao recarregar (directdata_saldo) menos o custo
@@ -8742,6 +8762,52 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       return res.send(pdfBuf);
     }
 
+    // ── Contrato de Arrendamento Veicular com IA (ver arrendamento-veicular.js)
+    // Tudo que barra o pedido é checado em prepararContrato, antes da IA; o
+    // débito só acontece com o PDF pronto.
+    if (serviceId === ARRENDAMENTO_SERVICE_ID) {
+      const prep = arrendamentoVeicular.prepararContrato(params || {}, { isValidDoc, cnpjValido });
+      if (prep.erro) return res.status(400).json({ error: prep.erro });
+      const a = prep.contrato;
+
+      let pdfBuf;
+      try {
+        pdfBuf = (await arrendamentoVeicular.gerarContrato(a)).pdf;
+      } catch (e) {
+        console.error(`[${serviceId}] falha ao gerar:`, e.semChave ? 'sem ANTHROPIC_API_KEY' : e.message, e.status === 401 ? `— chave: ${recursoMulta.digitalChave()}` : '');
+        return res.status(502).json({ error: 'Não foi possível gerar o contrato agora. Nada foi cobrado. Tente de novo em instantes.' });
+      }
+
+      // params com documentos mascarados e sem endereço — o contrato inteiro fica no pdf_cache.
+      const paramsLog = arrendamentoVeicular.resumoLog(a);
+      const rotulo = `${a.veiculo.placa} — ${a.arrendatario.nome}`;
+      await debitarConsulta(userId, price);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name} — ${rotulo}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify(paramsLog), price, txRow.rows[0].id]
+      );
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, { placa: a.veiculo.placa, arrendatario: a.arrendatario.nome });
+      const nomeArq = `mcdespachadoria-contrato-arrendamento-${a.veiculo.placa}.pdf`;
+      if (user.phone) {
+        const caption = `✅ *Contrato de arrendamento pronto!*\n🚙 ${a.veiculo.marcaModelo} — ${a.veiculo.placa}\n\nConfira os dados, imprima em duas vias e colham as assinaturas das partes e de duas testemunhas. O termo de vistoria e as orientações estão no fim do PDF.`;
+        await sendWhatsAppPdf(user.phone, pdfBuf, nomeArq, caption).catch(() => {});
+      }
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
+      return res.send(pdfBuf);
+    }
+
     // ── Recurso de Multa com IA (ver recurso-multa.js) ────────────────────────
     // Os dados já chegam conferidos pelo cliente (lidos da notificação em
     // /api/recurso-multa/ler-notificacao e editados no formulário). Tudo que
@@ -14748,6 +14814,163 @@ app.get('/api/contrato-social/cnae/:codigo', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('[contrato-social] IBGE:', e.message);
     return res.status(502).json({ error: 'A tabela de CNAE do IBGE não respondeu. Tente de novo.' });
+  }
+});
+
+// ── Contrato de Arrendamento Veicular: apoio ao formulário ────────────────────
+// Busca da placa e do CPF/CNPJ das partes. Grátis para o cliente (o preço do
+// contrato cobre), mas cada chamada custa: limite diário por cliente somando
+// as três buscas (placa + duas partes = um contrato).
+const ARRENDAMENTO_BUSCAS_DIA = 15;
+async function reservarBuscaArrendamento(userId, tipo) {
+  const usadas = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM arrendamento_buscas WHERE user_id=$1 AND created_at > NOW() - INTERVAL '1 day'`, [userId]);
+  if (usadas.rows[0].n >= ARRENDAMENTO_BUSCAS_DIA) return false;
+  await pool.query('INSERT INTO arrendamento_buscas (user_id, tipo) VALUES ($1,$2)', [userId, tipo]);
+  return true;
+}
+const ARRENDAMENTO_LIMITE_MSG = 'Você atingiu o limite de buscas automáticas de hoje. Preencha os dados à mão — o contrato sai do mesmo jeito.';
+// "NADA CONSTA", "INEXISTENTE", "Indisponível" e afins não são dado.
+const valorUtilArr = v => { const s = String(v ?? '').trim(); return s && !/^(nada consta|indispon[ií]vel|inexistente|null)$/i.test(s) && !semDadoUtil(s) ? s : ''; };
+
+// POST /api/arrendamento-veicular/buscar-placa — Consulta Veicular Estadual da
+// DirectData (a mesma de dd-veicular-estadual) e, se ela falhar, a Nacional
+// (dd-veicular-nacional), mais estável (pedido do dono, 22/10/2026: a Estadual
+// devolveu resultadoId 21 depois de 58 s na TTT7A54 e respondeu na QNP9E31).
+// Conferido na API real em 22/10/2026 (QNP9E31): a Estadual traz o documento
+// do proprietário só com dígitos e a restrição em restricoes.financeira; a
+// Nacional traz o documento formatado e as restrições numa lista de textos.
+app.post('/api/arrendamento-veicular/buscar-placa', requireAuth, async (req, res) => {
+  const placa = String(req.body?.placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa)) return res.status(400).json({ error: 'Placa inválida.' });
+  try {
+    if (!await reservarBuscaArrendamento(req.user.id, 'placa')) return res.status(429).json({ error: ARRENDAMENTO_LIMITE_MSG });
+    // Devolve o retorno, 'nao-encontrado' (resultadoId 6) ou null (falha).
+    const tentar = async id => {
+      const svc = DIRECTDATA_SVCS[id];
+      try {
+        const resp = await chamarDirectData(svc.endpoint, { Placa: placa });
+        const meta = resp.json?.metaDados || {};
+        const ok = meta.resultadoId === 1 && resp.json?.retorno;
+        await registrarConsumoDirectData({ serviceId: ARRENDAMENTO_SERVICE_ID, svc, meta, custo: ok ? svc.custo : 0, userId: req.user.id });
+        if (!ok) console.error(`[${ARRENDAMENTO_SERVICE_ID}] ${svc.endpoint} sem resultado (placa ${placa}): HTTP ${resp.status} resultadoId=${meta.resultadoId}`);
+        return ok ? resp.json.retorno : (meta.resultadoId === 6 ? 'nao-encontrado' : null);
+      } catch (e) {
+        console.error(`[${ARRENDAMENTO_SERVICE_ID}] ${svc.endpoint} falhou (placa ${placa}):`, e.semChave ? 'sem DIRECTDATA_TOKEN' : e.message);
+        return null;
+      }
+    };
+    let v = null;
+    const est = await tentar('dd-veicular-estadual');
+    let nac = null;
+    if (est && est !== 'nao-encontrado') {
+      const x = est.veiculo || {};
+      v = {
+        renavam: est.renavam, chassi: est.chassi, marcaModelo: x.marcaModelo, anoFabricacao: x.anoFabricacao, anoModelo: x.anoModelo,
+        cor: x.cor, combustivel: x.combustivel, especie: x.especie, tipo: x.tipo,
+        municipio: String(est.municipio || '').replace(/\s*-\s*[A-Z]{2}$/, ''), uf: est.uf,
+        proprietarioNome: est.nomeRazaoSocial, proprietarioDocumento: est.documento,
+        restricaoFinanceira: est.restricoes?.financeira,
+      };
+    } else {
+      nac = await tentar('dd-veicular-nacional');
+      if (nac && nac !== 'nao-encontrado') {
+        const x = nac.veiculo || {};
+        v = {
+          renavam: x.renavam, chassi: x.chassi, marcaModelo: x.marca && x.modelo ? `${x.marca}/${x.modelo}` : x.modelo,
+          anoFabricacao: x.anoFabricacao, anoModelo: x.anoModelo, cor: x.cor, combustivel: x.combustivel, especie: x.especie, tipo: x.tipo,
+          municipio: x.municipio, uf: x.uf, proprietarioNome: nac.proprietario, proprietarioDocumento: nac.documento,
+          restricaoFinanceira: (x.restricoes || []).find(r => /ALIENA|ARRENDAMENTO|RESERVA DE DOM|PENHOR/i.test(r)) || '',
+        };
+      }
+    }
+    if (!v && (est === 'nao-encontrado' || nac === 'nao-encontrado'))
+      return res.status(404).json({ error: 'Placa não encontrada na base do Detran. Confira a placa ou preencha o veículo à mão.' });
+    if (!v) return res.status(502).json({ error: 'A consulta do veículo não respondeu agora. Tente de novo ou preencha à mão.' });
+    const limpo = {};
+    for (const [k, val] of Object.entries(v)) limpo[k] = valorUtilArr(val);
+    limpo.placa = placa;
+    limpo.renavam = limpo.renavam.replace(/\D/g, '');
+    limpo.proprietarioDocumento = limpo.proprietarioDocumento.replace(/\D/g, '');
+    return res.json({ veiculo: limpo });
+  } catch (e) {
+    console.error(`[${ARRENDAMENTO_SERVICE_ID}] buscar-placa:`, e.message);
+    return res.status(500).json({ error: 'Erro ao buscar a placa. Preencha os dados à mão.' });
+  }
+});
+
+// Endereço da Datacube vem numa string só ("R FULANO DE TAL 123 AP 101"): o
+// primeiro número solto vira o número e o resto o complemento. O painel passa
+// o CEP pelo ViaCEP depois, que devolve logradouro e bairro com acento.
+function separarEnderecoDatacube(s) {
+  const t = String(s || '').replace(/\s+/g, ' ').trim();
+  const m = t.match(/^(.*?)[,\s]+(\d+[A-Z]?|S\/N)\b[,\s]*(.*)$/i);
+  return m ? { logradouro: m[1], numero: m[2], complemento: m[3] } : { logradouro: t, numero: '', complemento: '' };
+}
+
+// POST /api/arrendamento-veicular/buscar-documento — CPF pela Localização da
+// Datacube (/pessoas/localizacao: cadastro + endereços, ~2 s, conferido em
+// 22/10/2026) e CNPJ pela API comercial do CNPJá (a mesma do Contrato Social).
+app.post('/api/arrendamento-veicular/buscar-documento', requireAuth, async (req, res) => {
+  const doc = String(req.body?.documento || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
+  const ehCpf = /^\d{11}$/.test(doc);
+  if (ehCpf ? !isValidDoc(doc) : !cnpjValido(doc)) return res.status(400).json({ error: 'CPF ou CNPJ inválido.' });
+  try {
+    if (!await reservarBuscaArrendamento(req.user.id, ehCpf ? 'cpf' : 'cnpj')) return res.status(429).json({ error: ARRENDAMENTO_LIMITE_MSG });
+    if (ehCpf) {
+      let j;
+      try {
+        const r = await fetch(`${DATACUBE_API_URL}/pessoas/localizacao`, {
+          method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ auth_token: DATACUBE_TOKEN, cpf: doc }).toString(), signal: AbortSignal.timeout(60000),
+        });
+        j = await r.json().catch(() => null);
+        if (!r.ok || !j?.status) console.error(`[${ARRENDAMENTO_SERVICE_ID}] Datacube localização HTTP ${r.status}: ${String(j?.message || '').slice(0, 200)}`);
+      } catch (e) {
+        console.error(`[${ARRENDAMENTO_SERVICE_ID}] Datacube localização falhou:`, e.message);
+      }
+      const cad = j?.result?.cadastro;
+      if (!cad?.nome) return res.status(502).json({ error: 'Não encontramos os dados desse CPF agora. Preencha à mão.' });
+      const e = (j.result.enderecos || [])[0];
+      return res.json({
+        tipo: 'PF', documento: doc, nome: valorUtilArr(cad.nome).toUpperCase(), genero: cad.sexo === 'F' ? 'F' : 'M',
+        situacao: valorUtilArr(cad.situacao_cpf), falecido: /^sim$/i.test(String(cad.falecido || '').trim()),
+        endereco: e ? { ...separarEnderecoDatacube(e.endereco), bairro: valorUtilArr(e.bairro), cidade: valorUtilArr(e.cidade), uf: valorUtilArr(e.uf), cep: String(e.cep || '').replace(/\D/g, '') } : null,
+      });
+    }
+    if (!CNPJA_API_KEY) return res.status(503).json({ error: 'A busca por CNPJ está indisponível agora. Preencha os dados à mão.' });
+    let r;
+    try {
+      r = await fetch(`${CNPJA_API_URL}/${doc}`, { headers: { Authorization: CNPJA_API_KEY, Accept: 'application/json' }, signal: AbortSignal.timeout(30000) });
+    } catch (e) {
+      console.error(`[${ARRENDAMENTO_SERVICE_ID}] CNPJá não respondeu:`, e.message);
+      return res.status(502).json({ error: 'A base de CNPJ não respondeu. Tente de novo ou preencha à mão.' });
+    }
+    const j = await r.json().catch(() => null);
+    if (r.status === 404) return res.status(404).json({ error: 'CNPJ não encontrado na base da Receita Federal.' });
+    if (r.status === 401 || (r.status === 429 && /credit/i.test(j?.message || ''))) {
+      avisarAdminCnpja(r.status === 401 ? 'A chave de API foi recusada (401). Confira a CNPJA_API_KEY na Vercel.' : 'Sem créditos no plano. Recarregue no painel do CNPJá.');
+      return res.status(503).json({ error: 'A busca por CNPJ está indisponível agora. Preencha os dados à mão.' });
+    }
+    if (!r.ok || !j?.taxId) {
+      console.error(`[${ARRENDAMENTO_SERVICE_ID}] CNPJá HTTP ${r.status}: ${JSON.stringify(j).slice(0, 300)}`);
+      return res.status(502).json({ error: 'A base de CNPJ respondeu de forma inesperada. Tente de novo ou preencha à mão.' });
+    }
+    await conferirSaldoCnpja();
+    const a = j.address || {};
+    // Quem pode assinar pela empresa: sócios-administradores e administradores
+    // (o CPF deles vem mascarado na Receita — o cliente digita).
+    const representantes = (j.company?.members || [])
+      .filter(m => m.person?.type !== 'LEGAL' && /administrador|titular|diretor|presidente/i.test(m.role?.text || ''))
+      .map(m => ({ nome: String(m.person?.name || '').toUpperCase(), qualidade: String(m.role?.text || '').toLowerCase() }));
+    return res.json({
+      tipo: 'PJ', documento: j.taxId, nome: String(j.company?.name || '').toUpperCase(), situacao: j.status?.text || '',
+      endereco: { logradouro: a.street || '', numero: a.number || '', complemento: a.details || '', bairro: a.district || '', cidade: a.city || '', uf: a.state || '', cep: a.zip || '' },
+      representantes,
+    });
+  } catch (e) {
+    console.error(`[${ARRENDAMENTO_SERVICE_ID}] buscar-documento:`, e.message);
+    return res.status(500).json({ error: 'Erro ao buscar o documento. Preencha os dados à mão.' });
   }
 });
 

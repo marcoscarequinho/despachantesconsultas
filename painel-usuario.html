@@ -70,6 +70,8 @@
   <script src="/assets/pagamento-cartao.js" defer></script>
   <!-- Contrato Social LTDA com IA: formulário em etapas — ver assets/contrato-social.js -->
   <script src="/assets/contrato-social.js" defer></script>
+  <!-- Contrato de Arrendamento Veicular com IA: formulário em etapas — ver assets/arrendamento-veicular.js -->
+  <script src="/assets/arrendamento-veicular.js" defer></script>
   <style>
     .metodo-btn { border: 2px solid #d1d5db; color: #374151; border-radius: .5rem; padding: .45rem .4rem; font-weight: 700; transition: .15s; background: white; }
     .metodo-btn:hover { border-color: #d97706; }
@@ -2257,6 +2259,7 @@ function inputTypeLabel(t) {
     assinatura_digital:  'Entrada: PDF + dados de quem assina',
     recurso_multa:       'Entrada: Notificação da multa (foto ou PDF) + perguntas',
     contrato_social:     'Entrada: Dados da empresa e dos sócios (constituição ou alteração)',
+    arrendamento_veicular: 'Entrada: Placa + CPF/CNPJ do arrendador e do arrendatário + condições',
     cancelar_venda:      'Entrada: ID + Protocolo + Motivo',
     protocolo:           'Entrada: Protocolo',
     protocolo_get:       'Entrada: Protocolo (GET)',
@@ -2548,6 +2551,7 @@ const CATALOG_DESTAQUES = [
   'crlv-agendado-es',         // CRLV-e Agendado Espírito Santo (ES)
   'crlv-ce-instantaneo',      // CRLV-e Emissão Instantânea Ceará (CE)
   'cnpj-completo',            // Consulta CNPJ Completa com Localização
+  'contrato-arrendamento-veicular', // Contrato de Arrendamento Veicular com IA
 ];
 const CATALOG_GRUPO_DESTAQUE = 'Destaques';
 
@@ -2610,6 +2614,7 @@ const CATALOG_GROUP_META = {
 const CATALOG_BADGE_SERVICO = {
   'atpve-vistocar-rj': { badge:'⏳ Em emissão', badgeClass:'bg-amber-100 text-amber-800' },
   'atpve-vistocar-mg': { badge:'⏳ Em emissão', badgeClass:'bg-amber-100 text-amber-800' },
+  'contrato-arrendamento-veicular': { badge:'🤖 Com IA', badgeClass:'bg-indigo-100 text-indigo-700' },
 };
 
 // Busca sem acento e sem caixa: "debito rj" acha "Débitos RJ".
@@ -3508,6 +3513,7 @@ function queryActionLabel(inputType) {
   if (inputType === 'assinatura_digital') return 'Enviar para Assinatura';
   if (inputType === 'recurso_multa') return 'Gerar Recurso';
   if (inputType === 'contrato_social') return 'Gerar Contrato Social';
+  if (inputType === 'arrendamento_veicular') return 'Gerar Contrato de Arrendamento';
   return 'Realizar Consulta';
 }
 
@@ -4144,6 +4150,8 @@ function renderFormFields(inputType, svc) {
 
     // Formulário em etapas, desenhado por assets/contrato-social.js.
     contrato_social: '<div id="cs-root"></div>',
+    // Formulário em etapas, desenhado por assets/arrendamento-veicular.js.
+    arrendamento_veicular: '<div id="av-root"></div>',
 
     debito_doc: placaField + renavamField +
       field('documento', 'CPF ou CNPJ do Proprietário', 'text', '000.000.000-00') +
@@ -4291,6 +4299,7 @@ function renderFormFields(inputType, svc) {
   // base64 ja lido — sem zerar aqui, reabrir mandaria o PDF do pedido anterior.
   if (inputType === 'assinatura_digital') assinaturaArquivo = { base64: '', nome: '' };
   if (inputType === 'contrato_social') csIniciar();
+  if (inputType === 'arrendamento_veicular') avIniciar();
   // Recurso de Multa: mesmo motivo — os arquivos lidos ficam em memória.
   if (inputType === 'recurso_multa') {
     recursoArquivos = [];
@@ -5461,6 +5470,7 @@ function buildParams(inputType) {
     };
 
   if (inputType === 'contrato_social') return csParams();
+  if (inputType === 'arrendamento_veicular') return avParams();
   // Recurso de Multa: nomes iguais aos de CAMPOS_NOTIFICACAO (recurso-multa.js).
   // A notificação em si não vai — ela já foi lida; vai só o que o cliente conferiu.
   if (inputType === 'recurso_multa') {
@@ -5567,6 +5577,7 @@ function buildParams(inputType) {
 // para dar feedback imediato sem depender da resposta da API externa).
 function validateParams(inputType, p) {
   if (inputType === 'contrato_social') return csValidar(p);
+  if (inputType === 'arrendamento_veicular') return avValidar(p);
   if (inputType === 'recurso_multa') {
     const d = p.dados;
     if (!d.orgao_autuador) return 'Informe o órgão autuador.';
@@ -5737,7 +5748,7 @@ function setQueryLoading(on) {
   document.getElementById('query-submit').disabled = on;
   document.getElementById('query-submit-text').textContent = on
     ? (selectedSvc?.inputType === 'recurso_multa' ? 'Redigindo o recurso com IA (cerca de 1 min)...'
-      : selectedSvc?.inputType === 'contrato_social' ? 'Redigindo o contrato com IA (cerca de 1 min)...' : 'Processando...')
+      : ['contrato_social', 'arrendamento_veicular'].includes(selectedSvc?.inputType) ? 'Redigindo o contrato com IA (cerca de 1 min)...' : 'Processando...')
     : (editingComunicacaoVendaQueryId ? 'Salvar Alterações' : queryActionLabel(selectedSvc?.inputType));
   document.getElementById('query-spinner').classList.toggle('hidden', !on);
 }
