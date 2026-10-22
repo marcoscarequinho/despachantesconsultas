@@ -232,7 +232,8 @@ const PRF_TIPOS = { EmAberto: 'Autuações/Multas em aberto', Pagas: 'Multas pag
 // de fora: as UFs de CRLV-e com entrega AGENDADA (AM, DF, PB, PE, RN, SC — o
 // documento demora horas e aqui a consulta espera na própria requisição), o
 // Débitos + Boleto (o boleto só existe dentro do relatório com a marca deles) e
-// a emissão de ATPV-e/comunicação de venda (fluxo com procuração e anexos).
+// a comunicação de venda. A EMISSÃO de ATPV-e (intenção de venda) tem fluxo
+// próprio, assíncrono — ver emitirAtpveDataCred.
 const DATACRED_BASE_URL = 'https://app.datacredconsultas.com.br/api/v1';
 const DATACRED_API_KEY  = process.env.DATACRED_API_KEY || '';
 const DATACRED_MARKUP   = 1.60;
@@ -246,6 +247,8 @@ const dcr = (codigo, nome, custo, sub, entrada, extra = {}) => {
   // O id vai para o nome do arquivo e para a página: "datacred_basic" vira dcr-pacote-basic.
   DATACRED_SVCS[`dcr-${codigo.replace(/^datacred_/, 'pacote_').replace(/_/g, '-')}`] = { codigo, nome, custo, sub, entrada, ...extra };
 };
+// Em destaque no topo da página (pedido do dono): a emissão do ATPV-e.
+dcr('atpve',                         'Emissão de ATPV-e (Intenção de Venda)',      20.00, 'Emissão de ATPV-e', 'atpve', { icon: '📝' });
 dcr('cancelamento_atpve',            'Cancelamento de ATPV-e (intenção de venda)', 20.00, 'Cancelamentos', 'cancelar_atpve', { icon: '🚫' });
 dcr('cancelamento_comunicado_venda', 'Cancelamento de Comunicado de Venda',        20.00, 'Cancelamentos', 'cancelar_cve',   { icon: '↩️' });
 dcr('reemissao_atpve',  'Reemissão ATPV-e (PDF)',                 39.90, 'Documentos do veículo', 'placa', { doc: true, icon: '📝' });
@@ -290,7 +293,19 @@ dcr('rating_premium_pf',         'Rating Bancário Premium PF',     22.90, 'Cré
 dcr('rating_premium_pj',         'Rating Bancário Premium PJ',     22.90, 'Crédito', 'cnpj', { icon: '🏦' });
 dcr('rating_avancado_pf',        'Rating Bancário Avançado PF',    16.90, 'Crédito', 'cpf',  { icon: '🏦' });
 dcr('rating_avancado_pj',        'Rating Bancário Avançado PJ',    16.90, 'Crédito', 'cnpj', { icon: '🏦' });
-const DATACRED_INPUT_TYPES = { placa: 'placa', placa_renavam: 'placa_renavam', cpf: 'dc_cpf', cnpj: 'cnpj', cancelar_atpve: 'dcr_cancelar_atpve', cancelar_cve: 'dcr_cancelar_cve' };
+const DATACRED_INPUT_TYPES = { placa: 'placa', placa_renavam: 'placa_renavam', cpf: 'dc_cpf', cnpj: 'cnpj', cancelar_atpve: 'dcr_cancelar_atpve', cancelar_cve: 'dcr_cancelar_cve', atpve: 'dcr_atpve' };
+// Emissão de ATPV-e (GET /comunicados-venda/formulario?produto=atpve, 22/10/2026):
+// RJ é automática; as demais passam por conferência humana. Pedem anexo
+// (procuração assinada e/ou documentos do veículo e das partes) DF, GO, PR, RS,
+// MS e SP; MG dispensa. DF, GO, PR e RS exigem um documento assinado pelo
+// vendedor no gov.br, gerado preenchido em POST /comunicados-venda/procuracao.
+// As listas vêm da ficha da API, que muda por configuração — quando mudar, é
+// aqui que se atualiza (a API recusa com 400 o que faltar, sem cobrar).
+const DATACRED_ATPVE_UFS = ['DF', 'GO', 'MG', 'MS', 'PR', 'RJ', 'RS', 'SP'];
+const DATACRED_ATPVE_UFS_ANEXO = new Set(['DF', 'GO', 'MS', 'PR', 'RS', 'SP']);
+const DATACRED_ATPVE_SERVICE_ID = 'dcr-atpve';
+// Manual sem resposta em 15 dias: a pendência é encerrada sem cobrar e o dono avisado.
+const DATACRED_PENDENTE_DIAS = 15;
 const dataCredPreco = custo => Math.round(custo * DATACRED_MARKUP * 100) / 100;
 
 // Consulta CNPJ grátis — API pública do CNPJá (open.cnpja.com), sem chave. A
@@ -1661,8 +1676,13 @@ const SERVICES = [
   // cobrado no envio, só quando o ATPV-e é entregue (finalizePendingQuery), e o
   // painel acompanha a emissão pela barra de progresso
   // (GET /api/queries/:id/atpve-status).
-  { id:'atpve-vistocar-rj', name:'Intenção de Venda / ATPV-e RJ', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'atpve_vistocar', icon:'📝', uf:'rj' },
-  { id:'atpve-vistocar-mg', name:'Intenção de Venda / ATPV-e MG', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'atpve_vistocar', icon:'📝', uf:'mg' },
+  // SUSPENSOS desde 22/10/2026 (unavailable, decisão do dono): pedido novo é
+  // recusado em processCatalogQuery e o painel leva o cliente à emissão nova
+  // (dcr-atpve). Os pedidos antigos seguem sendo entregues pelo cron/webhook.
+  { id:'atpve-vistocar-rj', name:'Intenção de Venda / ATPV-e RJ', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'atpve_vistocar', icon:'📝', uf:'rj', unavailable:true,
+    slowNote:'A emissão por este caminho está suspensa temporariamente. Use a nova Emissão de ATPV-e (Intenção de Venda), na página "ATPVe’s e Consultas Novas".' },
+  { id:'atpve-vistocar-mg', name:'Intenção de Venda / ATPV-e MG', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'atpve_vistocar', icon:'📝', uf:'mg', unavailable:true,
+    slowNote:'A emissão por este caminho está suspensa temporariamente. Use a nova Emissão de ATPV-e (Intenção de Venda), na página "ATPVe’s e Consultas Novas".' },
 ];
 
 // Serviços desta categoria não retornam resultado na hora: o pedido fica
@@ -2055,6 +2075,20 @@ async function initDB() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_arrendamento_buscas_user ON arrendamento_buscas(user_id, created_at);`);
+  // Emissões de ATPV-e (DataCred) que ainda não têm o PDF: conferência manual
+  // de horas ou dias. O cron entrega e cobra (finalizePendingQuery) ou cancela
+  // sem cobrar (recusa da conferência) — ver entregarAtpveDataCred.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS datacred_pendentes (
+      emissao_id    INTEGER PRIMARY KEY,
+      query_id      INTEGER REFERENCES queries(id) ON DELETE CASCADE,
+      user_id       INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      phone         TEXT,
+      placa         TEXT,
+      created_at    TIMESTAMPTZ DEFAULT NOW(),
+      verificado_em TIMESTAMPTZ
+    );
+  `);
   // DirectData: a API não tem rota de saldo (16/10/2026: Saldo, ConsultaSaldo,
   // Usuario/Saldo e Conta/Saldo dão 404), então o saldo do admin é ESTIMADO —
   // o valor que o admin informa ao recarregar (directdata_saldo) menos o custo
@@ -8267,6 +8301,151 @@ function erroDataCred(resp) {
   return { status: resp.status === 404 ? 404 : 400, error: (msgDataCred(resp.json) || 'Consulta recusada.') + ' Nada foi cobrado.' };
 }
 
+// ── Emissão de ATPV-e (DataCred) ─────────────────────────────────────────────
+// Corpo de POST /comunicados-venda (e da /procuracao, que usa os mesmos nomes).
+// Os 18 campos de toda UF mais os que cada documento/UF pede (doc, 5.2 e 5.3).
+// cpf_cnpj é SEMPRE o documento do comprador e vendedor_documento vai explícito:
+// sem ele a API usa o cpf_cnpj no lugar e emite com vendedor = comprador (o
+// aviso está na ficha de todas as UFs). CEP e código de município vão como
+// texto (número JSON dá 500 lá); venda_data em AAAA-MM-DD.
+function montarCorpoAtpveDataCred(p = {}) {
+  const t = v => String(v ?? '').replace(/\s+/g, ' ').trim();
+  const d = v => String(v ?? '').replace(/\D/g, '');
+  const doc = v => String(v ?? '').toUpperCase().replace(/[^0-9A-Z]/g, '');
+  const isoBr = v => { const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(t(v)); return m ? `${m[3]}-${m[2]}-${m[1]}` : ''; };
+  const vDoc = doc(p.vendedor_documento), cDoc = doc(p.comprador_documento);
+  const corpo = {
+    produto: 'atpve', confirmar: true,
+    placa: t(p.placa).toUpperCase().replace(/[^A-Z0-9]/g, ''), uf: t(p.uf).toUpperCase(), renavam: d(p.renavam),
+    ano_fabricacao: d(p.ano_fabricacao), ano_modelo: d(p.ano_modelo),
+    chassi: t(p.chassi).toUpperCase().replace(/[^A-Z0-9]/g, ''), marca: t(p.marca).toUpperCase(), modelo: t(p.modelo).toUpperCase(),
+    odometro: d(p.odometro), crv_numero: d(p.crv_numero), crv_codigo_seguranca: d(p.crv_codigo_seguranca),
+    crv_data_emissao: isoBr(p.crv_data_emissao),
+    cpf_cnpj: cDoc,
+    vendedor_documento: vDoc, vendedor_tipo: vDoc.length === 14 ? 'J' : 'F', vendedor_nome: t(p.vendedor_nome).toUpperCase(),
+    vendedor_email: t(p.vendedor_email).toLowerCase(), vendedor_celular: d(p.vendedor_celular),
+    vendedor_rg: t(p.vendedor_rg), vendedor_orgao_expedidor: t(p.vendedor_orgao_expedidor).toUpperCase(),
+    vendedor_estado_civil: t(p.vendedor_estado_civil), vendedor_cep: d(p.vendedor_cep), vendedor_rua: t(p.vendedor_rua),
+    vendedor_numero: t(p.vendedor_numero), vendedor_bairro: t(p.vendedor_bairro), vendedor_quadra: t(p.vendedor_quadra),
+    vendedor_lote: t(p.vendedor_lote), vendedor_municipio: t(p.vendedor_municipio), vendedor_uf_endereco: t(p.vendedor_uf_endereco).toUpperCase(),
+    comprador_documento: cDoc, comprador_tipo: cDoc.length === 14 ? 'J' : 'F', comprador_nome: t(p.comprador_nome).toUpperCase(),
+    comprador_email: t(p.comprador_email).toLowerCase(), comprador_rg: t(p.comprador_rg),
+    comprador_cep: d(p.comprador_cep), comprador_rua: t(p.comprador_rua), comprador_numero: t(p.comprador_numero),
+    comprador_complemento: t(p.comprador_complemento), comprador_bairro: t(p.comprador_bairro),
+    comprador_city_id: d(p.comprador_city_id), comprador_cidade: t(p.comprador_cidade), comprador_uf: t(p.comprador_uf).toUpperCase(),
+    venda_data: isoBr(p.venda_data), venda_valor: t(p.venda_valor), local_assinatura: t(p.local_assinatura),
+  };
+  for (const k of Object.keys(corpo)) if (corpo[k] === '') delete corpo[k];
+  return corpo;
+}
+
+// O que a API recusaria (ela devolve 400 sem cobrar, mas a mensagem é melhor
+// aqui) e o que ela ACEITA e trava depois na conferência (SP sem odômetro,
+// chassi e e-mails — doc 5.2). Devolve string de erro ou null.
+function validarAtpveDataCred(c, anexos) {
+  if (!DATACRED_ATPVE_UFS.includes(c.uf)) return 'Escolha a UF de origem do veículo.';
+  if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(c.placa || '')) return 'Placa inválida.';
+  if (!c.renavam || c.renavam.length < 9 || c.renavam.length > 11) return 'Renavam inválido (9 a 11 dígitos).';
+  const ano = new Date().getFullYear() + 1;
+  if (!(+c.ano_fabricacao >= 1950 && +c.ano_fabricacao <= ano) || !(+c.ano_modelo >= 1950 && +c.ano_modelo <= ano)) return 'Informe os anos de fabricação e modelo.';
+  for (const [quem, d] of [['vendedor', c.vendedor_documento], ['comprador', c.comprador_documento]])
+    if (!(d && (d.length === 11 ? isValidDoc(d) : cnpjValido(d)))) return `CPF/CNPJ do ${quem} inválido.`;
+  if (c.vendedor_documento === c.comprador_documento) return 'Vendedor e comprador não podem ter o mesmo documento.';
+  if ((c.vendedor_nome || '').length < 5 || (c.comprador_nome || '').length < 5) return 'Informe o nome completo do vendedor e do comprador.';
+  if ((c.comprador_cep || '').length !== 8 || !c.comprador_rua || !c.comprador_numero || !c.comprador_bairro) return 'Endereço do comprador incompleto (CEP, rua, número e bairro).';
+  if (!c.comprador_city_id) return 'Busque o CEP do comprador: o código do município do Detran vem dele.';
+  if (!c.venda_data || new Date(c.venda_data) > new Date()) return 'Informe a data da venda (dd/mm/aaaa), que não pode ser futura.';
+  if (!(Number(String(c.venda_valor || '').replace(/\./g, '').replace(',', '.')) > 0)) return 'Informe o valor da venda.';
+  if (['MG', 'MS', 'PR', 'SP'].includes(c.uf) && !c.odometro) return `Em ${c.uf} o Detran pede a quilometragem (odômetro).`;
+  if (c.uf === 'SP' && (!/^[A-HJ-NPR-Z0-9]{17}$/.test(c.chassi || '') || !c.vendedor_email || !c.comprador_email))
+    return 'Em SP o Detran pede o chassi e o e-mail do vendedor e do comprador.';
+  if (c.uf === 'PR' && (!c.crv_numero || !c.vendedor_email || !c.comprador_email)) return 'No PR o Detran pede o número do CRV e o e-mail do vendedor e do comprador.';
+  if (c.uf === 'DF' && (!c.vendedor_email || !c.comprador_email)) return 'No DF o Detran pede o e-mail do vendedor e do comprador.';
+  if (c.uf === 'RS' && !c.comprador_email) return 'No RS o Detran pede o e-mail do comprador.';
+  if (DATACRED_ATPVE_UFS_ANEXO.has(c.uf) && !anexos.length)
+    return ['DF', 'GO', 'PR', 'RS'].includes(c.uf)
+      ? `Em ${c.uf} anexe o documento assinado pelo vendedor no gov.br (gere pelo botão do formulário) e os documentos do veículo.`
+      : `Em ${c.uf} a conferência pede anexos: documento do veículo (CRV/CRLV) e documento com foto das partes.`;
+  return null;
+}
+
+// POST /comunicados-venda/{id}/documentos — multipart, cada parte com
+// name="arquivos" (doc 5.4.1: sem o name a API devolve 400 antes de cobrar).
+// Content-Type NÃO é definido à mão: o FormData gera o boundary.
+async function enviarAnexosDataCred(emissaoId, anexos) {
+  const form = new FormData();
+  for (const a of anexos) form.append('arquivos', new Blob([Buffer.from(a.base64, 'base64')], { type: a.tipo }), a.nome);
+  const r = await fetch(`${DATACRED_BASE_URL}/comunicados-venda/${emissaoId}/documentos`, {
+    method: 'POST', headers: { 'X-API-Key': DATACRED_API_KEY }, body: form, signal: AbortSignal.timeout(120000),
+  });
+  const buf = Buffer.from(await r.arrayBuffer());
+  let json = null;
+  try { json = JSON.parse(buf.toString('utf8')); } catch {}
+  return { status: r.status, json, buf };
+}
+
+// Anexos que o painel manda: [{ nome, tipo, base64 }]. Só PDF/JPG/PNG/WEBP
+// (doc 5.4); o corpo inteiro já passou pelo limite de 4,5 MB da Vercel.
+function normalizarAnexosDataCred(lista) {
+  const TIPOS = { pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+  return (Array.isArray(lista) ? lista : []).slice(0, 8).map(a => {
+    const ext = String(a?.nome || '').toLowerCase().split('.').pop();
+    const base64 = String(a?.base64 || '').replace(/^data:[^,]*,/, '');
+    return TIPOS[ext] && base64.length > 100 ? { nome: String(a.nome).slice(0, 80), tipo: TIPOS[ext], base64 } : null;
+  }).filter(Boolean);
+}
+
+// Entrega uma emissão pendente: PDF pronto → cobra (finalizePendingQuery),
+// guarda e manda no WhatsApp; recusada na conferência → cancela sem cobrar (o
+// fornecedor estorna). Idempotente: finalizePendingQuery faz o claim.
+async function entregarAtpveDataCred(pend) {
+  const st = await chamarDataCred(`/comunicados-venda/${pend.emissao_id}`);
+  const j = st.json;
+  if (st.status !== 200 || !j) { console.error(`[${DATACRED_ATPVE_SERVICE_ID}] status ${pend.emissao_id}: HTTP ${st.status}`); return 'erro'; }
+  const encerrar = async (motivo) => {
+    await pool.query(`UPDATE queries SET status='cancelado', result_data=$2 WHERE id=$1 AND status='aguardando_pdf'`,
+      [pend.query_id, JSON.stringify({ emissao: pend.emissao_id, motivo })]);
+    await pool.query('DELETE FROM datacred_pendentes WHERE emissao_id=$1', [pend.emissao_id]);
+    if (pend.phone) await sendWhatsApp(pend.phone, `❌ *ATPV-e não emitido*\n🔤 Placa: ${pend.placa}\n\n${motivo}\n\nNada foi cobrado.`).catch(() => {});
+  };
+  if (j.recusada === true || j.status === 'recusada' || j.status === 'erro')
+    { await encerrar(semMarcaDataCred(j.motivo_recusa || j.erro || j.mensagem || 'A conferência do Detran recusou o pedido.')); return 'recusada'; }
+  if (!j.pdf_pronto) {
+    if (Date.now() - new Date(pend.created_at).getTime() > DATACRED_PENDENTE_DIAS * 86400000) {
+      await encerrar(`O Detran não concluiu a emissão em ${DATACRED_PENDENTE_DIAS} dias.`);
+      if (ADMIN_PHONE) await sendWhatsApp(ADMIN_PHONE, `⚠️ ATPV-e (DataCred) ${pend.emissao_id}, placa ${pend.placa}, sem conclusão em ${DATACRED_PENDENTE_DIAS} dias — encerrado sem cobrar o cliente. Confira no painel deles.`).catch(() => {});
+      return 'expirada';
+    }
+    await pool.query('UPDATE datacred_pendentes SET verificado_em=NOW() WHERE emissao_id=$1', [pend.emissao_id]);
+    return 'aguardando';
+  }
+  const p = await chamarDataCred(`/comunicados-venda/${pend.emissao_id}/pdf`);
+  if (p.status !== 200 || p.buf.slice(0, 4).toString() !== '%PDF') { console.error(`[${DATACRED_ATPVE_SERVICE_ID}] PDF ${pend.emissao_id}: HTTP ${p.status}`); return 'erro'; }
+  const fechou = await finalizePendingQuery(pend.query_id, pend.user_id, `Consulta: Emissão de ATPV-e — ${pend.placa}`);
+  await pool.query('DELETE FROM datacred_pendentes WHERE emissao_id=$1', [pend.emissao_id]);
+  if (!fechou) return 'ja-entregue';
+  const token = crypto.randomBytes(32).toString('hex');
+  await pool.query(
+    `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+    [pend.query_id, pend.user_id, token, p.buf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+  ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+  if (pend.phone)
+    await sendWhatsAppPdf(pend.phone, p.buf, `${MC_ARQUIVO_PREFIXO}-atpve-${pend.placa}.pdf`, `✅ *ATPV-e emitido!*\n🔤 Placa: ${pend.placa}\n\nDocumento gerado pela MC Despachadoria.`).catch(() => {});
+  return 'entregue';
+}
+
+// Pega carona no cron de 15 em 15 minutos do CRLV/Vistocar.
+async function runDataCredPendingCheck() {
+  const r = await pool.query('SELECT * FROM datacred_pendentes ORDER BY verificado_em NULLS FIRST LIMIT 30');
+  const resumo = {};
+  for (const pend of r.rows) {
+    let s;
+    try { s = await entregarAtpveDataCred(pend); } catch (e) { console.error(`[${DATACRED_ATPVE_SERVICE_ID}] ${pend.emissao_id}:`, e.message); s = 'erro'; }
+    resumo[s] = (resumo[s] || 0) + 1;
+  }
+  return { verificadas: r.rows.length, ...resumo };
+}
+
 // ── Consulta CNPJ grátis (CNPJá público — ver CNPJA_OPEN_URL) ────────────────
 
 // CNPJ numérico ou alfanumérico (Receita, a partir de julho/2026: 12 posições
@@ -8934,6 +9113,80 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
       return res.send(pdfBuf);
+    }
+
+    // ── Emissão de ATPV-e (DataCred) — ato no Detran, assíncrono ──────────────
+    // RJ sai na hora (espera até 2 min aqui); as demais UFs passam por
+    // conferência humana e ficam 'aguardando_pdf' em datacred_pendentes. Nos
+    // dois casos o cliente só é cobrado quando o PDF existe (finalizePendingQuery).
+    if (serviceId === DATACRED_ATPVE_SERVICE_ID) {
+      if (params?.confirmar !== true) return res.status(400).json({ error: 'Confirme que a emissão do ATPV-e é um ato irreversível.' });
+      const corpo = montarCorpoAtpveDataCred(params || {});
+      const anexos = normalizarAnexosDataCred(params?.anexos);
+      const erroVal = validarAtpveDataCred(corpo, anexos);
+      if (erroVal) return res.status(400).json({ error: erroVal });
+      // Sem os anexos (megabytes de base64) e com documentos mascarados.
+      const paramsLog = { placa: corpo.placa, uf: corpo.uf, vendedor: maskDocDisplay(corpo.vendedor_documento), comprador: maskDocDisplay(corpo.comprador_documento), anexos: anexos.length };
+      let emissao;
+      try {
+        const r = await chamarDataCred('/comunicados-venda', { method: 'POST', body: corpo });
+        if (r.status >= 300 || !r.json?.id) { const e = erroDataCred(r); return res.status(e.status).json({ error: e.error }); }
+        emissao = r.json;
+        if (emissao.aguardando_documentos === true) {
+          const up = await enviarAnexosDataCred(emissao.id, anexos);
+          if (up.status >= 300) {
+            console.error(`[${serviceId}] anexos da emissão ${emissao.id}: HTTP ${up.status} ${JSON.stringify(up.json).slice(0, 300)}`);
+            const e = erroDataCred(up);
+            return res.status(e.status).json({ error: `O pedido foi criado, mas os anexos não foram aceitos: ${e.error} Corrija e envie de novo — o mesmo pedido é reaproveitado.` });
+          }
+        }
+      } catch (e) {
+        console.error(`[${serviceId}] DataCred:`, e.semChave ? 'sem DATACRED_API_KEY' : e.message);
+        return res.status(502).json({ error: 'A emissão não pôde ser enviada agora. Nada foi cobrado — confira o Histórico antes de tentar de novo.' });
+      }
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
+         VALUES ($1,$2,$3,$4,'aguardando_pdf',$5,'pdf',$6) RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify(paramsLog), price, JSON.stringify({ emissao: emissao.id, placa: corpo.placa })]
+      );
+      const pend = { emissao_id: emissao.id, query_id: qRow.rows[0].id, user_id: userId, phone: user.phone || null, placa: corpo.placa, created_at: new Date() };
+      await pool.query(
+        `INSERT INTO datacred_pendentes (emissao_id, query_id, user_id, phone, placa) VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (emissao_id) DO UPDATE SET query_id=EXCLUDED.query_id, created_at=NOW()`,
+        [pend.emissao_id, pend.query_id, userId, pend.phone, pend.placa]
+      );
+      await notifyAdminNewQuery(user, service, price, paramsLog);
+      // UF automática (RJ): a emissora costuma devolver em segundos.
+      if (!emissao.manual) {
+        const t0 = Date.now();
+        while (Date.now() - t0 < 120000) {
+          await new Promise(r => setTimeout(r, 15000));
+          const s = await entregarAtpveDataCred(pend).catch(() => 'erro');
+          if (s === 'entregue' || s === 'ja-entregue') {
+            const pdf = await pool.query('SELECT pdf_data FROM pdf_cache WHERE query_id=$1 ORDER BY id DESC LIMIT 1', [pend.query_id]);
+            if (pdf.rows[0]) {
+              const buf = Buffer.from(pdf.rows[0].pdf_data, 'base64');
+              res.setHeader('Content-Type', 'application/pdf');
+              res.setHeader('Content-Disposition', `attachment; filename="${MC_ARQUIVO_PREFIXO}-atpve-${corpo.placa}.pdf"`);
+              return res.send(buf);
+            }
+            break;
+          }
+          if (s === 'recusada') {
+            const q = await pool.query('SELECT result_data FROM queries WHERE id=$1', [pend.query_id]);
+            return res.status(422).json({ error: `O Detran recusou a emissão: ${q.rows[0]?.result_data?.motivo || 'sem motivo informado'}. Nada foi cobrado.` });
+          }
+        }
+      }
+      return res.json({
+        success: true, pending: true, queryId: pend.query_id,
+        result: {
+          protocolo: emissao.id,
+          mensagem: emissao.manual
+            ? `Pedido registrado (protocolo ${emissao.id}). Em ${corpo.uf} a emissão passa por conferência no Detran e pode levar de algumas horas a alguns dias. O ATPV-e chega no seu WhatsApp e no Histórico — só é cobrado quando sair.`
+            : `Pedido registrado (protocolo ${emissao.id}) e em processamento no Detran. O ATPV-e chega no seu WhatsApp e no Histórico em instantes — só é cobrado quando sair.`,
+        },
+      });
     }
 
     // ── ATPVe's e Consultas Novas (DataCred — ver DATACRED_SVCS) ─────────────
@@ -15307,6 +15560,46 @@ app.post('/api/arrendamento-veicular/buscar-documento', requireAuth, async (req,
   }
 });
 
+// ── Emissão de ATPV-e (DataCred): apoio ao formulário ────────────────────────
+// GET /api/novas/cep/:cep — o código TOM do município (comprador_city_id), que
+// o Detran exige e ninguém tem à mão, mais o endereço. Não cobra lá.
+app.get('/api/novas/cep/:cep', requireAuth, async (req, res) => {
+  const cep = String(req.params.cep || '').replace(/\D/g, '');
+  if (cep.length !== 8) return res.status(400).json({ error: 'CEP inválido.' });
+  try {
+    const r = await chamarDataCred(`/cep/${cep}`);
+    if (r.status === 404) return res.status(404).json({ error: 'CEP não encontrado.' });
+    if (r.status !== 200 || !r.json) return res.status(502).json({ error: 'A busca de CEP não respondeu. Tente de novo.' });
+    const j = r.json;
+    // TOM não é o IBGE: city_id tem 4 dígitos e pode vir null (doc 5.1.2).
+    return res.json({ logradouro: j.logradouro || '', bairro: j.bairro || '', cidade: j.cidade || '', uf: j.uf || '', city_id: j.city_id || '' });
+  } catch (e) {
+    console.error('[novas] cep:', e.message);
+    return res.status(502).json({ error: 'A busca de CEP não respondeu. Tente de novo.' });
+  }
+});
+
+// POST /api/novas/atpve/documento — o documento que o vendedor assina no
+// gov.br (VE-15 no DF, procuração em GO, Anexo I no PR, requerimento no RS),
+// já preenchido. Não cria emissão e não cobra.
+app.post('/api/novas/atpve/documento', requireAuth, async (req, res) => {
+  const corpo = montarCorpoAtpveDataCred(req.body || {});
+  delete corpo.produto; delete corpo.confirmar;
+  if (!['DF', 'GO', 'PR', 'RS'].includes(corpo.uf)) return res.status(400).json({ error: 'Só DF, GO, PR e RS pedem documento assinado.' });
+  try {
+    const r = await chamarDataCred('/comunicados-venda/procuracao', { method: 'POST', body: corpo });
+    if (r.status === 200 && r.buf.slice(0, 4).toString() === '%PDF') {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="documento-assinatura-${corpo.uf}-${corpo.placa || 'veiculo'}.pdf"`);
+      return res.send(r.buf);
+    }
+    return res.status(r.status >= 500 ? 502 : 400).json({ error: msgDataCred(r.json) || 'Não foi possível gerar o documento. Confira os dados.' });
+  } catch (e) {
+    console.error('[novas] documento:', e.message);
+    return res.status(502).json({ error: 'Não foi possível gerar o documento agora. Tente de novo.' });
+  }
+});
+
 // ── POST /api/pdf/extrair-crlve ───────────────────────────────────────────────
 // Irmã da /api/pdf/extrair-atpv, para o outro documento: recebe o texto e as
 // posições que o PDF.js leu no navegador e devolve os campos do CRLV-e **já
@@ -18063,7 +18356,11 @@ app.get('/api/cron/crlv-agendado-status', async (req, res) => {
     let assinafy = null;
     try { assinafy = await runAssinafyPendingCheck(); }
     catch (e) { console.error('Erro na checagem de assinaturas pendentes:', e.message); assinafy = { erro: e.message }; }
-    res.json({ success: true, ...result, vistocar, assinafy });
+    // Emissões de ATPV-e da DataCred em conferência — mesma carona.
+    let datacred = null;
+    try { datacred = await runDataCredPendingCheck(); }
+    catch (e) { console.error('Erro na checagem de ATPV-e DataCred:', e.message); datacred = { erro: e.message }; }
+    res.json({ success: true, ...result, vistocar, assinafy, datacred });
   } catch (err) {
     console.error('Erro no cron crlv-agendado-status:', err.message);
     res.status(500).json({ error: err.message });

@@ -2312,6 +2312,7 @@ function inputTypeLabel(t) {
     recurso_multa:       'Entrada: Notificação da multa (foto ou PDF) + perguntas',
     contrato_social:     'Entrada: Dados da empresa e dos sócios (constituição ou alteração)',
     dcr_cancelar_atpve:  'Entrada: Placa + UF + Número do ATPV-e (+ DUDA no RJ)',
+    dcr_atpve:           'Entrada: Veículo, vendedor, comprador e venda (+ anexos conforme a UF)',
     dcr_cancelar_cve:    'Entrada: Placa + Protocolo e Renavam, ou DUDA',
     arrendamento_veicular: 'Entrada: Placa + CPF/CNPJ do arrendador e do arrendatário + condições',
     cancelar_venda:      'Entrada: ID + Protocolo + Motivo',
@@ -2840,7 +2841,7 @@ function renderNovasDestaque(svcsVisiveis) {
             <span class="svc-badge bg-rose-100 text-rose-700">🆕 Novo</span>
           </div>
           <p class="text-xs text-gray-600 mt-1 leading-snug">
-            <strong>Cancelamento de ATPV-e</strong> e de <strong>comunicado de venda</strong>, CRLV-e de 20 estados,
+            <strong>Emissão de ATPV-e (intenção de venda)</strong>, <strong>cancelamento de ATPV-e</strong> e de <strong>comunicado de venda</strong>, CRLV-e de 20 estados,
             pacotes veiculares, leilão, histórico de proprietários e consultas de crédito — ${doGrupo.length} consultas numa página só.
           </p>
         </div>
@@ -3490,10 +3491,120 @@ function buildExtrasList() {
   document.getElementById('extras-service-list').innerHTML = botoes.join('');
 }
 
+// ── Emissão de ATPV-e nova (dcr_atpve) ─────────────────────────────────────────
+// Anexos lidos em memória ({ nome, tipo, base64 }) — o form.reset() limpa o
+// <input type="file">, não isto, por isso iniciarAtpveNova zera.
+let a2Anexos = [];
+const A2_LIMITE_BASE64 = 4.0 * 1024 * 1024;
+
+function atualizarFormAtpveNova() {
+  const uf = document.getElementById('f-a2-uf')?.value || '';
+  document.querySelectorAll('[data-a2-ufs]').forEach(el =>
+    el.classList.toggle('hidden', !uf || !el.dataset.a2Ufs.split(',').includes(uf)));
+  const rot = { DF: 'Autorização VE-15 assinada pelo vendedor', GO: 'Procuração assinada pelo vendedor', PR: 'Anexo I assinado pelo vendedor', RS: 'Requerimento assinado pelo vendedor' }[uf];
+  const t = document.getElementById('a2-doc-titulo'); if (t && rot) t.textContent = rot;
+}
+
+function iniciarAtpveNovaUf(uf) {
+  const el = document.getElementById('f-a2-uf');
+  if (el) { el.value = uf; atualizarFormAtpveNova(); }
+}
+
+function iniciarAtpveNova(ufInicial) {
+  a2Anexos = [];
+  const ufEl = document.getElementById('f-a2-uf');
+  if (!ufEl) return;
+  if (ufInicial) ufEl.value = ufInicial;
+  ufEl.addEventListener('change', atualizarFormAtpveNova);
+  atualizarFormAtpveNova();
+  document.querySelectorAll('[data-a2-data]').forEach(el => el.addEventListener('input', function () {
+    const d = this.value.replace(/\D/g, '').slice(0, 8);
+    this.value = d.replace(/^(\d{2})(\d{1,2})?(\d{1,4})?$/, (_, a, b, c) => [a, b, c].filter(Boolean).join('/'));
+  }));
+  document.getElementById('f-a2-comprador_cep')?.addEventListener('input', function () {
+    this.value = this.value.replace(/\D/g, '').slice(0, 8);
+    document.getElementById('f-a2-comprador_city_id').value = '';
+    if (this.value.length === 8) buscarCepAtpveNova(this.value);
+  });
+  document.getElementById('f-a2-vendedor_cep')?.addEventListener('input', async function () {
+    this.value = this.value.replace(/\D/g, '').slice(0, 8);
+    if (this.value.length !== 8) return;
+    try {
+      const r = await fetch('/api/cep/' + this.value); const d = await r.json();
+      if (!r.ok) return;
+      const set = (k, v) => { const el = document.getElementById('f-a2-' + k); if (el && v) el.value = v; };
+      set('vendedor_rua', d.logradouro); set('vendedor_bairro', d.bairro); set('vendedor_municipio', d.cidade_nome); set('vendedor_uf_endereco', d.uf);
+    } catch { /* o cliente preenche à mão */ }
+  });
+}
+
+// O código TOM do município (comprador_city_id) só vem por aqui.
+async function buscarCepAtpveNova(cep) {
+  const st = document.getElementById('a2-cep-status');
+  st.className = 'text-xs mt-1 text-gray-500'; st.textContent = '⏳ Buscando o CEP…';
+  try {
+    const r = await fetch('/api/novas/cep/' + cep); const d = await r.json();
+    if (!r.ok) { st.className = 'text-xs mt-1 text-red-600'; st.textContent = d.error || 'CEP não encontrado.'; return; }
+    const set = (k, v) => { const el = document.getElementById('f-a2-' + k); if (el && v) el.value = v; };
+    set('comprador_rua', d.logradouro); set('comprador_bairro', d.bairro); set('comprador_cidade', d.cidade); set('comprador_uf', d.uf);
+    document.getElementById('f-a2-comprador_city_id').value = d.city_id || '';
+    if (d.city_id) { st.className = 'text-xs mt-1 text-green-700'; st.textContent = `✓ ${d.cidade}/${d.uf} — código do município ${d.city_id}.`; }
+    else { st.className = 'text-xs mt-1 text-red-600'; st.textContent = 'Este CEP não trouxe o código do município do Detran. Tente o CEP geral da cidade.'; }
+  } catch { st.className = 'text-xs mt-1 text-red-600'; st.textContent = 'Erro de conexão ao buscar o CEP.'; }
+}
+
+async function gerarDocumentoAtpveNova() {
+  const st = document.getElementById('a2-doc-status');
+  st.className = 'text-xs text-gray-600'; st.textContent = '⏳ Gerando o documento…';
+  try {
+    const r = await fetch('/api/novas/atpve/documento', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildParams('dcr_atpve')) });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); st.className = 'text-xs text-red-600'; st.textContent = d.error || 'Não foi possível gerar.'; return; }
+    const blob = await r.blob();
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'documento-para-assinatura.pdf'; a.click();
+    st.className = 'text-xs text-green-700'; st.textContent = '✓ Documento baixado. O vendedor assina no gov.br e você anexa o arquivo assinado abaixo.';
+  } catch { st.className = 'text-xs text-red-600'; st.textContent = 'Erro de conexão.'; }
+}
+
+// PDF grande é reduzido como no ATPV-e anterior (reduzirPdfAtpve); a soma tem
+// de caber no limite de 4,5 MB do corpo na Vercel.
+async function handleAnexosAtpveNova(input) {
+  const st = document.getElementById('a2-anexos-status');
+  a2Anexos = [];
+  const files = [...(input.files || [])].slice(0, 8);
+  st.className = 'text-xs mt-1 text-gray-500'; st.textContent = files.length ? '⏳ Lendo os arquivos…' : '';
+  try {
+    for (const f of files) {
+      const ext = f.name.toLowerCase().split('.').pop();
+      let base64;
+      if (ext === 'pdf' && f.size > 700 * 1024) { try { base64 = await reduzirPdfAtpve(f); } catch { base64 = null; } }
+      if (!base64) base64 = await lerArquivoBase64(f);
+      a2Anexos.push({ nome: f.name, base64 });
+    }
+    const total = a2Anexos.reduce((t, a) => t + a.base64.length, 0);
+    if (total > A2_LIMITE_BASE64) { st.className = 'text-xs mt-1 text-red-600'; st.textContent = 'Os anexos passam do limite de 4 MB. Envie fotos menores ou PDFs mais leves.'; a2Anexos = []; return; }
+    st.className = 'text-xs mt-1 text-green-700'; st.textContent = `✓ ${a2Anexos.length} arquivo(s) pronto(s) — ${(total / 1024 / 1024 * 0.75).toFixed(1)} MB.`;
+  } catch { st.className = 'text-xs mt-1 text-red-600'; st.textContent = 'Não foi possível ler um dos arquivos.'; a2Anexos = []; }
+}
+
+// Pedido aceito sem documento ainda (conferência do Detran): tela de "registrado".
+function showDcrPendente(data, svc) {
+  document.getElementById('query-form-wrap').classList.add('hidden');
+  document.getElementById('query-result-wrap').classList.remove('hidden');
+  document.getElementById('result-service-name').textContent = svc.name;
+  document.getElementById('result-json-wrap').classList.add('hidden');
+  document.getElementById('result-pdf-wrap').classList.add('hidden');
+  let box = document.getElementById('dcr-pendente-box');
+  if (!box) { box = document.createElement('div'); box.id = 'dcr-pendente-box'; document.getElementById('result-json-wrap').before(box); }
+  box.classList.remove('hidden');
+  box.innerHTML = `<div class="bg-green-50 border border-green-200 rounded-lg p-4 text-sm text-green-900">
+    <div class="font-bold mb-1">✅ Pedido registrado</div>${escapeHtml(data.result?.mensagem || 'O documento chega no WhatsApp e no Histórico.')}</div>`;
+  document.getElementById('query-result-wrap').scrollIntoView({ behavior: 'smooth' });
+}
+
 // ── ATPVe's e Consultas Novas ──────────────────────────────────────────────────
 const GRUPO_NOVAS = "ATPVe's e Consultas Novas";
 // Ordem dos blocos da página; subgrupo novo vindo do servidor entra no fim.
-const NOVAS_SUBGRUPOS = ['Cancelamentos', 'Documentos do veículo', 'CRLV-e', 'Pacotes veiculares', 'Bases veiculares', 'Crédito'];
+const NOVAS_SUBGRUPOS = ['Emissão de ATPV-e', 'Cancelamentos', 'Documentos do veículo', 'CRLV-e', 'Pacotes veiculares', 'Bases veiculares', 'Crédito'];
 
 function buildNovasList() {
   const wrap = document.getElementById('novas-service-list');
@@ -3501,7 +3612,25 @@ function buildNovasList() {
   const svcs = allServices.filter(s => s.group === GRUPO_NOVAS);
   const subs = [...new Set(svcs.map(s => s.subgrupo || 'Outras'))]
     .sort((a, b) => (NOVAS_SUBGRUPOS.indexOf(a) + 1 || 99) - (NOVAS_SUBGRUPOS.indexOf(b) + 1 || 99));
-  wrap.innerHTML = subs.map(sub => `
+  wrap.innerHTML = subs.map(sub => sub === 'Emissão de ATPV-e' ? svcs.filter(s => s.subgrupo === sub).map(s => `
+    <button type="button" onclick="selectService(${JSON.stringify(s).replace(/"/g,"&quot;")})"
+      class="w-full text-left bg-gradient-to-r from-amber-50 to-white border-2 border-amber-300 rounded-xl p-4 sm:p-5 hover:border-amber-500 hover:shadow-md transition-all">
+      <div class="flex items-center gap-4">
+        <div class="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center text-2xl flex-shrink-0">${s.icon}</div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="font-bold text-gray-800">${escapeHtml(s.name)}</span>
+            <span class="svc-badge bg-orange-100 text-orange-700">⭐ Destaque</span>
+          </div>
+          <p class="text-xs text-gray-600 mt-1 leading-snug">RJ, MG, SP, PR, RS, GO, MS e DF. No RJ sai na hora; nas demais passa pela conferência do Detran.
+            <strong>Só é cobrada quando o ATPV-e sai.</strong></p>
+        </div>
+        <div class="flex flex-col items-end gap-1 flex-shrink-0">
+          <span class="price-tag text-sm">${fmtPrice(s.price)}</span>
+          <span class="svc-cta">Emitir</span>
+        </div>
+      </div>
+    </button>`).join('') : `
     <div class="card">
       <h3 class="font-semibold text-gray-800 mb-3">${escapeHtml(sub)}</h3>
       <div class="grid sm:grid-cols-2 gap-2">
@@ -3582,6 +3711,15 @@ function renderServiceList(cat) {
 
 function selectService(svc) {
   if (typeof svc === 'string') svc = JSON.parse(svc);
+  // ATPV-e da Vistocar suspenso (22/10/2026): vai para a emissão nova, com a UF dele.
+  if ((svc.id === 'atpve-vistocar-rj' || svc.id === 'atpve-vistocar-mg') && allServices.some(s => s.id === 'dcr-atpve')) {
+    const uf = svc.uf ? svc.uf.toUpperCase() : '';
+    toast('A emissão de ATPV-e agora é por aqui.');
+    showSection('novas');
+    selectService(allServices.find(s => s.id === 'dcr-atpve'));
+    if (uf) iniciarAtpveNovaUf(uf);
+    return;
+  }
   // Serviços da aba "Coisas de Despachantes": sem assinatura ativa, abre o
   // popup em vez do formulário (ver assinaturaLiberada).
   if (!assinaturaLiberada(svc.id)) { abrirAssinaturaDoServico(svc); return; }
@@ -3641,6 +3779,7 @@ function queryActionLabel(inputType) {
   if (inputType === 'recurso_multa') return 'Gerar Recurso';
   if (inputType === 'contrato_social') return 'Gerar Contrato Social';
   if (inputType === 'dcr_cancelar_atpve' || inputType === 'dcr_cancelar_cve') return 'Solicitar Cancelamento';
+  if (inputType === 'dcr_atpve') return 'Emitir ATPV-e';
   if (inputType === 'arrendamento_veicular') return 'Gerar Contrato de Arrendamento';
   return 'Realizar Consulta';
 }
@@ -4279,6 +4418,105 @@ function renderFormFields(inputType, svc) {
     // Formulário em etapas, desenhado por assets/contrato-social.js.
     contrato_social: '<div id="cs-root"></div>',
 
+    // Emissão de ATPV-e (página ATPVe's e Consultas Novas) — ids f-a2-<campo da API>.
+    dcr_atpve: (() => {
+      const c = (id, label, ph = '', estrela = false, extra = '') => `<div>
+        <label class="label">${label}${estrela ? ' <span class="text-red-500">*</span>' : ''}</label>
+        <input id="f-a2-${id}" type="text" placeholder="${ph}" class="input-field" ${extra}></div>`;
+      const bloco = (ufs, html) => `<div data-a2-ufs="${ufs}" class="hidden">${html}</div>`;
+      const titulo = t => `<div class="font-semibold text-blue-800 text-sm mt-4 mb-2 uppercase tracking-wide">${t}</div>`;
+      return `
+      <div class="bg-amber-50 border border-amber-300 text-amber-900 rounded-lg px-3 py-2 text-sm mb-3">
+        <strong>Atenção:</strong> isto não é uma consulta. Emitir registra oficialmente o veículo como vendido ao comprador informado — é um <strong>ato irreversível</strong>.
+      </div>
+      ${titulo('Veículo')}
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        <div>
+          <label class="label">UF de origem do veículo <span class="text-red-500">*</span></label>
+          <select id="f-a2-uf" class="input-field">
+            <option value="">—</option>${['RJ','DF','GO','MG','MS','PR','RS','SP'].map(u => `<option value="${u}">${u}</option>`).join('')}
+          </select>
+        </div>
+        ${c('placa', 'Placa', 'ABC1D23', true, 'maxlength="8" style="text-transform:uppercase"')}
+        ${c('renavam', 'Renavam', 'só números', true, 'inputmode="numeric" maxlength="11"')}
+        ${c('ano_fabricacao', 'Ano de fabricação', '2022', true, 'inputmode="numeric" maxlength="4"')}
+        ${c('ano_modelo', 'Ano do modelo', '2023', true, 'inputmode="numeric" maxlength="4"')}
+        ${c('crv_numero', 'Número do CRV (obrigatório no PR)', '', false, 'inputmode="numeric"')}
+      </div>
+      ${bloco('DF,GO,RS,SP', `<div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
+        ${c('chassi', 'Chassi', '17 caracteres', true, 'maxlength="17" style="text-transform:uppercase"')}
+        <div data-a2-ufs="DF,GO,RS" class="hidden">${c('marca', 'Marca', 'VOLKSWAGEN', true)}</div>
+        <div data-a2-ufs="DF,GO,RS" class="hidden">${c('modelo', 'Modelo', 'GOL 1.6', true)}</div></div>`)}
+      ${bloco('MG,MS,PR,SP', `<div class="grid grid-cols-2 gap-3 mt-3">${c('odometro', 'Quilometragem (odômetro, km)', '145320', true, 'inputmode="numeric"')}</div>`)}
+
+      ${titulo('Vendedor (proprietário atual)')}
+      <div class="grid sm:grid-cols-2 gap-3">
+        ${c('vendedor_documento', 'CPF/CNPJ do vendedor', 'só números', true, 'inputmode="numeric" maxlength="18"')}
+        ${c('vendedor_nome', 'Nome do vendedor', '', true)}
+        ${c('vendedor_email', 'E-mail do vendedor (obrigatório no DF, PR e SP)', 'vendedor@email.com')}
+      </div>
+      ${bloco('DF,GO', `<div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
+        ${c('vendedor_celular', 'Celular do vendedor', '21999999999', true, 'inputmode="numeric"')}
+        ${c('vendedor_rg', 'RG do vendedor', '', true)}
+        ${c('vendedor_orgao_expedidor', 'Órgão expedidor', 'DETRAN/RJ', true)}
+        <div data-a2-ufs="GO" class="hidden">${c('vendedor_estado_civil', 'Estado civil do vendedor', 'solteiro', true)}</div>
+        ${c('vendedor_cep', 'CEP do vendedor', '00000000', true, 'inputmode="numeric" maxlength="9"')}
+        ${c('vendedor_rua', 'Rua do vendedor', '', true)}
+        ${c('vendedor_numero', 'Número', '', true)}
+        ${c('vendedor_bairro', 'Bairro', '', true)}
+        ${c('vendedor_municipio', 'Município do vendedor', '', true)}
+        ${c('vendedor_uf_endereco', 'UF do endereço', 'RJ', true, 'maxlength="2" style="text-transform:uppercase"')}
+        <div data-a2-ufs="GO" class="hidden">${c('vendedor_quadra', 'Quadra (se houver)')}</div>
+        <div data-a2-ufs="GO" class="hidden">${c('vendedor_lote', 'Lote (se houver)')}</div></div>`)}
+
+      ${titulo('Comprador')}
+      <div class="grid sm:grid-cols-2 gap-3">
+        ${c('comprador_documento', 'CPF/CNPJ do comprador', 'só números', true, 'inputmode="numeric" maxlength="18"')}
+        ${c('comprador_nome', 'Nome do comprador', '', true)}
+        ${c('comprador_email', 'E-mail do comprador (obrigatório no DF, PR, RS e SP)', 'comprador@email.com')}
+        <div data-a2-ufs="GO" class="hidden">${c('comprador_rg', 'RG do comprador', '', true)}</div>
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
+        ${c('comprador_cep', 'CEP do comprador', '00000000', true, 'inputmode="numeric" maxlength="9"')}
+        <div class="col-span-1 sm:col-span-2">${c('comprador_rua', 'Rua', '', true)}</div>
+        ${c('comprador_numero', 'Número', '123 ou S/N', true)}
+        ${c('comprador_complemento', 'Complemento', 'Apto 101')}
+        ${c('comprador_bairro', 'Bairro', '', true)}
+        ${c('comprador_cidade', 'Cidade', '', true)}
+        ${c('comprador_uf', 'UF', '', true, 'maxlength="2" style="text-transform:uppercase"')}
+      </div>
+      <input type="hidden" id="f-a2-comprador_city_id">
+      <p id="a2-cep-status" class="text-xs mt-1 text-gray-500">Digite o CEP: o código do município do Detran vem dele.</p>
+
+      ${titulo('Venda')}
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        ${c('venda_data', 'Data da venda', 'dd/mm/aaaa', true, 'maxlength="10" inputmode="numeric" data-a2-data="1"')}
+        ${c('venda_valor', 'Valor da venda (R$)', '45.000,00', true, 'inputmode="decimal"')}
+        <div data-a2-ufs="PR" class="hidden">${c('local_assinatura', 'Cidade da assinatura', 'Curitiba', true)}</div>
+      </div>
+
+      ${bloco('DF,GO,PR,RS', `<div class="mt-4 border border-blue-200 bg-blue-50 rounded-lg p-3 space-y-2">
+        <div class="font-semibold text-blue-900 text-sm" id="a2-doc-titulo">Documento assinado pelo vendedor</div>
+        <p class="text-xs text-blue-900">O Detran desta UF só emite com um documento assinado pelo <strong>vendedor</strong> no gov.br.
+          1) Preencha os dados acima; 2) baixe o documento já preenchido; 3) o vendedor assina no gov.br; 4) anexe o arquivo assinado abaixo.</p>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" onclick="gerarDocumentoAtpveNova()" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-3 py-2 rounded">📄 Baixar documento preenchido</button>
+          <a href="https://assinador.iti.br" target="_blank" rel="noopener" class="bg-white border border-blue-300 text-blue-700 text-xs font-semibold px-3 py-2 rounded">✍️ Assinar no gov.br</a>
+        </div>
+        <p id="a2-doc-status" class="text-xs"></p></div>`)}
+
+      ${bloco('DF,GO,PR,RS,MS,SP', `<div class="mt-4">
+        <label class="label">Anexos <span class="text-red-500">*</span></label>
+        <input id="f-a2-anexos" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" class="input-field" onchange="handleAnexosAtpveNova(this)">
+        <p class="text-xs text-gray-500 mt-1">PDF ou foto: o documento assinado (quando a UF pede), o CRV/CRLV do veículo e documento com foto das partes. Total de até 4 MB.</p>
+        <p id="a2-anexos-status" class="text-xs mt-1"></p></div>`)}
+
+      <label class="flex items-start gap-2 text-sm text-red-800 bg-red-50 border border-red-200 rounded p-2 mt-4">
+        <input type="checkbox" id="f-a2-confirmar" class="mt-1">
+        <span>Conferi os dados e confirmo a emissão do ATPV-e. <strong>É um ato no Detran e não pode ser desfeito.</strong></span>
+      </label>`;
+    })(),
+
     // Cancelamentos (página ATPVe's e Consultas Novas). Campos que a API pede,
     // conferidos pelas recusas dela em 22/10/2026.
     dcr_cancelar_atpve: placaField + `
@@ -4462,6 +4700,7 @@ function renderFormFields(inputType, svc) {
   // base64 ja lido — sem zerar aqui, reabrir mandaria o PDF do pedido anterior.
   if (inputType === 'assinatura_digital') assinaturaArquivo = { base64: '', nome: '' };
   if (inputType === 'contrato_social') csIniciar();
+  if (inputType === 'dcr_atpve') iniciarAtpveNova();
   if (inputType === 'arrendamento_veicular') avIniciar();
   // Recurso de Multa: mesmo motivo — os arquivos lidos ficam em memória.
   if (inputType === 'recurso_multa') {
@@ -5434,6 +5673,11 @@ async function submitQuery(e) {
       }
       // Assinatura Digital: o pedido foi criado, mas o documento assinado só
       // existe depois que a pessoa assina — mesma ideia, tela própria.
+      if (data.pending && selectedSvc.inputType === 'dcr_atpve') {
+        showDcrPendente(data, selectedSvc);
+        await loadQueries();
+        return;
+      }
       if (data.pending && selectedSvc.inputType === 'assinatura_digital') {
         showAssinaturaProgress(data, selectedSvc);
         await Promise.all([loadQueries(), loadAssinaturaStatus()]);
@@ -5473,6 +5717,13 @@ function buildParams(inputType) {
                                          return { id: g('id') };
   if (inputType === 'pedido_id_get')     return { pedido_id: g('pedido_id') };
 
+  if (inputType === 'dcr_atpve') {
+    const p = {};
+    document.querySelectorAll('[id^="f-a2-"]').forEach(el => { if (el.type !== 'file' && el.type !== 'checkbox') p[el.id.slice(5)] = el.value.trim(); });
+    p.anexos = a2Anexos;
+    p.confirmar = !!document.getElementById('f-a2-confirmar')?.checked;
+    return p;
+  }
   if (inputType === 'dcr_cancelar_atpve')
     return { placa: g('placa'), uf: g('uf'), numero_atpve: g('numero_atpve'), renavam: g('renavam'), numero_duda: g('numero_duda'), confirmar: !!document.getElementById('f-dcr_confirmar')?.checked };
   if (inputType === 'dcr_cancelar_cve')
@@ -5744,6 +5995,21 @@ function buildParams(inputType) {
 // para dar feedback imediato sem depender da resposta da API externa).
 function validateParams(inputType, p) {
   if (inputType === 'contrato_social') return csValidar(p);
+  if (inputType === 'dcr_atpve') {
+    const dg = v => String(v || '').replace(/\D/g, '');
+    if (!p.uf) return 'Escolha a UF de origem do veículo.';
+    if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(String(p.placa).toUpperCase().replace(/[^A-Z0-9]/g, ''))) return 'Placa inválida.';
+    if (dg(p.renavam).length < 9) return 'Renavam inválido.';
+    if (dg(p.ano_fabricacao).length !== 4 || dg(p.ano_modelo).length !== 4) return 'Informe os anos de fabricação e modelo.';
+    if (![11, 14].includes(dg(p.vendedor_documento).length) || ![11, 14].includes(dg(p.comprador_documento).length)) return 'Informe o CPF/CNPJ do vendedor e do comprador.';
+    if (!p.vendedor_nome || !p.comprador_nome) return 'Informe o nome do vendedor e do comprador.';
+    if (!p.comprador_city_id) return 'Busque o CEP do comprador (o código do município vem dele).';
+    if (!p.comprador_rua || !p.comprador_numero || !p.comprador_bairro) return 'Complete o endereço do comprador.';
+    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(p.venda_data)) return 'Informe a data da venda (dd/mm/aaaa).';
+    if (!p.venda_valor) return 'Informe o valor da venda.';
+    if (['DF', 'GO', 'MS', 'PR', 'RS', 'SP'].includes(p.uf) && !p.anexos.length) return 'Anexe os documentos pedidos para esta UF.';
+    if (!p.confirmar) return 'Marque a confirmação da emissão.';
+  }
   if (inputType === 'dcr_cancelar_atpve' || inputType === 'dcr_cancelar_cve') {
     if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(String(p.placa).toUpperCase().replace(/[^A-Z0-9]/g, ''))) return 'Placa inválida.';
     if (inputType === 'dcr_cancelar_atpve') {
@@ -5944,6 +6210,7 @@ function triggerPdfDownload(blob, serviceId) {
 }
 
 function showPdfResult(svc) {
+  document.getElementById('dcr-pendente-box')?.classList.add('hidden');
   document.getElementById('query-form-wrap').classList.add('hidden');
   document.getElementById('query-result-wrap').classList.remove('hidden');
   document.getElementById('result-service-name').textContent = svc.name;
@@ -6306,6 +6573,7 @@ function showAssinaturaProgress(data, svc) {
 }
 
 function showJsonResult(data, svc) {
+  document.getElementById('dcr-pendente-box')?.classList.add('hidden');
   document.getElementById('query-form-wrap').classList.add('hidden');
   document.getElementById('query-result-wrap').classList.remove('hidden');
   document.getElementById('result-service-name').textContent = svc.name;
