@@ -8245,6 +8245,11 @@ async function chamarDataCred(caminho, { method = 'GET', body } = {}) {
   const buf = Buffer.from(await r.arrayBuffer());
   let json = null;
   try { json = JSON.parse(buf.toString('utf8')); } catch {}
+  // 401/403 vindos da Vercel com o corpo vazio (22/10/2026), enquanto a mesma
+  // chave respondia 200 fora dela: registra o que veio para saber se é a API
+  // deles ou um firewall na frente. Só o caminho e o corpo — nunca a chave.
+  if (r.status === 401 || r.status === 403)
+    console.error(`[datacred] ${method} ${caminho.split('?')[0]} → HTTP ${r.status} ct=${r.headers.get('content-type') || '-'} server=${r.headers.get('server') || '-'} cf-ray=${r.headers.get('cf-ray') || '-'} chave=${DATACRED_API_KEY.length}c/${DATACRED_API_KEY.slice(0, 4)}… corpo=${buf.toString('utf8').replace(/\s+/g, ' ').slice(0, 300)}`);
   return { status: r.status, json, buf, ct: r.headers.get('content-type') || '' };
 }
 
