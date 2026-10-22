@@ -9221,6 +9221,9 @@ async function processCatalogQuery(userId, serviceId, params, res) {
             const numero = String(params?.numero_atpve || '').replace(/\D/g, '');
             if (!/^[A-Z]{2}$/.test(uf)) return res.status(400).json({ error: 'Informe a UF do ATPV-e.' });
             if (numero.length < 6) return res.status(400).json({ error: 'Informe o número do ATPV-e a cancelar.' });
+            // A API pede o renavam (testado com BA em 22/10/2026: depois da UF
+            // ela recusa com 'Informe o RENAVAM do veículo').
+            if (renavam.length < 9 || renavam.length > 11) return res.status(400).json({ error: 'Informe o renavam do veículo (9 a 11 dígitos).' });
             if (uf === 'RJ' && !duda) return res.status(400).json({ error: 'No RJ o número da DUDA é obrigatório para cancelar o ATPV-e.' });
             caminho = '/comunicados-venda/cancelar-atpve';
             corpo = { confirmar: true, placa, uf, numero_atpve: numero, ...(renavam ? { renavam } : {}), ...(duda ? { numero_duda: duda } : {}) };

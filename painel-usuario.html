@@ -2311,7 +2311,7 @@ function inputTypeLabel(t) {
     assinatura_digital:  'Entrada: PDF + dados de quem assina',
     recurso_multa:       'Entrada: Notificação da multa (foto ou PDF) + perguntas',
     contrato_social:     'Entrada: Dados da empresa e dos sócios (constituição ou alteração)',
-    dcr_cancelar_atpve:  'Entrada: Placa + UF + Número do ATPV-e (+ DUDA no RJ)',
+    dcr_cancelar_atpve:  'Entrada: Placa + Renavam + UF + Número do ATPV-e (+ DUDA no RJ)',
     dcr_atpve:           'Entrada: Veículo, vendedor, comprador e venda (+ anexos conforme a UF)',
     dcr_cancelar_cve:    'Entrada: Placa + Protocolo e Renavam, ou DUDA',
     arrendamento_veicular: 'Entrada: Placa + CPF/CNPJ do arrendador e do arrendatário + condições',
@@ -4542,13 +4542,13 @@ function renderFormFields(inputType, svc) {
         <div>
           <label class="label">UF do ATPV-e <span class="text-red-500">*</span></label>
           <select id="f-uf" class="input-field" required>
-            <option value="">—</option><option value="DF">DF</option><option value="GO">GO</option><option value="MG">MG</option><option value="MS">MS</option><option value="PR">PR</option><option value="RJ">RJ</option><option value="RS">RS</option><option value="SP">SP</option>
+            <option value="">—</option><option value="AC">AC</option><option value="AL">AL</option><option value="AM">AM</option><option value="AP">AP</option><option value="BA">BA</option><option value="CE">CE</option><option value="DF">DF</option><option value="ES">ES</option><option value="GO">GO</option><option value="MA">MA</option><option value="MG">MG</option><option value="MS">MS</option><option value="MT">MT</option><option value="PA">PA</option><option value="PB">PB</option><option value="PE">PE</option><option value="PI">PI</option><option value="PR">PR</option><option value="RJ">RJ</option><option value="RN">RN</option><option value="RO">RO</option><option value="RR">RR</option><option value="RS">RS</option><option value="SC">SC</option><option value="SE">SE</option><option value="SP">SP</option><option value="TO">TO</option>
           </select>
         </div>
         ${field('numero_atpve', 'Número do ATPV-e', 'text', '000000000000', true, 'inputmode="numeric"')}
       </div>
       <div class="grid grid-cols-2 gap-3">
-        ${field('renavam', 'Renavam (opcional)', 'text', '00000000000', false, 'inputmode="numeric" maxlength="11"')}
+        ${field('renavam', 'Renavam', 'text', '00000000000', true, 'inputmode="numeric" maxlength="11"')}
         ${field('numero_duda', 'Número da DUDA (obrigatório no RJ)', 'text', '', false, 'inputmode="numeric"')}
       </div>
       <p class="text-xs text-gray-500 mt-1">Cancela a <strong>intenção de venda</strong> (o ATPV-e). Para desfazer uma comunicação de venda, use o cancelamento de comunicado.</p>
@@ -6033,6 +6033,7 @@ function validateParams(inputType, p) {
     if (inputType === 'dcr_cancelar_atpve') {
       if (!p.uf) return 'Escolha a UF do ATPV-e.';
       if (p.numero_atpve.replace(/\D/g, '').length < 6) return 'Informe o número do ATPV-e.';
+      if (String(p.renavam).replace(/\D/g, '').length < 9) return 'Informe o renavam (9 a 11 dígitos).';
       if (p.uf === 'RJ' && !p.numero_duda) return 'No RJ o número da DUDA é obrigatório.';
     } else if (!(p.protocolo && p.renavam) && !p.numero_duda) return 'Informe o protocolo com o renavam, ou o número da DUDA.';
     if (!p.confirmar) return 'Marque a confirmação do cancelamento.';
