@@ -109,6 +109,9 @@
     <div class="nav-item" data-section="atpve" onclick="showSection('atpve')">
       <span class="text-lg">📝</span> Pedidos ATPV-e
     </div>
+    <div class="nav-item" data-section="novas" onclick="showSection('novas')">
+      <span class="text-lg">🚫</span> Consultas Novas (ATPV-e)
+    </div>
     <div class="nav-item" data-section="pos-pago" onclick="showSection('pos-pago')">
       <span class="text-lg">🧮</span> Clientes Pós-pago
     </div>
@@ -667,6 +670,77 @@
           </table>
         </div>
         <div id="atpve-count" class="px-4 py-2 text-xs text-gray-400 border-t border-gray-100"></div>
+      </div>
+    </section>
+
+    <!-- ── CONSULTAS NOVAS (DataCred) ────────────────────────────────────────
+         Irmã da "Pedidos ATPV-e": todos os pedidos da página ATPVe's e
+         Consultas Novas (emissões, cancelamentos e consultas). As ações chamam
+         as mesmas funções do cron (/api/admin/novas-pedidos/*). -->
+    <section id="section-novas" class="admin-section hidden space-y-4">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Consultas Novas — ATPV-e e consultas</h2>
+        <p class="text-sm text-gray-500">Todos os pedidos da página <strong>ATPVe's e Consultas Novas</strong>, de todos os clientes. A <strong>emissão de ATPV-e</strong> fica <strong>aguardando</strong> enquanto o Detran confere (fora o RJ, que sai na hora) e <strong>só é cobrada na entrega</strong>. <strong>Cancelar aqui encerra só o nosso pedido</strong> — não cancela nada no fornecedor.</p>
+      </div>
+
+      <div class="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        <div class="stat-card border-l-amber-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Emissões aguardando</div>
+          <div id="novas-aguardando" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">em conferência no Detran</div>
+        </div>
+        <div class="stat-card border-l-green-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Emissões entregues</div>
+          <div id="novas-entregues" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">ATPV-e emitido</div>
+        </div>
+        <div class="stat-card border-l-blue-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Consultas e cancelamentos</div>
+          <div id="novas-consultas" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">entregues</div>
+        </div>
+        <div class="stat-card border-l-gray-400">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Cancelados / recusados</div>
+          <div id="novas-cancelados" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">sem cobrança</div>
+        </div>
+      </div>
+
+      <div class="card p-0 overflow-hidden">
+        <div class="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-gray-100">
+          <input id="novas-search" type="text" class="input-field flex-1 min-w-48" placeholder="Buscar por placa, cliente, e-mail, protocolo ou serviço..." oninput="renderNovasPedidos()">
+          <select id="novas-tipo" class="input-field w-auto" onchange="renderNovasPedidos()">
+            <option value="todos">Todos os tipos</option>
+            <option value="emissao">Emissão de ATPV-e</option>
+            <option value="cancelamento">Cancelamentos</option>
+            <option value="consulta">Consultas</option>
+          </select>
+          <select id="novas-filtro" class="input-field w-auto" onchange="renderNovasPedidos()">
+            <option value="todos">Todos os status</option>
+            <option value="aguardando">Aguardando</option>
+            <option value="entregues">Entregues</option>
+            <option value="cancelados">Cancelados</option>
+          </select>
+          <button onclick="loadNovasPedidos()" class="btn-secondary text-xs">🔄 Atualizar</button>
+          <button onclick="verificarTodasNovas()" class="btn-primary text-xs">⚡ Verificar todas as emissões pendentes</button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Pedido</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Cliente</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">Protocolo</th>
+                <th class="px-4 py-3 text-center font-semibold text-gray-600">Status</th>
+                <th class="px-4 py-3 text-right font-semibold text-gray-600">Ações</th>
+              </tr>
+            </thead>
+            <tbody id="novas-tbody" class="divide-y divide-gray-50">
+              <tr><td colspan="5" class="px-4 py-8"><div class="space-y-2"><div class="skeleton"></div><div class="skeleton"></div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="novas-count" class="px-4 py-2 text-xs text-gray-400 border-t border-gray-100"></div>
       </div>
     </section>
 
@@ -1311,7 +1385,7 @@ const fmt = v => 'R$ ' + parseFloat(v||0).toLocaleString('pt-BR',{minimumFractio
 const fmtDate = s => { const d=new Date(s); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
 
 let allUsers = [], allTx = [], allQueries = [], allServices = [], allManualQueries = [];
-const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API', 'assinantes':'Lista de Assinantes Cadastrados', 'atpve':'Pedidos de ATPV-e', 'pos-pago':'Clientes Pós-pago', directdata:'Saldo DirectData', video:'Vídeo de Apresentação', mensagens:'Mensagens de clientes' };
+const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API', 'assinantes':'Lista de Assinantes Cadastrados', 'atpve':'Pedidos de ATPV-e', 'novas':'Consultas Novas (ATPV-e)', 'pos-pago':'Clientes Pós-pago', directdata:'Saldo DirectData', video:'Vídeo de Apresentação', mensagens:'Mensagens de clientes' };
 
 function toast(msg, type='success') {
   const el = document.getElementById('toast');
@@ -1343,6 +1417,7 @@ function showSection(id) {
   if (id === 'api-cobrancas') loadApiCharges();
   if (id === 'assinantes') loadAssinantes();
   if (id === 'atpve') loadAtpvePedidos();
+  if (id === 'novas') loadNovasPedidos();
   if (id === 'pos-pago') loadPosPago();
   if (id === 'directdata') loadDirectData();
   if (id === 'mensagens') loadMensagensAdmin();
@@ -1364,6 +1439,7 @@ function refreshCurrentSection() {
   if (id === 'api-cobrancas') loadApiCharges();
   if (id === 'assinantes')    loadAssinantes();
   if (id === 'atpve')         loadAtpvePedidos();
+  if (id === 'novas')         loadNovasPedidos();
   if (id === 'pos-pago')      loadPosPago();
   if (id === 'directdata')    loadDirectData();
   if (id === 'mensagens')     loadMensagensAdmin();
@@ -1646,6 +1722,151 @@ async function excluirAtpve(id) {
     toast('Pedido excluído.');
     await loadAtpvePedidos();
   } catch { toast('Erro de conexão.', 'error'); }
+}
+
+// ── Consultas Novas (DataCred) ────────────────────────────────────────────────
+async function loadNovasPedidos() {
+  try {
+    const r = await fetch('/api/admin/novas-pedidos');
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || 'Erro ao carregar as Consultas Novas.', 'error'); return; }
+    allNovasPedidos = d.pedidos || [];
+    renderNovasPedidos();
+  } catch { toast('Erro de conexão ao carregar as Consultas Novas.', 'error'); }
+}
+
+function renderNovasPedidos() {
+  const busca = (document.getElementById('novas-search').value || '').toLowerCase().trim();
+  const tipo = document.getElementById('novas-tipo').value;
+  const filtro = document.getElementById('novas-filtro').value;
+  const emissoes = allNovasPedidos.filter(p => p.tipo === 'emissao');
+  document.getElementById('novas-aguardando').textContent = emissoes.filter(p => p.status === 'aguardando_pdf').length;
+  document.getElementById('novas-entregues').textContent = emissoes.filter(p => p.status === 'success').length;
+  document.getElementById('novas-consultas').textContent = allNovasPedidos.filter(p => p.tipo !== 'emissao' && p.status === 'success').length;
+  document.getElementById('novas-cancelados').textContent = allNovasPedidos.filter(p => p.status === 'cancelado').length;
+
+  const lista = allNovasPedidos.filter(p => {
+    if (tipo !== 'todos' && p.tipo !== tipo) return false;
+    if (filtro === 'aguardando' && p.status !== 'aguardando_pdf') return false;
+    if (filtro === 'entregues' && p.status !== 'success') return false;
+    if (filtro === 'cancelados' && p.status !== 'cancelado') return false;
+    if (!busca) return true;
+    return [p.placa, p.documento, p.emissao, p.service_name, p.user.name, p.user.email, p.user.phone, String(p.id)]
+      .some(v => String(v || '').toLowerCase().includes(busca));
+  });
+
+  const selo = p => {
+    if (p.status === 'success') return '<span class="badge bg-green-100 text-green-700">✅ Entregue</span>';
+    if (p.status === 'cancelado') return '<span class="badge bg-gray-100 text-gray-600">Cancelado</span>';
+    if (p.status === 'aguardando_pdf') return '<span class="badge bg-amber-100 text-amber-800">⏳ Em conferência</span>';
+    return `<span class="badge bg-gray-100 text-gray-600">${escAtpve(p.status)}</span>`;
+  };
+  const rotuloTipo = { emissao: '📝 Emissão de ATPV-e', cancelamento: '🚫 Cancelamento', consulta: '🔎 Consulta' };
+
+  document.getElementById('novas-tbody').innerHTML = lista.length ? lista.map(p => `
+    <tr class="hover:bg-gray-50">
+      <td class="px-4 py-3 align-top">
+        <div class="font-semibold text-gray-800">${escAtpve(p.placa || p.documento) || '—'}${p.uf ? ` <span class="text-xs text-gray-500">${escAtpve(p.uf)}</span>` : ''}</div>
+        <div class="text-xs text-gray-500">${rotuloTipo[p.tipo]} · ${escAtpve(p.service_name)} · #${p.id}</div>
+        <div class="text-xs text-gray-400">${fmtDate(p.created_at)}</div>
+      </td>
+      <td class="px-4 py-3 align-top">
+        <div class="text-gray-800">${escAtpve(p.user.name || '—')}</div>
+        <div class="text-xs text-gray-500">${escAtpve(p.user.email || '')}</div>
+        <div class="text-xs text-gray-400">📲 ${escAtpve(p.user.phone || 'sem telefone')}</div>
+      </td>
+      <td class="px-4 py-3 align-top hidden md:table-cell">
+        <div class="text-xs font-mono text-gray-600">${escAtpve(p.emissao || '—')}</div>
+        ${p.verificado_em ? `<div class="text-xs text-gray-400">verificado em ${fmtDate(p.verificado_em)}</div>` : ''}
+        ${p.motivo ? `<div class="text-xs text-red-500">${escAtpve(p.motivo)}</div>` : ''}
+        ${p.whatsapp_sent_at ? `<div class="text-xs text-green-600">zap em ${fmtDate(p.whatsapp_sent_at)}</div>` : ''}
+        ${p.entrega_manual ? `<div class="text-xs text-purple-600">entregue manualmente em ${fmtDate(p.entrega_manual)}</div>` : ''}
+      </td>
+      <td class="px-4 py-3 align-top text-center">
+        ${selo(p)}
+        <div class="text-xs text-gray-400 mt-1">${p.cobrada ? fmt(p.amount) : (p.status === 'aguardando_pdf' ? 'cobra ' + fmt(p.amount) + ' na entrega' : 'sem cobrança')}</div>
+      </td>
+      <td class="px-4 py-3 align-top text-right whitespace-nowrap">
+        ${p.status === 'aguardando_pdf' ? `
+          <button onclick="verificarNova(${p.id})" class="btn-primary text-xs mb-1">⚡ Verificar agora</button>
+          <button onclick="cancelarNova(${p.id})" class="btn-secondary text-xs mb-1">Cancelar</button>` : ''}
+        ${['aguardando_pdf', 'cancelado'].includes(p.status) && !p.tem_pdf && p.tipo === 'emissao' ? `
+          <button onclick="entregarNovaManual(${p.id})" class="btn-primary text-xs mb-1 bg-purple-600 hover:bg-purple-700">📤 Entregar PDF</button>` : ''}
+        ${p.tem_pdf ? `
+          <button onclick="window.open('/api/admin/queries/${p.id}/pdf','_blank')" class="btn-secondary text-xs mb-1">📄 Abrir PDF</button>
+          <button onclick="reenviarNovaWhatsapp(${p.id})" class="btn-secondary text-xs mb-1">📲 Reenviar</button>` : ''}
+      </td>
+    </tr>`).join('')
+    : '<tr><td colspan="5" class="px-4 py-8 text-center text-gray-400 text-sm">Nenhum pedido encontrado.</td></tr>';
+  document.getElementById('novas-count').textContent = `${lista.length} de ${allNovasPedidos.length} pedidos`;
+}
+
+async function verificarNova(id, silencioso = false) {
+  try {
+    const r = await fetch(`/api/admin/novas-pedidos/${id}/verificar`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { if (!silencioso) toast(d.error || 'Erro ao verificar.', 'error'); return false; }
+    if (!silencioso) { toast(d.motivo || (d.entregue ? 'Entregue!' : 'Ainda não.'), d.entregue ? 'success' : 'error'); await loadNovasPedidos(); }
+    return !!d.entregue;
+  } catch { if (!silencioso) toast('Erro de conexão.', 'error'); return false; }
+}
+
+async function verificarTodasNovas() {
+  const pend = allNovasPedidos.filter(p => p.status === 'aguardando_pdf');
+  if (!pend.length) { toast('Não há emissões aguardando.', 'error'); return; }
+  if (!confirm(`Verificar ${pend.length} emissão(ões) pendente(s) agora?`)) return;
+  let ok = 0;
+  for (const p of pend) if (await verificarNova(p.id, true)) ok++;
+  await loadNovasPedidos();
+  toast(`${ok} de ${pend.length} entregue(s).`, ok ? 'success' : 'error');
+}
+
+async function cancelarNova(id) {
+  const motivo = prompt('Cancelar este pedido. O cliente é avisado por WhatsApp e NÃO é cobrado.\n\nAtenção: isto NÃO cancela no fornecedor — se o ATPV-e sair lá depois, eles cobram.\n\nMotivo (opcional):', '');
+  if (motivo === null) return;
+  try {
+    const r = await fetch(`/api/admin/novas-pedidos/${id}/cancelar`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ motivo }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || 'Erro ao cancelar.', 'error'); return; }
+    toast('Pedido cancelado, sem cobrança.');
+    await loadNovasPedidos();
+  } catch { toast('Erro de conexão.', 'error'); }
+}
+
+async function reenviarNovaWhatsapp(id) {
+  const p = allNovasPedidos.find(x => x.id === id);
+  const phone = prompt('Reenviar o documento por WhatsApp para qual número? (DDD + número)', p?.user?.phone || '');
+  if (phone === null) return;
+  try {
+    const r = await fetch(`/api/admin/novas-pedidos/${id}/reenviar-whatsapp`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: (phone || '').replace(/\D/g, '') }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || 'Erro ao reenviar.', 'error'); return; }
+    toast('Documento reenviado pelo WhatsApp.');
+    await loadNovasPedidos();
+  } catch { toast('Erro de conexão.', 'error'); }
+}
+
+function entregarNovaManual(id) {
+  const p = allNovasPedidos.find(x => x.id === id);
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = 'application/pdf,.pdf';
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024) { toast('PDF grande demais (máximo 3 MB).', 'error'); return; }
+    const cobranca = p?.cobrada ? 'O pedido já foi cobrado antes; não haverá novo desconto.' : `Serão descontados ${fmt(p?.amount || 0)} do cliente.`;
+    if (!confirm(`Entregar "${file.name}" como o ATPV-e da placa ${p?.placa || '—'} para ${p?.user?.name || '—'}?\n\n${cobranca}`)) return;
+    try {
+      const b64 = await new Promise((ok, erro) => { const fr = new FileReader(); fr.onload = () => ok(String(fr.result).split(',')[1] || ''); fr.onerror = erro; fr.readAsDataURL(file); });
+      const r = await fetch(`/api/admin/novas-pedidos/${id}/entregar-manual`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pdfBase64: b64 }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { toast(d.error || 'Erro na entrega manual.', 'error'); return; }
+      const cob = d.cobrado > 0 ? (d.posPago ? `${fmt(d.cobrado)} lançado na fatura.` : `${fmt(d.cobrado)} descontado (saldo agora ${fmt(d.saldo)}).`) : 'Sem novo desconto.';
+      toast(`Documento entregue. ${cob}${d.whatsapp ? '' : ' WhatsApp não enviado.'}`, d.whatsapp ? 'success' : 'error');
+      await loadNovasPedidos();
+    } catch { toast('Erro de conexão.', 'error'); }
+  };
+  input.click();
 }
 
 async function init() {
@@ -2484,6 +2705,7 @@ async function enviarMensagemCliente() {
 // ── Lista de assinantes (Coisas de Despachantes) ─────────────────────────────
 let allAssinantes = [];
 let allAtpvePedidos = [], atpvePrazoHoras = 48, atpveExclusaoDias = 30;
+let allNovasPedidos = [];
 
 async function loadAssinantes() {
   try {

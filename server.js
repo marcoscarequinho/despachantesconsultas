@@ -17191,6 +17191,166 @@ app.post('/api/admin/atpve-pedidos/:id/entregar-manual', requireAuth, requireSup
   }
 });
 
+// ── ADMIN: Consultas Novas (DataCred) ─────────────────────────────────────────
+// Irmã da "Pedidos ATPV-e" da Vistocar: todos os pedidos da página ATPVe's e
+// Consultas Novas (emissões, cancelamentos e consultas), de todos os clientes.
+// As ações passam pelas MESMAS funções do cron (entregarAtpveDataCred,
+// finalizePendingQuery) para o que o admin faz e o que o automático faz não
+// gerarem estado diferente. Cancelar aqui encerra só a NOSSA pendência — não
+// cancela nada no fornecedor (se o ATPV-e sair depois, eles cobram).
+app.get('/api/admin/novas-pedidos', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    await ensureDbReady();
+    const r = await pool.query(
+      `SELECT q.id, q.service_id, q.service_name, q.status, q.amount, q.params, q.result_data,
+              q.created_at, q.whatsapp_sent_at, q.transaction_id,
+              u.id AS user_id, u.name AS user_name, u.email AS user_email, u.phone AS user_phone,
+              p.emissao_id AS pendencia_emissao, p.created_at AS pendencia_desde, p.verificado_em,
+              (SELECT 1 FROM pdf_cache c WHERE c.query_id = q.id AND c.expires_at > NOW() LIMIT 1) AS tem_pdf
+         FROM queries q
+         JOIN users u ON u.id = q.user_id
+         LEFT JOIN datacred_pendentes p ON p.query_id = q.id
+        WHERE q.service_id LIKE 'dcr-%'
+        ORDER BY (q.status = 'aguardando_pdf') DESC, q.created_at DESC
+        LIMIT 500`
+    );
+    const pedidos = r.rows.map(row => {
+      let params = {}, result = {};
+      try { params = JSON.parse(row.params || '{}'); } catch {}
+      try { result = JSON.parse(row.result_data || '{}'); } catch {}
+      const svc = DATACRED_SVCS[row.service_id];
+      return {
+        id: row.id, service_id: row.service_id, service_name: row.service_name,
+        tipo: row.service_id === DATACRED_ATPVE_SERVICE_ID ? 'emissao' : svc?.sub === 'Cancelamentos' ? 'cancelamento' : 'consulta',
+        status: row.status, amount: row.amount, cobrada: !!row.transaction_id,
+        created_at: row.created_at, whatsapp_sent_at: row.whatsapp_sent_at, tem_pdf: !!row.tem_pdf,
+        entrega_manual: result.entregaManual || null, motivo: result.motivo || null,
+        emissao: result.emissao || row.pendencia_emissao || null,
+        pendente: !!row.pendencia_emissao, verificado_em: row.verificado_em,
+        placa: String(params.placa || result.placa || '').toUpperCase(),
+        documento: params.documento || '', uf: params.uf || (svc?.uf || '').toUpperCase(),
+        vendedor: params.vendedor || '', comprador: params.comprador || '',
+        user: { id: row.user_id, name: row.user_name, email: row.user_email, phone: row.user_phone },
+      };
+    });
+    res.json({ pedidos, prazoDias: DATACRED_PENDENTE_DIAS });
+  } catch (err) {
+    console.error('Erro ao listar Consultas Novas no admin:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+async function pedidoNovasDoAdmin(id) {
+  const qr = await pool.query(
+    `SELECT q.id, q.user_id, q.service_id, q.service_name, q.status, q.amount, q.params, q.result_data, q.transaction_id,
+            u.phone, u.pos_pago
+       FROM queries q JOIN users u ON u.id = q.user_id WHERE q.id=$1`, [id]);
+  if (!qr.rows.length) return { erro: 'Pedido não encontrado.', http: 404 };
+  if (!DATACRED_SVCS[qr.rows[0].service_id]) return { erro: 'Este pedido não é da página Consultas Novas.', http: 400 };
+  return { q: qr.rows[0] };
+}
+
+// Pergunta ao fornecedor agora (o mesmo que o cron faz de 15 em 15 minutos) e
+// devolve também a situação deles, para o admin saber em que pé está.
+app.post('/api/admin/novas-pedidos/:id/verificar', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const { q, erro, http } = await pedidoNovasDoAdmin(req.params.id);
+    if (erro) return res.status(http).json({ error: erro });
+    const pr = await pool.query('SELECT * FROM datacred_pendentes WHERE query_id=$1', [q.id]);
+    if (!pr.rows.length) return res.json({ success: true, entregue: false, status: q.status, motivo: 'Não há pendência aberta (já foi entregue ou cancelado).' });
+    const resultado = await entregarAtpveDataCred(pr.rows[0]);
+    let situacao = '';
+    if (resultado === 'aguardando') {
+      const st = await chamarDataCred(`/comunicados-venda/${pr.rows[0].emissao_id}`).catch(() => null);
+      const j = st?.json || {};
+      situacao = [j.status, j.manual ? 'conferência manual' : '', j.aguardando_documentos ? 'aguardando documentos' : ''].filter(Boolean).join(' · ');
+    }
+    const atual = await pool.query('SELECT status FROM queries WHERE id=$1', [q.id]);
+    const textos = { entregue: 'Documento entregue ao cliente!', 'ja-entregue': 'Já tinha sido entregue.', recusada: 'A conferência recusou — pedido cancelado sem cobrança.', expirada: 'Passou do prazo — pedido encerrado sem cobrança.', erro: 'O fornecedor não respondeu agora.' };
+    res.json({ success: true, entregue: resultado === 'entregue', status: atual.rows[0].status,
+      motivo: textos[resultado] || `Ainda em andamento${situacao ? ` (${semMarcaDataCred(situacao)})` : ''}.` });
+  } catch (err) {
+    console.error('Erro ao verificar Consulta Nova no admin:', err.message);
+    res.status(500).json({ error: err.message || 'Erro interno.' });
+  }
+});
+
+app.post('/api/admin/novas-pedidos/:id/cancelar', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const { q, erro, http } = await pedidoNovasDoAdmin(req.params.id);
+    if (erro) return res.status(http).json({ error: erro });
+    if (q.status !== 'aguardando_pdf') return res.status(400).json({ error: 'Só dá para cancelar pedido que ainda aguarda o documento.' });
+    const motivo = String(req.body?.motivo || '').trim() || 'cancelado pelo suporte';
+    const r = await pool.query(`UPDATE queries SET status='cancelado', result_data=$2 WHERE id=$1 AND status='aguardando_pdf' RETURNING id`,
+      [q.id, JSON.stringify({ ...(() => { try { return JSON.parse(q.result_data || '{}'); } catch { return {}; } })(), motivo })]);
+    await pool.query('DELETE FROM datacred_pendentes WHERE query_id=$1', [q.id]);
+    let placa = ''; try { placa = (JSON.parse(q.params || '{}').placa || '').toUpperCase(); } catch {}
+    if (r.rowCount && q.phone)
+      await sendWhatsApp(q.phone, `❌ *${q.service_name}*\n🔤 Placa: ${placa}\n\nO pedido foi cancelado (${motivo}). Nada foi cobrado.`).catch(() => {});
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Erro ao cancelar Consulta Nova no admin:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+app.post('/api/admin/novas-pedidos/:id/reenviar-whatsapp', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const { q, erro, http } = await pedidoNovasDoAdmin(req.params.id);
+    if (erro) return res.status(http).json({ error: erro });
+    const phone = String(req.body?.phone || '').replace(/\D/g, '') || q.phone;
+    if (!phone) return res.status(400).json({ error: 'Cliente sem telefone cadastrado. Informe um número no reenvio.' });
+    const pr = await pool.query(`SELECT pdf_data FROM pdf_cache WHERE query_id=$1 ORDER BY created_at DESC LIMIT 1`, [q.id]);
+    if (!pr.rows.length) return res.status(404).json({ error: 'Este pedido ainda não tem documento.' });
+    let placa = ''; try { const p = JSON.parse(q.params || '{}'); placa = String(p.placa || p.documento || '').toUpperCase(); } catch {}
+    const nome = `${MC_ARQUIVO_PREFIXO}-${q.service_id.replace(/^dcr-/, '')}-${placa.replace(/[^A-Z0-9]/g, '') || q.id}.pdf`;
+    const sent = await sendWhatsAppPdf(phone, Buffer.from(pr.rows[0].pdf_data, 'base64'), nome, `✅ *${q.service_name}*\n🔎 ${placa}\n\nDocumento gerado pela MC Despachadoria.`).catch(() => false);
+    if (!sent) return res.status(502).json({ error: 'Falha ao reenviar pelo WhatsApp. Tente novamente.' });
+    await pool.query(`UPDATE queries SET whatsapp_sent_at = NOW() WHERE id=$1`, [q.id]);
+    res.json({ success: true, phone });
+  } catch (err) {
+    console.error('Erro no reenvio de Consulta Nova no admin:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// Entrega manual do ATPV-e conseguido por fora (painel do fornecedor): mesmo
+// caminho da automática — finalizePendingQuery cobra o valor da UF gravado no
+// pedido, pdf_cache, WhatsApp. Vale para pedido aguardando ou cancelado.
+app.post('/api/admin/novas-pedidos/:id/entregar-manual', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const { q, erro, http } = await pedidoNovasDoAdmin(req.params.id);
+    if (erro) return res.status(http).json({ error: erro });
+    if (!['aguardando_pdf', 'cancelado'].includes(q.status)) return res.status(400).json({ error: 'Este pedido já foi entregue.' });
+    const b64 = String(req.body?.pdfBase64 || '').replace(/^data:[^,]+,/, '').replace(/\s/g, '');
+    const buf = Buffer.from(b64, 'base64');
+    if (!b64 || buf.slice(0, 4).toString() !== '%PDF') return res.status(400).json({ error: 'Envie o PDF do documento.' });
+    if (buf.length > ATPVE_MANUAL_MAX_BYTES) return res.status(413).json({ error: 'PDF grande demais (máximo 3 MB).' });
+    const jaTem = await pool.query('SELECT 1 FROM pdf_cache WHERE query_id=$1 AND expires_at > NOW()', [q.id]);
+    if (jaTem.rows.length) return res.status(409).json({ error: 'Este pedido já tem documento entregue.' });
+    if (q.status === 'cancelado') await pool.query(`UPDATE queries SET status='aguardando_pdf' WHERE id=$1 AND status='cancelado'`, [q.id]);
+    const fechou = await finalizePendingQuery(q.id, q.user_id, `Consulta: ${q.service_name}`);
+    if (!fechou) return res.status(409).json({ error: 'O pedido foi fechado por outra execução agora há pouco. Recarregue a lista.' });
+    await pool.query('DELETE FROM datacred_pendentes WHERE query_id=$1', [q.id]);
+    await pool.query(`INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+      [q.id, q.user_id, crypto.randomBytes(32).toString('hex'), buf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]);
+    let result = {}; try { result = JSON.parse(q.result_data || '{}'); } catch {}
+    result.entregaManual = new Date().toISOString();
+    await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(result), q.id]);
+    let placa = ''; try { placa = (JSON.parse(q.params || '{}').placa || '').toUpperCase(); } catch {}
+    let whatsapp = false;
+    if (q.phone) {
+      whatsapp = await sendWhatsAppPdf(q.phone, buf, `${MC_ARQUIVO_PREFIXO}-${q.service_id.replace(/^dcr-/, '')}-${placa || q.id}.pdf`, `✅ *${q.service_name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`).catch(() => false);
+      if (whatsapp) await pool.query('UPDATE queries SET whatsapp_sent_at = NOW() WHERE id=$1', [q.id]).catch(() => {});
+    }
+    const saldo = await pool.query('SELECT credits FROM users WHERE id=$1', [q.user_id]);
+    res.json({ success: true, cobrado: q.transaction_id ? 0 : parseFloat(q.amount || 0), posPago: !!q.pos_pago, saldo: parseFloat(saldo.rows[0]?.credits || 0), whatsapp: !!whatsapp });
+  } catch (err) {
+    console.error('Erro na entrega manual de Consulta Nova:', err.message);
+    res.status(500).json({ error: err.message || 'Erro interno.' });
+  }
+});
+
 // Exclusão de UM pedido, e só depois de ATPVE_ADMIN_EXCLUSAO_DIAS. Não existe
 // exclusão em lote aqui de propósito: apagar registro é irreversível e um clique
 // errado num "excluir todos" levaria o histórico inteiro junto.
