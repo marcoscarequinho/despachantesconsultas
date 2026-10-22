@@ -302,6 +302,10 @@ const DATACRED_INPUT_TYPES = { placa: 'placa', placa_renavam: 'placa_renavam', c
 // As listas vêm da ficha da API, que muda por configuração — quando mudar, é
 // aqui que se atualiza (a API recusa com 400 o que faltar, sem cobrar).
 const DATACRED_ATPVE_UFS = ['DF', 'GO', 'MG', 'MS', 'PR', 'RJ', 'RS', 'SP'];
+// Preço da emissão por UF (tabela do dono, 22/10/2026) — não segue o custo +
+// 60% do resto da página. O catálogo mostra o menor ("a partir de") e o painel
+// troca o preço na tela quando a UF é escolhida (precosUf no /api/services).
+const DATACRED_ATPVE_PRECOS = { RJ: 47.84, DF: 192.00, GO: 79.84, MG: 47.84, MS: 47.84, PR: 79.84, RS: 79.84, SP: 38.90 };
 const DATACRED_ATPVE_UFS_ANEXO = new Set(['DF', 'GO', 'MS', 'PR', 'RS', 'SP']);
 const DATACRED_ATPVE_SERVICE_ID = 'dcr-atpve';
 // Manual sem resposta em 15 dias: a pendência é encerrada sem cobrar e o dono avisado.
@@ -1432,7 +1436,9 @@ const SERVICES = [
   // ATPVe's e Consultas Novas (DataCred, 22/10/2026) — ver DATACRED_SVCS. Preço
   // fixo = custo + 60%, por isso noMarkup. No painel têm página própria.
   ...Object.entries(DATACRED_SVCS).map(([id, s]) => ({
-    id, name: s.name || s.nome, group: DATACRED_GRUPO, subgrupo: s.sub, basePrice: dataCredPreco(s.custo), noMarkup: true,
+    id, name: s.name || s.nome, group: DATACRED_GRUPO, subgrupo: s.sub, noMarkup: true,
+    basePrice: id === DATACRED_ATPVE_SERVICE_ID ? Math.min(...Object.values(DATACRED_ATPVE_PRECOS)) : dataCredPreco(s.custo),
+    ...(id === DATACRED_ATPVE_SERVICE_ID ? { precosUf: DATACRED_ATPVE_PRECOS } : {}),
     inputType: DATACRED_INPUT_TYPES[s.entrada], icon: s.icon, ...(s.uf ? { uf: s.uf } : {}),
   })),
   { id:'recurso-multa-ia', name:'Recurso de Multa com IA', group:'Recurso de Multas', basePrice:80, noMarkup:true, inputType:'recurso_multa', icon:'⚖️',
@@ -9125,6 +9131,11 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       const anexos = normalizarAnexosDataCred(params?.anexos);
       const erroVal = validarAtpveDataCred(corpo, anexos);
       if (erroVal) return res.status(400).json({ error: erroVal });
+      // Preço é o da UF (DATACRED_ATPVE_PRECOS), não o do catálogo: o saldo é
+      // conferido de novo com ele, e é ele que vai para a cobrança na entrega.
+      const precoUf = DATACRED_ATPVE_PRECOS[corpo.uf];
+      const bloqueioUf = await bloqueioPagamentoConsulta(user.id, user, precoUf);
+      if (bloqueioUf) return res.status(bloqueioUf.status).json(bloqueioUf.body);
       // Sem os anexos (megabytes de base64) e com documentos mascarados.
       const paramsLog = { placa: corpo.placa, uf: corpo.uf, vendedor: maskDocDisplay(corpo.vendedor_documento), comprador: maskDocDisplay(corpo.comprador_documento), anexos: anexos.length };
       let emissao;
@@ -9147,7 +9158,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       const qRow = await pool.query(
         `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
          VALUES ($1,$2,$3,$4,'aguardando_pdf',$5,'pdf',$6) RETURNING id`,
-        [userId, serviceId, service.name, JSON.stringify(paramsLog), price, JSON.stringify({ emissao: emissao.id, placa: corpo.placa })]
+        [userId, serviceId, service.name, JSON.stringify(paramsLog), precoUf, JSON.stringify({ emissao: emissao.id, placa: corpo.placa })]
       );
       const pend = { emissao_id: emissao.id, query_id: qRow.rows[0].id, user_id: userId, phone: user.phone || null, placa: corpo.placa, created_at: new Date() };
       await pool.query(
@@ -9155,7 +9166,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
          ON CONFLICT (emissao_id) DO UPDATE SET query_id=EXCLUDED.query_id, created_at=NOW()`,
         [pend.emissao_id, pend.query_id, userId, pend.phone, pend.placa]
       );
-      await notifyAdminNewQuery(user, service, price, paramsLog);
+      await notifyAdminNewQuery(user, service, precoUf, paramsLog);
       // UF automática (RJ): a emissora costuma devolver em segundos.
       if (!emissao.manual) {
         const t0 = Date.now();

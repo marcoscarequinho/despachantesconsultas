@@ -3503,6 +3503,10 @@ function atualizarFormAtpveNova() {
     el.classList.toggle('hidden', !uf || !el.dataset.a2Ufs.split(',').includes(uf)));
   const rot = { DF: 'Autorização VE-15 assinada pelo vendedor', GO: 'Procuração assinada pelo vendedor', PR: 'Anexo I assinado pelo vendedor', RS: 'Requerimento assinado pelo vendedor' }[uf];
   const t = document.getElementById('a2-doc-titulo'); if (t && rot) t.textContent = rot;
+  // O preço da emissão é por UF (precosUf, vindo do servidor).
+  const ps = selectedSvc?.precosUf;
+  const precoEl = document.getElementById('form-service-price');
+  if (ps && precoEl) precoEl.textContent = uf && ps[uf] ? fmtPrice(ps[uf]) : 'a partir de ' + fmtPrice(Math.min(...Object.values(ps)));
 }
 
 function iniciarAtpveNovaUf(uf) {
@@ -3624,8 +3628,10 @@ function buildNovasList() {
           </div>
           <p class="text-xs text-gray-600 mt-1 leading-snug">RJ, MG, SP, PR, RS, GO, MS e DF. No RJ sai na hora; nas demais passa pela conferência do Detran.
             <strong>Só é cobrada quando o ATPV-e sai.</strong></p>
+          ${s.precosUf ? `<p class="text-[11px] text-gray-500 mt-1">${Object.entries(s.precosUf).map(([u, p]) => `${u} ${fmtPrice(p)}`).join(' · ')}</p>` : ''}
         </div>
         <div class="flex flex-col items-end gap-1 flex-shrink-0">
+          ${s.precosUf ? '<span class="text-[11px] text-gray-500">a partir de</span>' : ''}
           <span class="price-tag text-sm">${fmtPrice(s.price)}</span>
           <span class="svc-cta">Emitir</span>
         </div>
