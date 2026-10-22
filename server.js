@@ -157,6 +157,12 @@ const ADMIN_PHONE        = process.env.ADMIN_PHONE        || '';
 // corpo a resposta é o PDF em bytes, e erro é sempre JSON 400/500 ({ error }).
 const CONSULTASFACIL_BASE_URL = 'https://www.consultasfacil.net';
 const CONSULTASFACIL_KEY      = process.env.CONSULTASFACIL_KEY || '';
+// Numero ATPVe Brasil avulso (22/10/2026, R$ 19,99): o mesmo POST
+// /consultar-Numero-ATPVE { placa } que a Reemissão da ATPVe com Comunicação de
+// Venda usa por dentro, mas aqui o cliente recebe o PDF como veio — é a
+// consulta "crua", sem o documento montado nem as consultas extras daquela.
+// Sem PDF da Consultas Fácil, a reserva é o numero_atpve da despbrasil.
+const NUMERO_ATPVE_BRASIL_SERVICE_ID = 'numero-atpve-brasil';
 // ── DirectData (apiv3.directd.com.br) — grupo "Consultas Especiais Veículos e etc" ──
 // Entrou em 16/10/2026. Contrato: GET /api/<Endpoint>?<params>&TOKEN=<chave>,
 // resposta { metaDados, retorno } síncrona (assincrono:false e ~3s na placa
@@ -498,6 +504,8 @@ const VISTOCAR_ARQUIVO_NOMES = {
   'crlv-sp-v2':                      'crlv-sp',
   'consultar-crlv-go':               'crlv-go',
   'crlv-rio-reemissao-v2':           'crlv-rj',
+  // Consultas Fácil, mas o nome segue o padrão para o cliente.
+  [NUMERO_ATPVE_BRASIL_SERVICE_ID]:  'numero-atpve',
 };
 const MC_ARQUIVO_PREFIXO = 'mcdespachadoria';
 function nomeArquivoVistocar(serviceId, sufixo) {
@@ -1138,6 +1146,9 @@ const SERVICES = [
     slowNote:'ATENÇÃO, ao inserir a placa você concorda com os termos: "Devido ao formato como esta ATPVe é gerada, o QR Code não faz leitura — todas as demais informações deste documento são reais. Fica a seu critério."',
     noteStyle:'danger',
     modeloUrl:'/assets/modelo-atpve.pdf' },
+  // Numero ATPVe Brasil — Consultas Fácil (despbrasil de reserva), PDF direto (ver NUMERO_ATPVE_BRASIL_SERVICE_ID).
+  { id:NUMERO_ATPVE_BRASIL_SERVICE_ID,     name:'Numero ATPVe Brasil', group:'Débitos e Documentação', basePrice:19.99, noMarkup:true, inputType:'placa', icon:'🔢',
+    slowNote:'A consulta pode levar até 3 minutos (se a primeira base não responder, tentamos uma segunda). Só é cobrada se o PDF sair.' },
   // CRLV-e Rio, com Comunicação de Venda (09/10/2026): Licenciamento + BIN e
   // Consulta Comunicado do portal montados no modelo do CRLV-e — ver
   // gerarCrlveComunicacaoVenda. Só sai com comunicação de venda, intenção de venda ou gravame.
@@ -9865,6 +9876,13 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       method = 'POST';
       body   = { placa };
     }
+    if (serviceId === NUMERO_ATPVE_BRASIL_SERVICE_ID) {
+      const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa)) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      apiUrl = `${CONSULTASFACIL_BASE_URL}/consultar-Numero-ATPVE`;
+      method = 'POST';
+      body   = { placa };
+    }
     // Serviços via API despbrasil.com.br (auth por header chaveAcesso fixo, ver
     // fetchHeaders abaixo). Resposta é JSON com a URL do PDF pronto em "arquivo_url".
     if (DESPBRASIL_SVCS[serviceId]) {
@@ -10189,7 +10207,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       // Cobre os três casos do portal: consulta com PDF na hora (PORTAL_PLACA_MAP),
       // o solicitar do agendado e o "Ver Status" de um pedido PORTAL-.
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': PORTAL_DESP_KEY };
-    } else if (serviceId === 'consultar-Numero-ATPVE') {
+    } else if (serviceId === 'consultar-Numero-ATPVE' || serviceId === NUMERO_ATPVE_BRASIL_SERVICE_ID) {
       // Antes do DESPBRASIL_SVCS: o id está nos dois, mas a 1ª chamada é na Consultas Fácil.
       fetchHeaders = { 'Content-Type': 'application/json', 'chaveAcesso': CONSULTASFACIL_KEY };
     } else if (DESPBRASIL_SVCS[serviceId]) {
@@ -10228,6 +10246,29 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         body = { servico: DESPBRASIL_SVCS[serviceId].servico, placa: body.placa, ...DESPBRASIL_SVCS[serviceId].extra };
         fetchOpts.body = JSON.stringify(body);
         apiRes = await fetch(apiUrl, fetchOpts);
+      }
+    }
+    // Numero ATPVe Brasil: sem PDF da Consultas Fácil (erro, 504 do nginx depois
+    // de 60 s — visto em 22/10/2026), a 2ª tentativa é o numero_atpve da
+    // despbrasil (pedido do dono), que devolve a URL do PDF. Se ela também não
+    // sair, a resposta da Consultas Fácil segue adiante e vira o erro.
+    if (serviceId === NUMERO_ATPVE_BRASIL_SERVICE_ID) {
+      const inicio = Buffer.from(await apiRes.clone().arrayBuffer().catch(() => new ArrayBuffer(0))).slice(0, 4).toString();
+      if (!apiRes.ok || inicio !== '%PDF') {
+        console.log(`[${serviceId}] Consultas Fácil sem PDF (HTTP ${apiRes.status}) — tentando a despbrasil.`);
+        try {
+          const rd = await fetch(DESPBRASIL_BASE_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json', chaveAcesso: DESPBRASIL_KEY },
+            body: JSON.stringify({ servico: DESPBRASIL_SVCS['consultar-Numero-ATPVE'].servico, placa: body.placa }),
+            signal: AbortSignal.timeout(150000),
+          });
+          const jd = await rd.json().catch(() => null);
+          const pdfRes = rd.ok && jd?.sucesso && jd?.arquivo_url ? await fetch(jd.arquivo_url) : null;
+          if (pdfRes?.ok) apiRes = pdfRes;
+          else console.error(`[${serviceId}] despbrasil sem PDF (HTTP ${rd.status}): ${JSON.stringify(jd).slice(0, 300)}`);
+        } catch (e) {
+          console.error(`[${serviceId}] despbrasil falhou:`, e.message);
+        }
       }
     }
     const ct = apiRes.headers.get('content-type') || '';
@@ -10273,6 +10314,8 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       if (serviceId === 'consultar-atpve' || serviceId === 'consultar-atpve-v1') {
         errMsg = 'Não encontramos ATPV-e disponível para reemissão nessa placa no momento. É possível que essa ATPV-e tenha comunicação de venda ou tenha sido gerada pelo app eCNH — nesses casos a segunda via não sai por aqui. Tente a consulta "Reemissão da ATPVe Com Comunicação de Venda".';
       }
+      if (serviceId === NUMERO_ATPVE_BRASIL_SERVICE_ID && apiRes.status >= 500)
+        return res.status(502).json({ error: 'As bases do Número da ATPVe estão fora do ar agora. Nada foi cobrado — tente de novo em instantes.' });
       return res.status(apiRes.status).json({ error: errMsg });
     }
 
@@ -10283,6 +10326,11 @@ async function processCatalogQuery(userId, serviceId, params, res) {
     // ATPVe montado (despbrasilJsonPdfBuf) — se contasse como "PDF pronto", ele
     // passaria na frente no pdfToSend e o cliente receberia o relatório cru.
     const isRealPdf  = serviceId !== 'consultar-Numero-ATPVE' && apiRes.ok && bodyBuffer.slice(0, 4).toString() === '%PDF';
+    // Numero ATPVe Brasil: 200 sem PDF não é resultado — não cobra.
+    if (serviceId === NUMERO_ATPVE_BRASIL_SERVICE_ID && !isRealPdf) {
+      console.error(`[${serviceId}] Consultas Fácil 200 sem PDF: ${bodyStr.slice(0, 300)}`);
+      return res.status(422).json({ error: 'Número da ATPVe não encontrado para essa placa. Nada foi cobrado.' });
+    }
 
     // Serviços Datacube (form-urlencoded): a API retorna HTTP 200 mesmo em erro de
     // negócio (ex.: "Motor não encontrado"), sinalizando falha via status:false — não
@@ -10892,6 +10940,11 @@ async function processCatalogQuery(userId, serviceId, params, res) {
           const fileName = nomeArquivoVistocar(serviceId, placa || 'doc')
             || `${serviceId}-${placa || 'doc'}.pdf`;
           await sendWhatsAppPdf(user.phone, pdfToSend, fileName, caption).catch(() => {});
+        }
+        if (serviceId === NUMERO_ATPVE_BRASIL_SERVICE_ID && user.phone) {
+          const placa = (params?.placa || '').toUpperCase();
+          const caption = `✅ *${service.name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`;
+          await sendWhatsAppPdf(user.phone, pdfToSend, nomeArquivoVistocar(serviceId, placa || 'doc'), caption).catch(() => {});
         }
         // Envia PDF via WhatsApp para Localização CPF (e V3)
         if (isDcLocalizacaoCpf && user.phone) {
