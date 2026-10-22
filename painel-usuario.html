@@ -135,6 +135,13 @@
       </svg>
       <span style="color:#c4b5fd;font-weight:bold">Consultas Extras</span>
     </div>
+    <div class="nav-item" data-section="novas" onclick="showSection('novas')">
+      <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+      </svg>
+      <span style="color:#fca5a5;font-weight:bold">ATPVe's e Consultas Novas</span>
+    </div>
     <div class="nav-item" data-section="query2" onclick="showSection('query2')">
       <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -318,6 +325,10 @@
         <!-- No celular a fila de categorias rola na horizontal em vez de quebrar
              em 8 linhas e empurrar os cards para fora da tela. -->
         <div id="catalog-filters" class="flex gap-2 mb-5 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible"></div>
+        <!-- ATPVe's e Consultas Novas em faixa própria, acima do Contrato Social
+             (pedido do dono, 22/10/2026). O clique abre a página do grupo.
+             Preenchido por renderNovasDestaque(). -->
+        <div id="catalog-novas-destaque" class="hidden mb-4"></div>
         <!-- Contrato Social LTDA com IA em faixa própria, a primeira de todas,
              acima das Consultas Especiais (pedido do dono, 19/10/2026).
              Preenchido por renderContratoDestaque(). -->
@@ -741,6 +752,44 @@
 
       <!-- Slot do formulário/resultado compartilhado (ver #query-form-host) -->
       <div id="extras-form-slot" class="space-y-5"></div>
+    </section>
+
+    <!-- ── ATPVe's E CONSULTAS NOVAS ───────────────────────────────────────────
+         Cancelamento de ATPV-e e de comunicado de venda, CRLV-e de 20 UFs,
+         pacotes veiculares e crédito — todos de um fornecedor só (ver
+         DATACRED_SVCS no server.js; o nome dele não aparece para o cliente).
+         Mesmo formulário/resultado das outras abas (#query-form-host, movido
+         para cá por showSection()). A lista é montada por buildNovasList(),
+         agrupada pelo "subgrupo" de cada serviço. -->
+    <section id="section-novas" class="dash-section hidden space-y-5">
+
+      <div>
+        <h2 class="text-xl font-bold text-rose-600">ATPVe's — cancelamento de ATPVe's e outras consultas novas</h2>
+        <p class="text-sm text-gray-500">Cancele ATPV-e e comunicado de venda e faça consultas de CRLV-e, veículo e crédito</p>
+      </div>
+
+      <div class="card bg-gradient-to-br from-rose-50 to-white border border-rose-200 flex items-center gap-4">
+        <div class="w-10 h-10 bg-rose-100 rounded-full flex items-center justify-center text-xl flex-shrink-0">💳</div>
+        <div>
+          <div class="text-sm text-gray-600">Saldo disponível</div>
+          <div id="novas-credits" class="text-2xl font-bold text-rose-600">R$ 0,00</div>
+        </div>
+        <div class="ml-auto text-xs text-gray-400">Mesmo saldo das demais abas</div>
+      </div>
+
+      <div class="card bg-rose-50 border border-rose-200 flex gap-3">
+        <span class="text-rose-500 text-xl flex-shrink-0 mt-0.5">ℹ️</span>
+        <div class="text-sm text-rose-900 leading-relaxed">
+          <strong>Como funciona:</strong> as consultas levam de alguns segundos a cerca de 2 minutos — deixe a página aberta.
+          O documento sai em PDF, no WhatsApp e no seu <strong>Histórico</strong>. <strong>Nada é cobrado se a consulta não sair</strong>,
+          e o cancelamento só é cobrado quando o Detran confirma.
+        </div>
+      </div>
+
+      <div id="novas-service-list" class="space-y-4"></div>
+
+      <!-- Slot do formulário/resultado compartilhado (ver #query-form-host) -->
+      <div id="novas-form-slot" class="space-y-5"></div>
     </section>
 
     <!-- ── OPÇÃO 2 NOVA CONSULTA (API Datacube) ───────────────────────────── -->
@@ -1327,6 +1376,7 @@ const sectionTitles = {
   query:    'Acesse Aqui Para as Principais Consultas',
   despachantes: 'Coisas de Despachantes Assinatura',
   extras:   'Consultas Extras',
+  novas:    "ATPVe's — cancelamento de ATPVe's e outras consultas novas",
   query2:   'Opção 2 Nova Consulta',
   query3:   'Infosimples Nova Consulta',
   fatura:   'Conta Pós-paga',
@@ -1390,7 +1440,7 @@ function showSection(id) {
   // "Consultas Extras" dividem o MESMO formulário/resultado (#query-form-host,
   // ids f-*). Ao trocar de aba, o bloco é movido para o slot da aba de destino e
   // o formulário é zerado — senão o documento aberto numa aba apareceria na outra.
-  const FORM_SLOTS = { query:'query-form-slot', despachantes:'despachantes-form-slot', extras:'extras-form-slot' };
+  const FORM_SLOTS = { query:'query-form-slot', despachantes:'despachantes-form-slot', extras:'extras-form-slot', novas:'novas-form-slot' };
   if (FORM_SLOTS[id]) {
     const host = document.getElementById('query-form-host');
     const slot = document.getElementById(FORM_SLOTS[id]);
@@ -1465,6 +1515,7 @@ async function init() {
     buildCatalog();
     buildDespachantesList();
     buildExtrasList();
+    buildNovasList();
     renderServiceListV2();
     await Promise.all([loadStats(), loadQueries(), loadAssinaturaStatus()]);
     carregarMensagens();
@@ -1580,6 +1631,7 @@ async function loadStats() {
     document.getElementById('query-credits').textContent      = fmt(d.credits);
     document.getElementById('despachantes-credits').textContent = fmt(d.credits);
     document.getElementById('extras-credits').textContent      = fmt(d.credits);
+    document.getElementById('novas-credits').textContent       = fmt(d.credits);
     document.getElementById('query2-credits').textContent     = fmt(d.credits);
     document.getElementById('query3-credits').textContent     = fmt(d.credits);
     document.getElementById('header-credits').textContent     = fmt(d.credits);
@@ -1635,7 +1687,7 @@ function aplicarPosPagoNaTela(d) {
   }
 
   // Cartões "Saldo disponível" das abas de consulta.
-  ['query-credits', 'despachantes-credits', 'extras-credits',
+  ['query-credits', 'despachantes-credits', 'extras-credits', 'novas-credits',
    'query2-credits', 'query3-credits'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -2259,6 +2311,8 @@ function inputTypeLabel(t) {
     assinatura_digital:  'Entrada: PDF + dados de quem assina',
     recurso_multa:       'Entrada: Notificação da multa (foto ou PDF) + perguntas',
     contrato_social:     'Entrada: Dados da empresa e dos sócios (constituição ou alteração)',
+    dcr_cancelar_atpve:  'Entrada: Placa + UF + Número do ATPV-e (+ DUDA no RJ)',
+    dcr_cancelar_cve:    'Entrada: Placa + Protocolo e Renavam, ou DUDA',
     arrendamento_veicular: 'Entrada: Placa + CPF/CNPJ do arrendador e do arrendatário + condições',
     cancelar_venda:      'Entrada: ID + Protocolo + Motivo',
     protocolo:           'Entrada: Protocolo',
@@ -2373,6 +2427,8 @@ function apiExampleParams(inputType) {
     cnh_cpf_nascimento:  { cpf: '00000000000', data_nascimento: '01/01/1990' },
     veiculos_documento:  { documento: '00000000000' },
     cnpj:                { cnpj: '07526557011659' },
+    dcr_cancelar_atpve:  { placa: 'ABC1D23', uf: 'RJ', numero_atpve: '000000000000', numero_duda: '0000000000', confirmar: true },
+    dcr_cancelar_cve:    { placa: 'ABC1D23', protocolo: '00000000000000', renavam: '00000000000', confirmar: true },
     antt_ciot:           { rntrc: '000000000', renavam: '00000000000' },
     antt_regularidade:   { documento: '00000000000000', rntrc: '000000000' },
     venda: {
@@ -2470,6 +2526,11 @@ function quickSelect(serviceId) {
   // categorias nem #service-list — abre lá direto.
   if (svc.group === 'Para os Despachantes') {
     showSection('despachantes');
+    selectService(svc);
+    return;
+  }
+  if (svc.group === GRUPO_NOVAS) {
+    showSection('novas');
     selectService(svc);
     return;
   }
@@ -2581,6 +2642,9 @@ const CATALOG_GROUP_ORDER = [
   'Procurações e Contratos',
 ];
 
+// Nome do grupo da página "ATPVe's e Consultas Novas" (o GRUPO_NOVAS, que é
+// declarado mais abaixo e não existe ainda quando este mapa é montado).
+const GRUPO_NOVAS_META = "ATPVe's e Consultas Novas";
 // badge = selo do card; serve para separar na hora o que sai na hora do que é
 // agendado, que é a dúvida que mais chega no suporte.
 const CATALOG_GROUP_META = {
@@ -2605,6 +2669,7 @@ const CATALOG_GROUP_META = {
   'Recurso de Multas':      { icon:'⚖️', badge:'🤖 Com IA', badgeClass:'bg-indigo-100 text-indigo-700' },
   'Documentos Empresariais':{ icon:'📑', badge:'🤖 Com IA', badgeClass:'bg-indigo-100 text-indigo-700' },
   'Consultas Especiais Veículos e etc': { icon:'🔎', badge:'⚡ Na hora', badgeClass:'bg-sky-100 text-sky-700' },
+  [GRUPO_NOVAS_META]:       { icon:'🚫', badge:'🆕 Novo', badgeClass:'bg-rose-100 text-rose-700' },
 };
 
 // Selo por serviço, para quando o do grupo mentiria — por exemplo um serviço que
@@ -2755,6 +2820,38 @@ function abrirEspeciais() {
   document.getElementById('catalog-grid')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+// Faixa da página ATPVe's e Consultas Novas, acima do Contrato Social. Some
+// quando a busca/filtro atual não inclui nenhum serviço do grupo.
+function renderNovasDestaque(svcsVisiveis) {
+  const wrap = document.getElementById('catalog-novas-destaque');
+  if (!wrap) return;
+  const doGrupo = (svcsVisiveis || []).filter(s => s.group === GRUPO_NOVAS);
+  if (!doGrupo.length) { wrap.classList.add('hidden'); wrap.innerHTML = ''; return; }
+  const menor = Math.min(...doGrupo.map(s => s.price).filter(p => p > 0));
+  wrap.classList.remove('hidden');
+  wrap.innerHTML = `
+    <button type="button" onclick="showSection('novas')"
+      class="w-full text-left bg-gradient-to-r from-rose-50 to-white border border-rose-200 rounded-xl p-4 sm:p-5 hover:border-rose-400 hover:shadow-md transition-all">
+      <div class="flex items-center gap-4">
+        <div class="w-12 h-12 bg-rose-100 rounded-full flex items-center justify-center text-2xl flex-shrink-0">🚫</div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="font-bold text-gray-800">ATPVe's — cancelamento de ATPVe's e outras consultas novas</span>
+            <span class="svc-badge bg-rose-100 text-rose-700">🆕 Novo</span>
+          </div>
+          <p class="text-xs text-gray-600 mt-1 leading-snug">
+            <strong>Cancelamento de ATPV-e</strong> e de <strong>comunicado de venda</strong>, CRLV-e de 20 estados,
+            pacotes veiculares, leilão, histórico de proprietários e consultas de crédito — ${doGrupo.length} consultas numa página só.
+          </p>
+        </div>
+        <div class="flex flex-col items-end gap-1 flex-shrink-0">
+          ${Number.isFinite(menor) ? `<span class="text-[11px] text-gray-500">a partir de</span><span class="price-tag text-sm">${fmtPrice(menor)}</span>` : ''}
+          <span class="svc-cta">Ver consultas</span>
+        </div>
+      </div>
+    </button>`;
+}
+
 // Faixa do Contrato Social LTDA com IA, acima das Consultas Especiais. Mesma
 // regra das outras faixas: some quando a busca/filtro atual não inclui o serviço.
 function renderContratoDestaque(svcsVisiveis) {
@@ -2823,6 +2920,7 @@ function renderCatalog() {
   const termo = document.getElementById('catalog-search')?.value.trim() || '';
   const svcs  = catalogFiltered();
   renderEspeciaisDestaque(svcs);
+  renderNovasDestaque(svcs);
   renderContratoDestaque(svcs);
   renderRecursoDestaque(svcs);
   renderAssinaturaDestaque(svcs);
@@ -2917,7 +3015,7 @@ function openCatalogService(id) {
 function buildCategoryGrid() {
   // "Para os Despachantes" fica fora daqui — tem aba própria (Coisas de
   // Despachantes, ver buildDespachantesList).
-  const cats = [...new Set(allServices.map(s => s.group))].filter(c => c !== 'CRLV-e Agendado' && c !== 'CRLV-e Rio de Janeiro' && c !== 'Para os Despachantes');
+  const cats = [...new Set(allServices.map(s => s.group))].filter(c => c !== 'CRLV-e Agendado' && c !== 'CRLV-e Rio de Janeiro' && c !== 'Para os Despachantes' && c !== GRUPO_NOVAS);
   const catIcons = {
     'Consultas Básicas':       { icon:'🔍', color:'bg-blue-50 border-blue-200' },
     'Débitos e Documentação':  { icon:'💳', color:'bg-red-50 border-red-200' },
@@ -3392,6 +3490,35 @@ function buildExtrasList() {
   document.getElementById('extras-service-list').innerHTML = botoes.join('');
 }
 
+// ── ATPVe's e Consultas Novas ──────────────────────────────────────────────────
+const GRUPO_NOVAS = "ATPVe's e Consultas Novas";
+// Ordem dos blocos da página; subgrupo novo vindo do servidor entra no fim.
+const NOVAS_SUBGRUPOS = ['Cancelamentos', 'Documentos do veículo', 'CRLV-e', 'Pacotes veiculares', 'Bases veiculares', 'Crédito'];
+
+function buildNovasList() {
+  const wrap = document.getElementById('novas-service-list');
+  if (!wrap) return;
+  const svcs = allServices.filter(s => s.group === GRUPO_NOVAS);
+  const subs = [...new Set(svcs.map(s => s.subgrupo || 'Outras'))]
+    .sort((a, b) => (NOVAS_SUBGRUPOS.indexOf(a) + 1 || 99) - (NOVAS_SUBGRUPOS.indexOf(b) + 1 || 99));
+  wrap.innerHTML = subs.map(sub => `
+    <div class="card">
+      <h3 class="font-semibold text-gray-800 mb-3">${escapeHtml(sub)}</h3>
+      <div class="grid sm:grid-cols-2 gap-2">
+        ${svcs.filter(s => (s.subgrupo || 'Outras') === sub).map(s => `
+          <button type="button" onclick="selectService(${JSON.stringify(s).replace(/"/g,"&quot;")})"
+            class="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-rose-300 hover:bg-rose-50 text-left transition-all">
+            <span class="text-xl flex-shrink-0">${s.icon}</span>
+            <div class="min-w-0 flex-1">
+              <div class="font-medium text-gray-800 text-sm">${escapeHtml(s.name)}</div>
+              <div class="text-xs text-gray-400 mt-0.5">${inputTypeLabel(s.inputType)}</div>
+            </div>
+            <div class="price-tag text-sm flex-shrink-0">${fmtPrice(s.price)}</div>
+          </button>`).join('')}
+      </div>
+    </div>`).join('');
+}
+
 function openHeroService(serviceId) {
   const svc = allServices.find(s => s.id === serviceId);
   if (!svc) return;
@@ -3513,6 +3640,7 @@ function queryActionLabel(inputType) {
   if (inputType === 'assinatura_digital') return 'Enviar para Assinatura';
   if (inputType === 'recurso_multa') return 'Gerar Recurso';
   if (inputType === 'contrato_social') return 'Gerar Contrato Social';
+  if (inputType === 'dcr_cancelar_atpve' || inputType === 'dcr_cancelar_cve') return 'Solicitar Cancelamento';
   if (inputType === 'arrendamento_veicular') return 'Gerar Contrato de Arrendamento';
   return 'Realizar Consulta';
 }
@@ -4150,6 +4278,41 @@ function renderFormFields(inputType, svc) {
 
     // Formulário em etapas, desenhado por assets/contrato-social.js.
     contrato_social: '<div id="cs-root"></div>',
+
+    // Cancelamentos (página ATPVe's e Consultas Novas). Campos que a API pede,
+    // conferidos pelas recusas dela em 22/10/2026.
+    dcr_cancelar_atpve: placaField + `
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="label">UF do ATPV-e <span class="text-red-500">*</span></label>
+          <select id="f-uf" class="input-field" required>
+            <option value="">—</option><option value="DF">DF</option><option value="GO">GO</option><option value="MG">MG</option><option value="MS">MS</option><option value="PR">PR</option><option value="RJ">RJ</option><option value="RS">RS</option><option value="SP">SP</option>
+          </select>
+        </div>
+        ${field('numero_atpve', 'Número do ATPV-e', 'text', '000000000000', true, 'inputmode="numeric"')}
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        ${field('renavam', 'Renavam (opcional)', 'text', '00000000000', false, 'inputmode="numeric" maxlength="11"')}
+        ${field('numero_duda', 'Número da DUDA (obrigatório no RJ)', 'text', '', false, 'inputmode="numeric"')}
+      </div>
+      <p class="text-xs text-gray-500 mt-1">Cancela a <strong>intenção de venda</strong> (o ATPV-e). Para desfazer uma comunicação de venda, use o cancelamento de comunicado.</p>
+      <label class="flex items-start gap-2 text-sm text-red-800 bg-red-50 border border-red-200 rounded p-2 mt-2">
+        <input type="checkbox" id="f-dcr_confirmar" class="mt-1">
+        <span>Confirmo o cancelamento. <strong>É um ato no Detran e não pode ser desfeito.</strong></span>
+      </label>`,
+
+    dcr_cancelar_cve: placaField + `
+      <p class="text-xs text-gray-500 mb-2">Informe o <strong>protocolo da comunicação de venda com o renavam</strong>, ou o <strong>número da DUDA</strong>.</p>
+      <div class="grid grid-cols-2 gap-3">
+        ${field('protocolo', 'Protocolo da comunicação de venda', 'text', '', false, 'inputmode="numeric"')}
+        ${field('renavam', 'Renavam', 'text', '00000000000', false, 'inputmode="numeric" maxlength="11"')}
+      </div>
+      ${field('numero_duda', 'Número da DUDA (opcional)', 'text', '', false, 'inputmode="numeric"')}
+      <p class="text-xs text-gray-500 mt-1">Cancela a <strong>comunicação de venda</strong> — não é o mesmo que cancelar o ATPV-e.</p>
+      <label class="flex items-start gap-2 text-sm text-red-800 bg-red-50 border border-red-200 rounded p-2 mt-2">
+        <input type="checkbox" id="f-dcr_confirmar" class="mt-1">
+        <span>Confirmo o cancelamento. <strong>É um ato no Detran e não pode ser desfeito.</strong></span>
+      </label>`,
     // Formulário em etapas, desenhado por assets/arrendamento-veicular.js.
     arrendamento_veicular: '<div id="av-root"></div>',
 
@@ -5310,6 +5473,10 @@ function buildParams(inputType) {
                                          return { id: g('id') };
   if (inputType === 'pedido_id_get')     return { pedido_id: g('pedido_id') };
 
+  if (inputType === 'dcr_cancelar_atpve')
+    return { placa: g('placa'), uf: g('uf'), numero_atpve: g('numero_atpve'), renavam: g('renavam'), numero_duda: g('numero_duda'), confirmar: !!document.getElementById('f-dcr_confirmar')?.checked };
+  if (inputType === 'dcr_cancelar_cve')
+    return { placa: g('placa'), protocolo: g('protocolo'), renavam: g('renavam'), numero_duda: g('numero_duda'), confirmar: !!document.getElementById('f-dcr_confirmar')?.checked };
   if (inputType === 'placa_renavam')
     return { placa: g('placa'), renavam: g('renavam') };
   if (inputType === 'prf_infracoes')
@@ -5577,6 +5744,15 @@ function buildParams(inputType) {
 // para dar feedback imediato sem depender da resposta da API externa).
 function validateParams(inputType, p) {
   if (inputType === 'contrato_social') return csValidar(p);
+  if (inputType === 'dcr_cancelar_atpve' || inputType === 'dcr_cancelar_cve') {
+    if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(String(p.placa).toUpperCase().replace(/[^A-Z0-9]/g, ''))) return 'Placa inválida.';
+    if (inputType === 'dcr_cancelar_atpve') {
+      if (!p.uf) return 'Escolha a UF do ATPV-e.';
+      if (p.numero_atpve.replace(/\D/g, '').length < 6) return 'Informe o número do ATPV-e.';
+      if (p.uf === 'RJ' && !p.numero_duda) return 'No RJ o número da DUDA é obrigatório.';
+    } else if (!(p.protocolo && p.renavam) && !p.numero_duda) return 'Informe o protocolo com o renavam, ou o número da DUDA.';
+    if (!p.confirmar) return 'Marque a confirmação do cancelamento.';
+  }
   if (inputType === 'arrendamento_veicular') return avValidar(p);
   if (inputType === 'recurso_multa') {
     const d = p.dados;

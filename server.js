@@ -211,6 +211,88 @@ const DIRECTDATA_INPUT_TYPES = { placa: 'placa', placa_renavam: 'placa_renavam',
 // valor volta 400 resultadoId 8, igual a não mandar o TIPO.
 const PRF_TIPOS = { EmAberto: 'Autuações/Multas em aberto', Pagas: 'Multas pagas', Canceladas: 'Autuações/Multas canceladas' };
 
+// ── DataCred (app.datacredconsultas.com.br/api/v1) — página "ATPVe's e
+// consultas novas" (22/10/2026) ──────────────────────────────────────────────
+// Header X-API-Key (DATACRED_API_KEY, segredo de servidor: o repositório é
+// público). Contrato conferido na API real em 22/10/2026:
+//  - Consultas: POST /consultas { tipo, documento, renavam? } → 202 + id;
+//    GET /consultas/{id} até status "concluida" ou "erro" (Base Nacional
+//    concluiu em 15 s, CRLV-e RJ em 46 s); GET /consultas/{id}/pdf → o PDF.
+//    Nos produtos de DOCUMENTO (CRLV-e, reemissão do ATPV-e, CRV, laudo CSV) o
+//    PDF é o arquivo oficial puro e vai como veio. Nos de DADOS o PDF deles é o
+//    relatório com a marca do fornecedor — o dono não quer o nome no site —,
+//    então o relatório é montado aqui a partir de `dados` (buildDataCredPdfBuffer).
+//  - Cancelamentos: POST /comunicados-venda/cancelar-atpve (placa, uf,
+//    numero_atpve, e no RJ numero_duda) e /cancelar-avulso (placa + protocolo da
+//    CVE + renavam, ou numero_duda), os dois com confirmar:true. A doc não traz
+//    o corpo; os campos saíram das recusas 400 da própria API. A resposta traz
+//    `cancelada` e `status`/`mensagem`; o fornecedor só cobra quando a emissora
+//    confirma — e nós também.
+// Preço = custo do contrato + 60% (DATACRED_MARKUP, decisão do dono). Ficaram
+// de fora: as UFs de CRLV-e com entrega AGENDADA (AM, DF, PB, PE, RN, SC — o
+// documento demora horas e aqui a consulta espera na própria requisição), o
+// Débitos + Boleto (o boleto só existe dentro do relatório com a marca deles) e
+// a emissão de ATPV-e/comunicação de venda (fluxo com procuração e anexos).
+const DATACRED_BASE_URL = 'https://app.datacredconsultas.com.br/api/v1';
+const DATACRED_API_KEY  = process.env.DATACRED_API_KEY || '';
+const DATACRED_MARKUP   = 1.60;
+const DATACRED_GRUPO    = "ATPVe's e Consultas Novas";
+// UFs em que o CRLV-e exige o renavam (doc, "CRLV-e — o passo a passo exato").
+const DATACRED_CRLV_RENAVAM = new Set(['AP', 'BA', 'ES', 'MA', 'MG', 'PA', 'RJ', 'SP', 'TO']);
+// sub = bloco da página; entrada = placa | placa_renavam | cpf | cnpj |
+// cancelar_atpve | cancelar_cve; doc = entrega o PDF oficial do fornecedor.
+const DATACRED_SVCS = {};
+const dcr = (codigo, nome, custo, sub, entrada, extra = {}) => {
+  // O id vai para o nome do arquivo e para a página: "datacred_basic" vira dcr-pacote-basic.
+  DATACRED_SVCS[`dcr-${codigo.replace(/^datacred_/, 'pacote_').replace(/_/g, '-')}`] = { codigo, nome, custo, sub, entrada, ...extra };
+};
+dcr('cancelamento_atpve',            'Cancelamento de ATPV-e (intenção de venda)', 20.00, 'Cancelamentos', 'cancelar_atpve', { icon: '🚫' });
+dcr('cancelamento_comunicado_venda', 'Cancelamento de Comunicado de Venda',        20.00, 'Cancelamentos', 'cancelar_cve',   { icon: '↩️' });
+dcr('reemissao_atpve',  'Reemissão ATPV-e (PDF)',                 39.90, 'Documentos do veículo', 'placa', { doc: true, icon: '📝' });
+dcr('numero_atpv',      'Número do ATPV-e vigente',               20.00, 'Documentos do veículo', 'placa', { icon: '🔢' });
+dcr('placa_crv',        'CRV pela Placa (PDF)',                   49.90, 'Documentos do veículo', 'placa', { doc: true, icon: '📄' });
+dcr('crv_seguranca',    'Código de Segurança do CRV',             25.00, 'Documentos do veículo', 'placa', { icon: '🔐' });
+dcr('cod_seguranca',    'Código de Segurança do CLA (CRLV)',      25.00, 'Documentos do veículo', 'placa', { icon: '🔐' });
+dcr('siscsv',           'Laudo CSV (Certificado de Segurança Veicular)', 3.00, 'Documentos do veículo', 'placa', { doc: true, icon: '🛡️' });
+for (const [uf, codigo, custo] of [
+  ['AC', 'crlv_ac', 9.90], ['AL', 'crlv_ag_al', 39.90], ['AP', 'crlv_ap', 4.90], ['BA', 'crlv_ba', 24.90],
+  ['CE', 'crlv_ag_ce', 39.90], ['ES', 'crlv_ag_es', 29.90], ['GO', 'crlv_go', 7.90], ['MA', 'crlv_ma', 5.00],
+  ['MG', 'crlv_mg', 7.90], ['MS', 'crlv_ms', 8.90], ['MT', 'crlv_mt', 9.90], ['PA', 'crlv_pa', 6.90],
+  ['PI', 'crlv_pi', 6.50], ['PR', 'crlv_ag_pr', 8.90], ['RJ', 'crlv_ag_rj', 19.90], ['RO', 'crlv_ro', 8.90],
+  ['SE', 'crlv_se', 9.90], ['SP', 'crlv_sp', 10.39], ['TO', 'crlv_to', 3.50],
+]) dcr(codigo, `CRLV-e ${uf}`, custo, 'CRLV-e', DATACRED_CRLV_RENAVAM.has(uf) ? 'placa_renavam' : 'placa', { doc: true, icon: '📄', uf: uf.toLowerCase() });
+// A reemissão do RJ pede só a placa (renavam e cpf opcionais, doc).
+dcr('crlv_reemissao_rj', 'CRLV-e RJ (Reemissão 2ª via)', 40.00, 'CRLV-e', 'placa', { doc: true, icon: '📄', uf: 'rj' });
+dcr('datacred_basic',            'Pacote Veicular Basic',          15.00, 'Pacotes veiculares', 'placa', { icon: '🚗' });
+dcr('datacred_plus',             'Pacote Veicular Plus',           17.00, 'Pacotes veiculares', 'placa', { icon: '🚗' });
+dcr('datacred_advanced',         'Pacote Veicular Advanced',       18.90, 'Pacotes veiculares', 'placa', { icon: '🚗' });
+dcr('datacred_completa_vip',     'Pacote Veicular Completa VIP',   21.90, 'Pacotes veiculares', 'placa', { icon: '🚘' });
+dcr('datacred_completa_top',     'Pacote Veicular Completa TOP',   49.90, 'Pacotes veiculares', 'placa', { icon: '🚘' });
+dcr('datacred_completa_premium', 'Pacote Veicular Completa Premium', 49.90, 'Pacotes veiculares', 'placa', { icon: '🚘' });
+dcr('consulta_veicular_basic',   'Consulta Veicular Basic',        18.00, 'Pacotes veiculares', 'placa', { icon: '🔍' });
+dcr('consulta_veicular_plus',    'Consulta Veicular Plus',         19.90, 'Pacotes veiculares', 'placa', { icon: '🔍' });
+dcr('consulta_veicular_completa','Consulta Veicular Completa',     39.90, 'Pacotes veiculares', 'placa', { icon: '🔍' });
+dcr('base_nacional',             'Base Nacional (BIN)',             6.90, 'Bases veiculares', 'placa', { icon: '🗂️' });
+dcr('base_estadual',             'Base Estadual (Detran de origem)', 6.90, 'Bases veiculares', 'placa', { icon: '🏛️' });
+dcr('proprietario_atual_premium','Proprietário Atual Premium',      6.90, 'Bases veiculares', 'placa', { icon: '👤' });
+dcr('hist_proprietarios',        'Histórico de Proprietários',     13.00, 'Bases veiculares', 'placa', { icon: '📜' });
+dcr('leilao_conjugado',          'Leilão Conjugado',               10.00, 'Bases veiculares', 'placa', { icon: '🔨' });
+dcr('leilao_autorisco',          'Leilão Auto Risco',               5.10, 'Bases veiculares', 'placa', { icon: '🔨' });
+dcr('datacred_completa_pf',      'Crédito Completa PF',             9.90, 'Crédito', 'cpf',  { icon: '💳' });
+dcr('datacred_completa_pj',      'Crédito Completa PJ',            10.00, 'Crédito', 'cnpj', { icon: '💳' });
+dcr('scpc_basico',               'SCPC Básico',                     8.90, 'Crédito', 'cpf',  { icon: '💳' });
+dcr('scpc_advanced',             'SCPC Advanced',                   9.90, 'Crédito', 'cpf',  { icon: '💳' });
+dcr('relatorio_juridico_pf',     'Relatório Jurídico PF',           5.90, 'Crédito', 'cpf',  { icon: '⚖️' });
+dcr('serasa_pj',                 'Relatório Serasa Experian PJ',   25.90, 'Crédito', 'cnpj', { icon: '📊' });
+dcr('rel_total_pf',              'Relatório Total PF',             19.90, 'Crédito', 'cpf',  { icon: '📊' });
+dcr('rel_total_pj',              'Relatório Total PJ',             19.90, 'Crédito', 'cnpj', { icon: '📊' });
+dcr('rating_premium_pf',         'Rating Bancário Premium PF',     22.90, 'Crédito', 'cpf',  { icon: '🏦' });
+dcr('rating_premium_pj',         'Rating Bancário Premium PJ',     22.90, 'Crédito', 'cnpj', { icon: '🏦' });
+dcr('rating_avancado_pf',        'Rating Bancário Avançado PF',    16.90, 'Crédito', 'cpf',  { icon: '🏦' });
+dcr('rating_avancado_pj',        'Rating Bancário Avançado PJ',    16.90, 'Crédito', 'cnpj', { icon: '🏦' });
+const DATACRED_INPUT_TYPES = { placa: 'placa', placa_renavam: 'placa_renavam', cpf: 'dc_cpf', cnpj: 'cnpj', cancelar_atpve: 'dcr_cancelar_atpve', cancelar_cve: 'dcr_cancelar_cve' };
+const dataCredPreco = custo => Math.round(custo * DATACRED_MARKUP * 100) / 100;
+
 // Consulta CNPJ grátis — API pública do CNPJá (open.cnpja.com), sem chave. A
 // api.cnpja.com (com simples/registrations/suframa/geocoding na query) exige
 // chave paga e responde 401 "missing authentication"; a pública já traz
@@ -1332,6 +1414,12 @@ const SERVICES = [
   // (o "Para os Despachantes" zera o preço).
   { id:'contrato-social-ltda', name:'Contrato Social LTDA com IA', group:'Documentos Empresariais', basePrice:120, noMarkup:true, inputType:'contrato_social', icon:'📑',
     slowNote:'Constituição de sociedade limitada (inclusive unipessoal) ou alteração com consolidação do contrato, com quantos sócios forem precisos. Na alteração, o CNPJ preenche empresa e quadro de sócios. As cláusulas seguem o Código Civil; a IA redige só o objeto social a partir dos CNAEs. Sai em PDF pronto para assinar e registrar (cerca de 1 minuto). Só é cobrado se o PDF for gerado.' },
+  // ATPVe's e Consultas Novas (DataCred, 22/10/2026) — ver DATACRED_SVCS. Preço
+  // fixo = custo + 60%, por isso noMarkup. No painel têm página própria.
+  ...Object.entries(DATACRED_SVCS).map(([id, s]) => ({
+    id, name: s.name || s.nome, group: DATACRED_GRUPO, subgrupo: s.sub, basePrice: dataCredPreco(s.custo), noMarkup: true,
+    inputType: DATACRED_INPUT_TYPES[s.entrada], icon: s.icon, ...(s.uf ? { uf: s.uf } : {}),
+  })),
   { id:'recurso-multa-ia', name:'Recurso de Multa com IA', group:'Recurso de Multas', basePrice:80, noMarkup:true, inputType:'recurso_multa', icon:'⚖️',
     slowNote:'Envie a foto ou o PDF da notificação, confira os dados e responda as perguntas. A IA redige a defesa prévia ou o recurso à JARI em PDF, pronto para assinar e protocolar (leva cerca de 1 minuto). Só é cobrado se o PDF for gerado.' },
   // ── CRLV-e Rio de Janeiro (destaque no topo da Nova Consulta) ──
@@ -8104,6 +8192,81 @@ function acharPdfDirectData(obj, prof = 0) {
   return null;
 }
 
+// ── DataCred (ver DATACRED_SVCS) ─────────────────────────────────────────────
+async function chamarDataCred(caminho, { method = 'GET', body } = {}) {
+  if (!DATACRED_API_KEY) throw Object.assign(new Error('DATACRED_API_KEY ausente'), { semChave: true });
+  const r = await fetch(`${DATACRED_BASE_URL}${caminho}`, {
+    method,
+    headers: { 'X-API-Key': DATACRED_API_KEY, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(120000),
+  });
+  const buf = Buffer.from(await r.arrayBuffer());
+  let json = null;
+  try { json = JSON.parse(buf.toString('utf8')); } catch {}
+  return { status: r.status, json, buf, ct: r.headers.get('content-type') || '' };
+}
+
+// As mensagens deles podem citar a própria marca ("relatório DataCred",
+// "fale com a DataCred"); o cliente não pode ver o nome do fornecedor.
+const semMarcaDataCred = s => String(s ?? '')
+  .replace(/\s*\b(?:n|d|pel)[ao]s?\s+data\s*cred\b/gi, '')
+  .replace(/\s*data\s*cred\s*/gi, ' ').replace(/\s+([.,;:])/g, '$1').replace(/\s{2,}/g, ' ').trim();
+const msgDataCred = j => semMarcaDataCred(j?.mensagem || j?.erro || j?.detail || '');
+
+// Saldo acabou (402) ou chave recusada (401/403) é problema nosso: o cliente
+// vê "indisponível" e o ADMIN_PHONE é avisado no máximo uma vez por hora.
+let dataCredAvisoEm = 0;
+function avisarAdminDataCred(motivo) {
+  if (!ADMIN_PHONE || Date.now() - dataCredAvisoEm < 3600 * 1000) return;
+  dataCredAvisoEm = Date.now();
+  sendWhatsApp(ADMIN_PHONE, `⚠️ *DataCred (ATPVe's e Consultas Novas)*\n${motivo}\n\nAs consultas da página estão recusando os clientes, sem cobrar, até isso ser resolvido.`).catch(() => {});
+}
+
+// `dados` vem com uma seção por base, no desenho de cada uma. Sai o que não
+// é para o cliente: o HEADER técnico de cada seção (parâmetros e controle da
+// base), chaves internas (começam com "_"), imagens em base64 (o pacote
+// Premium traz fotos de leilão — no relatório viraria página de letras) e o
+// nome do fornecedor em chave ou valor.
+function limparDadosDataCred(v, prof = 0) {
+  if (Array.isArray(v)) return v.map(x => limparDadosDataCred(x, prof + 1));
+  if (v && typeof v === 'object') {
+    const o = {};
+    for (const [k, x] of Object.entries(v)) {
+      if (k.startsWith('_') || (prof === 1 && k === 'HEADER')) continue;
+      o[semMarcaDataCred(k) || 'Dados'] = limparDadosDataCred(x, prof + 1);
+    }
+    return o;
+  }
+  if (typeof v === 'string') {
+    if (v.length > 300 && /^[A-Za-z0-9+/=\s]+$/.test(v.slice(0, 300))) return '[imagem omitida]';
+    return semMarcaDataCred(v);
+  }
+  return v;
+}
+
+// Acompanha uma consulta até "concluida" ou "erro" (doc: 20–30 s entre as
+// voltas; os produtos daqui são de entrega imediata e concluíram em 15–46 s
+// no teste). Devolve o último JSON, ou null se o tempo acabar.
+async function acompanharDataCred(caminho, j, terminou, limiteMs = 300000) {
+  const t0 = Date.now();
+  while (!terminou(j) && Date.now() - t0 < limiteMs) {
+    await new Promise(r => setTimeout(r, 15000));
+    const r = await chamarDataCred(caminho);
+    if (r.json) j = r.json;
+  }
+  return terminou(j) ? j : null;
+}
+
+// Recusa de conta/chave vira 503 sem cobrar; o resto leva o texto deles.
+function erroDataCred(resp) {
+  if (resp.status === 402) { avisarAdminDataCred('Saldo insuficiente ou fatura vencida na DataCred (HTTP 402).'); return { status: 503, error: 'Serviço temporariamente indisponível. Nada foi cobrado — tente mais tarde.' }; }
+  if (resp.status === 401 || resp.status === 403) { avisarAdminDataCred(`Chave recusada ou produto não liberado (HTTP ${resp.status}): ${msgDataCred(resp.json)}`); return { status: 503, error: 'Serviço temporariamente indisponível. Nada foi cobrado — tente mais tarde.' }; }
+  if (resp.status === 429) return { status: 429, error: 'Muitas consultas ao mesmo tempo. Aguarde um minuto e tente de novo. Nada foi cobrado.' };
+  if (resp.status >= 500) return { status: 502, error: 'A base não respondeu agora. Nada foi cobrado — tente de novo em instantes.' };
+  return { status: resp.status === 404 ? 404 : 400, error: (msgDataCred(resp.json) || 'Consulta recusada.') + ' Nada foi cobrado.' };
+}
+
 // ── Consulta CNPJ grátis (CNPJá público — ver CNPJA_OPEN_URL) ────────────────
 
 // CNPJ numérico ou alfanumérico (Receita, a partir de julho/2026: 12 posições
@@ -8768,6 +8931,123 @@ async function processCatalogQuery(userId, serviceId, params, res) {
         const caption = `✅ *${c.modo === 'alteracao' ? 'Alteração contratual' : 'Contrato social'} pronto!*\n🏢 ${rotulo}\n\nConfira os dados, colham as assinaturas e registre em até 30 dias. As orientações estão na última página.`;
         await sendWhatsAppPdf(user.phone, pdfBuf, nomeArq, caption).catch(() => {});
       }
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
+      return res.send(pdfBuf);
+    }
+
+    // ── ATPVe's e Consultas Novas (DataCred — ver DATACRED_SVCS) ─────────────
+    // Nada é cobrado antes do documento/relatório pronto (cancelamento: antes
+    // da emissora confirmar).
+    if (DATACRED_SVCS[serviceId]) {
+      const s = DATACRED_SVCS[serviceId];
+      const placa = String(params?.placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const renavam = String(params?.renavam || '').replace(/\D/g, '');
+      const placaOk = /^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa);
+      let entregue;   // { pdf, rotulo, log } ou { status, error }
+      try {
+        if (s.entrada === 'cancelar_atpve' || s.entrada === 'cancelar_cve') {
+          if (!placaOk) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+          if (params?.confirmar !== true) return res.status(400).json({ error: 'Confirme que o cancelamento é irreversível.' });
+          const duda = String(params?.numero_duda || '').replace(/\D/g, '');
+          let caminho, corpo, log;
+          if (s.entrada === 'cancelar_atpve') {
+            const uf = String(params?.uf || '').toUpperCase();
+            const numero = String(params?.numero_atpve || '').replace(/\D/g, '');
+            if (!/^[A-Z]{2}$/.test(uf)) return res.status(400).json({ error: 'Informe a UF do ATPV-e.' });
+            if (numero.length < 6) return res.status(400).json({ error: 'Informe o número do ATPV-e a cancelar.' });
+            if (uf === 'RJ' && !duda) return res.status(400).json({ error: 'No RJ o número da DUDA é obrigatório para cancelar o ATPV-e.' });
+            caminho = '/comunicados-venda/cancelar-atpve';
+            corpo = { confirmar: true, placa, uf, numero_atpve: numero, ...(renavam ? { renavam } : {}), ...(duda ? { numero_duda: duda } : {}) };
+            log = { placa, uf, numero_atpve: numero };
+          } else {
+            const protocolo = String(params?.protocolo || '').replace(/\D/g, '');
+            if (!(protocolo && renavam) && !duda) return res.status(400).json({ error: 'Informe o protocolo da comunicação de venda com o renavam, ou o número da DUDA.' });
+            caminho = '/comunicados-venda/cancelar-avulso';
+            corpo = { confirmar: true, placa, ...(protocolo ? { protocolo } : {}), ...(renavam ? { renavam } : {}), ...(duda ? { numero_duda: duda } : {}) };
+            log = { placa, protocolo: protocolo || undefined };
+          }
+          const r = await chamarDataCred(caminho, { method: 'POST', body: corpo });
+          if (r.status >= 300 || !r.json?.id) entregue = erroDataCred(r);
+          else {
+            // Conferido em 22/10/2026: o cancelamento avulso respondeu 200 já
+            // com o resultado (cancelada:false, status "erro"). Se vier em
+            // processamento, acompanha pelo id.
+            const j = r.json.cancelada === true || r.json.status === 'erro' ? r.json
+              : await acompanharDataCred(`/comunicados-venda/${r.json.id}`, r.json, x => x?.cancelada === true || ['erro', 'concluida', 'cancelada'].includes(x?.status));
+            if (!j) entregue = { status: 504, error: `O cancelamento (protocolo ${r.json.id}) ainda está em processamento na emissora. Nada foi cobrado até agora — fale com o suporte informando esse protocolo.` };
+            else if (j.cancelada !== true && j.status !== 'cancelada') entregue = { status: 422, error: (msgDataCred(j) || 'A emissora não confirmou o cancelamento.') + ' Nada foi cobrado.' };
+            else {
+              const comprovante = JSON.parse(JSON.stringify(limparDadosDataCred({ Resultado: {
+                situacao: 'CANCELAMENTO CONFIRMADO', placa, protocolo: j.protocolo || j.protocolo_cve || r.json.id,
+                numero_atpve: j.numero_atpve || corpo.numero_atpve, numero_duda: j.numero_duda || corpo.numero_duda,
+                mensagem: j.mensagem, data: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+              } }, 1)));
+              entregue = { pdf: await buildDirectDataPdfBuffer(service, null, comprovante, log), rotulo: placa, log };
+            }
+          }
+        } else {
+          let documento;
+          if (s.entrada === 'cpf') {
+            documento = String(params?.cpf || '').replace(/\D/g, '');
+            if (documento.length !== 11 || !isValidDoc(documento)) return res.status(400).json({ error: 'CPF inválido.' });
+          } else if (s.entrada === 'cnpj') {
+            documento = String(params?.cnpj || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
+            if (!cnpjValido(documento)) return res.status(400).json({ error: 'CNPJ inválido.' });
+          } else {
+            if (!placaOk) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+            if (s.entrada === 'placa_renavam' && (renavam.length < 9 || renavam.length > 11)) return res.status(400).json({ error: 'Renavam inválido (9 a 11 dígitos).' });
+            documento = placa;
+          }
+          const corpo = { tipo: s.codigo, documento, ...(s.entrada === 'placa_renavam' ? { renavam: renavam.padStart(11, '0') } : {}) };
+          const r = await chamarDataCred('/consultas', { method: 'POST', body: corpo });
+          if (r.status >= 300 || !r.json?.id) entregue = erroDataCred(r);
+          else {
+            const j = await acompanharDataCred(`/consultas/${r.json.id}`, r.json, x => ['concluida', 'erro'].includes(x?.status));
+            const rotulo = s.entrada === 'cpf' || s.entrada === 'cnpj' ? maskDocDisplay(documento) : placa;
+            const log = s.entrada === 'cpf' || s.entrada === 'cnpj' ? { documento: maskDocDisplay(documento) } : { placa, ...(corpo.renavam ? { renavam } : {}) };
+            if (!j) entregue = { status: 504, error: 'A consulta demorou mais que o normal e não foi concluída. Nada foi cobrado — tente de novo em alguns minutos.' };
+            else if (j.status === 'erro') entregue = { status: 422, error: (msgDataCred(j) || 'Nada encontrado para essa consulta.') + ' Nada foi cobrado.' };
+            else if (s.doc) {
+              const p = await chamarDataCred(`/consultas/${j.id}/pdf`);
+              if (p.status !== 200 || p.buf.slice(0, 4).toString() !== '%PDF') {
+                console.error(`[${serviceId}] PDF da consulta ${j.id}: HTTP ${p.status}`);
+                entregue = { status: 502, error: 'O documento não pôde ser baixado agora. Nada foi cobrado — tente de novo em instantes.' };
+              } else entregue = { pdf: p.buf, rotulo, log };
+            } else {
+              const dados = limparDadosDataCred(j.dados || {});
+              if (!Object.keys(dados).length) entregue = { status: 422, error: 'A base não trouxe dados para essa consulta. Nada foi cobrado.' };
+              else entregue = { pdf: await buildDirectDataPdfBuffer(service, null, dados, log), rotulo, log };
+            }
+          }
+        }
+      } catch (e) {
+        console.error(`[${serviceId}] DataCred:`, e.semChave ? 'sem DATACRED_API_KEY' : e.message);
+        entregue = e.semChave ? { status: 503, error: 'Serviço temporariamente indisponível. Nada foi cobrado.' }
+          : { status: 502, error: 'A base não respondeu agora. Nada foi cobrado — tente de novo em instantes.' };
+      }
+      if (!entregue.pdf) return res.status(entregue.status).json({ error: entregue.error });
+
+      const pdfBuf = entregue.pdf;
+      await debitarConsulta(userId, price);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name} — ${entregue.rotulo}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify(entregue.log), price, txRow.rows[0].id]
+      );
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+      await notifyAdminNewQuery(user, service, price, entregue.log);
+      const nomeArq = `${MC_ARQUIVO_PREFIXO}-${serviceId.replace(/^dcr-/, '')}-${String(entregue.rotulo).replace(/[^A-Za-z0-9]/g, '')}.pdf`;
+      if (user.phone)
+        await sendWhatsAppPdf(user.phone, pdfBuf, nomeArq, `✅ *${service.name}*\n🔎 ${entregue.rotulo}\n\nDocumento gerado pela MC Despachadoria.`).catch(() => {});
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
       return res.send(pdfBuf);
