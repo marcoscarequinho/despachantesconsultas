@@ -15578,20 +15578,34 @@ app.post('/api/arrendamento-veicular/buscar-documento', requireAuth, async (req,
 // ── Emissão de ATPV-e (DataCred): apoio ao formulário ────────────────────────
 // GET /api/novas/cep/:cep — o código TOM do município (comprador_city_id), que
 // o Detran exige e ninguém tem à mão, mais o endereço. Não cobra lá.
+// Reserva: o ViaCEP. O campo `siafi` dele É o código TOM — conferido em
+// 22/10/2026 contra o city_id do fornecedor (Rio 6001, Niterói 5865, São Paulo
+// 7107). Entra quando a rota do fornecedor falha ou volta sem city_id.
 app.get('/api/novas/cep/:cep', requireAuth, async (req, res) => {
   const cep = String(req.params.cep || '').replace(/\D/g, '');
   if (cep.length !== 8) return res.status(400).json({ error: 'CEP inválido.' });
+  let j = null;
   try {
     const r = await chamarDataCred(`/cep/${cep}`);
-    if (r.status === 404) return res.status(404).json({ error: 'CEP não encontrado.' });
-    if (r.status !== 200 || !r.json) return res.status(502).json({ error: 'A busca de CEP não respondeu. Tente de novo.' });
-    const j = r.json;
-    // TOM não é o IBGE: city_id tem 4 dígitos e pode vir null (doc 5.1.2).
-    return res.json({ logradouro: j.logradouro || '', bairro: j.bairro || '', cidade: j.cidade || '', uf: j.uf || '', city_id: j.city_id || '' });
+    if (r.status === 200 && r.json) j = r.json;
+    else console.error(`[novas] cep ${cep}: fornecedor HTTP ${r.status} ${msgDataCred(r.json)}`);
   } catch (e) {
-    console.error('[novas] cep:', e.message);
-    return res.status(502).json({ error: 'A busca de CEP não respondeu. Tente de novo.' });
+    console.error(`[novas] cep ${cep}: fornecedor falhou —`, e.semChave ? 'sem DATACRED_API_KEY' : e.message);
   }
+  if (j?.city_id) return res.json({ logradouro: j.logradouro || '', bairro: j.bairro || '', cidade: j.cidade || '', uf: j.uf || '', city_id: String(j.city_id) });
+  try {
+    const v = await fetch(`https://viacep.com.br/ws/${cep}/json/`, { signal: AbortSignal.timeout(15000) });
+    const d = await v.json().catch(() => null);
+    if (d?.erro) return res.status(404).json({ error: 'CEP não encontrado.' });
+    if (v.ok && d) return res.json({
+      logradouro: d.logradouro || j?.logradouro || '', bairro: d.bairro || j?.bairro || '',
+      cidade: d.localidade || j?.cidade || '', uf: d.uf || j?.uf || '', city_id: String(d.siafi || ''),
+    });
+    console.error(`[novas] cep ${cep}: ViaCEP HTTP ${v.status}`);
+  } catch (e) {
+    console.error(`[novas] cep ${cep}: ViaCEP falhou —`, e.message);
+  }
+  return res.status(502).json({ error: 'A busca de CEP não respondeu. Tente de novo em instantes.' });
 });
 
 // POST /api/novas/atpve/documento — o documento que o vendedor assina no
