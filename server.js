@@ -8238,7 +8238,11 @@ async function chamarDataCred(caminho, { method = 'GET', body } = {}) {
   if (!DATACRED_API_KEY) throw Object.assign(new Error('DATACRED_API_KEY ausente'), { semChave: true });
   const r = await fetch(`${DATACRED_BASE_URL}${caminho}`, {
     method,
-    headers: { 'X-API-Key': DATACRED_API_KEY, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    // O Cloudflare na frente da API deles respondeu 403 "Just a moment..." (o
+    // desafio anti-robô) a toda chamada vinda da Vercel em 22/10/2026 — a mesma
+    // chave passava fora dela. User-Agent e Accept explícitos não resolvem isso
+    // sozinhos (é reputação de IP de datacenter); quem libera é o suporte deles.
+    headers: { 'X-API-Key': DATACRED_API_KEY, 'User-Agent': 'MCDespachadoria/1.0 (+https://www.despachantesconsultas.com.br)', Accept: 'application/json, application/pdf', ...(body ? { 'Content-Type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(120000),
   });
