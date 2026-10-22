@@ -3509,6 +3509,15 @@ function atualizarFormAtpveNova() {
   if (ps && precoEl) precoEl.textContent = uf && ps[uf] ? fmtPrice(ps[uf]) : 'a partir de ' + fmtPrice(Math.min(...Object.values(ps)));
 }
 
+// Botão de UF do card em destaque: abre a emissão já com a UF (e o preço dela).
+function abrirAtpveNovaComUf(uf) {
+  const svc = allServices.find(s => s.id === 'dcr-atpve');
+  if (!svc) return;
+  selectService(svc);
+  iniciarAtpveNovaUf(uf);
+  document.getElementById('query-form-wrap')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 function iniciarAtpveNovaUf(uf) {
   const el = document.getElementById('f-a2-uf');
   if (el) { el.value = uf; atualizarFormAtpveNova(); }
@@ -3617,8 +3626,7 @@ function buildNovasList() {
   const subs = [...new Set(svcs.map(s => s.subgrupo || 'Outras'))]
     .sort((a, b) => (NOVAS_SUBGRUPOS.indexOf(a) + 1 || 99) - (NOVAS_SUBGRUPOS.indexOf(b) + 1 || 99));
   wrap.innerHTML = subs.map(sub => sub === 'Emissão de ATPV-e' ? svcs.filter(s => s.subgrupo === sub).map(s => `
-    <button type="button" onclick="selectService(${JSON.stringify(s).replace(/"/g,"&quot;")})"
-      class="w-full text-left bg-gradient-to-r from-amber-50 to-white border-2 border-amber-300 rounded-xl p-4 sm:p-5 hover:border-amber-500 hover:shadow-md transition-all">
+    <div class="bg-gradient-to-r from-amber-50 to-white border-2 border-amber-300 rounded-xl p-4 sm:p-5">
       <div class="flex items-center gap-4">
         <div class="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center text-2xl flex-shrink-0">${s.icon}</div>
         <div class="flex-1 min-w-0">
@@ -3626,17 +3634,21 @@ function buildNovasList() {
             <span class="font-bold text-gray-800">${escapeHtml(s.name)}</span>
             <span class="svc-badge bg-orange-100 text-orange-700">⭐ Destaque</span>
           </div>
-          <p class="text-xs text-gray-600 mt-1 leading-snug">RJ, MG, SP, PR, RS, GO, MS e DF. No RJ sai na hora; nas demais passa pela conferência do Detran.
-            <strong>Só é cobrada quando o ATPV-e sai.</strong></p>
-          ${s.precosUf ? `<p class="text-[11px] text-gray-500 mt-1">${Object.entries(s.precosUf).map(([u, p]) => `${u} ${fmtPrice(p)}`).join(' · ')}</p>` : ''}
-        </div>
-        <div class="flex flex-col items-end gap-1 flex-shrink-0">
-          ${s.precosUf ? '<span class="text-[11px] text-gray-500">a partir de</span>' : ''}
-          <span class="price-tag text-sm">${fmtPrice(s.price)}</span>
-          <span class="svc-cta">Emitir</span>
+          <p class="text-xs text-gray-600 mt-1 leading-snug">No RJ sai na hora; nas demais passa pela conferência do Detran.
+            <strong>Só é cobrada quando o ATPV-e sai.</strong> Escolha a UF:</p>
         </div>
       </div>
-    </button>`).join('') : `
+      <!-- Uma UF por botão, com o preço da intenção de venda dela; o clique já
+           abre o formulário com a UF escolhida. -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
+        ${Object.entries(s.precosUf || {}).map(([u, p]) => `
+          <button type="button" onclick="abrirAtpveNovaComUf('${u}')"
+            class="flex items-center justify-between gap-2 bg-white border border-amber-200 rounded-lg px-3 py-2 hover:border-amber-500 hover:bg-amber-50 transition-all">
+            <span class="font-bold text-gray-800">${u}</span>
+            <span class="price-tag text-sm">${fmtPrice(p)}</span>
+          </button>`).join('')}
+      </div>
+    </div>`).join('') : `
     <div class="card">
       <h3 class="font-semibold text-gray-800 mb-3">${escapeHtml(sub)}</h3>
       <div class="grid sm:grid-cols-2 gap-2">
