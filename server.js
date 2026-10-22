@@ -249,7 +249,8 @@ const dcr = (codigo, nome, custo, sub, entrada, extra = {}) => {
 };
 // Em destaque no topo da página (pedido do dono): a emissão do ATPV-e.
 dcr('atpve',                         'Emissão de ATPV-e (Intenção de Venda)',      20.00, 'Emissão de ATPV-e', 'atpve', { icon: '📝' });
-dcr('cancelamento_atpve',            'Cancelamento de ATPV-e (intenção de venda)', 20.00, 'Cancelamentos', 'cancelar_atpve', { icon: '🚫' });
+// Preço fixo do dono (22/10/2026), fora do custo + 60%.
+dcr('cancelamento_atpve',            'Cancelamento de ATPV-e (intenção de venda)', 20.00, 'Cancelamentos', 'cancelar_atpve', { icon: '🚫', precoFixo: 69.90 });
 dcr('cancelamento_comunicado_venda', 'Cancelamento de Comunicado de Venda',        20.00, 'Cancelamentos', 'cancelar_cve',   { icon: '↩️' });
 dcr('reemissao_atpve',  'Reemissão ATPV-e (PDF)',                 39.90, 'Documentos do veículo', 'placa', { doc: true, icon: '📝' });
 dcr('numero_atpv',      'Número do ATPV-e vigente',               20.00, 'Documentos do veículo', 'placa', { icon: '🔢' });
@@ -1437,7 +1438,7 @@ const SERVICES = [
   // fixo = custo + 60%, por isso noMarkup. No painel têm página própria.
   ...Object.entries(DATACRED_SVCS).map(([id, s]) => ({
     id, name: s.name || s.nome, group: DATACRED_GRUPO, subgrupo: s.sub, noMarkup: true,
-    basePrice: id === DATACRED_ATPVE_SERVICE_ID ? Math.min(...Object.values(DATACRED_ATPVE_PRECOS)) : dataCredPreco(s.custo),
+    basePrice: id === DATACRED_ATPVE_SERVICE_ID ? Math.min(...Object.values(DATACRED_ATPVE_PRECOS)) : (s.precoFixo ?? dataCredPreco(s.custo)),
     ...(id === DATACRED_ATPVE_SERVICE_ID ? { precosUf: DATACRED_ATPVE_PRECOS } : {}),
     inputType: DATACRED_INPUT_TYPES[s.entrada], icon: s.icon, ...(s.uf ? { uf: s.uf } : {}),
   })),
