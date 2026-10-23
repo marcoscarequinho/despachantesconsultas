@@ -2419,6 +2419,9 @@ async function initDB() {
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS revendedor_id INTEGER REFERENCES users(id) ON DELETE SET NULL`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS adesao_paga_em TIMESTAMPTZ`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_revendedor ON users (revendedor_id) WHERE revendedor_id IS NOT NULL`);
+  // adesao_exigida: o usuário entrou num revendedor com adesão liberada e fica
+  // bloqueado (active=false) até o revendedor receber a adesão e liberar.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS adesao_exigida BOOLEAN NOT NULL DEFAULT false`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS revendedores (
       user_id      INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -2431,6 +2434,18 @@ async function initDB() {
       updated_at   TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  // cobra_adesao = o admin LIBEROU o revendedor a cobrar adesão. O valor é
+  // combinado entre o dono e o revendedor fora do sistema e a taxa é toda do
+  // revendedor — valor_adesao ficou sem uso (regra esclarecida em 23/10/2026).
+  // Página pública do revendedor (/r/<slug>): textos em pagina (exibidos sempre
+  // escapados) e logo/banner em base64 (só PNG/JPG/WebP, conferidos pelos bytes).
+  await pool.query(`ALTER TABLE revendedores ADD COLUMN IF NOT EXISTS slug VARCHAR(60) UNIQUE`);
+  await pool.query(`ALTER TABLE revendedores ADD COLUMN IF NOT EXISTS pagina JSONB NOT NULL DEFAULT '{}'::jsonb`);
+  await pool.query(`ALTER TABLE revendedores ADD COLUMN IF NOT EXISTS logo_mime VARCHAR(20)`);
+  await pool.query(`ALTER TABLE revendedores ADD COLUMN IF NOT EXISTS logo_data TEXT`);
+  await pool.query(`ALTER TABLE revendedores ADD COLUMN IF NOT EXISTS banner_mime VARCHAR(20)`);
+  await pool.query(`ALTER TABLE revendedores ADD COLUMN IF NOT EXISTS banner_data TEXT`);
+  await pool.query(`ALTER TABLE revendedores ADD COLUMN IF NOT EXISTS pagina_atualizada_em TIMESTAMPTZ DEFAULT NOW()`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS revendedor_pagamentos (
       id            SERIAL PRIMARY KEY,
@@ -2786,6 +2801,8 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Credenciais inválidas.' });
 
     const user = r.rows[0];
+    if (!user.active && user.adesao_exigida && !user.adesao_paga_em)
+      return res.status(403).json({ error: 'Seu acesso ainda não foi liberado. Fale com o seu revendedor para concluir a adesão.' });
     if (!user.active)
       return res.status(403).json({ error: 'Conta bloqueada. Contate o suporte.' });
 
@@ -2956,11 +2973,12 @@ app.get('/api/reseller/stats', requireAuth, requireReseller, async (req, res) =>
     const rid = req.user.id;
     const [info, clientes, com] = await Promise.all([
       pool.query(
-        `SELECT u.credits, rv.pix_tipo, rv.pix_chave, rv.cobra_adesao, rv.valor_adesao
+        `SELECT u.credits, rv.pix_tipo, rv.pix_chave, rv.cobra_adesao, rv.slug
            FROM users u LEFT JOIN revendedores rv ON rv.user_id = u.id WHERE u.id=$1`, [rid]),
       pool.query(
         `SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE active) AS ativos,
-                COUNT(*) FILTER (WHERE adesao_paga_em IS NOT NULL) AS adesoes
+                COUNT(*) FILTER (WHERE adesao_paga_em IS NOT NULL) AS adesoes,
+                COUNT(*) FILTER (WHERE adesao_exigida AND adesao_paga_em IS NULL) AS adesoes_pendentes
            FROM users WHERE revendedor_id=$1`, [rid]),
       pool.query(
         `SELECT COALESCE(SUM(amount),0) AS gerada,
@@ -2980,10 +2998,11 @@ app.get('/api/reseller/stats', requireAuth, requireReseller, async (req, res) =>
       pix_tipo_nome:    PIX_TIPOS[i.pix_tipo] || null,
       pix_chave:        i.pix_chave || null,
       cobra_adesao:     !!i.cobra_adesao,
-      valor_adesao:     i.valor_adesao === null || i.valor_adesao === undefined ? null : parseFloat(i.valor_adesao),
+      slug:             i.slug || null,
       total_clients:    parseInt(clientes.rows[0].total),
       active_clients:   parseInt(clientes.rows[0].ativos),
       adesoes_pagas:    parseInt(clientes.rows[0].adesoes),
+      adesoes_pendentes: parseInt(clientes.rows[0].adesoes_pendentes),
       recargas_total:   parseFloat(c.recargas),
       month_commissions: parseFloat(c.mes),
       total_commissions: parseFloat(c.gerada),
@@ -3001,7 +3020,7 @@ app.get('/api/reseller/stats', requireAuth, requireReseller, async (req, res) =>
 app.get('/api/reseller/clients', requireAuth, requireReseller, async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT u.id, u.name, u.email, u.cpf_cnpj, u.phone, u.credits, u.active, u.created_at, u.adesao_paga_em,
+      `SELECT u.id, u.name, u.email, u.cpf_cnpj, u.phone, u.credits, u.active, u.created_at, u.adesao_paga_em, u.adesao_exigida,
               COALESCE((SELECT SUM(base) FROM commissions c WHERE c.client_id=u.id AND c.reseller_id=$1), 0) AS recargas,
               COALESCE((SELECT SUM(amount) FROM commissions c WHERE c.client_id=u.id AND c.reseller_id=$1), 0) AS comissao,
               (SELECT COUNT(*) FROM queries q WHERE q.user_id=u.id AND q.status='success') AS consultas
@@ -3014,40 +3033,54 @@ app.get('/api/reseller/clients', requireAuth, requireReseller, async (req, res) 
   }
 });
 
+// Cria um usuário vinculado ao revendedor — pelo painel dele ou pela página
+// pública (/r/<slug>). Com a adesão liberada pelo admin e exigirAdesao, a conta
+// nasce bloqueada (adesao_exigida) e só entra depois que o revendedor recebe a
+// adesão e clica em "Liberar acesso". Devolve { status, body }.
+async function criarUsuarioDoRevendedor(revendedorId, dados, { exigirAdesao, ip } = {}) {
+  const { name, cpf_cnpj, email, phone, password } = dados || {};
+  if (!name || !String(name).trim() || !cpf_cnpj || !email || !phone || !password)
+    return { status: 400, body: { error: 'Preencha todos os campos obrigatórios.' } };
+  if (String(password).length < 8)
+    return { status: 400, body: { error: 'A senha deve ter ao menos 8 caracteres.' } };
+  if (!isValidDoc(cpf_cnpj))
+    return { status: 400, body: { error: 'CPF ou CNPJ inválido.' } };
+  if (!isValidPhoneBR(phone))
+    return { status: 400, body: { error: 'Telefone inválido. Informe com DDD, ex.: (21) 90000-0000.' } };
+  const doc  = cleanDoc(cpf_cnpj);
+  const mail = String(email).toLowerCase().trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail))
+    return { status: 400, body: { error: 'E-mail inválido.' } };
+
+  const rv = await pool.query(
+    `SELECT rv.cobra_adesao FROM users u JOIN revendedores rv ON rv.user_id=u.id
+      WHERE u.id=$1 AND u.role='reseller' AND u.active=true`, [revendedorId]
+  );
+  if (!rv.rows.length) return { status: 404, body: { error: 'Revendedor não encontrado.' } };
+  const bloqueado = !!rv.rows[0].cobra_adesao && exigirAdesao !== false;
+
+  const dup = await pool.query('SELECT id FROM users WHERE email=$1 OR cpf_cnpj=$2', [mail, doc]);
+  if (dup.rows.length > 0)
+    return { status: 409, body: { error: 'E-mail ou CPF/CNPJ já cadastrado.' } };
+
+  const hash = await bcrypt.hash(String(password), 12);
+  const r = await pool.query(
+    `INSERT INTO users (name, cpf_cnpj, email, phone, password_hash, role, affiliate_code, revendedor_id,
+                        active, adesao_exigida, ip_address)
+     VALUES ($1,$2,$3,$4,$5,'user',$6,$7,$8,$9,$10)
+     RETURNING id, name, email, phone, cpf_cnpj, credits, active, created_at, adesao_exigida, role`,
+    [String(name).trim(), doc, mail, String(phone).trim(), hash, generateAffiliateCode(String(name)),
+     revendedorId, !bloqueado, bloqueado, ip || null]
+  );
+  return { status: 200, body: { success: true, client: r.rows[0] } };
+}
+
 // ── POST /api/reseller/clients — revendedor cria cliente diretamente ─────────
 app.post('/api/reseller/clients', requireAuth, requireReseller, async (req, res) => {
-  const { name, cpf_cnpj, email, phone, password } = req.body;
-
-  if (!name || !cpf_cnpj || !email || !phone || !password)
-    return res.status(400).json({ error: 'Preencha todos os campos obrigatórios.' });
-  if (password.length < 8)
-    return res.status(400).json({ error: 'A senha deve ter ao menos 8 caracteres.' });
-  if (!isValidDoc(cpf_cnpj))
-    return res.status(400).json({ error: 'CPF ou CNPJ inválido.' });
-  if (!isValidPhoneBR(phone))
-    return res.status(400).json({ error: 'Telefone inválido. Informe com DDD, ex.: (21) 90000-0000.' });
-
-  const doc  = cleanDoc(cpf_cnpj);
-  const mail = email.toLowerCase().trim();
-
   try {
-    const dup = await pool.query(
-      'SELECT id FROM users WHERE email=$1 OR cpf_cnpj=$2',
-      [mail, doc]
-    );
-    if (dup.rows.length > 0)
-      return res.status(409).json({ error: 'E-mail ou CPF/CNPJ já cadastrado.' });
-
-    const hash    = await bcrypt.hash(password, 12);
-    const affCode = generateAffiliateCode(name);
-
-    const r = await pool.query(
-      `INSERT INTO users (name, cpf_cnpj, email, phone, password_hash, role, affiliate_code, revendedor_id)
-       VALUES ($1,$2,$3,$4,$5,'user',$6,$7)
-       RETURNING id, name, email, phone, cpf_cnpj, credits, active, created_at`,
-      [name.trim(), doc, mail, phone?.trim() || null, hash, affCode, req.user.id]
-    );
-    res.json({ success: true, client: r.rows[0] });
+    const r = await criarUsuarioDoRevendedor(req.user.id, req.body,
+      { exigirAdesao: req.body?.exigir_adesao !== false });
+    res.status(r.status).json(r.body);
   } catch (err) {
     console.error('Erro ao criar cliente:', err.message);
     res.status(500).json({ error: 'Erro interno. Tente novamente.' });
@@ -3070,37 +3103,196 @@ app.put('/api/reseller/clients/:id/toggle', requireAuth, requireReseller, async 
   }
 });
 
-// ── PUT /api/reseller/clients/:id/adesao — marca/desmarca adesão paga ─────────
-// A adesão é cobrada pelo revendedor por fora e é toda dele: aqui só fica o
-// registro de quem já pagou, para ele e o admin acompanharem.
+// Adesão recebida → libera o acesso. A adesão é combinada entre o dono e o
+// revendedor, é toda do revendedor e é cobrada por fora: o sistema só registra
+// quando ele recebeu e libera a conta (active=true). Desmarcar não bloqueia de
+// novo — para bloquear existe o botão Bloquear.
+const SQL_LIBERAR_ADESAO = `
+  UPDATE users SET adesao_paga_em = CASE WHEN $3 THEN COALESCE(adesao_paga_em, NOW()) ELSE NULL END,
+                   active = CASE WHEN $3 THEN true ELSE active END
+   WHERE id=$1 AND revendedor_id=$2 RETURNING adesao_paga_em, active`;
 app.put('/api/reseller/clients/:id/adesao', requireAuth, requireReseller, async (req, res) => {
   try {
-    const r = await pool.query(
-      `UPDATE users SET adesao_paga_em = CASE WHEN $3 THEN COALESCE(adesao_paga_em, NOW()) ELSE NULL END
-        WHERE id=$1 AND revendedor_id=$2 RETURNING adesao_paga_em`,
-      [req.params.id, req.user.id, !!req.body?.paga]
-    );
+    const r = await pool.query(SQL_LIBERAR_ADESAO, [req.params.id, req.user.id, !!req.body?.paga]);
     if (!r.rows.length) return res.status(404).json({ error: 'Cliente não encontrado.' });
-    res.json({ success: true, adesao_paga_em: r.rows[0].adesao_paga_em });
+    res.json({ success: true, adesao_paga_em: r.rows[0].adesao_paga_em, active: r.rows[0].active });
   } catch (err) {
     res.status(500).json({ error: 'Erro interno.' });
   }
 });
 
-// ── PUT /api/reseller/adesao — o revendedor decide se cobra adesão ────────────
-app.put('/api/reseller/adesao', requireAuth, requireReseller, async (req, res) => {
-  const cobra = !!req.body?.cobra_adesao;
-  const valor = cobra ? parseFloat(String(req.body?.valor_adesao ?? '').replace(',', '.')) : null;
-  if (cobra && !(valor > 0)) return res.status(400).json({ error: 'Informe o valor da taxa de adesão.' });
+// ── Página pública do revendedor (/r/<slug>) ─────────────────────────────────
+// Design provisório com o nome do revendedor, que ele personaliza no painel
+// (textos e imagens). É conteúdo de terceiro no nosso domínio: texto é só
+// texto (o front põe com textContent, nunca innerHTML) e imagem só PNG/JPG/WebP
+// conferida pelos bytes — SVG fica de fora (pode carregar script).
+const PAGINA_REV_CAMPOS = { titulo: 80, subtitulo: 160, texto: 2000, whatsapp: 20, cor: 7 };
+const PAGINA_REV_IMG_MAX = 800 * 1024;
+const PAGINA_REV_IMG_TIPOS = ['logo', 'banner'];
+
+function slugRevendedor(name, id) {
+  const base = String(name || 'revendedor').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'revendedor';
+  return `${base}-${id}`;
+}
+
+function mimeImagemPermitida(buf) {
+  if (buf.length > 8 && buf[0] === 0x89 && buf.slice(1, 4).toString('latin1') === 'PNG') return 'image/png';
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf.length > 12 && buf.slice(0, 4).toString('latin1') === 'RIFF' && buf.slice(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+  return null;
+}
+
+function limparPaginaRevendedor(body) {
+  const out = {};
+  for (const [k, max] of Object.entries(PAGINA_REV_CAMPOS)) {
+    const v = String(body?.[k] ?? '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim();
+    if (v.length > max) return { error: `Texto muito longo em "${k}" (máximo ${max} caracteres).` };
+    out[k] = v;
+  }
+  if (out.cor && !/^#[0-9a-fA-F]{6}$/.test(out.cor)) return { error: 'Cor inválida.' };
+  if (out.whatsapp) {
+    let d = out.whatsapp.replace(/\D/g, '');
+    if (d.length === 13 && d.startsWith('55')) d = d.slice(2);
+    if (!isValidPhoneBR(d)) return { error: 'WhatsApp inválido. Informe com DDD.' };
+    out.whatsapp = d;
+  }
+  return { pagina: out };
+}
+
+app.get('/api/reseller/pagina', requireAuth, requireReseller, async (req, res) => {
   try {
     const r = await pool.query(
-      `UPDATE revendedores SET cobra_adesao=$2, valor_adesao=$3, updated_at=NOW() WHERE user_id=$1 RETURNING user_id`,
-      [req.user.id, cobra, cobra ? valor.toFixed(2) : null]
+      `SELECT slug, pagina, pagina_atualizada_em, logo_mime IS NOT NULL AS tem_logo, banner_mime IS NOT NULL AS tem_banner
+         FROM revendedores WHERE user_id=$1`, [req.user.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Cadastro de revendedor não encontrado. Fale com o suporte.' });
+    const p = r.rows[0];
+    const v = new Date(p.pagina_atualizada_em || 0).getTime();
+    res.json({
+      slug: p.slug, pagina: p.pagina || {},
+      logo: p.tem_logo && p.slug ? `/api/public/revendedor/${p.slug}/imagem/logo?v=${v}` : null,
+      banner: p.tem_banner && p.slug ? `/api/public/revendedor/${p.slug}/imagem/banner?v=${v}` : null,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+app.put('/api/reseller/pagina', requireAuth, requireReseller, async (req, res) => {
+  const p = limparPaginaRevendedor(req.body);
+  if (p.error) return res.status(400).json({ error: p.error });
+  try {
+    const r = await pool.query(
+      `UPDATE revendedores SET pagina=$2, pagina_atualizada_em=NOW() WHERE user_id=$1 RETURNING user_id`,
+      [req.user.id, JSON.stringify(p.pagina)]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Cadastro de revendedor não encontrado. Fale com o suporte.' });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+app.post('/api/reseller/pagina/imagem/:tipo', requireAuth, requireReseller, async (req, res) => {
+  const tipo = req.params.tipo;
+  if (!PAGINA_REV_IMG_TIPOS.includes(tipo)) return res.status(400).json({ error: 'Tipo de imagem inválido.' });
+  const b64 = String(req.body?.base64 || '').replace(/^data:[^,]*,/, '');
+  let buf;
+  try { buf = Buffer.from(b64, 'base64'); } catch { buf = Buffer.alloc(0); }
+  if (!buf.length) return res.status(400).json({ error: 'Envie a imagem.' });
+  if (buf.length > PAGINA_REV_IMG_MAX) return res.status(400).json({ error: 'Imagem muito grande (máximo 800 KB). Reduza e envie de novo.' });
+  const mime = mimeImagemPermitida(buf);
+  if (!mime) return res.status(400).json({ error: 'Formato não aceito. Use PNG, JPG ou WebP.' });
+  try {
+    const r = await pool.query(
+      `UPDATE revendedores SET ${tipo}_mime=$2, ${tipo}_data=$3, pagina_atualizada_em=NOW() WHERE user_id=$1 RETURNING user_id`,
+      [req.user.id, mime, buf.toString('base64')]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Cadastro de revendedor não encontrado.' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+app.delete('/api/reseller/pagina/imagem/:tipo', requireAuth, requireReseller, async (req, res) => {
+  const tipo = req.params.tipo;
+  if (!PAGINA_REV_IMG_TIPOS.includes(tipo)) return res.status(400).json({ error: 'Tipo de imagem inválido.' });
+  try {
+    await pool.query(
+      `UPDATE revendedores SET ${tipo}_mime=NULL, ${tipo}_data=NULL, pagina_atualizada_em=NOW() WHERE user_id=$1`,
+      [req.user.id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+async function revendedorPorSlug(slug) {
+  const r = await pool.query(
+    `SELECT u.id, u.name, rv.slug, rv.pagina, rv.cobra_adesao, rv.pagina_atualizada_em,
+            rv.logo_mime IS NOT NULL AS tem_logo, rv.banner_mime IS NOT NULL AS tem_banner
+       FROM revendedores rv JOIN users u ON u.id=rv.user_id
+      WHERE rv.slug=$1 AND u.role='reseller' AND u.active=true`,
+    [String(slug || '').toLowerCase().slice(0, 60)]
+  );
+  return r.rows[0] || null;
+}
+
+app.get('/api/public/revendedor/:slug', async (req, res) => {
+  try {
+    const rv = await revendedorPorSlug(req.params.slug);
+    if (!rv) return res.status(404).json({ error: 'Página não encontrada.' });
+    const v = new Date(rv.pagina_atualizada_em || 0).getTime();
+    res.json({
+      nome: rv.name, slug: rv.slug, pagina: rv.pagina || {}, adesao: !!rv.cobra_adesao,
+      logo: rv.tem_logo ? `/api/public/revendedor/${rv.slug}/imagem/logo?v=${v}` : null,
+      banner: rv.tem_banner ? `/api/public/revendedor/${rv.slug}/imagem/banner?v=${v}` : null,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+app.get('/api/public/revendedor/:slug/imagem/:tipo', async (req, res) => {
+  const tipo = req.params.tipo;
+  if (!PAGINA_REV_IMG_TIPOS.includes(tipo)) return res.status(404).end();
+  try {
+    const r = await pool.query(
+      `SELECT rv.${tipo}_mime AS mime, rv.${tipo}_data AS data FROM revendedores rv JOIN users u ON u.id=rv.user_id
+        WHERE rv.slug=$1 AND u.active=true`, [String(req.params.slug).toLowerCase()]
+    );
+    const row = r.rows[0];
+    if (!row?.data || !['image/png', 'image/jpeg', 'image/webp'].includes(row.mime)) return res.status(404).end();
+    res.set('Content-Type', row.mime);
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Content-Security-Policy', "default-src 'none'");
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.send(Buffer.from(row.data, 'base64'));
+  } catch (err) {
+    res.status(500).end();
+  }
+});
+
+// Cadastro pela página do revendedor: a conta já nasce vinculada a ele. Sem
+// adesão liberada, entra logada e vai para o painel; com adesão, fica
+// aguardando o revendedor liberar.
+app.post('/api/public/revendedor/:slug/cadastro', async (req, res) => {
+  try {
+    const rv = await revendedorPorSlug(req.params.slug);
+    if (!rv) return res.status(404).json({ error: 'Página não encontrada.' });
+    const r = await criarUsuarioDoRevendedor(rv.id, req.body, { exigirAdesao: true, ip: getClientIP(req) });
+    if (r.status !== 200) return res.status(r.status).json(r.body);
+    const u = r.body.client;
+    if (!u.active) return res.json({ success: true, aguardandoAdesao: true, revendedor: rv.name });
+    const token = jwt.sign({ id: u.id, email: u.email, role: u.role }, JWT_SECRET, { expiresIn: '7d' });
+    res.cookie('auth_token', token, { httpOnly: true, maxAge: 7 * 24 * 3600 * 1000, sameSite: 'lax' });
+    res.json({ success: true, aguardandoAdesao: false });
+  } catch (err) {
+    console.error('Erro no cadastro pela página do revendedor:', err.message);
+    res.status(500).json({ error: 'Erro interno. Tente novamente.' });
   }
 });
 
@@ -3135,21 +3327,18 @@ app.get('/api/reseller/commissions', requireAuth, requireReseller, async (req, r
 function dadosRevendedorBody(body) {
   const pix = normalizarChavePix(body.pix_tipo, body.pix_chave);
   if (pix.error) return pix;
-  const cobra = !!body.cobra_adesao;
-  const valor = cobra ? parseFloat(String(body.valor_adesao ?? '').replace(',', '.')) : null;
-  if (cobra && !(valor > 0)) return { error: 'Informe o valor da taxa de adesão (ou marque que não cobra).' };
   return {
-    pix_tipo: body.pix_tipo, pix_chave: pix.chave, cobra_adesao: cobra,
-    valor_adesao: cobra ? valor.toFixed(2) : null,
+    pix_tipo: body.pix_tipo, pix_chave: pix.chave, cobra_adesao: !!body.cobra_adesao,
     observacao: String(body.observacao || '').trim().slice(0, 1000) || null,
   };
 }
 
 const SQL_RESUMO_REVENDEDOR = `
   SELECT u.id, u.name, u.email, u.phone, u.cpf_cnpj, u.active, u.created_at,
-         rv.pix_tipo, rv.pix_chave, rv.cobra_adesao, rv.valor_adesao, rv.observacao,
+         rv.pix_tipo, rv.pix_chave, rv.cobra_adesao, rv.observacao, rv.slug,
          (SELECT COUNT(*) FROM users c WHERE c.revendedor_id=u.id) AS clientes,
          (SELECT COUNT(*) FROM users c WHERE c.revendedor_id=u.id AND c.adesao_paga_em IS NOT NULL) AS adesoes_pagas,
+         (SELECT COUNT(*) FROM users c WHERE c.revendedor_id=u.id AND c.adesao_exigida AND c.adesao_paga_em IS NULL) AS adesoes_pendentes,
          (SELECT COUNT(*) FROM queries q JOIN users c ON c.id=q.user_id
            WHERE c.revendedor_id=u.id AND q.status='success') AS consultas,
          (SELECT COALESCE(SUM(q.amount),0) FROM queries q JOIN users c ON c.id=q.user_id
@@ -3176,8 +3365,8 @@ function numerosRevendedor(r) {
     ...r,
     pix_tipo_nome: PIX_TIPOS[r.pix_tipo] || null,
     envio_automatico: !!PIX_TIPOS_PAYOUT[r.pix_tipo] && COMISSAO_ENVIO_AUTOMATICO,
-    valor_adesao: r.valor_adesao === null ? null : n('valor_adesao'),
-    clientes: parseInt(r.clientes), adesoes_pagas: parseInt(r.adesoes_pagas), consultas: parseInt(r.consultas),
+    clientes: parseInt(r.clientes), adesoes_pagas: parseInt(r.adesoes_pagas),
+    adesoes_pendentes: parseInt(r.adesoes_pendentes), consultas: parseInt(r.consultas),
     faturamento_consultas: n('faturamento_consultas'), recargas: n('recargas'),
     comissao_gerada: n('comissao_gerada'), comissao_paga: n('comissao_paga'),
     comissao_enviando: n('comissao_enviando'), comissao_a_pagar: n('comissao_a_pagar'),
@@ -3216,9 +3405,9 @@ app.post('/api/admin/revendedores', requireAuth, requireSuperAdmin, async (req, 
       [name.trim(), doc, mail, String(phone).trim(), hash, generateAffiliateCode(name)]
     );
     await client.query(
-      `INSERT INTO revendedores (user_id, pix_tipo, pix_chave, cobra_adesao, valor_adesao, observacao)
+      `INSERT INTO revendedores (user_id, pix_tipo, pix_chave, cobra_adesao, observacao, slug)
        VALUES ($1,$2,$3,$4,$5,$6)`,
-      [u.rows[0].id, dados.pix_tipo, dados.pix_chave, dados.cobra_adesao, dados.valor_adesao, dados.observacao]
+      [u.rows[0].id, dados.pix_tipo, dados.pix_chave, dados.cobra_adesao, dados.observacao, slugRevendedor(name, u.rows[0].id)]
     );
     await client.query('COMMIT');
     res.json({ success: true, id: u.rows[0].id });
@@ -3235,15 +3424,15 @@ app.put('/api/admin/revendedores/:id', requireAuth, requireSuperAdmin, async (re
   const dados = dadosRevendedorBody(req.body || {});
   if (dados.error) return res.status(400).json({ error: dados.error });
   try {
-    const u = await pool.query(`SELECT id FROM users WHERE id=$1 AND role='reseller'`, [req.params.id]);
+    const u = await pool.query(`SELECT id, name FROM users WHERE id=$1 AND role='reseller'`, [req.params.id]);
     if (!u.rows.length) return res.status(404).json({ error: 'Revendedor não encontrado.' });
     await pool.query(
-      `INSERT INTO revendedores (user_id, pix_tipo, pix_chave, cobra_adesao, valor_adesao, observacao)
+      `INSERT INTO revendedores (user_id, pix_tipo, pix_chave, cobra_adesao, observacao, slug)
        VALUES ($1,$2,$3,$4,$5,$6)
        ON CONFLICT (user_id) DO UPDATE SET pix_tipo=EXCLUDED.pix_tipo, pix_chave=EXCLUDED.pix_chave,
-         cobra_adesao=EXCLUDED.cobra_adesao, valor_adesao=EXCLUDED.valor_adesao,
-         observacao=EXCLUDED.observacao, updated_at=NOW()`,
-      [req.params.id, dados.pix_tipo, dados.pix_chave, dados.cobra_adesao, dados.valor_adesao, dados.observacao]
+         cobra_adesao=EXCLUDED.cobra_adesao, observacao=EXCLUDED.observacao,
+         slug=COALESCE(revendedores.slug, EXCLUDED.slug), updated_at=NOW()`,
+      [req.params.id, dados.pix_tipo, dados.pix_chave, dados.cobra_adesao, dados.observacao, slugRevendedor(u.rows[0].name, req.params.id)]
     );
     if (typeof req.body.active === 'boolean')
       await pool.query('UPDATE users SET active=$2 WHERE id=$1', [req.params.id, req.body.active]);
@@ -3264,7 +3453,7 @@ app.get('/api/admin/revendedores/:id', requireAuth, requireSuperAdmin, async (re
     if (!r.rows.length) return res.status(404).json({ error: 'Revendedor não encontrado.' });
     const [clientes, comissoes, pagamentos] = await Promise.all([
       pool.query(
-        `SELECT u.id, u.name, u.email, u.phone, u.active, u.credits, u.pos_pago, u.created_at, u.adesao_paga_em,
+        `SELECT u.id, u.name, u.email, u.phone, u.active, u.credits, u.pos_pago, u.created_at, u.adesao_paga_em, u.adesao_exigida,
                 (SELECT COUNT(*) FROM queries q WHERE q.user_id=u.id AND q.status='success') AS consultas,
                 (SELECT COALESCE(SUM(q.amount),0) FROM queries q WHERE q.user_id=u.id AND q.status='success') AS faturamento,
                 COALESCE((SELECT SUM(base) FROM commissions c WHERE c.client_id=u.id AND c.reseller_id=$1), 0) AS recargas,
@@ -3325,11 +3514,7 @@ app.delete('/api/admin/revendedores/:id/clientes/:uid', requireAuth, requireSupe
 
 app.put('/api/admin/revendedores/:id/clientes/:uid/adesao', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
-    const r = await pool.query(
-      `UPDATE users SET adesao_paga_em = CASE WHEN $3 THEN COALESCE(adesao_paga_em, NOW()) ELSE NULL END
-        WHERE id=$1 AND revendedor_id=$2 RETURNING adesao_paga_em`,
-      [req.params.uid, req.params.id, !!req.body?.paga]
-    );
+    const r = await pool.query(SQL_LIBERAR_ADESAO, [req.params.uid, req.params.id, !!req.body?.paga]);
     if (!r.rows.length) return res.status(404).json({ error: 'Cliente não encontrado nesse revendedor.' });
     res.json({ success: true });
   } catch (err) {
@@ -18194,6 +18379,10 @@ app.get('/cadastrar', (req, res) => {
 });
 // Autocadastro de revendedor saiu em 23/10/2026: só o admin cadastra.
 app.get('/cadastrar/revendedor', (req, res) => res.redirect('/cadastrar'));
+// Página pública de cada revendedor (o conteúdo vem de /api/public/revendedor/:slug).
+app.get('/r/:slug', (req, res) => {
+  noCache(res); res.sendFile(path.join(__dirname, 'revendedor-pagina.html'));
+});
 app.get('/consulta-avulsa', async (req, res) => {
   // Página privada: o link sem código foi revogado — só abre com ?codigo=XXXXXX
   // de um cliente ativo (validado no banco antes de servir o HTML). Qualquer

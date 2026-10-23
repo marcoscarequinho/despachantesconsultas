@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Consultas Veiculares</title>
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <meta name="theme-color" content="#0f172a">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { --cor: #1e3a8a; }
+    .cor-bg { background: var(--cor); }
+    .cor-txt { color: var(--cor); }
+    .input { width:100%;padding:.6rem .9rem;border:1px solid #d1d5db;border-radius:.5rem;font-size:.9rem; }
+    .input:focus { outline:none;border-color:var(--cor);box-shadow:0 0 0 3px rgba(30,58,138,.15); }
+    .texto-livre { white-space: pre-line; overflow-wrap: anywhere; }
+  </style>
+</head>
+<!-- Página pública de um revendedor (/r/<slug>). Tudo o que vem do revendedor
+     (nome, títulos, textos) entra com textContent — nunca innerHTML —, porque é
+     conteúdo de terceiro no nosso domínio. As imagens vêm de
+     /api/public/revendedor/<slug>/imagem/*, que só serve PNG/JPG/WebP. -->
+<body class="bg-gray-50 min-h-screen flex flex-col">
+
+  <div id="carregando" class="flex-1 flex items-center justify-center text-gray-400">Carregando…</div>
+  <div id="nao-encontrada" class="hidden flex-1 flex flex-col items-center justify-center text-center p-6">
+    <div class="text-5xl mb-3">🔎</div>
+    <h1 class="text-xl font-bold text-gray-800">Página não encontrada</h1>
+    <p class="text-gray-500 mt-1">Confira o link com quem o enviou.</p>
+    <a href="/" class="mt-4 text-blue-700 font-semibold">Ir para o site →</a>
+  </div>
+
+  <div id="pagina" class="hidden flex-1 flex flex-col">
+    <header class="cor-bg text-white">
+      <div class="max-w-5xl mx-auto px-4 py-4 flex items-center gap-3">
+        <img id="logo" alt="" class="hidden h-12 w-12 rounded-lg object-contain bg-white p-1">
+        <div class="min-w-0">
+          <div id="nome" class="font-bold text-lg truncate"></div>
+          <div class="text-xs text-white/70">Revendedor autorizado · Consultas veiculares</div>
+        </div>
+        <a href="/entrar" class="ml-auto text-sm bg-white/15 hover:bg-white/25 px-3 py-1.5 rounded-lg whitespace-nowrap">Já tenho conta</a>
+      </div>
+    </header>
+
+    <section class="relative">
+      <img id="banner" alt="" class="hidden w-full max-h-80 object-cover">
+      <div class="max-w-5xl mx-auto px-4 py-10">
+        <h1 id="titulo" class="text-3xl sm:text-4xl font-extrabold text-gray-900"></h1>
+        <p id="subtitulo" class="text-lg text-gray-600 mt-2"></p>
+      </div>
+    </section>
+
+    <main class="max-w-5xl mx-auto px-4 pb-12 grid lg:grid-cols-5 gap-8 w-full">
+      <div class="lg:col-span-3 space-y-6">
+        <div class="bg-white rounded-2xl shadow-sm p-6">
+          <p id="texto" class="texto-livre text-gray-700 leading-relaxed"></p>
+        </div>
+        <div class="bg-white rounded-2xl shadow-sm p-6">
+          <h2 class="font-bold text-gray-800 mb-3">O que você consulta aqui</h2>
+          <ul class="grid sm:grid-cols-2 gap-2 text-sm text-gray-700">
+            <li>🚗 Dados do veículo, base estadual e nacional</li>
+            <li>💳 Débitos, multas e licenciamento</li>
+            <li>📄 CRLV-e e documentos do veículo</li>
+            <li>🔍 Leilão, roubo/furto, gravame e restrições</li>
+            <li>🧾 ATPV-e e comunicação de venda</li>
+            <li>⚖️ Documentos com IA (recurso de multa, contratos)</li>
+          </ul>
+          <p class="text-xs text-gray-400 mt-3">Pré-pago: você recarrega por PIX ou cartão e paga só o que consultar.</p>
+        </div>
+        <a id="whatsapp" class="hidden inline-flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white font-semibold px-5 py-3 rounded-xl" target="_blank" rel="noopener noreferrer">💬 Falar no WhatsApp</a>
+      </div>
+
+      <div class="lg:col-span-2">
+        <div class="bg-white rounded-2xl shadow-sm p-6 sticky top-4">
+          <h2 class="font-bold text-gray-800 text-lg">Crie sua conta</h2>
+          <p id="aviso-adesao" class="hidden text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-2"></p>
+          <form id="form" class="space-y-3 mt-4" onsubmit="cadastrar(event)">
+            <input id="f-nome" class="input" placeholder="Nome completo" autocomplete="name" required>
+            <input id="f-doc" class="input" placeholder="CPF ou CNPJ" inputmode="numeric" maxlength="18" required>
+            <input id="f-fone" class="input" placeholder="WhatsApp com DDD" inputmode="numeric" maxlength="15" autocomplete="tel" required>
+            <input id="f-email" type="email" class="input" placeholder="E-mail" autocomplete="email" required>
+            <input id="f-senha" type="password" class="input" placeholder="Senha (mínimo 8 caracteres)" minlength="8" autocomplete="new-password" required>
+            <div id="erro" class="hidden text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2"></div>
+            <button id="btn" class="cor-bg w-full text-white font-semibold py-3 rounded-xl hover:opacity-90">Criar conta</button>
+          </form>
+          <div id="sucesso" class="hidden text-sm text-green-800 bg-green-50 border border-green-200 rounded-lg px-4 py-3 mt-4"></div>
+        </div>
+      </div>
+    </main>
+
+    <footer class="text-center text-xs text-gray-400 py-6">
+      Consultas fornecidas pela plataforma <a href="/" class="underline">MC Despachadoria Consultas</a>.
+    </footer>
+  </div>
+
+<script>
+const slug = decodeURIComponent(location.pathname.split('/').filter(Boolean)[1] || '');
+const $ = id => document.getElementById(id);
+
+function mascaraDoc(v) {
+  const d = v.replace(/\D/g, '').slice(0, 14);
+  if (d.length <= 11) return d.replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d{1,2})$/, '$1-$2');
+  return d.replace(/^(\d{2})(\d)/, '$1.$2').replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3').replace(/\.(\d{3})(\d)/, '.$1/$2').replace(/(\d{4})(\d)/, '$1-$2');
+}
+function mascaraFone(v) {
+  const d = v.replace(/\D/g, '').slice(0, 11);
+  return d.length <= 10 ? d.replace(/^(\d{2})(\d)/, '($1) $2').replace(/(\d{4})(\d)/, '$1-$2')
+                        : d.replace(/^(\d{2})(\d)/, '($1) $2').replace(/(\d{5})(\d)/, '$1-$2');
+}
+$('f-doc').addEventListener('input', e => { e.target.value = mascaraDoc(e.target.value); });
+$('f-fone').addEventListener('input', e => { e.target.value = mascaraFone(e.target.value); });
+
+async function carregar() {
+  try {
+    const r = await fetch(`/api/public/revendedor/${encodeURIComponent(slug)}`);
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    const p = d.pagina || {};
+    document.title = `${d.nome} — Consultas Veiculares`;
+    if (/^#[0-9a-fA-F]{6}$/.test(p.cor || '')) document.documentElement.style.setProperty('--cor', p.cor);
+    $('nome').textContent = d.nome;
+    $('titulo').textContent = p.titulo || `${d.nome}: consultas veiculares completas`;
+    $('subtitulo').textContent = p.subtitulo || 'Débitos, documentos, restrições e muito mais, na hora e direto do seu celular.';
+    $('texto').textContent = p.texto || `Sou revendedor autorizado da plataforma MC Despachadoria Consultas. Crie sua conta ao lado e tenha acesso a todas as consultas veiculares, com atendimento direto comigo.`;
+    if (d.logo) { $('logo').src = d.logo; $('logo').classList.remove('hidden'); }
+    if (d.banner) { $('banner').src = d.banner; $('banner').classList.remove('hidden'); }
+    if (p.whatsapp) {
+      $('whatsapp').href = `https://wa.me/55${encodeURIComponent(p.whatsapp)}`;
+      $('whatsapp').classList.remove('hidden');
+    }
+    if (d.adesao) {
+      $('aviso-adesao').textContent = `Depois do cadastro, ${d.nome} entra em contato para combinar a adesão e libera o seu acesso.`;
+      $('aviso-adesao').classList.remove('hidden');
+    }
+    $('carregando').classList.add('hidden');
+    $('pagina').classList.remove('hidden');
+  } catch {
+    $('carregando').classList.add('hidden');
+    $('nao-encontrada').classList.remove('hidden');
+  }
+}
+
+async function cadastrar(e) {
+  e.preventDefault();
+  $('erro').classList.add('hidden');
+  $('btn').disabled = true; $('btn').textContent = 'Criando…';
+  try {
+    const r = await fetch(`/api/public/revendedor/${encodeURIComponent(slug)}/cadastro`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: $('f-nome').value, cpf_cnpj: $('f-doc').value, phone: $('f-fone').value, email: $('f-email').value, password: $('f-senha').value }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Não foi possível criar a conta.');
+    if (!d.aguardandoAdesao) { location.href = '/painel/usuario'; return; }
+    $('form').classList.add('hidden');
+    $('sucesso').textContent = `Cadastro recebido! ${d.revendedor} vai falar com você para combinar a adesão e liberar o seu acesso. Depois disso é só entrar com o seu e-mail e senha.`;
+    $('sucesso').classList.remove('hidden');
+  } catch (err) {
+    $('erro').textContent = err.message;
+    $('erro').classList.remove('hidden');
+  } finally {
+    $('btn').disabled = false; $('btn').textContent = 'Criar conta';
+  }
+}
+
+carregar();
+</script>
+</body>
+</html>

@@ -26,7 +26,8 @@
             Só o admin cadastra revendedor. O revendedor ganha <strong id="rv-taxa">20</strong>% de cada recarga
             (e de cada fatura pós-paga) dos usuários dele, enviados <strong>na hora</strong> por PIX para a chave cadastrada.
             Se o envio automático não sair, a comissão fica <em>a pagar</em> e você é avisado no WhatsApp.
-            A taxa de adesão é opcional e <strong>toda do revendedor</strong> — ele cobra por fora; aqui só fica o registro.
+            A adesão é você quem <strong>libera</strong> por revendedor (o valor é combinado entre vocês, fora do sistema) e é
+            <strong>toda do revendedor</strong>: os usuários dele ficam bloqueados até ele receber e liberar o acesso.
           </p>
         </div>
         <button onclick="rvAbrirCadastro()" class="btn-primary whitespace-nowrap">➕ Novo revendedor</button>
@@ -111,10 +112,9 @@
             </div>
             <div class="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
               <div class="text-sm font-semibold text-gray-700">Taxa de adesão</div>
-              <p class="text-xs text-gray-500">Opcional e toda do revendedor: ele cobra dos usuários por fora. A plataforma não recebe nem repassa esse valor — só registra quem pagou. O próprio revendedor também pode mudar isso no painel dele.</p>
-              <label class="flex items-center gap-2 text-sm"><input type="radio" name="rv-adesao" value="nao" checked onchange="rvToggleAdesao()"> Não cobra adesão</label>
-              <label class="flex items-center gap-2 text-sm"><input type="radio" name="rv-adesao" value="sim" onchange="rvToggleAdesao()"> Cobra adesão</label>
-              <div id="rv-adesao-valor-box" class="hidden"><label class="label">Valor da adesão (R$) *</label><input id="rv-adesao-valor" type="number" min="1" step="0.01" class="input-field"></div>
+              <p class="text-xs text-gray-500">O valor é combinado entre você e o revendedor, fora do sistema, e a taxa é toda dele. Liberada, cada usuário novo do revendedor fica bloqueado até ele receber a adesão e clicar em “Liberar acesso”.</p>
+              <label class="flex items-center gap-2 text-sm"><input type="radio" name="rv-adesao" value="nao" checked> Não liberar adesão (usuários entram direto)</label>
+              <label class="flex items-center gap-2 text-sm"><input type="radio" name="rv-adesao" value="sim"> Liberar cobrança de adesão para este revendedor</label>
             </div>
             <div><label class="label">Observação (só o admin vê)</label><textarea id="rv-obs" rows="2" class="input-field"></textarea></div>
             <div id="rv-ativo-box" class="hidden"><label class="flex items-center gap-2 text-sm"><input id="rv-ativo" type="checkbox"> Revendedor ativo (desativado não recebe comissão nem entra no painel)</label></div>
@@ -195,7 +195,7 @@
           ${r.pix_chave ? `<div class="text-gray-500">${esc(r.pix_tipo_nome)}</div><div class="font-mono text-gray-700 break-all">${esc(r.pix_chave)}</div>${r.envio_automatico ? '' : '<div class="text-amber-600">envio manual</div>'}` : '<span class="badge-red">sem chave PIX</span>'}
         </td>
         <td class="px-4 py-3 text-center">${r.clientes}</td>
-        <td class="px-4 py-3 text-center hidden md:table-cell text-xs">${r.cobra_adesao ? `${fmt(r.valor_adesao)}<div class="text-gray-400">${r.adesoes_pagas} paga(s)</div>` : '<span class="text-gray-400">não cobra</span>'}</td>
+        <td class="px-4 py-3 text-center hidden md:table-cell text-xs">${r.cobra_adesao ? `<span class="badge-green">liberada</span><div class="text-gray-400">${r.adesoes_pagas} paga(s)${r.adesoes_pendentes ? ` · ${r.adesoes_pendentes} aguardando` : ''}</div>` : '<span class="text-gray-400">não liberada</span>'}</td>
         <td class="px-4 py-3 text-right hidden md:table-cell">${fmt(r.recargas)}</td>
         <td class="px-4 py-3 text-right text-green-700">${fmt(r.comissao_paga)}</td>
         <td class="px-4 py-3 text-right font-semibold ${r.comissao_a_pagar > 0 ? 'text-red-600' : 'text-gray-400'}">${fmt(r.comissao_a_pagar)}${r.comissao_enviando > 0 ? `<div class="text-xs font-normal text-blue-600">${fmt(r.comissao_enviando)} enviando</div>` : ''}</td>
@@ -222,11 +222,6 @@
       : (envioAutomatico ? 'A comissão é enviada automaticamente para esta chave a cada recarga paga pelos usuários do revendedor.' : '');
   };
 
-  window.rvToggleAdesao = function () {
-    const sim = document.querySelector('input[name="rv-adesao"]:checked')?.value === 'sim';
-    document.getElementById('rv-adesao-valor-box').classList.toggle('hidden', !sim);
-  };
-
   function erroForm(msg) {
     const el = document.getElementById('rv-form-erro');
     el.textContent = msg || '';
@@ -239,9 +234,8 @@
     document.getElementById('rv-id').value = '';
     document.getElementById('rv-dados-conta').classList.remove('hidden');
     document.getElementById('rv-ativo-box').classList.add('hidden');
-    ['rv-nome', 'rv-doc', 'rv-fone', 'rv-email', 'rv-senha', 'rv-pix-chave', 'rv-adesao-valor', 'rv-obs'].forEach(id => { document.getElementById(id).value = ''; });
+    ['rv-nome', 'rv-doc', 'rv-fone', 'rv-email', 'rv-senha', 'rv-pix-chave', 'rv-obs'].forEach(id => { document.getElementById(id).value = ''; });
     document.querySelector('input[name="rv-adesao"][value="nao"]').checked = true;
-    rvToggleAdesao();
     preencherTiposPix('');
     erroForm('');
     openModal('modal-revendedor');
@@ -258,8 +252,6 @@
     preencherTiposPix(r.pix_tipo);
     document.getElementById('rv-pix-chave').value = r.pix_chave || '';
     document.querySelector(`input[name="rv-adesao"][value="${r.cobra_adesao ? 'sim' : 'nao'}"]`).checked = true;
-    document.getElementById('rv-adesao-valor').value = r.valor_adesao ?? '';
-    rvToggleAdesao();
     document.getElementById('rv-obs').value = r.observacao || '';
     erroForm('');
     openModal('modal-revendedor');
@@ -272,7 +264,7 @@
     const corpo = {
       pix_tipo: v('rv-pix-tipo'), pix_chave: v('rv-pix-chave'),
       cobra_adesao: document.querySelector('input[name="rv-adesao"]:checked')?.value === 'sim',
-      valor_adesao: v('rv-adesao-valor'), observacao: v('rv-obs'),
+      observacao: v('rv-obs'),
     };
     if (id) corpo.active = document.getElementById('rv-ativo').checked;
     else Object.assign(corpo, { name: v('rv-nome'), cpf_cnpj: v('rv-doc'), phone: v('rv-fone'), email: v('rv-email'), password: v('rv-senha') });
@@ -317,7 +309,8 @@
             <div class="text-xs text-green-700 font-semibold">Chave PIX (${esc(rv.pix_tipo_nome || '—')})</div>
             <div class="font-mono text-green-900 break-all">${esc(rv.pix_chave || 'não cadastrada')}</div>
             <div class="text-xs text-green-700 mt-1">${rv.envio_automatico ? `Envio automático de ${taxa}% a cada recarga.` : 'Envio manual (pague pelo banco e dê baixa abaixo).'}</div>
-            <div class="text-xs text-gray-600 mt-1">Adesão: ${rv.cobra_adesao ? `${fmt(rv.valor_adesao)} (do revendedor) — ${rv.adesoes_pagas} de ${rv.clientes} pagaram` : 'não cobra'}</div>
+            <div class="text-xs text-gray-600 mt-1">Adesão: ${rv.cobra_adesao ? `liberada (do revendedor) — ${rv.adesoes_pagas} paga(s), ${rv.adesoes_pendentes} aguardando liberação` : 'não liberada'}</div>
+            ${rv.slug ? `<div class="text-xs mt-1"><a class="text-blue-700 underline" target="_blank" rel="noopener" href="/r/${encodeURIComponent(rv.slug)}">Página do revendedor: /r/${esc(rv.slug)}</a></div>` : ''}
           </div>
         </div>
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -348,7 +341,7 @@
                 <th class="px-3 py-2 text-left">Usuário</th><th class="px-3 py-2 text-right">Recargas</th>
                 <th class="px-3 py-2 text-right">Comissão</th><th class="px-3 py-2 text-center">Consultas</th>
                 <th class="px-3 py-2 text-right hidden md:table-cell">Faturamento</th>
-                ${rv.cobra_adesao ? '<th class="px-3 py-2 text-center">Adesão</th>' : ''}<th class="px-3 py-2"></th>
+                <th class="px-3 py-2 text-center">Adesão</th><th class="px-3 py-2"></th>
               </tr></thead>
               <tbody class="divide-y divide-gray-50">${d.clientes.length ? d.clientes.map(c => `
                 <tr>
@@ -357,7 +350,7 @@
                   <td class="px-3 py-2 text-right">${fmt(c.comissao)}</td>
                   <td class="px-3 py-2 text-center">${c.consultas}</td>
                   <td class="px-3 py-2 text-right hidden md:table-cell">${fmt(c.faturamento)}</td>
-                  ${rv.cobra_adesao ? `<td class="px-3 py-2 text-center"><label class="text-xs inline-flex items-center gap-1"><input type="checkbox" ${c.adesao_paga_em ? 'checked' : ''} onchange="rvAdesao(${rv.id}, ${c.id}, this.checked)"> paga</label></td>` : ''}
+                  <td class="px-3 py-2 text-center text-xs">${c.adesao_paga_em ? `<span class="badge-green">paga ${fmtDate(c.adesao_paga_em)}</span>` : c.adesao_exigida ? `<button onclick="rvAdesao(${rv.id}, ${c.id}, true)" class="action-btn bg-amber-100 text-amber-800 hover:bg-amber-200">🔓 Liberar acesso</button>` : '<span class="text-gray-400">—</span>'}</td>
                   <td class="px-3 py-2 text-right"><button onclick="rvDesvincular(${rv.id}, ${c.id})" class="action-btn bg-red-50 text-red-600 hover:bg-red-100" title="Desvincular">✕</button></td>
                 </tr>`).join('') : `<tr><td colspan="7" class="px-3 py-6 text-center text-gray-400">Nenhum usuário ainda. O revendedor cria os dele em “Meus Clientes”, ou vincule uma conta existente acima.</td></tr>`}
               </tbody>
@@ -444,7 +437,8 @@
   };
 
   window.rvAdesao = async function (id, uid, paga) {
-    await acao(`/api/admin/revendedores/${id}/clientes/${uid}/adesao`, { method: 'PUT', body: JSON.stringify({ paga }) }, paga ? 'Adesão marcada como paga.' : 'Adesão desmarcada.');
-    rvCarregar();
+    if (paga && !confirm('Liberar o acesso deste usuário (adesão recebida pelo revendedor)?')) return;
+    const d = await acao(`/api/admin/revendedores/${id}/clientes/${uid}/adesao`, { method: 'PUT', body: JSON.stringify({ paga }) }, paga ? 'Acesso liberado.' : 'Adesão desmarcada.');
+    if (d) recarregar(id);
   };
 })();
