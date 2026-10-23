@@ -8426,7 +8426,11 @@ async function entregarAtpveDataCred(pend) {
   };
   if (j.recusada === true || j.status === 'recusada' || j.status === 'erro')
     { await encerrar(semMarcaDataCred(j.motivo_recusa || j.erro || j.mensagem || 'A conferência do Detran recusou o pedido.')); return 'recusada'; }
-  if (!j.pdf_pronto) {
+  // A emissão automática (RJ) responde noutro formato: status "concluida" e
+  // link_pdf, sem pdf_pronto/pronto (OOB5F61, emissão 5349, 23/10/2026 — a
+  // entrega nunca saía e foi feita à mão). O /pdf deles serve as duas.
+  const pronto = j.pdf_pronto === true || j.pronto === true || j.status === 'concluida' || !!j.link_pdf;
+  if (!pronto) {
     if (Date.now() - new Date(pend.created_at).getTime() > DATACRED_PENDENTE_DIAS * 86400000) {
       await encerrar(`O Detran não concluiu a emissão em ${DATACRED_PENDENTE_DIAS} dias.`);
       if (ADMIN_PHONE) await sendWhatsApp(ADMIN_PHONE, `⚠️ ATPV-e (DataCred) ${pend.emissao_id}, placa ${pend.placa}, sem conclusão em ${DATACRED_PENDENTE_DIAS} dias — encerrado sem cobrar o cliente. Confira no painel deles.`).catch(() => {});
@@ -9164,6 +9168,25 @@ async function processCatalogQuery(userId, serviceId, params, res) {
       } catch (e) {
         console.error(`[${serviceId}] DataCred:`, e.semChave ? 'sem DATACRED_API_KEY' : e.message);
         return res.status(502).json({ error: 'A emissão não pôde ser enviada agora. Nada foi cobrado — confira o Histórico antes de tentar de novo.' });
+      }
+      // A emissora devolve o MESMO id quando a placa é enviada de novo (OOB5F61,
+      // 23/10/2026: dois envios em 3 min viraram a emissão 5349). Sem isto o 2º
+      // envio criava outro pedido, o ON CONFLICT abaixo tirava a pendência do 1º
+      // e, na entrega, os dois eram cobrados.
+      const jaExiste = await pool.query(
+        `SELECT id, user_id, status FROM queries
+          WHERE service_id=$1 AND status IN ('aguardando_pdf','success') AND result_data ~ ('"emissao":' || $2 || '[,}]')
+          ORDER BY id LIMIT 1`, [serviceId, String(emissao.id)]);
+      if (jaExiste.rows[0]) {
+        const q = jaExiste.rows[0];
+        if (q.user_id !== userId)
+          return res.status(409).json({ error: 'Já existe um pedido de emissão de ATPV-e em andamento para essa placa. Nada foi cobrado.' });
+        if (q.status === 'success')
+          return res.status(409).json({ error: `O ATPV-e dessa placa já foi emitido (pedido #${q.id}) — baixe pelo Histórico. Nada foi cobrado de novo.` });
+        return res.json({
+          success: true, pending: true, queryId: q.id,
+          result: { protocolo: emissao.id, mensagem: `Esse pedido já estava registrado (protocolo ${emissao.id}) — é o mesmo, nada novo foi criado. O ATPV-e chega no seu WhatsApp e no Histórico e só é cobrado uma vez.` },
+        });
       }
       const qRow = await pool.query(
         `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
@@ -17328,6 +17351,15 @@ app.post('/api/admin/novas-pedidos/:id/entregar-manual', requireAuth, requireSup
     if (buf.length > ATPVE_MANUAL_MAX_BYTES) return res.status(413).json({ error: 'PDF grande demais (máximo 3 MB).' });
     const jaTem = await pool.query('SELECT 1 FROM pdf_cache WHERE query_id=$1 AND expires_at > NOW()', [q.id]);
     if (jaTem.rows.length) return res.status(409).json({ error: 'Este pedido já tem documento entregue.' });
+    // Mesma emissão já entregue noutro pedido = cobrar duas vezes o mesmo ATPV-e
+    // (#3116 e #3117, emissão 5349, 23/10/2026).
+    let emissaoId = null; try { emissaoId = JSON.parse(q.result_data || '{}').emissao ?? null; } catch {}
+    if (emissaoId != null) {
+      const outro = await pool.query(
+        `SELECT id FROM queries WHERE id<>$1 AND service_id LIKE 'dcr-%' AND status='success' AND result_data ~ ('"emissao":' || $2 || '[,}]') LIMIT 1`,
+        [q.id, String(emissaoId)]);
+      if (outro.rows[0]) return res.status(409).json({ error: `A emissão ${emissaoId} já foi entregue (e cobrada) no pedido #${outro.rows[0].id}. Este é um envio repetido — cancele-o em vez de entregar.` });
+    }
     if (q.status === 'cancelado') await pool.query(`UPDATE queries SET status='aguardando_pdf' WHERE id=$1 AND status='cancelado'`, [q.id]);
     const fechou = await finalizePendingQuery(q.id, q.user_id, `Consulta: ${q.service_name}`);
     if (!fechou) return res.status(409).json({ error: 'O pedido foi fechado por outra execução agora há pouco. Recarregue a lista.' });
