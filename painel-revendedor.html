@@ -22,6 +22,7 @@
     .card { background:white;border-radius:.75rem;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:1.5rem; }
     .stat-card { background:white;border-radius:.75rem;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:1.25rem;border-left:4px solid transparent; }
     .badge-green  { display:inline-flex;align-items:center;padding:.2rem .6rem;border-radius:9999px;font-size:.75rem;font-weight:600;background:#dcfce7;color:#166534; }
+    .badge-amber  { display:inline-flex;align-items:center;padding:.2rem .6rem;border-radius:9999px;font-size:.75rem;font-weight:600;background:#fef3c7;color:#92400e; }
     .badge-red    { display:inline-flex;align-items:center;padding:.2rem .6rem;border-radius:9999px;font-size:.75rem;font-weight:600;background:#fee2e2;color:#991b1b; }
     .toast { position:fixed;bottom:1.5rem;right:1.5rem;z-index:9999;background:#1f2937;color:white;padding:.8rem 1.25rem;border-radius:.6rem;font-size:.875rem;box-shadow:0 4px 16px rgba(0,0,0,.2);transform:translateY(0);opacity:1;transition:all .3s; }
     .toast.hide { transform:translateY(8px);opacity:0; }
@@ -91,6 +92,14 @@
       </svg>
       Comissões
     </div>
+    <div class="nav-item" data-section="catalog" onclick="showSection('catalog')">
+      <span class="w-5 text-center flex-shrink-0">🔎</span>
+      Consultas para Revender
+    </div>
+    <a href="/painel/usuario" class="nav-item">
+      <span class="w-5 text-center flex-shrink-0">🚗</span>
+      Fazer uma Consulta
+    </a>
     <div class="nav-item" data-section="profile" onclick="showSection('profile')">
       <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -153,11 +162,11 @@
       <div class="grid grid-cols-2 xl:grid-cols-4 gap-4">
         <div class="stat-card border-l-orange-500">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-xs font-medium text-gray-500 uppercase tracking-wide">Saldo</span>
-            <span class="text-orange-500 text-lg">💳</span>
+            <span class="text-xs font-medium text-gray-500 uppercase tracking-wide">Recebido</span>
+            <span class="text-orange-500 text-lg">💸</span>
           </div>
-          <div id="stat-credits" class="text-2xl font-bold text-gray-800">R$ 0,00</div>
-          <div class="text-xs text-gray-400 mt-1">Créditos disponíveis</div>
+          <div id="stat-paga" class="text-2xl font-bold text-gray-800">R$ 0,00</div>
+          <div class="text-xs text-gray-400 mt-1"><span id="stat-a-receber">R$ 0,00</span> a receber</div>
         </div>
         <div class="stat-card border-l-blue-500">
           <div class="flex items-center justify-between mb-2">
@@ -182,6 +191,39 @@
           </div>
           <div id="stat-total" class="text-2xl font-bold text-gray-800">R$ 0,00</div>
           <div class="text-xs text-gray-400 mt-1">Todas as comissões</div>
+        </div>
+      </div>
+
+      <!-- Como funciona: chave PIX e adesão -->
+      <div class="grid lg:grid-cols-2 gap-6">
+        <div class="card bg-gradient-to-br from-green-50 to-white border border-green-100">
+          <h2 class="font-semibold text-gray-800 mb-2">💸 Sua comissão</h2>
+          <p class="text-sm text-gray-600">
+            Você recebe <strong><span id="info-taxa">20</span>% de cada recarga</strong> que os seus clientes pagarem
+            (PIX ou cartão), enviados <strong>na hora</strong> para a sua chave PIX:
+          </p>
+          <div class="mt-3 bg-white border border-green-200 rounded-lg px-4 py-2">
+            <div id="info-pix-tipo" class="text-xs text-green-700 font-semibold">—</div>
+            <div id="info-pix-chave" class="font-mono text-sm text-gray-800 break-all">—</div>
+          </div>
+          <p class="text-xs text-gray-500 mt-2">Para trocar a chave PIX, fale com o suporte.</p>
+        </div>
+        <div class="card">
+          <h2 class="font-semibold text-gray-800 mb-2">🧾 Taxa de adesão (opcional)</h2>
+          <p class="text-sm text-gray-600 mb-3">
+            Se quiser, cobre uma taxa de adesão dos seus clientes. Ela é <strong>toda sua</strong>: você
+            cobra direto do cliente, e aqui só marca quem já pagou.
+          </p>
+          <form class="space-y-3" onsubmit="salvarAdesao(event)">
+            <label class="flex items-center gap-2 text-sm"><input type="radio" name="adesao" value="nao" onchange="toggleAdesaoValor()"> Não cobro adesão</label>
+            <label class="flex items-center gap-2 text-sm"><input type="radio" name="adesao" value="sim" onchange="toggleAdesaoValor()"> Cobro adesão</label>
+            <div id="adesao-valor-box" class="hidden">
+              <label class="block text-sm font-semibold text-gray-700 mb-1">Valor (R$)</label>
+              <input id="adesao-valor" type="number" min="1" step="0.01"
+                class="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+            <button type="submit" class="btn-primary">Salvar</button>
+          </form>
         </div>
       </div>
 
@@ -261,8 +303,10 @@
               <tr>
                 <th class="px-5 py-3 text-left font-semibold text-gray-600">Nome</th>
                 <th class="px-5 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">E-mail</th>
-                <th class="px-5 py-3 text-right font-semibold text-gray-600">Créditos</th>
+                <th class="px-5 py-3 text-right font-semibold text-gray-600">Recargas</th>
+                <th class="px-5 py-3 text-right font-semibold text-gray-600 hidden sm:table-cell">Sua comissão</th>
                 <th class="px-5 py-3 text-center font-semibold text-gray-600">Status</th>
+                <th class="px-5 py-3 text-center font-semibold text-gray-600 adesao-col hidden">Adesão</th>
                 <th class="px-5 py-3 text-left font-semibold text-gray-600 hidden lg:table-cell">Cadastro</th>
                 <th class="px-5 py-3 text-center font-semibold text-gray-600">Ações</th>
               </tr>
@@ -291,14 +335,22 @@
       </div>
 
       <!-- Summary cards -->
-      <div class="grid sm:grid-cols-2 gap-4">
+      <div class="grid grid-cols-2 xl:grid-cols-4 gap-4">
         <div class="card bg-gradient-to-br from-green-50 to-white border border-green-100">
           <div class="text-sm text-green-700 font-medium mb-1">Mês Atual</div>
-          <div id="comm-month" class="text-3xl font-bold text-green-700">R$ 0,00</div>
+          <div id="comm-month" class="text-2xl font-bold text-green-700">R$ 0,00</div>
         </div>
         <div class="card bg-gradient-to-br from-blue-50 to-white border border-blue-100">
-          <div class="text-sm text-blue-700 font-medium mb-1">Total Acumulado</div>
-          <div id="comm-total" class="text-3xl font-bold text-blue-700">R$ 0,00</div>
+          <div class="text-sm text-blue-700 font-medium mb-1">Total Gerado</div>
+          <div id="comm-total" class="text-2xl font-bold text-blue-700">R$ 0,00</div>
+        </div>
+        <div class="card bg-gradient-to-br from-purple-50 to-white border border-purple-100">
+          <div class="text-sm text-purple-700 font-medium mb-1">Recebido no PIX</div>
+          <div id="comm-paga" class="text-2xl font-bold text-purple-700">R$ 0,00</div>
+        </div>
+        <div class="card bg-gradient-to-br from-amber-50 to-white border border-amber-100">
+          <div class="text-sm text-amber-700 font-medium mb-1">A Receber</div>
+          <div id="comm-a-receber" class="text-2xl font-bold text-amber-700">R$ 0,00</div>
         </div>
       </div>
 
@@ -306,7 +358,9 @@
       <div class="card bg-amber-50 border border-amber-200 flex gap-3">
         <span class="text-amber-600 text-xl flex-shrink-0 mt-0.5">💡</span>
         <p class="text-sm text-amber-800">
-          Você ganha uma <strong>comissão percentual</strong> sobre cada depósito PIX aprovado realizado pelos seus clientes. Os créditos são automaticamente creditados em sua conta.
+          Você ganha <strong><span class="info-taxa-txt">20</span>% de cada recarga</strong> aprovada dos seus clientes (PIX ou cartão,
+          e também da fatura de quem é pós-pago). A comissão é enviada na hora para a sua chave PIX; se o envio
+          automático falhar, ela fica "a receber" e a MC Despachadoria paga em seguida.
         </p>
       </div>
 
@@ -318,14 +372,40 @@
               <tr>
                 <th class="px-5 py-3 text-left font-semibold text-gray-600">Data</th>
                 <th class="px-5 py-3 text-left font-semibold text-gray-600">Cliente</th>
-                <th class="px-5 py-3 text-right font-semibold text-gray-600 hidden sm:table-cell">Depósito</th>
+                <th class="px-5 py-3 text-right font-semibold text-gray-600 hidden sm:table-cell">Recarga</th>
                 <th class="px-5 py-3 text-center font-semibold text-gray-600 hidden sm:table-cell">Taxa</th>
                 <th class="px-5 py-3 text-right font-semibold text-gray-600">Comissão</th>
+                <th class="px-5 py-3 text-center font-semibold text-gray-600">Situação</th>
               </tr>
             </thead>
             <tbody id="commissions-table-body" class="divide-y divide-gray-50"></tbody>
           </table>
         </div>
+      </div>
+
+      <div class="card">
+        <h3 class="font-semibold text-gray-800 mb-3">Pagamentos recebidos</h3>
+        <div id="pagamentos-list" class="text-sm text-gray-400">Nenhum pagamento ainda.</div>
+      </div>
+    </section>
+
+    <!-- ── CONSULTAS PARA REVENDER ───────────────────────────────────── -->
+    <section id="section-catalog" class="dash-section hidden space-y-5">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Consultas para Revender</h2>
+        <p class="text-sm text-gray-500">
+          Todas as consultas do site, com o preço que o seu cliente paga. Cada cliente seu faz as consultas
+          no próprio painel, com o saldo dele — e você ganha <span class="info-taxa-txt">20</span>% de cada recarga.
+        </p>
+      </div>
+      <div class="card flex flex-col sm:flex-row gap-3">
+        <input id="catalog-search" type="text" placeholder="Buscar consulta..."
+          class="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          oninput="renderCatalog()">
+        <a href="/painel/usuario" class="btn-primary justify-center">🚗 Fazer uma consulta</a>
+      </div>
+      <div id="catalog-list" class="space-y-5">
+        <div class="skeleton h-12 w-full"></div>
       </div>
     </section>
 
@@ -549,7 +629,18 @@ const sectionTitles = {
   overview:    'Visão Geral',
   clients:     'Meus Clientes',
   commissions: 'Comissões',
+  catalog:     'Consultas para Revender',
   profile:     'Perfil',
+};
+let resellerInfo = null;
+let allPagamentos = [];
+let allServices = null;
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+const STATUS_COMISSAO = {
+  A_PAGAR:  '<span class="badge-amber">A receber</span>',
+  ENVIANDO: '<span class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full text-xs font-medium">Enviando PIX</span>',
+  PAGA:     '<span class="badge-green">Recebida</span>',
 };
 
 // ── Formatação ─────────────────────────────────────────────────────────────
@@ -599,6 +690,7 @@ function showSection(id) {
   }
   if (id === 'clients') renderClientsTable();
   if (id === 'commissions') renderCommissionsTable();
+  if (id === 'catalog') loadCatalog();
 }
 
 // ── Inicialização ──────────────────────────────────────────────────────────
@@ -637,14 +729,93 @@ async function loadStats() {
     const r = await fetch('/api/reseller/stats');
     if (!r.ok) return;
     const d = await r.json();
-    document.getElementById('stat-credits').textContent = fmt(d.credits);
+    resellerInfo = d;
+    const aReceber = d.comissao_a_pagar + d.comissao_enviando;
+    document.getElementById('stat-paga').textContent      = fmt(d.comissao_paga);
+    document.getElementById('stat-a-receber').textContent = fmt(aReceber);
     document.getElementById('stat-clients').textContent = d.total_clients;
     document.getElementById('stat-active').textContent  = d.active_clients;
     document.getElementById('stat-month').textContent   = fmt(d.month_commissions);
     document.getElementById('stat-total').textContent   = fmt(d.total_commissions);
     document.getElementById('comm-month').textContent   = fmt(d.month_commissions);
     document.getElementById('comm-total').textContent   = fmt(d.total_commissions);
+    document.getElementById('comm-paga').textContent      = fmt(d.comissao_paga);
+    document.getElementById('comm-a-receber').textContent = fmt(aReceber);
+    document.getElementById('info-taxa').textContent = d.taxa_comissao;
+    document.querySelectorAll('.info-taxa-txt').forEach(el => { el.textContent = d.taxa_comissao; });
+    document.getElementById('info-pix-tipo').textContent  = d.pix_tipo_nome ? `Chave ${d.pix_tipo_nome}` : 'Chave PIX ainda não cadastrada';
+    document.getElementById('info-pix-chave').textContent = d.pix_chave || 'Fale com o suporte para cadastrar.';
+    document.querySelector(`input[name="adesao"][value="${d.cobra_adesao ? 'sim' : 'nao'}"]`).checked = true;
+    document.getElementById('adesao-valor').value = d.valor_adesao ?? '';
+    toggleAdesaoValor();
+    document.querySelectorAll('.adesao-col').forEach(el => el.classList.toggle('hidden', !d.cobra_adesao));
+    renderClientsTable();
   } catch { /* silencioso */ }
+}
+
+// ── Taxa de adesão (opcional, toda do revendedor) ──────────────────────────
+function toggleAdesaoValor() {
+  const sim = document.querySelector('input[name="adesao"]:checked')?.value === 'sim';
+  document.getElementById('adesao-valor-box').classList.toggle('hidden', !sim);
+}
+
+async function salvarAdesao(e) {
+  e.preventDefault();
+  const cobra = document.querySelector('input[name="adesao"]:checked')?.value === 'sim';
+  try {
+    const r = await fetch('/api/reseller/adesao', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cobra_adesao: cobra, valor_adesao: document.getElementById('adesao-valor').value }),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Erro ao salvar.', 'error'); return; }
+    toast(cobra ? 'Taxa de adesão salva.' : 'Adesão desligada.');
+    loadStats();
+  } catch { toast('Erro ao salvar.', 'error'); }
+}
+
+async function marcarAdesao(id, paga) {
+  try {
+    const r = await fetch(`/api/reseller/clients/${id}/adesao`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paga }),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Erro.', 'error'); return; }
+    const c = allClients.find(x => x.id === id);
+    if (c) c.adesao_paga_em = d.adesao_paga_em;
+    toast(paga ? 'Adesão marcada como paga.' : 'Adesão desmarcada.');
+  } catch { toast('Erro ao salvar.', 'error'); }
+}
+
+// ── Catálogo para revender ─────────────────────────────────────────────────
+async function loadCatalog() {
+  if (allServices) { renderCatalog(); return; }
+  try {
+    const r = await fetch('/api/services');
+    const d = await r.json();
+    allServices = (d.services || []).filter(s => !s.unavailable && !s.adminOnly);
+    renderCatalog();
+  } catch { document.getElementById('catalog-list').innerHTML = '<p class="text-sm text-red-600">Erro ao carregar as consultas.</p>'; }
+}
+
+function renderCatalog() {
+  const sem = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const q = sem(document.getElementById('catalog-search').value).trim();
+  const lista = (allServices || []).filter(s => !q || q.split(/\s+/).every(p => sem(`${s.name} ${s.group}`).includes(p)));
+  const grupos = {};
+  lista.forEach(s => { (grupos[s.group || 'Outras'] = grupos[s.group || 'Outras'] || []).push(s); });
+  const el = document.getElementById('catalog-list');
+  if (!lista.length) { el.innerHTML = '<p class="text-sm text-gray-400">Nenhuma consulta encontrada.</p>'; return; }
+  el.innerHTML = Object.entries(grupos).map(([g, ss]) => `
+    <div class="card p-0 overflow-hidden">
+      <div class="px-5 py-3 bg-gray-50 border-b border-gray-100 font-semibold text-gray-700">${esc(g)} <span class="text-xs text-gray-400 font-normal">(${ss.length})</span></div>
+      <div class="divide-y divide-gray-50">${ss.map(s => `
+        <div class="flex items-center justify-between px-5 py-2.5 text-sm">
+          <span class="text-gray-800">${esc(s.icon || '')} ${esc(s.name)}</span>
+          <span class="font-semibold ${s.price > 0 ? 'text-gray-800' : 'text-green-600'} whitespace-nowrap ml-3">${s.price > 0 ? fmt(s.price) : 'Grátis*'}</span>
+        </div>`).join('')}
+      </div>
+    </div>`).join('') + '<p class="text-xs text-gray-400">* Grátis para quem tem a Assinatura Coisas de Despachantes.</p>';
 }
 
 // ── Clientes ───────────────────────────────────────────────────────────────
@@ -709,7 +880,7 @@ function renderClientsTable() {
     `Exibindo ${filtered.length} de ${allClients.length} cliente(s)`;
 
   if (!filtered.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="text-center py-12 text-gray-400">
+    tbody.innerHTML = `<tr><td colspan="8" class="text-center py-12 text-gray-400">
       <div class="text-4xl mb-3">🔍</div>
       <p>${allClients.length ? 'Nenhum cliente encontrado com esse filtro.' : 'Nenhum cliente cadastrado ainda.'}</p>
       ${!allClients.length ? '<p class="text-xs mt-1">Adicione seu primeiro cliente para começar.</p>' : ''}
@@ -725,16 +896,20 @@ function renderClientsTable() {
             ${c.name.charAt(0).toUpperCase()}
           </div>
           <div>
-            <div class="font-medium text-gray-800">${c.name}</div>
+            <div class="font-medium text-gray-800">${esc(c.name)}</div>
             <div class="text-xs text-gray-400">${maskDoc(c.cpf_cnpj)}</div>
           </div>
         </div>
       </td>
-      <td class="px-5 py-3 text-gray-600 hidden md:table-cell">${c.email}</td>
-      <td class="px-5 py-3 text-right font-semibold text-gray-700">${fmt(c.credits)}</td>
+      <td class="px-5 py-3 text-gray-600 hidden md:table-cell">${esc(c.email)}</td>
+      <td class="px-5 py-3 text-right font-semibold text-gray-700">${fmt(c.recargas)}</td>
+      <td class="px-5 py-3 text-right text-green-600 hidden sm:table-cell">${fmt(c.comissao)}</td>
       <td class="px-5 py-3 text-center">
         <span class="${c.active ? 'badge-green' : 'badge-red'}">${c.active ? 'Ativo' : 'Bloqueado'}</span>
       </td>
+      ${resellerInfo?.cobra_adesao ? `<td class="px-5 py-3 text-center">
+        <label class="text-xs inline-flex items-center gap-1"><input type="checkbox" ${c.adesao_paga_em ? 'checked' : ''} onchange="marcarAdesao(${c.id}, this.checked)"> paga</label>
+      </td>` : ''}
       <td class="px-5 py-3 text-gray-500 text-xs hidden lg:table-cell">${fmtDate(c.created_at)}</td>
       <td class="px-5 py-3 text-center">
         <button onclick="toggleClient(${c.id})"
@@ -771,7 +946,9 @@ async function loadCommissions() {
     if (!r.ok) return;
     const d = await r.json();
     allComms = d.commissions || [];
+    allPagamentos = d.pagamentos || [];
     renderRecentCommissions();
+    renderCommissionsTable();
   } catch { /* silencioso */ }
 }
 
@@ -782,19 +959,19 @@ function renderRecentCommissions() {
       <div class="text-center py-8 text-gray-400">
         <div class="text-4xl mb-2">💰</div>
         <p class="text-sm">Nenhuma comissão ainda.</p>
-        <p class="text-xs mt-1">Comissões aparecem após depósitos de clientes.</p>
+        <p class="text-xs mt-1">Comissões aparecem quando seus clientes recarregam.</p>
       </div>`;
     return;
   }
   el.innerHTML = allComms.slice(0, 5).map(c => `
     <div class="flex items-center justify-between py-2.5 border-b border-gray-50 last:border-0">
       <div class="min-w-0">
-        <div class="text-sm font-medium text-gray-800 truncate">${c.client_name}</div>
-        <div class="text-xs text-gray-400">${fmtDate(c.created_at)}</div>
+        <div class="text-sm font-medium text-gray-800 truncate">${esc(c.client_name)}</div>
+        <div class="text-xs text-gray-400">${fmtDate(c.created_at)} · ${STATUS_COMISSAO[c.status] || ''}</div>
       </div>
       <div class="text-right flex-shrink-0 ml-3">
         <div class="text-sm font-bold text-green-600">+${fmt(c.amount)}</div>
-        <div class="text-xs text-gray-400">${parseFloat(c.rate)}% sobre ${fmt(c.deposit_amount)}</div>
+        <div class="text-xs text-gray-400">${parseFloat(c.rate)}% sobre ${fmt(c.base)}</div>
       </div>
     </div>`).join('');
 }
@@ -802,27 +979,35 @@ function renderRecentCommissions() {
 function renderCommissionsTable() {
   const tbody = document.getElementById('commissions-table-body');
   if (!allComms.length) {
-    tbody.innerHTML = `<tr><td colspan="5" class="text-center py-16 text-gray-400">
+    tbody.innerHTML = `<tr><td colspan="6" class="text-center py-16 text-gray-400">
       <div class="text-5xl mb-3">💰</div>
       <p class="font-medium">Nenhuma comissão ainda</p>
-      <p class="text-sm mt-1">Comissões são geradas quando seus clientes fazem depósitos aprovados.</p>
+      <p class="text-sm mt-1">Comissões são geradas quando seus clientes fazem recargas aprovadas.</p>
     </td></tr>`;
-    return;
-  }
-  tbody.innerHTML = allComms.map(c => `
+  } else {
+    tbody.innerHTML = allComms.map(c => `
     <tr class="table-row">
       <td class="px-5 py-3 text-gray-500 text-sm">${fmtDate(c.created_at)}</td>
       <td class="px-5 py-3">
-        <div class="font-medium text-gray-800 text-sm">${c.client_name}</div>
+        <div class="font-medium text-gray-800 text-sm">${esc(c.client_name)}${c.origem === 'FATURA' ? ' <span class="text-xs text-gray-400">(fatura)</span>' : ''}</div>
       </td>
-      <td class="px-5 py-3 text-right text-gray-600 text-sm hidden sm:table-cell">${fmt(c.deposit_amount)}</td>
+      <td class="px-5 py-3 text-right text-gray-600 text-sm hidden sm:table-cell">${fmt(c.base)}</td>
       <td class="px-5 py-3 text-center hidden sm:table-cell">
         <span class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full text-xs font-medium">
           ${parseFloat(c.rate)}%
         </span>
       </td>
       <td class="px-5 py-3 text-right font-bold text-green-600 text-sm">+${fmt(c.amount)}</td>
+      <td class="px-5 py-3 text-center">${STATUS_COMISSAO[c.status] || ''}</td>
     </tr>`).join('');
+  }
+  document.getElementById('pagamentos-list').innerHTML = allPagamentos.length
+    ? allPagamentos.map(p => `
+      <div class="flex items-center justify-between py-2 border-b border-gray-50 last:border-0 text-gray-700">
+        <span>${fmtDate(p.created_at)} · ${p.origem === 'AUTOMATICO' ? 'PIX automático' : 'PIX'}</span>
+        <span class="font-semibold text-green-600">${fmt(p.valor)}</span>
+      </div>`).join('')
+    : 'Nenhum pagamento ainda.';
 }
 
 // ── Perfil ─────────────────────────────────────────────────────────────────

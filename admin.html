@@ -115,6 +115,9 @@
     <div class="nav-item" data-section="pos-pago" onclick="showSection('pos-pago')">
       <span class="text-lg">🧮</span> Clientes Pós-pago
     </div>
+    <div class="nav-item" data-section="revendedores" onclick="showSection('revendedores')">
+      <span class="text-lg">🤝</span> Revendedores
+    </div>
     <div class="nav-item" data-section="directdata" onclick="showSection('directdata')">
       <span class="text-lg">🔎</span> Saldo DirectData
     </div>
@@ -921,6 +924,9 @@
       </div>
     </section>
 
+    <!-- ── REVENDEDORES (conteúdo montado por assets/admin-revendedores.js) ── -->
+    <section id="section-revendedores" class="admin-section hidden space-y-4"></section>
+
     <!-- ── VÍDEO DE APRESENTAÇÃO ─────────────────────────────────────────────── -->
     <section id="section-video" class="admin-section hidden space-y-4">
       <div>
@@ -1385,7 +1391,7 @@ const fmt = v => 'R$ ' + parseFloat(v||0).toLocaleString('pt-BR',{minimumFractio
 const fmtDate = s => { const d=new Date(s); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
 
 let allUsers = [], allTx = [], allQueries = [], allServices = [], allManualQueries = [];
-const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API', 'assinantes':'Lista de Assinantes Cadastrados', 'atpve':'Pedidos de ATPV-e', 'novas':'Consultas Novas (ATPV-e)', 'pos-pago':'Clientes Pós-pago', directdata:'Saldo DirectData', video:'Vídeo de Apresentação', mensagens:'Mensagens de clientes' };
+const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API', 'assinantes':'Lista de Assinantes Cadastrados', 'atpve':'Pedidos de ATPV-e', 'novas':'Consultas Novas (ATPV-e)', 'pos-pago':'Clientes Pós-pago', revendedores:'Revendedores', directdata:'Saldo DirectData', video:'Vídeo de Apresentação', mensagens:'Mensagens de clientes' };
 
 function toast(msg, type='success') {
   const el = document.getElementById('toast');
@@ -1419,6 +1425,7 @@ function showSection(id) {
   if (id === 'atpve') loadAtpvePedidos();
   if (id === 'novas') loadNovasPedidos();
   if (id === 'pos-pago') loadPosPago();
+  if (id === 'revendedores') rvCarregar();
   if (id === 'directdata') loadDirectData();
   if (id === 'mensagens') loadMensagensAdmin();
   if (id === 'video') loadVideoApresentacao();
@@ -1441,6 +1448,7 @@ function refreshCurrentSection() {
   if (id === 'atpve')         loadAtpvePedidos();
   if (id === 'novas')         loadNovasPedidos();
   if (id === 'pos-pago')      loadPosPago();
+  if (id === 'revendedores')  rvCarregar();
   if (id === 'directdata')    loadDirectData();
   if (id === 'mensagens')     loadMensagensAdmin();
 }
@@ -3654,5 +3662,6 @@ document.querySelectorAll('.modal-backdrop').forEach(m => {
 
 init();
 </script>
+<script src="/assets/admin-revendedores.js"></script>
 </body>
 </html>

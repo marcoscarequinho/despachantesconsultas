@@ -2413,6 +2413,48 @@ async function initDB() {
   `);
   await pool.query(`ALTER TABLE mensagens_usuario ADD COLUMN IF NOT EXISTS comunicado_id INTEGER REFERENCES comunicados(id) ON DELETE SET NULL`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_mensagens_usuario_comunicado ON mensagens_usuario (comunicado_id) WHERE comunicado_id IS NOT NULL`);
+  // Revendedores (23/10/2026): só o admin cadastra. O vínculo cliente →
+  // revendedor é revendedor_id, separado de referred_by — este é do programa
+  // de indicação (bônus de R$ 10), que é outra coisa e tem 65 contas marcadas.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS revendedor_id INTEGER REFERENCES users(id) ON DELETE SET NULL`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS adesao_paga_em TIMESTAMPTZ`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_revendedor ON users (revendedor_id) WHERE revendedor_id IS NOT NULL`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS revendedores (
+      user_id      INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      pix_tipo     VARCHAR(10) NOT NULL,
+      pix_chave    VARCHAR(140) NOT NULL,
+      cobra_adesao BOOLEAN NOT NULL DEFAULT false,
+      valor_adesao NUMERIC(10,2),
+      observacao   TEXT,
+      created_at   TIMESTAMPTZ DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS revendedor_pagamentos (
+      id            SERIAL PRIMARY KEY,
+      revendedor_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      valor         NUMERIC(10,2) NOT NULL,
+      origem        VARCHAR(10) NOT NULL CHECK (origem IN ('AUTOMATICO','MANUAL')),
+      payout_id     VARCHAR(60),
+      observacao    TEXT,
+      created_at    TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  // A tabela commissions é do modelo antigo (10% sobre depósito) e nunca
+  // recebeu uma linha — o novo modelo (20% sobre a recarga) a reaproveita.
+  // status: A_PAGAR → ENVIANDO (payout aceito pelo Mercado Pago) → PAGA; o
+  // envio que falha volta para A_PAGAR com o motivo em envio_erro.
+  await pool.query(`ALTER TABLE commissions ADD COLUMN IF NOT EXISTS pix_payment_id INTEGER REFERENCES pix_payments(id) ON DELETE SET NULL`);
+  await pool.query(`ALTER TABLE commissions ADD COLUMN IF NOT EXISTS base NUMERIC(10,2)`);
+  await pool.query(`ALTER TABLE commissions ADD COLUMN IF NOT EXISTS origem VARCHAR(20)`);
+  await pool.query(`ALTER TABLE commissions ADD COLUMN IF NOT EXISTS status VARCHAR(10) NOT NULL DEFAULT 'A_PAGAR'`);
+  await pool.query(`ALTER TABLE commissions ADD COLUMN IF NOT EXISTS pagamento_id INTEGER REFERENCES revendedor_pagamentos(id) ON DELETE SET NULL`);
+  await pool.query(`ALTER TABLE commissions ADD COLUMN IF NOT EXISTS payout_id VARCHAR(60)`);
+  await pool.query(`ALTER TABLE commissions ADD COLUMN IF NOT EXISTS envio_erro TEXT`);
+  await pool.query(`ALTER TABLE commissions ADD COLUMN IF NOT EXISTS envio_tentado_em TIMESTAMPTZ`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_commissions_pix_payment ON commissions (pix_payment_id) WHERE pix_payment_id IS NOT NULL`);
   console.log('✅ Tabelas prontas');
 }
 
@@ -2669,7 +2711,8 @@ app.post('/api/auth/register', async (req, res) => {
 
     const hash = await bcrypt.hash(password, 12);
     const affCode = generateAffiliateCode(name);
-    const userRole = role === 'reseller' ? 'reseller' : 'user';
+    // Revendedor só é criado pelo admin (Admin → Revendedores), desde 23/10/2026.
+    const userRole = 'user';
 
     const r = await pool.query(
       `INSERT INTO users (name, cpf_cnpj, email, phone, password_hash, role, affiliate_code, referred_by, ip_address)
@@ -2904,28 +2947,52 @@ app.get('/api/affiliate/stats', requireAuth, async (req, res) => {
   }
 });
 
-// ── GET /api/reseller/stats ───────────────────────────────────────────────────
+// ── Painel do revendedor ─────────────────────────────────────────────────────
+// Os clientes do revendedor são os users com revendedor_id = ele (ver initDB).
+// Os números de comissão saem de commissions (20% sobre a recarga, ver
+// registrarComissaoRevendedor).
 app.get('/api/reseller/stats', requireAuth, requireReseller, async (req, res) => {
   try {
     const rid = req.user.id;
-    const [userRow, totalRow, activeRow, monthRow, allTimeRow] = await Promise.all([
-      pool.query('SELECT credits, affiliate_code FROM users WHERE id=$1', [rid]),
-      pool.query('SELECT COUNT(*) FROM users WHERE referred_by=$1', [rid]),
-      pool.query('SELECT COUNT(*) FROM users WHERE referred_by=$1 AND active=true', [rid]),
-      pool.query(`SELECT COALESCE(SUM(amount),0) AS total FROM commissions
-                  WHERE reseller_id=$1 AND created_at >= date_trunc('month', NOW())`, [rid]),
-      pool.query('SELECT COALESCE(SUM(amount),0) AS total FROM commissions WHERE reseller_id=$1', [rid]),
+    const [info, clientes, com] = await Promise.all([
+      pool.query(
+        `SELECT u.credits, rv.pix_tipo, rv.pix_chave, rv.cobra_adesao, rv.valor_adesao
+           FROM users u LEFT JOIN revendedores rv ON rv.user_id = u.id WHERE u.id=$1`, [rid]),
+      pool.query(
+        `SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE active) AS ativos,
+                COUNT(*) FILTER (WHERE adesao_paga_em IS NOT NULL) AS adesoes
+           FROM users WHERE revendedor_id=$1`, [rid]),
+      pool.query(
+        `SELECT COALESCE(SUM(amount),0) AS gerada,
+                COALESCE(SUM(amount) FILTER (WHERE status='PAGA'),0) AS paga,
+                COALESCE(SUM(amount) FILTER (WHERE status='ENVIANDO'),0) AS enviando,
+                COALESCE(SUM(amount) FILTER (WHERE status='A_PAGAR'),0) AS a_pagar,
+                COALESCE(SUM(amount) FILTER (WHERE created_at >= date_trunc('month', NOW())),0) AS mes,
+                COALESCE(SUM(base),0) AS recargas
+           FROM commissions WHERE reseller_id=$1 AND pix_payment_id IS NOT NULL`, [rid]),
     ]);
+    const i = info.rows[0] || {};
+    const c = com.rows[0];
     res.json({
-      credits:           parseFloat(userRow.rows[0].credits),
-      affiliate_code:    userRow.rows[0].affiliate_code,
-      total_clients:     parseInt(totalRow.rows[0].count),
-      active_clients:    parseInt(activeRow.rows[0].count),
-      month_commissions: parseFloat(monthRow.rows[0].total),
-      total_commissions: parseFloat(allTimeRow.rows[0].total),
+      credits:          parseFloat(i.credits || 0),
+      taxa_comissao:    COMISSAO_REVENDEDOR_PCT,
+      pix_tipo:         i.pix_tipo || null,
+      pix_tipo_nome:    PIX_TIPOS[i.pix_tipo] || null,
+      pix_chave:        i.pix_chave || null,
+      cobra_adesao:     !!i.cobra_adesao,
+      valor_adesao:     i.valor_adesao === null || i.valor_adesao === undefined ? null : parseFloat(i.valor_adesao),
+      total_clients:    parseInt(clientes.rows[0].total),
+      active_clients:   parseInt(clientes.rows[0].ativos),
+      adesoes_pagas:    parseInt(clientes.rows[0].adesoes),
+      recargas_total:   parseFloat(c.recargas),
+      month_commissions: parseFloat(c.mes),
+      total_commissions: parseFloat(c.gerada),
+      comissao_paga:    parseFloat(c.paga),
+      comissao_enviando: parseFloat(c.enviando),
+      comissao_a_pagar: parseFloat(c.a_pagar),
     });
   } catch (err) {
-    console.error('Erro em stats:', err.message);
+    console.error('Erro em stats do revendedor:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
   }
 });
@@ -2934,8 +3001,11 @@ app.get('/api/reseller/stats', requireAuth, requireReseller, async (req, res) =>
 app.get('/api/reseller/clients', requireAuth, requireReseller, async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT id, name, email, cpf_cnpj, phone, credits, active, created_at
-       FROM users WHERE referred_by=$1 ORDER BY created_at DESC`,
+      `SELECT u.id, u.name, u.email, u.cpf_cnpj, u.phone, u.credits, u.active, u.created_at, u.adesao_paga_em,
+              COALESCE((SELECT SUM(base) FROM commissions c WHERE c.client_id=u.id AND c.reseller_id=$1), 0) AS recargas,
+              COALESCE((SELECT SUM(amount) FROM commissions c WHERE c.client_id=u.id AND c.reseller_id=$1), 0) AS comissao,
+              (SELECT COUNT(*) FROM queries q WHERE q.user_id=u.id AND q.status='success') AS consultas
+         FROM users u WHERE u.revendedor_id=$1 ORDER BY u.created_at DESC`,
       [req.user.id]
     );
     res.json({ clients: r.rows });
@@ -2972,7 +3042,7 @@ app.post('/api/reseller/clients', requireAuth, requireReseller, async (req, res)
     const affCode = generateAffiliateCode(name);
 
     const r = await pool.query(
-      `INSERT INTO users (name, cpf_cnpj, email, phone, password_hash, role, affiliate_code, referred_by)
+      `INSERT INTO users (name, cpf_cnpj, email, phone, password_hash, role, affiliate_code, revendedor_id)
        VALUES ($1,$2,$3,$4,$5,'user',$6,$7)
        RETURNING id, name, email, phone, cpf_cnpj, credits, active, created_at`,
       [name.trim(), doc, mail, phone?.trim() || null, hash, affCode, req.user.id]
@@ -2988,7 +3058,7 @@ app.post('/api/reseller/clients', requireAuth, requireReseller, async (req, res)
 app.put('/api/reseller/clients/:id/toggle', requireAuth, requireReseller, async (req, res) => {
   try {
     const c = await pool.query(
-      'SELECT id, active FROM users WHERE id=$1 AND referred_by=$2',
+      'SELECT id, active FROM users WHERE id=$1 AND revendedor_id=$2',
       [req.params.id, req.user.id]
     );
     if (!c.rows.length) return res.status(404).json({ error: 'Cliente não encontrado.' });
@@ -3000,24 +3070,319 @@ app.put('/api/reseller/clients/:id/toggle', requireAuth, requireReseller, async 
   }
 });
 
-// ── GET /api/reseller/commissions ─────────────────────────────────────────────
-app.get('/api/reseller/commissions', requireAuth, requireReseller, async (req, res) => {
+// ── PUT /api/reseller/clients/:id/adesao — marca/desmarca adesão paga ─────────
+// A adesão é cobrada pelo revendedor por fora e é toda dele: aqui só fica o
+// registro de quem já pagou, para ele e o admin acompanharem.
+app.put('/api/reseller/clients/:id/adesao', requireAuth, requireReseller, async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT c.id, c.amount, c.rate, c.created_at,
-              u.name AS client_name,
-              COALESCE(t.amount, 0) AS deposit_amount
-       FROM commissions c
-       JOIN users u ON u.id = c.client_id
-       LEFT JOIN transactions t ON t.id = c.transaction_id
-       WHERE c.reseller_id=$1
-       ORDER BY c.created_at DESC LIMIT 200`,
-      [req.user.id]
+      `UPDATE users SET adesao_paga_em = CASE WHEN $3 THEN COALESCE(adesao_paga_em, NOW()) ELSE NULL END
+        WHERE id=$1 AND revendedor_id=$2 RETURNING adesao_paga_em`,
+      [req.params.id, req.user.id, !!req.body?.paga]
     );
-    res.json({ commissions: r.rows });
+    if (!r.rows.length) return res.status(404).json({ error: 'Cliente não encontrado.' });
+    res.json({ success: true, adesao_paga_em: r.rows[0].adesao_paga_em });
   } catch (err) {
     res.status(500).json({ error: 'Erro interno.' });
   }
+});
+
+// ── PUT /api/reseller/adesao — o revendedor decide se cobra adesão ────────────
+app.put('/api/reseller/adesao', requireAuth, requireReseller, async (req, res) => {
+  const cobra = !!req.body?.cobra_adesao;
+  const valor = cobra ? parseFloat(String(req.body?.valor_adesao ?? '').replace(',', '.')) : null;
+  if (cobra && !(valor > 0)) return res.status(400).json({ error: 'Informe o valor da taxa de adesão.' });
+  try {
+    const r = await pool.query(
+      `UPDATE revendedores SET cobra_adesao=$2, valor_adesao=$3, updated_at=NOW() WHERE user_id=$1 RETURNING user_id`,
+      [req.user.id, cobra, cobra ? valor.toFixed(2) : null]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Cadastro de revendedor não encontrado. Fale com o suporte.' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── GET /api/reseller/commissions ─────────────────────────────────────────────
+app.get('/api/reseller/commissions', requireAuth, requireReseller, async (req, res) => {
+  try {
+    const [com, pag] = await Promise.all([
+      pool.query(
+        `SELECT c.id, c.amount, c.rate, c.base, c.origem, c.status, c.created_at,
+                u.name AS client_name
+           FROM commissions c
+           JOIN users u ON u.id = c.client_id
+          WHERE c.reseller_id=$1 AND c.pix_payment_id IS NOT NULL
+          ORDER BY c.created_at DESC LIMIT 300`,
+        [req.user.id]
+      ),
+      pool.query(
+        `SELECT id, valor, origem, created_at FROM revendedor_pagamentos
+          WHERE revendedor_id=$1 ORDER BY created_at DESC LIMIT 100`,
+        [req.user.id]
+      ),
+    ]);
+    res.json({ commissions: com.rows, pagamentos: pag.rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// ── Admin: revendedores ──────────────────────────────────────────────────────
+// Cadastro só pelo admin (sem autocadastro). Cada revendedor é um users com
+// role 'reseller' + uma linha em revendedores (chave PIX e adesão).
+function dadosRevendedorBody(body) {
+  const pix = normalizarChavePix(body.pix_tipo, body.pix_chave);
+  if (pix.error) return pix;
+  const cobra = !!body.cobra_adesao;
+  const valor = cobra ? parseFloat(String(body.valor_adesao ?? '').replace(',', '.')) : null;
+  if (cobra && !(valor > 0)) return { error: 'Informe o valor da taxa de adesão (ou marque que não cobra).' };
+  return {
+    pix_tipo: body.pix_tipo, pix_chave: pix.chave, cobra_adesao: cobra,
+    valor_adesao: cobra ? valor.toFixed(2) : null,
+    observacao: String(body.observacao || '').trim().slice(0, 1000) || null,
+  };
+}
+
+const SQL_RESUMO_REVENDEDOR = `
+  SELECT u.id, u.name, u.email, u.phone, u.cpf_cnpj, u.active, u.created_at,
+         rv.pix_tipo, rv.pix_chave, rv.cobra_adesao, rv.valor_adesao, rv.observacao,
+         (SELECT COUNT(*) FROM users c WHERE c.revendedor_id=u.id) AS clientes,
+         (SELECT COUNT(*) FROM users c WHERE c.revendedor_id=u.id AND c.adesao_paga_em IS NOT NULL) AS adesoes_pagas,
+         (SELECT COUNT(*) FROM queries q JOIN users c ON c.id=q.user_id
+           WHERE c.revendedor_id=u.id AND q.status='success') AS consultas,
+         (SELECT COALESCE(SUM(q.amount),0) FROM queries q JOIN users c ON c.id=q.user_id
+           WHERE c.revendedor_id=u.id AND q.status='success') AS faturamento_consultas,
+         COALESCE(cm.recargas,0) AS recargas, COALESCE(cm.gerada,0) AS comissao_gerada,
+         COALESCE(cm.paga,0) AS comissao_paga, COALESCE(cm.enviando,0) AS comissao_enviando,
+         COALESCE(cm.a_pagar,0) AS comissao_a_pagar, cm.ultimo_erro
+    FROM users u
+    LEFT JOIN revendedores rv ON rv.user_id = u.id
+    LEFT JOIN LATERAL (
+      SELECT SUM(base) AS recargas, SUM(amount) AS gerada,
+             SUM(amount) FILTER (WHERE status='PAGA') AS paga,
+             SUM(amount) FILTER (WHERE status='ENVIANDO') AS enviando,
+             SUM(amount) FILTER (WHERE status='A_PAGAR') AS a_pagar,
+             (ARRAY_AGG(envio_erro ORDER BY envio_tentado_em DESC NULLS LAST)
+                FILTER (WHERE envio_erro IS NOT NULL AND status <> 'PAGA'))[1] AS ultimo_erro
+        FROM commissions WHERE reseller_id=u.id AND pix_payment_id IS NOT NULL
+    ) cm ON true
+   WHERE u.role='reseller'`;
+
+function numerosRevendedor(r) {
+  const n = k => parseFloat(r[k] || 0);
+  return {
+    ...r,
+    pix_tipo_nome: PIX_TIPOS[r.pix_tipo] || null,
+    envio_automatico: !!PIX_TIPOS_PAYOUT[r.pix_tipo] && COMISSAO_ENVIO_AUTOMATICO,
+    valor_adesao: r.valor_adesao === null ? null : n('valor_adesao'),
+    clientes: parseInt(r.clientes), adesoes_pagas: parseInt(r.adesoes_pagas), consultas: parseInt(r.consultas),
+    faturamento_consultas: n('faturamento_consultas'), recargas: n('recargas'),
+    comissao_gerada: n('comissao_gerada'), comissao_paga: n('comissao_paga'),
+    comissao_enviando: n('comissao_enviando'), comissao_a_pagar: n('comissao_a_pagar'),
+  };
+}
+
+app.get('/api/admin/revendedores', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(`${SQL_RESUMO_REVENDEDOR} ORDER BY u.name`);
+    res.json({ revendedores: r.rows.map(numerosRevendedor), taxa: COMISSAO_REVENDEDOR_PCT, envioAutomatico: COMISSAO_ENVIO_AUTOMATICO, pixTipos: PIX_TIPOS });
+  } catch (err) {
+    console.error('Erro ao listar revendedores:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+app.post('/api/admin/revendedores', requireAuth, requireSuperAdmin, async (req, res) => {
+  const { name, cpf_cnpj, email, phone, password } = req.body || {};
+  if (!name || !name.trim() || !cpf_cnpj || !email || !phone || !password)
+    return res.status(400).json({ error: 'Preencha nome, CPF/CNPJ, e-mail, telefone e senha.' });
+  if (String(password).length < 8) return res.status(400).json({ error: 'A senha deve ter ao menos 8 caracteres.' });
+  if (!isValidDoc(cpf_cnpj)) return res.status(400).json({ error: 'CPF ou CNPJ do revendedor inválido.' });
+  if (!isValidPhoneBR(phone)) return res.status(400).json({ error: 'Telefone inválido. Informe com DDD.' });
+  const dados = dadosRevendedorBody(req.body);
+  if (dados.error) return res.status(400).json({ error: dados.error });
+  const doc = cleanDoc(cpf_cnpj); const mail = String(email).toLowerCase().trim();
+  const client = await pool.connect();
+  try {
+    const dup = await client.query('SELECT id FROM users WHERE email=$1 OR cpf_cnpj=$2', [mail, doc]);
+    if (dup.rows.length) return res.status(409).json({ error: 'E-mail ou CPF/CNPJ já cadastrado. Para transformar uma conta existente em revendedor, troque o tipo dela em Usuários.' });
+    const hash = await bcrypt.hash(String(password), 12);
+    await client.query('BEGIN');
+    const u = await client.query(
+      `INSERT INTO users (name, cpf_cnpj, email, phone, password_hash, role, affiliate_code)
+       VALUES ($1,$2,$3,$4,$5,'reseller',$6) RETURNING id`,
+      [name.trim(), doc, mail, String(phone).trim(), hash, generateAffiliateCode(name)]
+    );
+    await client.query(
+      `INSERT INTO revendedores (user_id, pix_tipo, pix_chave, cobra_adesao, valor_adesao, observacao)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [u.rows[0].id, dados.pix_tipo, dados.pix_chave, dados.cobra_adesao, dados.valor_adesao, dados.observacao]
+    );
+    await client.query('COMMIT');
+    res.json({ success: true, id: u.rows[0].id });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('Erro ao cadastrar revendedor:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  } finally { client.release(); }
+});
+
+// Edita PIX/adesão/observação. Também serve para completar o cadastro de quem
+// virou revendedor pela troca de tipo em Usuários (sem linha em revendedores).
+app.put('/api/admin/revendedores/:id', requireAuth, requireSuperAdmin, async (req, res) => {
+  const dados = dadosRevendedorBody(req.body || {});
+  if (dados.error) return res.status(400).json({ error: dados.error });
+  try {
+    const u = await pool.query(`SELECT id FROM users WHERE id=$1 AND role='reseller'`, [req.params.id]);
+    if (!u.rows.length) return res.status(404).json({ error: 'Revendedor não encontrado.' });
+    await pool.query(
+      `INSERT INTO revendedores (user_id, pix_tipo, pix_chave, cobra_adesao, valor_adesao, observacao)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (user_id) DO UPDATE SET pix_tipo=EXCLUDED.pix_tipo, pix_chave=EXCLUDED.pix_chave,
+         cobra_adesao=EXCLUDED.cobra_adesao, valor_adesao=EXCLUDED.valor_adesao,
+         observacao=EXCLUDED.observacao, updated_at=NOW()`,
+      [req.params.id, dados.pix_tipo, dados.pix_chave, dados.cobra_adesao, dados.valor_adesao, dados.observacao]
+    );
+    if (typeof req.body.active === 'boolean')
+      await pool.query('UPDATE users SET active=$2 WHERE id=$1', [req.params.id, req.body.active]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Erro ao editar revendedor:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// Tela de controle de um revendedor: números, clientes, comissões e pagamentos.
+// Abrir a tela confere os payouts em andamento dele no Mercado Pago.
+app.get('/api/admin/revendedores/:id', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const rid = parseInt(req.params.id, 10);
+    await conferirPayoutsRevendedores(rid).catch(() => {});
+    const r = await pool.query(`${SQL_RESUMO_REVENDEDOR} AND u.id=$1`, [rid]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Revendedor não encontrado.' });
+    const [clientes, comissoes, pagamentos] = await Promise.all([
+      pool.query(
+        `SELECT u.id, u.name, u.email, u.phone, u.active, u.credits, u.pos_pago, u.created_at, u.adesao_paga_em,
+                (SELECT COUNT(*) FROM queries q WHERE q.user_id=u.id AND q.status='success') AS consultas,
+                (SELECT COALESCE(SUM(q.amount),0) FROM queries q WHERE q.user_id=u.id AND q.status='success') AS faturamento,
+                COALESCE((SELECT SUM(base) FROM commissions c WHERE c.client_id=u.id AND c.reseller_id=$1), 0) AS recargas,
+                COALESCE((SELECT SUM(amount) FROM commissions c WHERE c.client_id=u.id AND c.reseller_id=$1), 0) AS comissao
+           FROM users u WHERE u.revendedor_id=$1 ORDER BY u.created_at DESC`, [rid]),
+      pool.query(
+        `SELECT c.id, c.amount, c.base, c.origem, c.status, c.envio_erro, c.payout_id, c.created_at, u.name AS client_name
+           FROM commissions c JOIN users u ON u.id=c.client_id
+          WHERE c.reseller_id=$1 AND c.pix_payment_id IS NOT NULL
+          ORDER BY c.created_at DESC LIMIT 300`, [rid]),
+      pool.query(
+        `SELECT id, valor, origem, payout_id, observacao, created_at FROM revendedor_pagamentos
+          WHERE revendedor_id=$1 ORDER BY created_at DESC LIMIT 100`, [rid]),
+    ]);
+    res.json({ revendedor: numerosRevendedor(r.rows[0]), clientes: clientes.rows, comissoes: comissoes.rows, pagamentos: pagamentos.rows });
+  } catch (err) {
+    console.error('Erro ao abrir revendedor:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// Vincula uma conta existente (e-mail ou CPF/CNPJ) ao revendedor. Não mexe em
+// recargas antigas: a comissão vale a partir do vínculo.
+app.post('/api/admin/revendedores/:id/clientes', requireAuth, requireSuperAdmin, async (req, res) => {
+  const busca = String(req.body?.busca || '').trim();
+  if (!busca) return res.status(400).json({ error: 'Informe o e-mail ou CPF/CNPJ do cliente.' });
+  try {
+    const rv = await pool.query(`SELECT id FROM users WHERE id=$1 AND role='reseller'`, [req.params.id]);
+    if (!rv.rows.length) return res.status(404).json({ error: 'Revendedor não encontrado.' });
+    const doc = busca.replace(/\D/g, '');
+    const u = await pool.query(
+      `SELECT id, name, role, revendedor_id FROM users WHERE LOWER(email)=LOWER($1) OR ($2 <> '' AND cpf_cnpj=$2)`,
+      [busca, doc.length === 11 || doc.length === 14 ? doc : '']
+    );
+    if (!u.rows.length) return res.status(404).json({ error: 'Nenhuma conta com esse e-mail ou CPF/CNPJ.' });
+    const c = u.rows[0];
+    if (c.role !== 'user') return res.status(400).json({ error: 'Só contas de usuário podem ser vinculadas a um revendedor.' });
+    if (c.revendedor_id && String(c.revendedor_id) !== String(req.params.id))
+      return res.status(409).json({ error: `${c.name} já é cliente de outro revendedor. Desvincule lá primeiro.` });
+    await pool.query('UPDATE users SET revendedor_id=$1 WHERE id=$2', [req.params.id, c.id]);
+    res.json({ success: true, cliente: { id: c.id, name: c.name } });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+app.delete('/api/admin/revendedores/:id/clientes/:uid', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(
+      'UPDATE users SET revendedor_id=NULL WHERE id=$1 AND revendedor_id=$2 RETURNING id', [req.params.uid, req.params.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Cliente não encontrado nesse revendedor.' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+app.put('/api/admin/revendedores/:id/clientes/:uid/adesao', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `UPDATE users SET adesao_paga_em = CASE WHEN $3 THEN COALESCE(adesao_paga_em, NOW()) ELSE NULL END
+        WHERE id=$1 AND revendedor_id=$2 RETURNING adesao_paga_em`,
+      [req.params.uid, req.params.id, !!req.body?.paga]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Cliente não encontrado nesse revendedor.' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// Tenta de novo o envio automático do que está "a pagar".
+app.post('/api/admin/revendedores/:id/enviar', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const r = await enviarComissoesRevendedor(parseInt(req.params.id, 10), { avisar: false });
+    res.json(r);
+  } catch (err) {
+    console.error('Erro ao enviar comissão:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// Pagamento feito pelo admin fora do sistema (PIX pelo banco): dá baixa em
+// tudo o que está "a pagar". Com incluirTravados, também no lote que ficou
+// ENVIANDO sem resposta do Mercado Pago — só depois de o admin conferir lá que
+// o PIX automático não saiu.
+app.post('/api/admin/revendedores/:id/pagamento-manual', requireAuth, requireSuperAdmin, async (req, res) => {
+  const rid = parseInt(req.params.id, 10);
+  const incluirTravados = !!req.body?.incluirTravados;
+  const observacao = String(req.body?.observacao || '').trim().slice(0, 500) || null;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const sel = await client.query(
+      `SELECT id, amount FROM commissions
+        WHERE reseller_id=$1 AND pix_payment_id IS NOT NULL
+          AND (status='A_PAGAR' OR ($2 AND status='ENVIANDO' AND (payout_id IS NULL OR payout_id='')))
+        FOR UPDATE`,
+      [rid, incluirTravados]
+    );
+    if (!sel.rows.length) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Não há comissão a pagar para esse revendedor.' }); }
+    const total = sel.rows.reduce((s, c) => s + parseFloat(c.amount), 0);
+    const pg = await client.query(
+      `INSERT INTO revendedor_pagamentos (revendedor_id, valor, origem, observacao) VALUES ($1,$2,'MANUAL',$3) RETURNING id`,
+      [rid, total.toFixed(2), observacao]
+    );
+    await client.query(
+      `UPDATE commissions SET status='PAGA', pagamento_id=$1, envio_erro=NULL WHERE id = ANY($2::int[])`,
+      [pg.rows[0].id, sel.rows.map(c => c.id)]
+    );
+    await client.query('COMMIT');
+    res.json({ success: true, valor: parseFloat(total.toFixed(2)), comissoes: sel.rows.length });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('Erro no pagamento manual de revendedor:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  } finally { client.release(); }
 });
 
 // ── GET /api/auth/me (extended) ───────────────────────────────────────────────
@@ -13564,6 +13929,232 @@ app.get('/api/admin/assinantes', requireAuth, requireSuperAdmin, async (req, res
   }
 });
 
+// ── Revendedores: comissão de 20% sobre a recarga ────────────────────────────
+// Regra do dono (23/10/2026): quando o usuário de um revendedor paga uma
+// recarga (PIX ou cartão) ou a fatura do pós-pago, 20% do valor LÍQUIDO (sem o
+// acréscimo do cartão) é do revendedor e vai na hora para a chave PIX dele;
+// os 80% ficam com a plataforma. A base é a recarga e não a consulta — decisão
+// do dono com a consequência na mesa: o revendedor ganha mesmo que o crédito
+// nunca seja usado, e consulta/estorno não mexem na comissão.
+// A taxa de adesão NÃO passa por aqui: é opcional, decidida pelo revendedor e
+// 100% dele, cobrada por fora — o sistema só guarda o valor e quem já pagou.
+const COMISSAO_REVENDEDOR_PCT = 20;
+// Envio automático pelo Payouts do Mercado Pago (POST /v1/payouts). Com false,
+// a comissão fica "a pagar" e o admin paga e dá baixa na tela Revendedores.
+const COMISSAO_ENVIO_AUTOMATICO = true;
+// O Payouts recusa transferência abaixo de R$ 1,00: comissão menor espera
+// somar com a próxima.
+const PAYOUT_MINIMO = 1.00;
+const PIX_TIPOS = { cpf: 'CPF', cnpj: 'CNPJ', email: 'E-mail', telefone: 'Telefone', aleatoria: 'Chave aleatória' };
+// Tipos do Payouts ("transactions.pix.type"). A doc lista EMAIL, PHONE, CPF,
+// CNPJ e PIX_CODE — chave aleatória não aparece, então ela fica só no manual.
+const PIX_TIPOS_PAYOUT = { cpf: 'CPF', cnpj: 'CNPJ', email: 'EMAIL', telefone: 'PHONE' };
+
+// Normaliza e valida a chave PIX conforme o tipo. Devolve { chave } ou { error }.
+function normalizarChavePix(tipo, chave) {
+  const bruto = String(chave || '').trim();
+  if (!PIX_TIPOS[tipo]) return { error: 'Escolha o tipo da chave PIX.' };
+  if (!bruto) return { error: 'Informe a chave PIX do revendedor.' };
+  if (tipo === 'cpf' || tipo === 'cnpj') {
+    const d = bruto.replace(/\D/g, '');
+    if (d.length !== (tipo === 'cpf' ? 11 : 14) || !isValidDoc(d))
+      return { error: `Chave PIX: ${tipo.toUpperCase()} inválido.` };
+    return { chave: d };
+  }
+  if (tipo === 'email') {
+    const e = bruto.toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) || e.length > 77) return { error: 'Chave PIX: e-mail inválido.' };
+    return { chave: e };
+  }
+  if (tipo === 'telefone') {
+    let d = bruto.replace(/\D/g, '');
+    if (d.length === 13 && d.startsWith('55')) d = d.slice(2);
+    if (!isValidPhoneBR(d)) return { error: 'Chave PIX: telefone inválido. Informe com DDD.' };
+    return { chave: `+55${d}` };
+  }
+  const uuid = bruto.toLowerCase();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid))
+    return { error: 'Chave PIX aleatória inválida (formato 00000000-0000-0000-0000-000000000000).' };
+  return { chave: uuid };
+}
+
+// Chave PIX mascarada para log e WhatsApp — nunca a chave inteira.
+function mascararChavePix(chave) {
+  const c = String(chave || '');
+  if (c.length <= 6) return '***';
+  return `${c.slice(0, 3)}***${c.slice(-3)}`;
+}
+
+// Chamada dentro da transação do creditPixPaymentIfApproved, logo depois da
+// baixa. Em SAVEPOINT: falha da comissão não pode desfazer o crédito do
+// cliente. O índice único em pix_payment_id impede comissão dobrada. Devolve o
+// id do revendedor quando gerou comissão (o envio é feito depois do COMMIT).
+async function registrarComissaoRevendedor(client, p, origem) {
+  await client.query('SAVEPOINT comissao_revendedor');
+  try {
+    const r = await client.query(
+      `SELECT u.revendedor_id FROM users u
+         JOIN users ru ON ru.id = u.revendedor_id AND ru.role = 'reseller' AND ru.active = true
+         JOIN revendedores rv ON rv.user_id = ru.id
+        WHERE u.id = $1`,
+      [p.user_id]
+    );
+    if (!r.rows.length) { await client.query('RELEASE SAVEPOINT comissao_revendedor'); return null; }
+    const revendedorId = r.rows[0].revendedor_id;
+    const base = parseFloat(p.value);
+    const valor = Math.round(base * COMISSAO_REVENDEDOR_PCT) / 100;
+    if (!(valor > 0)) { await client.query('RELEASE SAVEPOINT comissao_revendedor'); return null; }
+    const ins = await client.query(
+      `INSERT INTO commissions (reseller_id, client_id, amount, rate, base, origem, pix_payment_id, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'A_PAGAR')
+       ON CONFLICT (pix_payment_id) WHERE pix_payment_id IS NOT NULL DO NOTHING RETURNING id`,
+      [revendedorId, p.user_id, valor, COMISSAO_REVENDEDOR_PCT, base, origem, p.id]
+    );
+    await client.query('RELEASE SAVEPOINT comissao_revendedor');
+    return ins.rows.length ? revendedorId : null;
+  } catch (e) {
+    await client.query('ROLLBACK TO SAVEPOINT comissao_revendedor');
+    console.error(`[revendedor] comissão do PIX ${p.id} não registrada:`, e.message);
+    return null;
+  }
+}
+
+// Envia por PIX tudo o que o revendedor tem "a pagar", num payout só (assim a
+// comissão abaixo de R$ 1,00 vai junto com a próxima). O claim
+// A_PAGAR → ENVIANDO é atômico: dois pagamentos confirmados ao mesmo tempo não
+// mandam a mesma comissão duas vezes. A X-Idempotency-Key sai dos ids do lote,
+// então repetir o mesmo lote não duplica do lado do Mercado Pago.
+// Falha com resposta do Mercado Pago (recusa) devolve o lote para A_PAGAR e
+// avisa o admin para pagar à mão. Falha SEM resposta (rede, timeout) deixa o
+// lote em ENVIANDO sem payout_id: o dinheiro pode ter saído, e reenviar às
+// cegas pagaria duas vezes — o admin confere no Mercado Pago e decide na tela.
+async function enviarComissoesRevendedor(revendedorId, { avisar = true } = {}) {
+  const rv = await pool.query(
+    `SELECT u.name, rv.pix_tipo, rv.pix_chave FROM users u JOIN revendedores rv ON rv.user_id = u.id
+      WHERE u.id = $1 AND u.role = 'reseller'`,
+    [revendedorId]
+  );
+  if (!rv.rows.length) return { enviado: false, motivo: 'revendedor não encontrado' };
+  const { name, pix_tipo, pix_chave } = rv.rows[0];
+  const tipoPayout = PIX_TIPOS_PAYOUT[pix_tipo];
+
+  const aPagar = await pool.query(
+    `SELECT COALESCE(SUM(amount),0) AS total FROM commissions WHERE reseller_id=$1 AND status='A_PAGAR'`,
+    [revendedorId]
+  );
+  const totalAPagar = parseFloat(aPagar.rows[0].total);
+  const avisarAdmin = async (motivo) => {
+    if (!avisar || !ADMIN_PHONE) return;
+    await sendWhatsApp(ADMIN_PHONE,
+      `💸 *Comissão de revendedor a pagar*\n\nRevendedor: ${name}\nValor a pagar: R$ ${totalAPagar.toFixed(2).replace('.', ',')}\n` +
+      `Chave PIX (${PIX_TIPOS[pix_tipo]}): ${mascararChavePix(pix_chave)}\n\nO envio automático não saiu: ${motivo}\n` +
+      `Pague pelo banco e dê baixa em Admin → Revendedores.`
+    ).catch(() => {});
+  };
+
+  if (!COMISSAO_ENVIO_AUTOMATICO) { await avisarAdmin('envio automático desligado'); return { enviado: false, motivo: 'desligado' }; }
+  if (!tipoPayout) { await avisarAdmin('chave aleatória não é aceita pelo Payouts do Mercado Pago'); return { enviado: false, motivo: 'chave aleatória' }; }
+  if (totalAPagar < PAYOUT_MINIMO) return { enviado: false, motivo: 'abaixo do mínimo' };
+
+  const lote = await pool.query(
+    `UPDATE commissions SET status='ENVIANDO', envio_tentado_em=NOW(), envio_erro=NULL
+      WHERE reseller_id=$1 AND status='A_PAGAR' RETURNING id, amount`,
+    [revendedorId]
+  );
+  if (!lote.rows.length) return { enviado: false, motivo: 'nada a pagar' };
+  const ids = lote.rows.map(c => c.id).sort((a, b) => a - b);
+  const total = parseFloat(lote.rows.reduce((s, c) => s + parseFloat(c.amount), 0).toFixed(2));
+  if (total < PAYOUT_MINIMO) {
+    await pool.query(`UPDATE commissions SET status='A_PAGAR' WHERE id = ANY($1::int[])`, [ids]);
+    return { enviado: false, motivo: 'abaixo do mínimo' };
+  }
+  const ref = `COMREV${revendedorId}C${ids[0]}A${ids[ids.length - 1]}N${ids.length}`.slice(0, 50);
+  const idem = crypto.createHash('sha256').update(`comissao-revendedor:${ids.join(',')}`).digest('hex');
+
+  let resp;
+  try {
+    resp = await mpReq('POST', '/v1/payouts', {
+      external_reference: ref,
+      description: 'Comissao de revendedor MC Despachadoria',
+      transactions: [{
+        description: `Comissao ${COMISSAO_REVENDEDOR_PCT}% sobre recargas`,
+        type: 'pix',
+        pix: { type: tipoPayout, chave: pix_chave },
+        amount: { currency: 'BRL', value: total },
+        external_reference: ref,
+      }],
+    }, { 'X-Idempotency-Key': idem });
+  } catch (e) {
+    if (e.mpStatus) {
+      const motivo = `Mercado Pago recusou (${e.mpStatus}): ${e.message}`.slice(0, 500);
+      await pool.query(
+        `UPDATE commissions SET status='A_PAGAR', envio_erro=$2 WHERE id = ANY($1::int[])`, [ids, motivo]
+      );
+      console.error(`[revendedor] payout do revendedor ${revendedorId} recusado: ${motivo}`);
+      await avisarAdmin(motivo);
+      return { enviado: false, motivo };
+    }
+    const motivo = `sem resposta do Mercado Pago (${e.message}) — confira no Mercado Pago antes de pagar de novo`;
+    await pool.query(`UPDATE commissions SET envio_erro=$2 WHERE id = ANY($1::int[])`, [ids, motivo.slice(0, 500)]);
+    console.error(`[revendedor] payout do revendedor ${revendedorId} sem resposta:`, e.message);
+    await avisarAdmin(motivo);
+    return { enviado: false, motivo };
+  }
+  await pool.query(`UPDATE commissions SET payout_id=$2 WHERE id = ANY($1::int[])`, [ids, String(resp.id || '')]);
+  console.log(`[revendedor] payout ${resp.id} de R$ ${total} para o revendedor ${revendedorId} (${ids.length} comissões, chave ${mascararChavePix(pix_chave)})`);
+  return { enviado: true, payoutId: resp.id, total };
+}
+
+// O 202 do Payouts só diz que o pedido foi aceito; quem diz que o dinheiro
+// chegou é GET /v1/payouts/{id}/transactions. Concluído → PAGA, com um
+// revendedor_pagamentos AUTOMATICO; erro/cancelado → volta para A_PAGAR.
+// Roda no cron de reconciliação do PIX e quando o admin abre o revendedor.
+async function conferirPayoutsRevendedores(revendedorId = null) {
+  const r = await pool.query(
+    `SELECT DISTINCT reseller_id, payout_id FROM commissions
+      WHERE status='ENVIANDO' AND payout_id IS NOT NULL AND payout_id <> ''
+        ${revendedorId ? 'AND reseller_id=$1' : ''}`,
+    revendedorId ? [revendedorId] : []
+  );
+  let pagos = 0;
+  for (const { reseller_id, payout_id } of r.rows) {
+    try {
+      const tx = await mpReq('GET', `/v1/payouts/${encodeURIComponent(payout_id)}/transactions?limit=10&offset=0`);
+      const lista = tx.results || tx.transactions || tx.data || (Array.isArray(tx) ? tx : []);
+      const st = (lista[0]?.status || '').toLowerCase();
+      if (st === 'success') {
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          const claim = await client.query(
+            `UPDATE commissions SET status='PAGA', envio_erro=NULL WHERE payout_id=$1 AND status='ENVIANDO' RETURNING amount`,
+            [payout_id]
+          );
+          if (claim.rows.length) {
+            const total = claim.rows.reduce((s, c) => s + parseFloat(c.amount), 0);
+            const pg = await client.query(
+              `INSERT INTO revendedor_pagamentos (revendedor_id, valor, origem, payout_id) VALUES ($1,$2,'AUTOMATICO',$3) RETURNING id`,
+              [reseller_id, total.toFixed(2), payout_id]
+            );
+            await client.query(`UPDATE commissions SET pagamento_id=$1 WHERE payout_id=$2`, [pg.rows[0].id, payout_id]);
+            pagos++;
+          }
+          await client.query('COMMIT');
+        } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
+      } else if (['error', 'canceled', 'cancelled', 'rejected', 'failed'].includes(st)) {
+        const det = lista[0]?.status_detail ? ` (${lista[0].status_detail})` : '';
+        await pool.query(
+          `UPDATE commissions SET status='A_PAGAR', payout_id=NULL, envio_erro=$2 WHERE payout_id=$1 AND status='ENVIANDO'`,
+          [payout_id, `PIX não concluído no Mercado Pago: ${st}${det}`]
+        );
+      }
+    } catch (e) {
+      console.error(`[revendedor] conferência do payout ${payout_id}:`, e.message);
+    }
+  }
+  return { conferidos: r.rows.length, pagos };
+}
+
 // ── Crédito de pagamento PIX aprovado — ponto único usado por /status, /webhook
 // e pelo cron de reconciliação. O passo que credita o usuário é uma única
 // UPDATE ... WHERE credited=false, cujo lock de linha do Postgres garante que
@@ -13678,7 +14269,9 @@ async function creditPixPaymentIfApproved(gatewayId) {
       // Como na assinatura, de propósito não grava em transactions: aquele
       // extrato é o do saldo pré-pago, e a fatura não movimenta saldo. O
       // pagamento fica em pix_payments e a baixa na própria fatura.
+      const revendedorFatura = await registrarComissaoRevendedor(client, p, 'FATURA');
       await client.query('COMMIT');
+      if (revendedorFatura) await enviarComissoesRevendedor(revendedorFatura).catch(e => console.error('[revendedor] envio:', e.message));
       return { credited: true, status: 'approved', value: parseFloat(p.value), purpose: 'FATURA' };
     }
 
@@ -13687,7 +14280,11 @@ async function creditPixPaymentIfApproved(gatewayId) {
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'deposit',$2,$3)`,
       [p.user_id, p.value, `Recarga ${{ CARTAO: 'cartão de débito', CREDITO: 'cartão de crédito' }[p.method] || 'PIX'} — R$ ${parseFloat(p.value).toFixed(2).replace('.', ',')}`]
     );
+    const revendedorRecarga = await registrarComissaoRevendedor(client, p, 'RECARGA');
     await client.query('COMMIT');
+    // Depois do COMMIT e com await: na Vercel promessa solta morre com a
+    // resposta, e o envio tem de sair "na hora" da recarga.
+    if (revendedorRecarga) await enviarComissoesRevendedor(revendedorRecarga).catch(e => console.error('[revendedor] envio:', e.message));
     return { credited: true, status: 'approved', value: parseFloat(p.value) };
   } catch (e) {
     await client.query('ROLLBACK');
@@ -13760,6 +14357,7 @@ async function runPixReconcile() {
     }
   }
   console.log(`✅ Reconciliação PIX: ${checked} verificados, ${credited} creditados`);
+  await conferirPayoutsRevendedores().catch(e => console.error('[revendedor] conferência de payouts:', e.message));
   return { checked, credited, pending: pendentes.length };
 }
 
@@ -17594,9 +18192,8 @@ app.get('/extensao/privacidade', (req, res) => {
 app.get('/cadastrar', (req, res) => {
   noCache(res); res.sendFile(path.join(__dirname, 'cadastrar.html'));
 });
-app.get('/cadastrar/revendedor', (req, res) => {
-  noCache(res); res.sendFile(path.join(__dirname, 'cadastrar.html'));
-});
+// Autocadastro de revendedor saiu em 23/10/2026: só o admin cadastra.
+app.get('/cadastrar/revendedor', (req, res) => res.redirect('/cadastrar'));
 app.get('/consulta-avulsa', async (req, res) => {
   // Página privada: o link sem código foi revogado — só abre com ?codigo=XXXXXX
   // de um cliente ativo (validado no banco antes de servir o HTML). Qualquer
