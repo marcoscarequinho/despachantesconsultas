@@ -8537,6 +8537,20 @@ function requeryFromModal() {
         <li class="flex gap-2"><span>📊</span><span>Painel de revendedor com seus clientes, comissões recebidas e a receber.</span></li>
         <li class="flex gap-2"><span>✅</span><span>O cadastro de revendedor é feito pela MC Despachadoria, após a sua solicitação.</span></li>
       </ul>
+      <!-- Mesmos campos do cadastro em Admin → Revendedores (assets/admin-revendedores.js).
+           Senha não é pedida: o admin cria uma e envia ao revendedor. -->
+      <div class="bg-blue-50 border border-blue-200 rounded-xl p-4">
+        <p class="font-semibold text-blue-900">📋 Para pedir a adesão, envie pelo WhatsApp:</p>
+        <ol class="list-decimal pl-5 mt-2 space-y-1 text-blue-900">
+          <li>Nome completo (ou razão social)</li>
+          <li>CPF ou CNPJ</li>
+          <li>Telefone / WhatsApp com DDD</li>
+          <li>E-mail (será o seu login)</li>
+          <li>Chave PIX para receber as comissões e o tipo dela (CPF, CNPJ, e-mail, telefone ou aleatória)</li>
+          <li>Se quer cobrar taxa de adesão dos seus clientes (sim ou não)</li>
+        </ol>
+        <p class="text-xs text-blue-800 mt-2">A mensagem já vai pronta com esses itens — é só completar. Não envie senha: a sua senha de acesso é criada pela MC e enviada a você.</p>
+      </div>
       <a id="seja-revendedor-whatsapp" target="_blank" rel="noopener noreferrer"
         class="flex items-center justify-center gap-2 w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 rounded-xl">
         💬 Pedir adesão pelo WhatsApp (22) 99209-0682
@@ -8547,8 +8561,18 @@ function requeryFromModal() {
 <script>
 const SEJA_REVENDEDOR_WHATSAPP = '5522992090682';
 function abrirSejaRevendedor() {
-  const nome = (typeof currentUser !== 'undefined' && currentUser?.name) ? ` Sou ${currentUser.name}.` : '';
-  const msg = `Olá! Quero ser revendedor da MC Despachadoria Consultas e gostaria de pedir a adesão.${nome}`;
+  const u = (typeof currentUser !== 'undefined' && currentUser) || {};
+  const msg = [
+    'Olá! Quero ser revendedor da MC Despachadoria Consultas e gostaria de pedir a adesão. Seguem meus dados:',
+    '',
+    `Nome completo / razão social: ${u.name || ''}`,
+    'CPF ou CNPJ: ',
+    `Telefone / WhatsApp: ${u.phone || ''}`,
+    `E-mail (login): ${u.email || ''}`,
+    'Chave PIX para as comissões: ',
+    'Tipo da chave PIX (CPF, CNPJ, e-mail, telefone ou aleatória): ',
+    'Quero cobrar taxa de adesão dos meus clientes (sim/não): ',
+  ].join('\n');
   document.getElementById('seja-revendedor-whatsapp').href =
     `https://wa.me/${SEJA_REVENDEDOR_WHATSAPP}?text=${encodeURIComponent(msg)}`;
   const m = document.getElementById('seja-revendedor-modal');
