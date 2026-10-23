@@ -248,6 +248,10 @@
     <div class="flex items-center gap-3">
       <a href="/" class="btn-ghost text-xs hidden sm:inline-flex">← Site</a>
       <a id="topbar-recarga" href="/recarga-pix" class="btn-primary text-xs">💸 Recarga PIX</a>
+      <button type="button" onclick="abrirSejaRevendedor()"
+        class="text-xs font-semibold px-3 py-2 rounded-lg bg-blue-700 hover:bg-blue-800 text-white whitespace-nowrap">
+        🤝 <span class="hidden sm:inline">Quer ser um </span>Revendedor<span class="hidden sm:inline">?</span>
+      </button>
       <div class="flex items-center gap-2">
         <div id="topbar-avatar"
           class="w-8 h-8 bg-orange-500 rounded-full flex items-center justify-center text-white font-bold text-xs">?</div>
@@ -8514,7 +8518,49 @@ function requeryFromModal() {
 }
 </script>
 
-<div id="history-result-modal" class="fixed inset-0 z-[9999] hidden items-center justify-center p-4" style="background:rgba(0,0,0,.6);" onclick="if(event.target===this) closeHistoryResultModal()">
+<!-- Pop-up "Quer ser um Revendedor?" (botão do topo). O cadastro de revendedor é
+     só pelo admin, então aqui é só a apresentação das regras e o WhatsApp do
+     dono para pedir a adesão — as regras espelham a seção Revendedores do CLAUDE.md. -->
+<div id="seja-revendedor-modal" class="fixed inset-0 z-[9999] hidden items-center justify-center p-4" style="background:rgba(0,0,0,.6);" onclick="if(event.target===this) fecharSejaRevendedor()">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+      <h3 class="font-bold text-gray-800 text-lg">🤝 Seja um Revendedor</h3>
+      <button onclick="fecharSejaRevendedor()" class="text-gray-400 hover:text-gray-600 text-xl font-bold" aria-label="Fechar">✕</button>
+    </div>
+    <div class="px-6 py-5 space-y-4 text-sm text-gray-700">
+      <p>Revenda <strong>todas as consultas</strong> da plataforma para os seus clientes e ganhe comissão em cada recarga que eles fizerem.</p>
+      <ul class="space-y-2.5">
+        <li class="flex gap-2"><span>💸</span><span><strong>20% de cada recarga</strong> dos seus clientes (PIX ou cartão), enviados para a sua chave PIX.</span></li>
+        <li class="flex gap-2"><span>🔎</span><span>Seus clientes têm acesso a todo o catálogo, pelo preço do site, cada um com o próprio painel e saldo.</span></li>
+        <li class="flex gap-2"><span>🌐</span><span>Página própria com o seu nome, que você personaliza com textos e imagens. Quem se cadastra por ela vira seu cliente automaticamente.</span></li>
+        <li class="flex gap-2"><span>🧾</span><span>Taxa de adesão dos seus clientes: opcional, combinada com a MC Despachadoria. Quando liberada, o valor é <strong>todo seu</strong> — você recebe e libera o acesso do cliente.</span></li>
+        <li class="flex gap-2"><span>📊</span><span>Painel de revendedor com seus clientes, comissões recebidas e a receber.</span></li>
+        <li class="flex gap-2"><span>✅</span><span>O cadastro de revendedor é feito pela MC Despachadoria, após a sua solicitação.</span></li>
+      </ul>
+      <a id="seja-revendedor-whatsapp" target="_blank" rel="noopener noreferrer"
+        class="flex items-center justify-center gap-2 w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 rounded-xl">
+        💬 Pedir adesão pelo WhatsApp (22) 99209-0682
+      </a>
+    </div>
+  </div>
+</div>
+<script>
+const SEJA_REVENDEDOR_WHATSAPP = '5522992090682';
+function abrirSejaRevendedor() {
+  const nome = (typeof currentUser !== 'undefined' && currentUser?.name) ? ` Sou ${currentUser.name}.` : '';
+  const msg = `Olá! Quero ser revendedor da MC Despachadoria Consultas e gostaria de pedir a adesão.${nome}`;
+  document.getElementById('seja-revendedor-whatsapp').href =
+    `https://wa.me/${SEJA_REVENDEDOR_WHATSAPP}?text=${encodeURIComponent(msg)}`;
+  const m = document.getElementById('seja-revendedor-modal');
+  m.classList.remove('hidden'); m.classList.add('flex');
+}
+function fecharSejaRevendedor() {
+  const m = document.getElementById('seja-revendedor-modal');
+  m.classList.add('hidden'); m.classList.remove('flex');
+}
+</script>
+
+<div id="history-result-modal"class="fixed inset-0 z-[9999] hidden items-center justify-center p-4" style="background:rgba(0,0,0,.6);" onclick="if(event.target===this) closeHistoryResultModal()">
   <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
     <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
       <div class="min-w-0">
