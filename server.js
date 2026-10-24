@@ -18494,8 +18494,9 @@ Vá e veja você mesmo, nossa plataforma de consultas é hoje um das mais comple
 👉 https://www.despachantesconsultas.com.br`,
 };
 
-// Primeiro dia dos disparos (fuso de Brasilia). A cadencia de 2 em 2 dias dos
-// demais grupos conta a partir dele: 26/10, 28/10, 30/10...
+// Primeiro dia do disparo dos DEMAIS grupos (fuso de Brasilia); a cadencia de
+// 2 em 2 dias conta a partir dele: 26/10, 28/10, 30/10... SERVIÇOS e PORTAL
+// nao esperam esta data — ja recebem todo dia desde a troca (24/10/2026).
 const BROADCAST_INICIO = '2026-10-26';
 
 // Envia broadcast apenas para grupos — envio para contatos individuais foi
@@ -18755,18 +18756,19 @@ async function devolverDisparoBroadcast(canal, minutos) {
   ).catch(() => {});
 }
 
-// Cron com as duas regras: so a partir de BROADCAST_INICIO, e de `cadenciaDias`
-// em `cadenciaDias` dias contados dele (1 = todo dia).
-async function cronBroadcast(req, res, opts, { cadenciaDias, travaMin }) {
+// Cron com cadencia opcional: com `inicio`, so sai a partir dessa data e de
+// `cadenciaDias` em `cadenciaDias` dias contados dela; sem, sai em todo horario.
+async function cronBroadcast(req, res, opts, { inicio, cadenciaDias = 1, travaMin }) {
   const secret = process.env.CRON_SECRET || '';
   if (secret && req.headers.authorization !== `Bearer ${secret}`) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
-    const hoje = hojeBroadcast();
-    const dias = Math.round((Date.parse(hoje) - Date.parse(BROADCAST_INICIO)) / 86400000);
-    if (dias < 0) return res.json({ success: true, skipped: `disparos começam em ${BROADCAST_INICIO}` });
-    if (dias % cadenciaDias) return res.json({ success: true, skipped: `hoje não é dia de disparo (de ${cadenciaDias} em ${cadenciaDias} dias)` });
+    if (inicio) {
+      const dias = Math.round((Date.parse(hojeBroadcast()) - Date.parse(inicio)) / 86400000);
+      if (dias < 0) return res.json({ success: true, skipped: `disparos começam em ${inicio}` });
+      if (dias % cadenciaDias) return res.json({ success: true, skipped: `hoje não é dia de disparo (de ${cadenciaDias} em ${cadenciaDias} dias)` });
+    }
     if (!await reservarDisparoBroadcast(opts.canal, travaMin))
       return res.json({ success: true, skipped: 'este disparo já saiu' });
     try {
@@ -18785,12 +18787,12 @@ async function cronBroadcast(req, res, opts, { cadenciaDias, travaMin }) {
 // ── GET /api/cron/broadcast-whatsapp-priority (Vercel Cron — 13h e 19h UTC =
 // 10h e 16h BRT, todo dia) ── SERVIÇOS, OFERTAS E AMIGOS e PORTAL⚔️DESPACHANTES.
 app.get('/api/cron/broadcast-whatsapp-priority', (req, res) =>
-  cronBroadcast(req, res, BROADCAST_OPTS_PRIORIDADE, { cadenciaDias: 1, travaMin: 120 }));
+  cronBroadcast(req, res, BROADCAST_OPTS_PRIORIDADE, { travaMin: 120 }));
 
 // ── GET /api/cron/broadcast-whatsapp (Vercel Cron — 12h UTC = 9h BRT; o envio
 // sai de 2 em 2 dias a partir de BROADCAST_INICIO) ── Os DEMAIS grupos.
 app.get('/api/cron/broadcast-whatsapp', (req, res) =>
-  cronBroadcast(req, res, BROADCAST_OPTS_GERAL, { cadenciaDias: 2, travaMin: 600 }));
+  cronBroadcast(req, res, BROADCAST_OPTS_GERAL, { inicio: BROADCAST_INICIO, cadenciaDias: 2, travaMin: 600 }));
 
 // ── POST /api/admin/broadcast-whatsapp[-priority] (disparo manual pelo admin) ─
 // Sai na hora, sem olhar data nem trava.
