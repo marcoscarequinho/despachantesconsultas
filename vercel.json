@@ -15,23 +15,11 @@
   "crons": [
     {
       "path": "/api/cron/broadcast-whatsapp",
-      "schedule": "0 11 */3 * *"
+      "schedule": "0 12 * * *"
     },
     {
       "path": "/api/cron/broadcast-whatsapp-priority",
-      "schedule": "40 */3 * * *"
-    },
-    {
-      "path": "/api/cron/broadcast-whatsapp-portal",
-      "schedule": "20 13-19/3 * * 1-5"
-    },
-    {
-      "path": "/api/cron/broadcast-whatsapp-tabela",
-      "schedule": "0 14 * * *"
-    },
-    {
-      "path": "/api/cron/broadcast-whatsapp-educaai",
-      "schedule": "0 13 * * *"
+      "schedule": "0 13,19 * * *"
     },
     {
       "path": "/api/cron/saldo-portal",

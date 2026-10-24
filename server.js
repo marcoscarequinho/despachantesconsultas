@@ -2276,18 +2276,10 @@ async function initDB() {
       created_at     TIMESTAMPTZ DEFAULT NOW()
     );
   `);
-  // Contador de disparos por canal do broadcast: e ele que faz as campanhas
-  // alternarem (ver proximaCampanhaBroadcast). Uma linha por canal.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS broadcast_campanha_state (
-      canal      VARCHAR(20) PRIMARY KEY,
-      disparos   INTEGER NOT NULL DEFAULT 0,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-  // Quando cada disparo de cadencia longa saiu pela ultima vez. Cron diario +
-  // esta marca = "de N em N dias" de verdade: o cron da Vercel so sabe dizer
-  // "dia 1, 6, 11..." do mes, que emenda 6 dias na virada.
+  // Quando cada canal do broadcast saiu pela ultima vez: trava contra o cron
+  // repetido da Vercel (ver reservarDisparoBroadcast). O "de 2 em 2 dias" e
+  // contado a partir de BROADCAST_INICIO — o cron da Vercel so sabe dizer
+  // "dia 1, 3, 5..." do mes, que emenda dois dias na virada.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS broadcast_agenda (
       canal        VARCHAR(20) PRIMARY KEY,
@@ -18486,69 +18478,25 @@ app.get('/admin', requirePageAuth, async (req, res) => {
   }
 });
 
-// ── Broadcast WhatsApp — campanhas em rodízio ───────────────────────────────
-// Duas campanhas em rodizio: os grupos recebem uma a cada disparo, alternando,
-// para o mesmo card nao se repetir sempre no mesmo grupo.
-// - Campanha com `videoApresentacao`: vai o VIDEO de apresentacao (HeyGen, ver
-//   VIDEO_APRESENTACAO_ID) com a mensagem como legenda, e so ele — o marcos.mp4
-//   nao vai depois (seriam dois videos seguidos). O video vai por LINK, nao
-//   base64: sao ~25 MB, e a Z-API baixa direto do CDN da HeyGen (aceita ate
-//   100 MB). Se a HeyGen falhar na hora, cai na `imagem` + mensagem de antes.
-// - As demais: imagem + mensagem e, logo depois, o marcos.mp4.
-const BROADCAST_VIDEO_PATH = path.join(__dirname, 'marcos.mp4');
-
-const BROADCAST_CAMPANHAS = [
-  {
-    id: 'atpve',
-    videoApresentacao: true,
-    imagem: path.join(__dirname, 'promo-atpve.png'), // reserva, se a HeyGen falhar
-    mensagem:
-`🛑ATENÇÃO CADASTRE COM SEU NUMERO WHATSAPP CORRETO PARA RECEBER AS NOTIFICAÇÕES
-✅ FAÇA SEU CADASTRO:
-✅ PAGAMENTO INSTANTÂNEO: PIX: QRcod, copia e Cola, na tela.
-✅ Faça Recarga via PIX no valor que quiser.
-🔎 Nossos Serviços:
-🛑CRLVe Rio com comunicação de venda, não se esqueça de ler os Termos de "Atenção" em vermelho acima da inserção da placa
-🛑Agora temos consulta ATPVe com comunicação de venda, Saindo na hora
-🛑Numero do CRV Antigo, dos Estados: RJ, SP, MG, CE, ES, BA, RN, PE, PB, e outros, total de 21 Estados veja em seu painel🛑
-✅ Sem mensalidade. Pague só pelo que usar.
+// ── Broadcast WhatsApp — campanha unica (desde 26/10/2026) ──────────────────
+// Substituiu o rodizio de duas campanhas, a tabela de servicos de 5 em 5 dias
+// e o disparo da EducaAI (pedido do dono, 24/10/2026). Todo grupo recebe a
+// mesma coisa: o VIDEO de apresentacao e, logo depois, a imagem com o texto.
+// O video e o "Tour completo" da HeyGen (VIDEO_APRESENTACAO_ID — o mesmo
+// arquivo do v.mp4 do dono, 24.508.125 bytes, conferido) e vai por LINK: sao
+// ~25 MB, a Vercel nao serve resposta acima de 4,5 MB e a Z-API baixa direto do
+// CDN da HeyGen. Se a HeyGen falhar na hora, o grupo recebe so a imagem + texto.
+const BROADCAST_CAMPANHA = {
+  imagem: path.join(__dirname, 'assets', 'promo-plataforma.jpg'),
+  mensagem:
+`Só na Despachante consultas você tem tantas opções de consultas
+Vá e veja você mesmo, nossa plataforma de consultas é hoje um das mais completas, ela te afasta da burocracia dos DETRAN's
 👉 https://www.despachantesconsultas.com.br`,
-  },
-  {
-    id: 'despachantes',
-    imagem: path.join(__dirname, 'promo-despachantes.png'),
-    mensagem:
-`🛑 NO CARD: Coisas de Despachantes.
-🛑 ATENÇÃO DESPACHANTES ESSA É SÓ PARA VOCÊS ASSINATURA POR 30 REAIS MÊS, INCLUINDO 5 CONSULTAS:
-✅ Consulta placas 50
-✅ Consulta 3 Código Segurança CRV (PDF) 5
-✅ Gerar Declaração de Residência DETRAN RJ
-✅ Nota de Prestação de Serviços Para Despachantes Rio
-✅ Gerar ASD
-################################################################################
-✅CRLVe CE 32,50 Você Recebe no WhatsApp em minutos
-✅CRLVe PE 35,00 Imediato
-✅CRLVe Rio 1° via 20,00 imediato
-✅CRLVe Rio 2° via Reemissão 55,00 imediato
-👉 https://www.despachantesconsultas.com.br`,
-  },
-];
+};
 
-// Rodizio por canal (geral / portal / servicos): cada canal tem cadencia
-// propria, entao guardar um contador por canal faz os tres alternarem sem se
-// atrapalhar. Precisa de estado no banco porque na Vercel cada execucao do cron
-// e um processo novo — variavel em memoria voltaria sempre a mesma campanha.
-async function proximaCampanhaBroadcast(canal) {
-  const r = await pool.query(
-    `INSERT INTO broadcast_campanha_state (canal, disparos) VALUES ($1, 1)
-     ON CONFLICT (canal) DO UPDATE SET disparos = broadcast_campanha_state.disparos + 1,
-                                       updated_at = NOW()
-     RETURNING disparos`,
-    [canal]
-  );
-  const n = r.rows[0].disparos;
-  return BROADCAST_CAMPANHAS[(n - 1) % BROADCAST_CAMPANHAS.length];
-}
+// Primeiro dia dos disparos (fuso de Brasilia). A cadencia de 2 em 2 dias dos
+// demais grupos conta a partir dele: 26/10, 28/10, 30/10...
+const BROADCAST_INICIO = '2026-10-26';
 
 // Envia broadcast apenas para grupos — envio para contatos individuais foi
 // desativado por estar sendo denunciado como spam no WhatsApp.
@@ -18615,7 +18563,7 @@ async function sendBroadcastText(dest, message) {
 }
 
 // Envio para broadcast — sempre para IDs de grupo ("<id>-group"), imagem + legenda
-async function sendBroadcastImage(dest, base64Png, caption) {
+async function sendBroadcastImage(dest, base64Png, caption, mime = 'image/png') {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !dest) return;
   const phone = String(dest);
   try {
@@ -18627,12 +18575,12 @@ async function sendBroadcastImage(dest, base64Png, caption) {
           'Content-Type': 'application/json',
           ...(ZAPI_CLIENT_TOKEN ? { 'Client-Token': ZAPI_CLIENT_TOKEN } : {}),
         },
-        body: JSON.stringify({ phone, image: `data:image/png;base64,${base64Png}`, caption }),
+        body: JSON.stringify({ phone, image: `data:${mime};base64,${base64Png}`, caption }),
       }
     );
     const d = await r.json().catch(() => ({}));
-    if (!r.ok) console.error(`Broadcast erro [${phone}]:`, JSON.stringify(d));
-    else console.log(`✅ Broadcast → ${phone}`);
+    if (!r.ok) { console.error(`Broadcast erro [${phone}]:`, JSON.stringify(d)); throw new Error('envio recusado'); }
+    console.log(`✅ Broadcast → ${phone}`);
   } catch (err) {
     console.error(`Broadcast falha [${phone}]:`, err.message);
     throw err;
@@ -18669,22 +18617,11 @@ async function sendBroadcastVideo(dest, video, caption) {
   }
 }
 
-// Grupos com disparo proprio, em cadencia diferente do resto:
-// PORTAL⚔️DESPACHANTES roda de 3 em 3 horas em horario comercial (seg-sex,
-// 10h/13h/16h BRT) e SERVIÇOS, OFERTAS E AMIGOS de 3 em 3 horas todos os dias
-// (ver schedules em vercel.json). Como ja tem cadencia propria, os dois ficam
-// FORA do disparo geral — antes recebiam os dois e viam a mensagem repetida.
+// Grupos com disparo proprio, todo dia as 10h e as 16h (BRT). Ficam FORA do
+// disparo de 2 em 2 dias dos demais grupos, para nao receberem repetido.
 const BROADCAST_GROUP_PORTAL = 'PORTAL⚔️DESPACHANTES';
 const BROADCAST_GROUP_SERVICOS = 'SERVIÇOS, OFERTAS E AMIGOS';
-const BROADCAST_GROUP_DOCUMENTALISTAS = 'Despachantes Documentalistas do Brasil';
-// Grupos do canal "servicos" — mesma cadencia e mesmo rodizio de campanhas.
-const BROADCAST_GRUPOS_SERVICOS = [BROADCAST_GROUP_SERVICOS, BROADCAST_GROUP_DOCUMENTALISTAS];
-// Grupo ainda em formacao: so entra na cadencia do canal "servicos" (de 3 em 3
-// horas) quando atingir este numero de membros. Ate la ele recebe o disparo
-// geral (de 3 em 3 dias) junto com os demais grupos — por isso a mesma regra
-// serve para os dois lados: incluir no "servicos" a partir do minimo e excluir
-// do "geral" a partir do minimo, sem nunca receber os dois.
-const BROADCAST_MIN_MEMBROS = [{ nome: BROADCAST_GROUP_DOCUMENTALISTAS, minimo: 200 }];
+const BROADCAST_GRUPOS_PRIORIDADE = [BROADCAST_GROUP_SERVICOS, BROADCAST_GROUP_PORTAL];
 
 // Nome de grupo no WhatsApp costuma ter emoji/sufixo extra
 // (ex.: "PORTAL⚔️DESPACHANTES🇧🇷📌"), por isso startsWith e nao igualdade.
@@ -18721,7 +18658,7 @@ async function contarMembrosGrupo(phone) {
   }
 }
 
-// canal identifica o rodizio de campanha (ver proximaCampanhaBroadcast);
+// canal identifica o disparo nos logs e na trava (broadcast_agenda);
 // incluir = so estes grupos; excluir = todos menos estes; minMembros =
 // [{ nome, minimo }] so dispara para o grupo depois que ele cresceu;
 // excluirAoAtingir = o inverso, tira o grupo assim que ele cresce.
@@ -18756,39 +18693,29 @@ async function selecionarDestinosBroadcast({ canal, incluir, excluir, minMembros
 async function runWhatsAppBroadcast(opts = {}) {
   const { canal } = opts;
   const dests = await selecionarDestinosBroadcast(opts);
-
-  const campanha = await proximaCampanhaBroadcast(canal || 'geral');
-  console.log(`📢 Broadcast [${canal || 'geral'}] campanha "${campanha.id}": ${dests.length} grupos`);
+  console.log(`📢 Broadcast [${canal || 'geral'}]: ${dests.length} grupos`);
 
   // Link novo a cada disparo: o da HeyGen é assinado e expira.
   let videoUrl = null;
-  if (campanha.videoApresentacao) {
-    try {
-      const v = await buscarVideoApresentacao();
-      if (v.status === 'completed' && v.video_url) videoUrl = v.video_url;
-      else console.error(`Broadcast: vídeo de apresentação indisponível (status ${v.status}) — indo com a imagem.`);
-    } catch (e) {
-      console.error('Broadcast: HeyGen falhou, indo com a imagem:', e.message);
-    }
+  try {
+    const v = await buscarVideoApresentacao();
+    if (v.status === 'completed' && v.video_url) videoUrl = v.video_url;
+    else console.error(`Broadcast: vídeo de apresentação indisponível (status ${v.status}) — indo só com a imagem.`);
+  } catch (e) {
+    console.error('Broadcast: HeyGen falhou, indo só com a imagem:', e.message);
   }
-  const imageBase64 = videoUrl ? null : fs.readFileSync(campanha.imagem).toString('base64');
-  const videoBase64 = videoUrl ? null : fs.readFileSync(BROADCAST_VIDEO_PATH).toString('base64');
+  const imageBase64 = fs.readFileSync(BROADCAST_CAMPANHA.imagem).toString('base64');
   let sent = 0, failed = 0;
   for (const dest of dests) {
     try {
       if (videoUrl) {
+        // Vídeo recusado não segura a imagem: o grupo recebe ao menos o texto.
         try {
-          await sendBroadcastVideo(dest.phone, videoUrl, campanha.mensagem);
-        } catch {
-          // Vídeo recusado pela Z-API: o grupo recebe o card de antes em vez
-          // de ficar sem a campanha.
-          await sendBroadcastImage(dest.phone, fs.readFileSync(campanha.imagem).toString('base64'), campanha.mensagem);
-        }
-      } else {
-        await sendBroadcastImage(dest.phone, imageBase64, campanha.mensagem);
-        await new Promise(r => setTimeout(r, 1000));
-        await sendBroadcastVideo(dest.phone, videoBase64);
+          await sendBroadcastVideo(dest.phone, videoUrl);
+          await new Promise(r => setTimeout(r, 1000));
+        } catch {}
       }
+      await sendBroadcastImage(dest.phone, imageBase64, BROADCAST_CAMPANHA.mensagem, 'image/jpeg');
       sent++;
     } catch {
       failed++;
@@ -18796,371 +18723,91 @@ async function runWhatsAppBroadcast(opts = {}) {
     await new Promise(r => setTimeout(r, 1000));
   }
   console.log(`✅ Broadcast concluído: ${sent} enviados, ${failed} falhas`);
-  return { sent, failed, total: dests.length, campanha: campanha.id, formato: videoUrl ? 'video' : 'imagem' };
+  return { sent, failed, total: dests.length, formato: videoUrl ? 'video+imagem' : 'imagem' };
 }
 
-// ── GET /api/cron/broadcast-whatsapp (Vercel Cron — 8h BRT = 11h UTC, de 3 em
-// 3 dias) ── Vai para os DEMAIS grupos: PORTAL e SERVIÇOS ficam de fora porque
-// ja tem disparo proprio, varias vezes ao dia.
-app.get('/api/cron/broadcast-whatsapp', async (req, res) => {
+const BROADCAST_OPTS_PRIORIDADE = { canal: 'prioridade', incluir: BROADCAST_GRUPOS_PRIORIDADE };
+const BROADCAST_OPTS_GERAL = { canal: 'geral', excluir: BROADCAST_GRUPOS_PRIORIDADE };
+
+// Data de hoje no fuso de Brasilia (AAAA-MM-DD).
+const hojeBroadcast = () => new Date(Date.now() - TZ_BR_OFFSET_MS).toISOString().slice(0, 10);
+
+// Trava contra execucao repetida do cron (a Vercel pode chamar duas vezes):
+// so um processo leva o disparo se o ultimo saiu ha mais de `minutos`.
+async function reservarDisparoBroadcast(canal, minutos) {
+  const r = await pool.query(
+    `INSERT INTO broadcast_agenda (canal, ultimo_envio) VALUES ($1, NOW())
+     ON CONFLICT (canal) DO UPDATE SET ultimo_envio = NOW()
+      WHERE broadcast_agenda.ultimo_envio <= NOW() - make_interval(mins => $2)
+     RETURNING ultimo_envio`,
+    [canal, minutos]
+  );
+  return r.rowCount > 0;
+}
+
+// Devolve a marca quando o disparo nem chegou a sair (Z-API fora do ar), para a
+// proxima execucao tentar de novo.
+async function devolverDisparoBroadcast(canal, minutos) {
+  await pool.query(
+    `UPDATE broadcast_agenda SET ultimo_envio = ultimo_envio - make_interval(mins => $2)
+      WHERE canal = $1`,
+    [canal, minutos]
+  ).catch(() => {});
+}
+
+// Cron com as duas regras: so a partir de BROADCAST_INICIO, e de `cadenciaDias`
+// em `cadenciaDias` dias contados dele (1 = todo dia).
+async function cronBroadcast(req, res, opts, { cadenciaDias, travaMin }) {
   const secret = process.env.CRON_SECRET || '';
   if (secret && req.headers.authorization !== `Bearer ${secret}`) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
-    const result = await runWhatsAppBroadcast({
-      canal: 'geral',
-      excluir: [BROADCAST_GROUP_PORTAL, BROADCAST_GROUP_SERVICOS],
-      excluirAoAtingir: BROADCAST_MIN_MEMBROS,
-    });
-    res.json({ success: true, ...result });
+    const hoje = hojeBroadcast();
+    const dias = Math.round((Date.parse(hoje) - Date.parse(BROADCAST_INICIO)) / 86400000);
+    if (dias < 0) return res.json({ success: true, skipped: `disparos começam em ${BROADCAST_INICIO}` });
+    if (dias % cadenciaDias) return res.json({ success: true, skipped: `hoje não é dia de disparo (de ${cadenciaDias} em ${cadenciaDias} dias)` });
+    if (!await reservarDisparoBroadcast(opts.canal, travaMin))
+      return res.json({ success: true, skipped: 'este disparo já saiu' });
+    try {
+      const result = await runWhatsAppBroadcast(opts);
+      res.json({ success: true, ...result });
+    } catch (err) {
+      await devolverDisparoBroadcast(opts.canal, travaMin);
+      throw err;
+    }
   } catch (err) {
-    console.error('Erro no cron broadcast:', err.message);
+    console.error(`Erro no cron broadcast [${opts.canal}]:`, err.message);
     res.status(500).json({ error: err.message });
   }
-});
+}
 
-// ── POST /api/admin/broadcast-whatsapp (teste manual pelo admin) ──────────────
+// ── GET /api/cron/broadcast-whatsapp-priority (Vercel Cron — 13h e 19h UTC =
+// 10h e 16h BRT, todo dia) ── SERVIÇOS, OFERTAS E AMIGOS e PORTAL⚔️DESPACHANTES.
+app.get('/api/cron/broadcast-whatsapp-priority', (req, res) =>
+  cronBroadcast(req, res, BROADCAST_OPTS_PRIORIDADE, { cadenciaDias: 1, travaMin: 120 }));
+
+// ── GET /api/cron/broadcast-whatsapp (Vercel Cron — 12h UTC = 9h BRT; o envio
+// sai de 2 em 2 dias a partir de BROADCAST_INICIO) ── Os DEMAIS grupos.
+app.get('/api/cron/broadcast-whatsapp', (req, res) =>
+  cronBroadcast(req, res, BROADCAST_OPTS_GERAL, { cadenciaDias: 2, travaMin: 600 }));
+
+// ── POST /api/admin/broadcast-whatsapp[-priority] (disparo manual pelo admin) ─
+// Sai na hora, sem olhar data nem trava.
 app.post('/api/admin/broadcast-whatsapp', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
-    const result = await runWhatsAppBroadcast({
-      canal: 'geral',
-      excluir: [BROADCAST_GROUP_PORTAL, BROADCAST_GROUP_SERVICOS],
-      excluirAoAtingir: BROADCAST_MIN_MEMBROS,
-    });
-    res.json({ success: true, ...result });
+    res.json({ success: true, ...await runWhatsAppBroadcast(BROADCAST_OPTS_GERAL) });
   } catch (err) {
     console.error('Erro no broadcast manual:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── GET /api/cron/broadcast-whatsapp-priority (Vercel Cron — de 3 em 3 horas, todo dia) ─
-// Só para o grupo SERVIÇOS, OFERTAS E AMIGOS.
-app.get('/api/cron/broadcast-whatsapp-priority', async (req, res) => {
-  const secret = process.env.CRON_SECRET || '';
-  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  try {
-    const result = await runWhatsAppBroadcast({ canal: 'servicos', incluir: BROADCAST_GRUPOS_SERVICOS, minMembros: BROADCAST_MIN_MEMBROS });
-    res.json({ success: true, ...result });
-  } catch (err) {
-    console.error('Erro no cron broadcast prioritário:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── POST /api/admin/broadcast-whatsapp-priority (teste manual pelo admin) ────
 app.post('/api/admin/broadcast-whatsapp-priority', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
-    const result = await runWhatsAppBroadcast({ canal: 'servicos', incluir: BROADCAST_GRUPOS_SERVICOS, minMembros: BROADCAST_MIN_MEMBROS });
-    res.json({ success: true, ...result });
+    res.json({ success: true, ...await runWhatsAppBroadcast(BROADCAST_OPTS_PRIORIDADE) });
   } catch (err) {
     console.error('Erro no broadcast prioritário manual:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── GET /api/cron/broadcast-whatsapp-portal (Vercel Cron — de 3 em 3 horas,
-// seg-sex, 10h/13h/16h BRT) ── Só para o grupo PORTAL⚔️DESPACHANTES.
-app.get('/api/cron/broadcast-whatsapp-portal', async (req, res) => {
-  const secret = process.env.CRON_SECRET || '';
-  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  try {
-    const result = await runWhatsAppBroadcast({ canal: 'portal', incluir: [BROADCAST_GROUP_PORTAL] });
-    res.json({ success: true, ...result });
-  } catch (err) {
-    console.error('Erro no cron broadcast portal:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── POST /api/admin/broadcast-whatsapp-portal (teste manual pelo admin) ──────
-app.post('/api/admin/broadcast-whatsapp-portal', requireAuth, requireSuperAdmin, async (req, res) => {
-  try {
-    const result = await runWhatsAppBroadcast({ canal: 'portal', incluir: [BROADCAST_GROUP_PORTAL] });
-    res.json({ success: true, ...result });
-  } catch (err) {
-    console.error('Erro no broadcast portal manual:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Tabela de serviços — disparo de 5 em 5 dias ──────────────────────────────
-// Mensagem de texto puro (sem imagem nem vídeo, diferente das campanhas em
-// rodízio) para os grupos do disparo geral: PORTAL e SERVIÇOS ficam de fora
-// porque já recebem campanha de 3 em 3 horas.
-const BROADCAST_TABELA_DIAS = 5;
-const BROADCAST_TABELA_MENSAGEM = `👉 https://www.despachantesconsultas.com.br
-Olá! 🚗💨 Confira nossa tabela atualizada de serviços e consultas veiculares. Facilidade, rapidez e sem burocracia para você resolver tudo direto pelo WhatsApp:
-
-🛑 📄 DOCUMENTOS E ATPV-e
-
-✅ Reemissão ATPV-e com Com. Venda: R$ 120,00 (Placa)
-
-✅ Reemissão ATPV-e: R$ 18,90 (Placa + Renavam ou Chassi)
-
-✅ Inserir Comunicação de Venda: R$ 32,90
-
-✅ Transmitir / Desbloquear Comunicação: R$ 7,00
-
-✅ Cancelar Comunicação de Venda: R$ 11,20
-
-🚗 EMISSÃO DE CRLV-e (LICENCIAMENTO)
-
-✅ CRLV-e RJ (⚡ Na hora / Reemissão): R$ 20,00 a R$ 65,00
-
-✅ CRLV-e Instantâneo (PE / CE): A partir de R$ 32,50
-
-✅ CRLV-e Agendado (ES, AL, DF, PB, PR, RN, SC): R$ 21,00 a R$ 84,00
-
-✅ CRLV-e Digital por Estado (SP, MG, BA, PR, etc.): R$ 14,00 a R$ 162,00 (Placa + Renavam + CPF)
-
-🔍 CONSULTAS E DÉBITOS
-
-✅ Consulta FIPE: Grátis
-
-✅ Consulta de Débitos: R$ 1,50 (Placa) | Todos os estados: R$ 3,00 (Placa + Renavam)
-
-✅ Licenciamento + BIN: R$ 14,00 (Placa)
-
-✅ Básica Estadual / Nacional / RENAVAM: R$ 3,00 a R$ 9,80
-
-✅ Gravame / RENAJUD / Comunicado: R$ 10,50 a R$ 13,30
-
-✅ Histórico de Proprietários: R$ 13,99 (Placa)
-
-✅ Consulta Cautelar VIP GOLD: R$ 27,99 (Placa)
-
-✅ Histórico de Leilão / Fotos: R$ 14,00 a R$ 30,00
-
-✅ Roubo e Furto: R$ 25,00
-
-✅ Auto KM / Prop. Atual / Chassi: R$ 10,50
-
-🛠️ OUTROS SERVIÇOS E DOCUMENTAÇÕES
-
-✅ Localização / Veículos por CPF ou CNPJ: R$ 5,00 a R$ 14,00
-
-✅ Consultar CNH (Por Estado): R$ 4,00 a R$ 16,00
-
-✅ Número CRV Antigo (Por Estado): R$ 77,00 a R$ 600,00
-
-✅ Dívida Ativa (SP, DF, RJ): R$ 3,00
-
-✅ Consulta SPC / Crédito: R$ 21,00
-
-✅ Gerar Contrato / Procuração Veicular: R$ 16,00 a R$ 22,00
-
-⭐ Ferramentas Exclusivas para Assinantes: Declaração de Residência, Nota de Serviços e ASD são Grátis!`;
-
-// Cadência real de 5 dias: o cron roda todo dia e esta troca atômica decide se
-// já venceu. O UPDATE condicional no ON CONFLICT garante que só um processo
-// leva o disparo, mesmo se a Vercel executar o cron duas vezes.
-async function reservarDisparoTabela() {
-  const r = await pool.query(
-    `INSERT INTO broadcast_agenda (canal, ultimo_envio) VALUES ($1, NOW())
-     ON CONFLICT (canal) DO UPDATE SET ultimo_envio = NOW()
-      WHERE broadcast_agenda.ultimo_envio <= NOW() - make_interval(days => $2)
-     RETURNING ultimo_envio`,
-    ['tabela', BROADCAST_TABELA_DIAS]
-  );
-  return r.rowCount > 0;
-}
-
-// Devolve a marca para trás quando o disparo nem chegou a sair (Z-API fora do
-// ar, por exemplo) — assim o cron do dia seguinte tenta de novo em vez de
-// esperar os 5 dias inteiros.
-async function devolverDisparoTabela() {
-  await pool.query(
-    `UPDATE broadcast_agenda
-        SET ultimo_envio = ultimo_envio - make_interval(days => $1)
-      WHERE canal = 'tabela'`,
-    [BROADCAST_TABELA_DIAS]
-  ).catch(() => {});
-}
-
-async function runBroadcastTabela() {
-  const dests = await selecionarDestinosBroadcast({
-    canal: 'tabela',
-    excluir: [BROADCAST_GROUP_PORTAL, BROADCAST_GROUP_SERVICOS],
-    excluirAoAtingir: BROADCAST_MIN_MEMBROS,
-  });
-  console.log(`📢 Broadcast [tabela]: ${dests.length} grupos`);
-
-  let sent = 0, failed = 0;
-  for (const dest of dests) {
-    try {
-      await sendBroadcastText(dest.phone, BROADCAST_TABELA_MENSAGEM);
-      sent++;
-    } catch {
-      failed++;
-    }
-    await new Promise(r => setTimeout(r, 1000));
-  }
-  console.log(`✅ Broadcast tabela concluído: ${sent} enviados, ${failed} falhas`);
-  return { sent, failed, total: dests.length };
-}
-
-// ── GET /api/cron/broadcast-whatsapp-tabela (Vercel Cron — todo dia às 11h BRT;
-// o envio mesmo sai de 5 em 5 dias, quem decide é reservarDisparoTabela) ──────
-app.get('/api/cron/broadcast-whatsapp-tabela', async (req, res) => {
-  const secret = process.env.CRON_SECRET || '';
-  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  try {
-    if (!await reservarDisparoTabela())
-      return res.json({ success: true, skipped: 'ainda não completou 5 dias desde o último disparo' });
-    try {
-      const result = await runBroadcastTabela();
-      res.json({ success: true, ...result });
-    } catch (err) {
-      await devolverDisparoTabela();
-      throw err;
-    }
-  } catch (err) {
-    console.error('Erro no cron broadcast tabela:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── POST /api/admin/broadcast-whatsapp-tabela (disparo manual pelo admin) ─────
-// Sai na hora e reinicia a contagem dos 5 dias a partir de agora.
-app.post('/api/admin/broadcast-whatsapp-tabela', requireAuth, requireSuperAdmin, async (req, res) => {
-  try {
-    const result = await runBroadcastTabela();
-    await pool.query(
-      `INSERT INTO broadcast_agenda (canal, ultimo_envio) VALUES ('tabela', NOW())
-       ON CONFLICT (canal) DO UPDATE SET ultimo_envio = NOW()`
-    );
-    res.json({ success: true, ...result });
-  } catch (err) {
-    console.error('Erro no broadcast tabela manual:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── EducaAI (suead.com.br) — disparo diario as 10h BRT ───────────────────────
-// Campanha de outra marca, fora do catalogo de consultas: vai so para os grupos
-// listados aqui (incluir), nunca para a base inteira. Texto puro, sem imagem
-// nem video, e sem rodizio — a mensagem e sempre a mesma.
-const BROADCAST_EDUCAAI_GRUPOS = [
-  'ANÚNCIO ARARUAMA NEWS RJ 01',
-  'NOTÍCIAS DE SAQUAREMA',
-  'LAGOS INFORMAÇÃO NEWS',
-  BROADCAST_GROUP_SERVICOS,
-  'SOS IGUABINHA',
-  'Grupo de divulgação de vendas em geral',
-  'Amigos de Cabo Frio',
-  'REGIÃO DOS LAGOS RJ',
-  'NOTÓRIOS NOTÍCIAS 24H',
-  // De proposito casa com DOIS grupos: existem duas "Notícias de Arraial do
-  // Cabo" na conta, com ids diferentes, e as duas devem receber.
-  'Notícias de Arraial do Cabo',
-  'OLX LAGOS E LINKS WHATSAPP',
-];
-
-const BROADCAST_EDUCAAI_MENSAGEM = `Olá! Tudo bem? 📱
-
-Se você busca transformar e modernizar processos educativos com tecnologia de ponta, precisa conhecer o EducaAI. Combinamos inteligência artificial e soluções práticas para otimizar o aprendizado e potencializar resultados no setor educacional. 🚀
-
-Confira nossas soluções e saiba mais em nosso site:
-👉 https://www.suead.com.br/`;
-
-// O cron e diario, mas a Vercel pode repetir a execucao — esta troca atomica
-// (mesma tabela do disparo da tabela de servicos) garante um envio por dia.
-// O guarda e por DIA no fuso de Brasilia, nao por intervalo de horas: um
-// disparo manual a tarde nao pode bloquear o cron das 10h do dia seguinte
-// (com janela de 24h, bloquearia).
-async function reservarDisparoEducaAI() {
-  const r = await pool.query(
-    `INSERT INTO broadcast_agenda (canal, ultimo_envio) VALUES ($1, NOW())
-     ON CONFLICT (canal) DO UPDATE SET ultimo_envio = NOW()
-      WHERE (broadcast_agenda.ultimo_envio AT TIME ZONE 'America/Sao_Paulo')::date
-          < (NOW() AT TIME ZONE 'America/Sao_Paulo')::date
-     RETURNING ultimo_envio`,
-    ['educaai']
-  );
-  return r.rowCount > 0;
-}
-
-// Devolve a marca para ontem quando o disparo nem chegou a sair (Z-API fora do
-// ar): a proxima execucao tenta de novo em vez de pular o dia.
-async function devolverDisparoEducaAI() {
-  await pool.query(
-    `UPDATE broadcast_agenda
-        SET ultimo_envio = ultimo_envio - INTERVAL '1 day'
-      WHERE canal = 'educaai'`
-  ).catch(() => {});
-}
-
-async function runBroadcastEducaAI() {
-  const dests = await selecionarDestinosBroadcast({
-    canal: 'educaai',
-    incluir: BROADCAST_EDUCAAI_GRUPOS,
-  });
-  console.log(`📢 Broadcast [educaai]: ${dests.length} grupos`);
-
-  // Grupo da lista que a Z-API nao devolveu (nome mudou, saimos do grupo): sem
-  // isso o disparo "funciona" caindo em menos grupos a cada dia, sem aviso.
-  const faltando = BROADCAST_EDUCAAI_GRUPOS.filter(
-    alvo => !dests.some(d => nomeGrupoCombina(d.name, [alvo]))
-  );
-  if (faltando.length) console.warn(`⚠️  Broadcast [educaai] nao encontrou: ${faltando.join(' | ')}`);
-
-  let sent = 0, failed = 0;
-  for (const dest of dests) {
-    try {
-      await sendBroadcastText(dest.phone, BROADCAST_EDUCAAI_MENSAGEM);
-      sent++;
-    } catch {
-      failed++;
-    }
-    await new Promise(r => setTimeout(r, 1000));
-  }
-  console.log(`✅ Broadcast educaai concluído: ${sent} enviados, ${failed} falhas`);
-  return { sent, failed, total: dests.length, naoEncontrados: faltando };
-}
-
-// ── GET /api/cron/broadcast-whatsapp-educaai (Vercel Cron — todo dia 13h UTC =
-// 10h BRT) ───────────────────────────────────────────────────────────────────
-app.get('/api/cron/broadcast-whatsapp-educaai', async (req, res) => {
-  const secret = process.env.CRON_SECRET || '';
-  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  try {
-    if (!await reservarDisparoEducaAI())
-      return res.json({ success: true, skipped: 'o disparo EducaAI de hoje já saiu' });
-    try {
-      const result = await runBroadcastEducaAI();
-      res.json({ success: true, ...result });
-    } catch (err) {
-      await devolverDisparoEducaAI();
-      throw err;
-    }
-  } catch (err) {
-    console.error('Erro no cron broadcast educaai:', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── POST /api/admin/broadcast-whatsapp-educaai (disparo manual pelo admin) ────
-// Sai na hora e marca o dia como disparado, para o cron das 10h não repetir.
-app.post('/api/admin/broadcast-whatsapp-educaai', requireAuth, requireSuperAdmin, async (req, res) => {
-  try {
-    const result = await runBroadcastEducaAI();
-    await pool.query(
-      `INSERT INTO broadcast_agenda (canal, ultimo_envio) VALUES ('educaai', NOW())
-       ON CONFLICT (canal) DO UPDATE SET ultimo_envio = NOW()`
-    );
-    res.json({ success: true, ...result });
-  } catch (err) {
-    console.error('Erro no broadcast educaai manual:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
