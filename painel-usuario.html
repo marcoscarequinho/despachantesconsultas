@@ -2016,7 +2016,7 @@ function preencherFormVenda(p) {
   set('c_bairro', end.bairro);
   set('c_uf', end.uf);
   set('venda_data', vda.data);
-  set('venda_valor', vda.valor);
+  set('venda_valor', String(vda.valor ?? '').replace(/^(\d+)\.(\d{1,2})$/, '$1,$2'));
   set('placa', veic.placa);
   set('renavam', veic.renavam);
   set('ano_fab', veic.ano_fabricacao);
@@ -3864,7 +3864,7 @@ function renderFormFields(inputType, svc) {
     <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Venda</div>
     <div class="grid grid-cols-2 gap-3">
       ${field('venda_data','Data da Venda','text','01/01/2025')}
-      ${field('venda_valor','Valor (R$)','text','10000.00')}
+      ${field('venda_valor','Valor (R$) — sem ponto','text','10000,00',true,'inputmode="decimal"')}
     </div>
     <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Veículo</div>
     ${placaField + renavamField}
@@ -3955,7 +3955,7 @@ function renderFormFields(inputType, svc) {
     <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Venda</div>
     <div class="grid grid-cols-2 gap-3">
       ${field('at_venda_data','Data da Venda','text','DD/MM/AAAA')}
-      ${field('at_venda_valor','Valor da Venda (R$)','text','10.000,00')}
+      ${field('at_venda_valor','Valor da Venda (R$) — sem ponto','text','10000,00',true,'inputmode="decimal"')}
     </div>
     <div class="grid grid-cols-2 gap-3">
       ${field('at_venda_cidade','Cidade do Local da Venda','text','RIO DE JANEIRO')}
@@ -4513,7 +4513,7 @@ function renderFormFields(inputType, svc) {
       ${titulo('Venda')}
       <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
         ${c('venda_data', 'Data da venda', 'dd/mm/aaaa', true, 'maxlength="10" inputmode="numeric" data-a2-data="1"')}
-        ${c('venda_valor', 'Valor da venda (R$)', '45.000,00', true, 'inputmode="decimal"')}
+        ${c('venda_valor', 'Valor da venda (R$) — sem ponto', '45000,00', true, 'inputmode="decimal"')}
         <div data-a2-ufs="PR" class="hidden">${c('local_assinatura', 'Cidade da assinatura', 'Curitiba', true)}</div>
       </div>
 
@@ -5609,6 +5609,25 @@ function resetForm(showCats = true) {
 }
 
 // ── Submeter consulta ──────────────────────────────────────────────────────────
+// Valor da venda (ATPV-e e comunicação de venda): só números e vírgula, SEM
+// ponto (regra do dono, 24/10/2026). Com ponto, "45.000.00" e afins viravam
+// valores na casa dos milhões na emissão. O servidor confere de novo
+// (valorVendaSemPonto); aqui o ponto nem entra no campo.
+function valorVendaErro(v) {
+  const s = String(v ?? '').trim();
+  if (!s) return 'Informe o valor da venda.';
+  if (!/^\d+(,\d{1,2})?$/.test(s) || !(Number(s.replace(',', '.')) > 0))
+    return 'Valor da venda inválido: use só números e vírgula para os centavos, sem ponto (ex.: 45000,00).';
+  return null;
+}
+document.addEventListener('beforeinput', e => {
+  if (!/venda[._]valor$/.test(e.target?.id || '')) return;
+  if (e.data && /[^\d,]/.test(e.data)) {
+    e.preventDefault();
+    if (e.data.includes('.')) toast('No valor da venda use só vírgula para os centavos, sem ponto (ex.: 45000,00).');
+  }
+});
+
 async function submitQuery(e) {
   e.preventDefault();
   if (!selectedSvc) return;
@@ -6028,7 +6047,7 @@ function validateParams(inputType, p) {
     if (!p.comprador_city_id) return 'Busque o CEP do comprador (o código do município vem dele).';
     if (!p.comprador_rua || !p.comprador_numero || !p.comprador_bairro) return 'Complete o endereço do comprador.';
     if (!/^\d{2}\/\d{2}\/\d{4}$/.test(p.venda_data)) return 'Informe a data da venda (dd/mm/aaaa).';
-    if (!p.venda_valor) return 'Informe o valor da venda.';
+    if (valorVendaErro(p.venda_valor)) return valorVendaErro(p.venda_valor);
     if (['DF', 'GO', 'MS', 'PR', 'RS', 'SP'].includes(p.uf) && !p.anexos.length) return 'Anexe os documentos pedidos para esta UF.';
     if (!p.confirmar) return 'Marque a confirmação da emissão.';
   }
@@ -6094,7 +6113,7 @@ function validateParams(inputType, p) {
     if (!/^\d{4}$/.test(p.anoFabricacao)) return 'Ano de fabricação inválido. Informe os 4 dígitos.';
     if (!/^\d{4}$/.test(p.anoModelo))     return 'Ano do modelo inválido. Informe os 4 dígitos.';
     if (!/^\d{2}\/\d{2}\/\d{4}$/.test(p.dataVenda)) return 'Data da venda inválida. Use o formato DD/MM/AAAA.';
-    if (!p.valorVenda)   return 'Informe o valor da venda.';
+    if (valorVendaErro(p.valorVenda)) return valorVendaErro(p.valorVenda);
     if (!p.cidadeVenda)  return 'Informe a cidade do local da venda.';
     const vDoc = dig(p.documentoVendedor), cDoc = dig(p.documentoComprador);
     if (vDoc.length !== 11 && vDoc.length !== 14) return 'CPF/CNPJ do vendedor inválido. Informe 11 dígitos (CPF) ou 14 (CNPJ).';
@@ -6198,7 +6217,7 @@ function validateParams(inputType, p) {
     if (!end.bairro)                               return 'Informe o bairro do comprador.';
     if (!/^\d+$/.test(end.cidade))                 return 'Código IBGE da cidade do comprador inválido.';
     if (!/^\d{2}\/\d{2}\/\d{4}$/.test(vda.data))    return 'Data da venda inválida. Use o formato DD/MM/AAAA.';
-    if (!vda.valor)                                return 'Informe o valor da venda.';
+    if (valorVendaErro(vda.valor))                 return valorVendaErro(vda.valor);
     if (numeroCrvDigits.length < 9 || numeroCrvDigits.length > 12) return 'Número do CRV deve ter de 9 a 12 dígitos.';
     if (codigoSegDigits.length !== 11)              return 'Código de segurança do CRV deve ter 11 dígitos.';
     if (!crv.numero_via)                            return 'Informe o número da via do CRV.';
@@ -6978,7 +6997,7 @@ function renderFormFieldsV2(inputType) {
       <div class="font-semibold text-gray-700 mt-2">Venda</div>
       <div class="grid grid-cols-2 gap-3">
         ${field('venda.data', 'Data da Venda', 'text', 'DD/MM/AAAA')}
-        ${field('venda.valor', 'Valor da Venda', 'text', '0,00')}
+        ${field('venda.valor', 'Valor da Venda — sem ponto', 'text', '45000,00', true, 'inputmode="decimal"')}
       </div>
       <div>
         <label class="label">Comprovante (PDF do ATPV-e e/ou CRV frente e verso) <span class="text-red-500">*</span></label>
@@ -7258,7 +7277,7 @@ function validateParamsV2(inputType, p) {
     const cd = p['comprador.documento'].replace(/\D/g, '');
     if (cd.length !== 11 && cd.length !== 14) return 'Documento do comprador inválido. Informe CPF ou CNPJ.';
     if (!p['venda.data']) return 'Informe a data da venda.';
-    if (!p['venda.valor']) return 'Informe o valor da venda.';
+    if (valorVendaErro(p['venda.valor'])) return valorVendaErro(p['venda.valor']);
     if (!p.comprovante) return 'Informe o comprovante em base64.';
   }
   if (inputType === 'dc_cancelar_comunicado_venda') {

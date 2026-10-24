@@ -762,6 +762,18 @@ function valorVendaParaNumero(valor) {
   return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
 }
 
+// Valor da venda dos formulários de ATPV-e e comunicação de venda: só dígitos
+// e vírgula decimal, SEM ponto (regra do dono, 24/10/2026). Com o ponto livre,
+// o cliente digitava "45.000.00" ou "45000.000" e a emissão saía com valor na
+// casa dos milhões — no ATPV-e o valor vai ao Detran, não dá para corrigir
+// depois. Devolve o texto normalizado ("45000" ou "45000,50") ou null.
+const VALOR_VENDA_SEM_PONTO_MSG = 'Valor da venda inválido: use só números e vírgula para os centavos, sem ponto (ex.: 45000,00).';
+function valorVendaSemPonto(valor) {
+  const s = String(valor ?? '').trim().replace(/^R\$\s*/i, '');
+  if (!/^\d+(,\d{1,2})?$/.test(s)) return null;
+  return Number(s.replace(',', '.')) > 0 ? s : null;
+}
+
 // Troca os anexos em base64 por uma marca curta, para o pedido caber em
 // queries.params e na mensagem do admin sem carregar os megabytes do arquivo.
 const ATPVE_CAMPOS_ANEXO = [
@@ -933,6 +945,7 @@ async function montarCorpoAtpveVistocar(service, params) {
   const dataVendaIso = dataBrParaIso(p.dataVenda);
   if (!dataVendaIso) return { erro: 'Data da venda inválida. Use o formato DD/MM/AAAA.' };
   const dataVenda = dataVendaIso.split('-').reverse().join('/');
+  if (valorVendaSemPonto(p.valorVenda) === null) return { erro: VALOR_VENDA_SEM_PONTO_MSG };
   const valorNum = valorVendaParaNumero(p.valorVenda);
   if (valorNum === null) return { erro: 'Valor da venda inválido. Informe um valor maior que zero.' };
   const valorVenda = valorNum.toFixed(2).replace('.', ',');
@@ -2082,6 +2095,14 @@ async function initDB() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_arrendamento_buscas_user ON arrendamento_buscas(user_id, created_at);`);
+  // Trava de consulta repetida em andamento (ver travarConsultaRepetida).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS consultas_em_andamento (
+      chave     TEXT PRIMARY KEY,
+      user_id   INTEGER,
+      criado_em TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
   // Emissões de ATPV-e (DataCred) que ainda não têm o PDF: conferência manual
   // de horas ou dias. O cron entrega e cobra (finalizePendingQuery) ou cancela
   // sem cobrar (recusa da conferência) — ver entregarAtpveDataCred.
@@ -8250,6 +8271,7 @@ function buildComunicacaoVendaBody(params) {
   if (cep.length !== 8)                            return { error: 'CEP inválido. Deve ter 8 dígitos.' };
   if (!numeroResidencia || numeroResidencia.length > 6) return { error: 'Número do endereço do comprador inválido. Use só dígitos (máx. 6).' };
   if (Number.isNaN(cidadeComprador) || cidadeComprador <= 0) return { error: 'Código IBGE da cidade do comprador inválido.' };
+  if (valorVendaSemPonto(valorStr) === null)      return { error: VALOR_VENDA_SEM_PONTO_MSG };
   if (Number.isNaN(valor) || valor <= 0)          return { error: 'Valor da venda inválido.' };
   if (!/^\d{2}\/\d{2}\/\d{4}$/.test(vda.data || '')) return { error: 'Data da venda inválida. Use o formato DD/MM/AAAA.' };
   if (!Number.isInteger(numeroVia) || numeroVia < 1) return { error: 'Número da via do CRV inválido.' };
@@ -8921,7 +8943,8 @@ function validarAtpveDataCred(c, anexos) {
   if ((c.comprador_cep || '').length !== 8 || !c.comprador_rua || !c.comprador_numero || !c.comprador_bairro) return 'Endereço do comprador incompleto (CEP, rua, número e bairro).';
   if (!c.comprador_city_id) return 'Busque o CEP do comprador: o código do município do Detran vem dele.';
   if (!c.venda_data || new Date(c.venda_data) > new Date()) return 'Informe a data da venda (dd/mm/aaaa), que não pode ser futura.';
-  if (!(Number(String(c.venda_valor || '').replace(/\./g, '').replace(',', '.')) > 0)) return 'Informe o valor da venda.';
+  if (!c.venda_valor) return 'Informe o valor da venda.';
+  if (valorVendaSemPonto(c.venda_valor) === null) return VALOR_VENDA_SEM_PONTO_MSG;
   if (['MG', 'MS', 'PR', 'SP'].includes(c.uf) && !c.odometro) return `Em ${c.uf} o Detran pede a quilometragem (odômetro).`;
   if (c.uf === 'SP' && (!/^[A-HJ-NPR-Z0-9]{17}$/.test(c.chassi || '') || !c.vendedor_email || !c.comprador_email))
     return 'Em SP o Detran pede o chassi e o e-mail do vendedor e do comprador.';
@@ -9352,7 +9375,48 @@ function acharSaldoNoEvento(obj, prof = 0) {
   return null;
 }
 
+// Trava de consulta repetida: a mesma consulta (cliente + serviço + dados) não
+// roda duas vezes ao mesmo tempo. Em 24/10/2026 o CRLV 2 Rio Reemissão da
+// KVD4F36 (#3146/#3147) chegou duas vezes com 18 ms de diferença, saiu duas
+// vezes no portal e foi cobrado duas vezes (R$ 110,00) — e o levantamento achou
+// o mesmo em base-nacional, consulta-cautelar, consultar-Numero-ATPVE e outros.
+// O botão do painel já fica desabilitado, então o 2º pedido vem de outro lugar
+// (aba repetida, toque duplo no celular, reenvio da rede); por isso a trava é
+// no servidor e no banco — na Vercel os dois pedidos podem cair em instâncias
+// diferentes. Consulta igual DEPOIS de a primeira terminar continua permitida.
+// A trava vence em 15 min (maxDuration é 800 s) para instância morta no meio
+// não prender o cliente.
+async function travarConsultaRepetida(userId, serviceId, params) {
+  const chave = crypto.createHash('sha256')
+    .update(`${userId}|${serviceId}|${JSON.stringify(params || {})}`).digest('hex');
+  const r = await pool.query(
+    `INSERT INTO consultas_em_andamento (chave, user_id, criado_em) VALUES ($1, $2, NOW())
+     ON CONFLICT (chave) DO UPDATE SET criado_em = NOW()
+       WHERE consultas_em_andamento.criado_em < NOW() - INTERVAL '15 minutes'
+     RETURNING chave`, [chave, userId]);
+  return r.rowCount ? chave : null;
+}
+
 async function processCatalogQuery(userId, serviceId, params, res) {
+  let chave;
+  try {
+    chave = await travarConsultaRepetida(userId, serviceId, params);
+  } catch (e) {
+    // Banco fora para a trava = fora para a consulta também; segue sem ela.
+    console.error('[trava consulta] falha ao travar:', e.message);
+    chave = undefined;
+  }
+  if (chave === null)
+    return res.status(409).json({ error: 'Essa mesma consulta já está em andamento. Aguarde o resultado e confira o Histórico — nada foi cobrado por este segundo envio.' });
+  try {
+    return await processCatalogQueryInterna(userId, serviceId, params, res);
+  } finally {
+    if (chave) await pool.query('DELETE FROM consultas_em_andamento WHERE chave=$1', [chave])
+      .catch(e => console.error('[trava consulta] falha ao liberar:', e.message));
+  }
+}
+
+async function processCatalogQueryInterna(userId, serviceId, params, res) {
   if (!serviceId) return res.status(400).json({ error: 'Serviço não informado.' });
 
   const service = SERVICES.find(s => s.id === serviceId);
@@ -12631,6 +12695,7 @@ app.post('/api/query-v2', requireAuth, async (req, res) => {
         if (compradorDocumento.length !== 11 && compradorDocumento.length !== 14) return res.status(400).json({ error: 'Documento do comprador inválido. Informe CPF ou CNPJ.' });
         if (!vendaData) return res.status(400).json({ error: 'Data da venda é obrigatória.' });
         if (!vendaValor) return res.status(400).json({ error: 'Valor da venda é obrigatório.' });
+        if (valorVendaSemPonto(vendaValor) === null) return res.status(400).json({ error: VALOR_VENDA_SEM_PONTO_MSG });
         if (!comprovante) return res.status(400).json({ error: 'Comprovante (PDF Base64) é obrigatório.' });
 
         form.set('veiculo[placa]', placa);
@@ -15813,7 +15878,7 @@ function extrairDeCampos(campos) {
     c_nome: c_nomeVal,
     c_cep: c_cep.replace(/[\.\-\s]/g, ''),
     c_uf,
-    venda_valor: venda_valor.replace(/\./g, '').replace(',', '.'),
+    venda_valor: venda_valor.replace(/\./g, ''),
     venda_data,
     venda_estado,
   };
@@ -15895,7 +15960,8 @@ function extrairDePosicoes(itens) {
 
   const lValor = acharLinha('Valor declarado na venda: R$');
   const venda_valor_raw = lValor ? valorMesmaLinha(lValor.linhaIdx, lValor.item.x) : '';
-  const venda_valor = venda_valor_raw.replace(/\./g, '').replace(',', '.');
+  // Mantém a vírgula: o formulário recusa ponto no valor (valorVendaSemPonto).
+  const venda_valor = venda_valor_raw.replace(/\./g, '');
 
   // Endereço do comprador: valor pode ocupar 1-2 linhas até aparecer o CEP
   let c_cep = '';
@@ -16565,7 +16631,7 @@ app.post('/api/pdf/extrair-atpv', requireAuth, async (req, res) => {
     c_nome: c_nome.trim(),
     c_cep: c_cep.replace(/[\.\-\s]/g,''),
     c_uf,
-    venda_valor: venda_valor.replace(/\./g,'').replace(',','.'),
+    venda_valor: venda_valor.replace(/\./g,''),
     venda_data,
     venda_estado,
   };
