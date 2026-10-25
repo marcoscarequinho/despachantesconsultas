@@ -66,6 +66,7 @@
        aplica a classe antes da primeira pintura. Ver assets/tema.css. -->
   <link rel="stylesheet" href="/assets/tema.css">
   <script src="/assets/tema.js"></script>
+  <script src="/assets/marca-parceiro.js"></script>
   <!-- Cartão de débito (Checkout Bricks do Mercado Pago) — ver assets/pagamento-cartao.js -->
   <script src="/assets/pagamento-cartao.js" defer></script>
   <!-- Contrato Social LTDA com IA: formulário em etapas — ver assets/contrato-social.js -->
@@ -85,15 +86,15 @@
   class="fixed left-0 top-0 h-full w-64 bg-blue-900 z-40 flex flex-col select-none shadow-xl">
 
   <div class="flex items-center gap-3 px-5 py-5 border-b border-blue-800">
-    <div class="w-9 h-9 bg-orange-500 rounded-lg flex items-center justify-center flex-shrink-0">
+    <div id="marca-logo" class="w-9 h-9 bg-orange-500 rounded-lg flex items-center justify-center flex-shrink-0">
       <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
           d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
       </svg>
     </div>
     <div>
-      <div class="text-white font-bold text-sm leading-tight">DESPACHANTES CONSULTAS</div>
-      <div class="text-blue-300 text-xs">Painel do Usuário</div>
+      <div id="marca-nome" class="text-white font-bold text-sm leading-tight">DESPACHANTES CONSULTAS</div>
+      <div id="marca-sub" class="text-blue-300 text-xs">Painel do Usuário</div>
     </div>
   </div>
 
@@ -246,9 +247,9 @@
       <h1 id="page-title" class="font-bold text-gray-800 text-lg">Visão Geral</h1>
     </div>
     <div class="flex items-center gap-3">
-      <a href="/" class="btn-ghost text-xs hidden sm:inline-flex">← Site</a>
+      <a href="/" class="link-site btn-ghost text-xs hidden sm:inline-flex">← Site</a>
       <a id="topbar-recarga" href="/recarga-pix" class="btn-primary text-xs">💸 Recarga PIX</a>
-      <button type="button" onclick="abrirSejaRevendedor()"
+      <button type="button" id="btn-seja-parceiro" onclick="abrirSejaRevendedor()"
         class="text-xs font-semibold px-3 py-2 rounded-lg bg-blue-700 hover:bg-blue-800 text-white whitespace-nowrap">
         🤝 <span class="hidden sm:inline">Quer ser um </span>Parceiro<span class="hidden sm:inline">?</span>
       </button>
@@ -1320,7 +1321,7 @@
 </div>
 
 <!-- WhatsApp Flutuante -->
-<a href="https://wa.me/5522999951574?text=Olá, preciso de suporte na plataforma DESPACHANTES CONSULTAS"
+<a id="whatsapp-flutuante" href="https://wa.me/5522999951574?text=Olá, preciso de suporte na plataforma DESPACHANTES CONSULTAS"
    target="_blank" aria-label="WhatsApp Suporte"
    style="position:fixed;bottom:1.75rem;right:1.75rem;z-index:9998;width:56px;height:56px;border-radius:50%;background:#25d366;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(0,0,0,.3);transition:transform .2s,background .2s;"
    onmouseover="this.style.transform='scale(1.1)';this.style.background='#20ba5a'"
@@ -1496,6 +1497,7 @@ async function init() {
     ]);
     if (!meRes.ok) { window.location.href = '/entrar'; return; }
     currentUser = await meRes.json();
+    aplicarMarcaParceiro(currentUser.parceiro);
     allServices   = (await svcRes.json()).services  || [];
     allServicesV2 = (await svcRes2.json()).services || [];
     allServicesV3 = (await svcRes3.json()).services || [];
@@ -8221,7 +8223,7 @@ async function anexarCrlveImportado(file) {
 // ── Logout ─────────────────────────────────────────────────────────────────────
 async function logout() {
   await fetch('/api/auth/logout', { method: 'POST' });
-  window.location.href = '/entrar';
+  window.location.href = urlSaidaParceiro();
 }
 
 // ── Start ──────────────────────────────────────────────────────────────────────

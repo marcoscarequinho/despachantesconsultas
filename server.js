@@ -2686,7 +2686,58 @@ function requirePageAuth(req, res, next) {
       return next();
     } catch { res.clearCookie('auth_token'); }
   }
-  res.redirect(`/entrar?${new URLSearchParams({ voltar: req.originalUrl })}`);
+  // Cliente/parceiro entra pela página do parceiro (Parceria, 25/10/2026):
+  // no domínio próprio é a raiz; no nosso, o /r/<slug> lembrado no login.
+  paginaEntradaParceiro(req)
+    .then(pagina => res.redirect(`${pagina || '/entrar'}?${new URLSearchParams(pagina ? { entrar: '1', voltar: req.originalUrl } : { voltar: req.originalUrl })}`))
+    .catch(() => res.redirect(`/entrar?${new URLSearchParams({ voltar: req.originalUrl })}`));
+}
+
+// Onde fica o login para esta requisição: a raiz do domínio próprio do
+// parceiro, ou o /r/<slug> do cookie parceiro_slug (gravado no login de quem
+// é parceiro ou cliente de parceiro). null = o /entrar de sempre.
+async function paginaEntradaParceiro(req) {
+  if (await slugPorDominio(hostDaRequisicao(req))) return '/';
+  const slug = String(req.cookies.parceiro_slug || '').toLowerCase();
+  if (/^[a-z0-9-]{1,60}$/.test(slug) && await revendedorPorSlug(slug)) return `/r/${slug}`;
+  return null;
+}
+
+// Marca do parceiro para quem é parceiro ou cliente de parceiro: o painel usa
+// o nome, a logo, a cor e o WhatsApp dele, e "Sair" volta para a página dele —
+// o site parece dele, com domínio próprio ou não (pedido do dono, 25/10/2026).
+async function marcaParceiroDoUsuario(userId) {
+  const r = await pool.query(
+    `SELECT p.id, p.name, rv.slug, rv.pagina, rv.pagina_atualizada_em, rv.logo_mime IS NOT NULL AS tem_logo,
+            (SELECT d.dominio FROM parceiro_dominios d
+              WHERE d.parceiro_id = p.id AND d.status='ATIVO' AND d.dominio IS NOT NULL
+                AND (d.valido_ate IS NULL OR d.valido_ate + ($2 || ' days')::interval > NOW())) AS dominio
+       FROM users u
+       JOIN users p ON p.id = CASE WHEN u.role='reseller' THEN u.id ELSE u.revendedor_id END
+                   AND p.role='reseller' AND p.active=true
+       JOIN revendedores rv ON rv.user_id = p.id
+      WHERE u.id = $1 AND rv.slug IS NOT NULL`,
+    [userId, String(DOMINIO_CARENCIA_DIAS)]
+  );
+  const m = r.rows[0];
+  if (!m) return null;
+  const pg = m.pagina || {};
+  const v = new Date(m.pagina_atualizada_em || 0).getTime();
+  return {
+    nome: m.name, slug: m.slug, dominio: m.dominio || null,
+    url: m.dominio ? `https://${m.dominio}/` : `/r/${m.slug}`,
+    cor: /^#[0-9a-fA-F]{6}$/.test(pg.cor || '') ? pg.cor : null,
+    whatsapp: pg.whatsapp || null,
+    logo: m.tem_logo ? `/api/public/revendedor/${m.slug}/imagem/logo?v=${v}` : null,
+  };
+}
+
+// Lembra no navegador de qual parceiro é a conta, para a sessão expirada no
+// nosso domínio voltar para a página dele (ver requirePageAuth).
+const COOKIE_PARCEIRO = { maxAge: 365 * 24 * 3600 * 1000, sameSite: 'lax', httpOnly: true };
+function gravarCookieParceiro(res, marca) {
+  if (marca) res.cookie('parceiro_slug', marca.slug, COOKIE_PARCEIRO);
+  else res.clearCookie('parceiro_slug');
 }
 
 function requireReseller(req, res, next) {
@@ -2891,9 +2942,12 @@ app.post('/api/auth/login', async (req, res) => {
       maxAge: 7 * 24 * 3600 * 1000,
       sameSite: 'lax',
     });
+    const marca = await marcaParceiroDoUsuario(user.id).catch(() => null);
+    gravarCookieParceiro(res, marca);
     res.json({
       success: true,
       user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      parceiro: marca,
     });
   } catch (err) {
     console.error('Erro no login:', err.message);
@@ -3008,7 +3062,8 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
       [req.user.id]
     );
     if (r.rows.length === 0) return res.status(404).json({ error: 'Usuário não encontrado.' });
-    res.json(r.rows[0]);
+    const parceiro = await marcaParceiroDoUsuario(req.user.id).catch(() => null);
+    res.json({ ...r.rows[0], parceiro });
   } catch (err) {
     res.status(500).json({ error: 'Erro interno.' });
   }
@@ -3495,75 +3550,84 @@ function limparPaginaRevendedor(body) {
   return { pagina: out };
 }
 
-app.get('/api/reseller/pagina', requireAuth, requireReseller, async (req, res) => {
-  try {
-    const r = await pool.query(
-      `SELECT slug, pagina, pagina_atualizada_em, logo_mime IS NOT NULL AS tem_logo, banner_mime IS NOT NULL AS tem_banner
-         FROM revendedores WHERE user_id=$1`, [req.user.id]
-    );
-    if (!r.rows.length) return res.status(404).json({ error: 'Cadastro de revendedor não encontrado. Fale com o suporte.' });
-    const p = r.rows[0];
-    const v = new Date(p.pagina_atualizada_em || 0).getTime();
-    res.json({
-      slug: p.slug, pagina: p.pagina || {},
-      logo: p.tem_logo && p.slug ? `/api/public/revendedor/${p.slug}/imagem/logo?v=${v}` : null,
-      banner: p.tem_banner && p.slug ? `/api/public/revendedor/${p.slug}/imagem/banner?v=${v}` : null,
-    });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro interno.' });
-  }
-});
+// Leitura/gravação da página do parceiro, usadas pelo painel dele
+// (/api/reseller/pagina*) e pelo admin, que também edita a página de cada
+// parceiro (/api/admin/revendedores/:id/pagina*). Devolvem { status, body }.
+async function lerPaginaParceiro(uid) {
+  const r = await pool.query(
+    `SELECT slug, pagina, pagina_atualizada_em, logo_mime IS NOT NULL AS tem_logo, banner_mime IS NOT NULL AS tem_banner
+       FROM revendedores WHERE user_id=$1`, [uid]
+  );
+  if (!r.rows.length) return { status: 404, body: { error: 'Cadastro de parceiro não encontrado. Fale com o suporte.' } };
+  const p = r.rows[0];
+  const v = new Date(p.pagina_atualizada_em || 0).getTime();
+  return { status: 200, body: {
+    slug: p.slug, pagina: p.pagina || {},
+    logo: p.tem_logo && p.slug ? `/api/public/revendedor/${p.slug}/imagem/logo?v=${v}` : null,
+    banner: p.tem_banner && p.slug ? `/api/public/revendedor/${p.slug}/imagem/banner?v=${v}` : null,
+  } };
+}
 
-app.put('/api/reseller/pagina', requireAuth, requireReseller, async (req, res) => {
-  const p = limparPaginaRevendedor(req.body);
-  if (p.error) return res.status(400).json({ error: p.error });
-  try {
-    const r = await pool.query(
-      `UPDATE revendedores SET pagina=$2, pagina_atualizada_em=NOW() WHERE user_id=$1 RETURNING user_id`,
-      [req.user.id, JSON.stringify(p.pagina)]
-    );
-    if (!r.rows.length) return res.status(404).json({ error: 'Cadastro de revendedor não encontrado. Fale com o suporte.' });
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro interno.' });
-  }
-});
+async function salvarPaginaParceiro(uid, body) {
+  const p = limparPaginaRevendedor(body);
+  if (p.error) return { status: 400, body: { error: p.error } };
+  const r = await pool.query(
+    `UPDATE revendedores SET pagina=$2, pagina_atualizada_em=NOW() WHERE user_id=$1 RETURNING user_id`,
+    [uid, JSON.stringify(p.pagina)]
+  );
+  if (!r.rows.length) return { status: 404, body: { error: 'Cadastro de parceiro não encontrado. Fale com o suporte.' } };
+  return { status: 200, body: { success: true } };
+}
 
-app.post('/api/reseller/pagina/imagem/:tipo', requireAuth, requireReseller, async (req, res) => {
-  const tipo = req.params.tipo;
-  if (!PAGINA_REV_IMG_TIPOS.includes(tipo)) return res.status(400).json({ error: 'Tipo de imagem inválido.' });
-  const b64 = String(req.body?.base64 || '').replace(/^data:[^,]*,/, '');
+async function salvarImagemParceiro(uid, tipo, base64) {
+  if (!PAGINA_REV_IMG_TIPOS.includes(tipo)) return { status: 400, body: { error: 'Tipo de imagem inválido.' } };
+  const b64 = String(base64 || '').replace(/^data:[^,]*,/, '');
   let buf;
   try { buf = Buffer.from(b64, 'base64'); } catch { buf = Buffer.alloc(0); }
-  if (!buf.length) return res.status(400).json({ error: 'Envie a imagem.' });
-  if (buf.length > PAGINA_REV_IMG_MAX) return res.status(400).json({ error: 'Imagem muito grande (máximo 800 KB). Reduza e envie de novo.' });
+  if (!buf.length) return { status: 400, body: { error: 'Envie a imagem.' } };
+  if (buf.length > PAGINA_REV_IMG_MAX) return { status: 400, body: { error: 'Imagem muito grande (máximo 800 KB). Reduza e envie de novo.' } };
   const mime = mimeImagemPermitida(buf);
-  if (!mime) return res.status(400).json({ error: 'Formato não aceito. Use PNG, JPG ou WebP.' });
-  try {
-    const r = await pool.query(
-      `UPDATE revendedores SET ${tipo}_mime=$2, ${tipo}_data=$3, pagina_atualizada_em=NOW() WHERE user_id=$1 RETURNING user_id`,
-      [req.user.id, mime, buf.toString('base64')]
-    );
-    if (!r.rows.length) return res.status(404).json({ error: 'Cadastro de revendedor não encontrado.' });
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro interno.' });
-  }
-});
+  if (!mime) return { status: 400, body: { error: 'Formato não aceito. Use PNG, JPG ou WebP.' } };
+  const r = await pool.query(
+    `UPDATE revendedores SET ${tipo}_mime=$2, ${tipo}_data=$3, pagina_atualizada_em=NOW() WHERE user_id=$1 RETURNING user_id`,
+    [uid, mime, buf.toString('base64')]
+  );
+  if (!r.rows.length) return { status: 404, body: { error: 'Cadastro de parceiro não encontrado.' } };
+  return { status: 200, body: { success: true } };
+}
 
-app.delete('/api/reseller/pagina/imagem/:tipo', requireAuth, requireReseller, async (req, res) => {
-  const tipo = req.params.tipo;
-  if (!PAGINA_REV_IMG_TIPOS.includes(tipo)) return res.status(400).json({ error: 'Tipo de imagem inválido.' });
+async function removerImagemParceiro(uid, tipo) {
+  if (!PAGINA_REV_IMG_TIPOS.includes(tipo)) return { status: 400, body: { error: 'Tipo de imagem inválido.' } };
+  await pool.query(
+    `UPDATE revendedores SET ${tipo}_mime=NULL, ${tipo}_data=NULL, pagina_atualizada_em=NOW() WHERE user_id=$1`, [uid]
+  );
+  return { status: 200, body: { success: true } };
+}
+
+// Embrulho comum das rotas: o id do parceiro vem do login (painel dele) ou da
+// URL (admin).
+const rotaPagina = (fn, idDe) => async (req, res) => {
   try {
-    await pool.query(
-      `UPDATE revendedores SET ${tipo}_mime=NULL, ${tipo}_data=NULL, pagina_atualizada_em=NOW() WHERE user_id=$1`,
-      [req.user.id]
-    );
-    res.json({ success: true });
+    const r = await fn(idDe(req), req);
+    res.status(r.status).json(r.body);
   } catch (err) {
+    console.error('Erro na página do parceiro:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
   }
-});
+};
+const idLogado = req => req.user.id;
+const idDaUrl = req => parseInt(req.params.id, 10);
+
+app.get('/api/reseller/pagina', requireAuth, requireReseller, rotaPagina(uid => lerPaginaParceiro(uid), idLogado));
+app.put('/api/reseller/pagina', requireAuth, requireReseller, rotaPagina((uid, req) => salvarPaginaParceiro(uid, req.body), idLogado));
+app.post('/api/reseller/pagina/imagem/:tipo', requireAuth, requireReseller, rotaPagina((uid, req) => salvarImagemParceiro(uid, req.params.tipo, req.body?.base64), idLogado));
+app.delete('/api/reseller/pagina/imagem/:tipo', requireAuth, requireReseller, rotaPagina((uid, req) => removerImagemParceiro(uid, req.params.tipo), idLogado));
+
+// O admin edita a página (home) de qualquer parceiro pelo ✏️ da lista.
+app.get('/api/admin/revendedores/:id/pagina', requireAuth, requireSuperAdmin, rotaPagina(uid => lerPaginaParceiro(uid), idDaUrl));
+app.put('/api/admin/revendedores/:id/pagina', requireAuth, requireSuperAdmin, rotaPagina((uid, req) => salvarPaginaParceiro(uid, req.body), idDaUrl));
+app.post('/api/admin/revendedores/:id/pagina/imagem/:tipo', requireAuth, requireSuperAdmin, rotaPagina((uid, req) => salvarImagemParceiro(uid, req.params.tipo, req.body?.base64), idDaUrl));
+app.delete('/api/admin/revendedores/:id/pagina/imagem/:tipo', requireAuth, requireSuperAdmin, rotaPagina((uid, req) => removerImagemParceiro(uid, req.params.tipo), idDaUrl));
 
 async function revendedorPorSlug(slug) {
   const r = await pool.query(
@@ -3664,6 +3728,7 @@ app.post('/api/public/revendedor/:slug/cadastro', async (req, res) => {
     const u = r.body.client;
     const token = jwt.sign({ id: u.id, email: u.email, role: u.role }, JWT_SECRET, { expiresIn: '7d' });
     res.cookie('auth_token', token, { httpOnly: true, maxAge: 7 * 24 * 3600 * 1000, sameSite: 'lax' });
+    res.cookie('parceiro_slug', rv.slug, COOKIE_PARCEIRO);
     res.json({ success: true });
   } catch (err) {
     console.error('Erro no cadastro pela página do parceiro:', err.message);
@@ -19000,7 +19065,12 @@ app.get('/verificar-asd/:codigo', async (req, res) => {
 app.get('/', (req, res) => {
   noCache(res); res.sendFile(path.join(__dirname, 'index.html'));
 });
-app.get('/entrar', (req, res) => {
+app.get('/entrar', async (req, res) => {
+  // No domínio próprio do parceiro o login é na página dele.
+  if (await slugPorDominio(hostDaRequisicao(req)).catch(() => null)) {
+    const voltar = String(req.query.voltar || '');
+    return res.redirect(`/?${new URLSearchParams(voltar ? { entrar: '1', voltar } : { entrar: '1' })}`);
+  }
   noCache(res); res.sendFile(path.join(__dirname, 'entrar.html'));
 });
 // Política de privacidade da extensão do Chrome (extensao-chrome/): é a URL
@@ -19008,7 +19078,8 @@ app.get('/entrar', (req, res) => {
 app.get('/extensao/privacidade', (req, res) => {
   noCache(res); res.sendFile(path.join(__dirname, 'privacidade-extensao.html'));
 });
-app.get('/cadastrar', (req, res) => {
+app.get('/cadastrar', async (req, res) => {
+  if (await slugPorDominio(hostDaRequisicao(req)).catch(() => null)) return res.redirect('/');
   noCache(res); res.sendFile(path.join(__dirname, 'cadastrar.html'));
 });
 // Autocadastro de revendedor saiu em 23/10/2026: só o admin cadastra.

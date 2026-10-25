@@ -36,6 +36,7 @@
        aplica a classe antes da primeira pintura. Ver assets/tema.css. -->
   <link rel="stylesheet" href="/assets/tema.css">
   <script src="/assets/tema.js"></script>
+  <script src="/assets/marca-parceiro.js"></script>
 </head>
 <body class="bg-gray-100 min-h-screen">
 
@@ -45,15 +46,15 @@
 
   <!-- Logo -->
   <div class="flex items-center gap-3 px-5 py-5 border-b border-blue-800">
-    <div class="w-9 h-9 bg-orange-500 rounded-lg flex items-center justify-center flex-shrink-0">
+    <div id="marca-logo" class="w-9 h-9 bg-orange-500 rounded-lg flex items-center justify-center flex-shrink-0">
       <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
           d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
       </svg>
     </div>
     <div>
-      <div class="text-white font-bold text-sm leading-tight">DESPACHANTES CONSULTAS</div>
-      <div class="text-blue-300 text-xs">Painel do Parceiro</div>
+      <div id="marca-nome" class="text-white font-bold text-sm leading-tight">DESPACHANTES CONSULTAS</div>
+      <div id="marca-sub" class="text-blue-300 text-xs">Painel do Parceiro</div>
     </div>
   </div>
 
@@ -149,7 +150,7 @@
       <h1 id="page-title" class="font-bold text-gray-800 text-lg">Visão Geral</h1>
     </div>
     <div class="flex items-center gap-3">
-      <a href="/" class="btn-ghost text-xs hidden sm:inline-flex">← Site</a>
+      <a href="/" class="link-site btn-ghost text-xs hidden sm:inline-flex">← Site</a>
       <div class="flex items-center gap-2">
         <div id="topbar-avatar"
           class="w-8 h-8 bg-orange-500 rounded-full flex items-center justify-center text-white font-bold text-xs">
@@ -811,6 +812,7 @@ async function init() {
     const res = await fetch('/api/auth/me');
     if (!res.ok) { window.location.href = '/entrar'; return; }
     currentUser = await res.json();
+    aplicarMarcaParceiro(currentUser.parceiro, { subtitulo: 'Painel do Parceiro' });
 
     // Atualizar UI com dados do usuário
     const initial = currentUser.name ? currentUser.name.charAt(0).toUpperCase() : '?';
@@ -1395,7 +1397,7 @@ async function changePassword(e) {
 // ── Logout ─────────────────────────────────────────────────────────────────
 async function logout() {
   await fetch('/api/auth/logout', { method: 'POST' });
-  window.location.href = '/entrar';
+  window.location.href = urlSaidaParceiro();
 }
 
 // ── Modal: Criar Cliente ───────────────────────────────────────────────────

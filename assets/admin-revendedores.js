@@ -120,6 +120,35 @@
               </div>
               <p id="rv-pix-dica" class="text-xs text-green-700"></p>
             </div>
+            <div id="rv-pagina-box" class="hidden bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
+              <div class="flex items-center justify-between gap-2">
+                <div class="text-sm font-semibold text-blue-900">🌐 Página (home) do parceiro</div>
+                <a id="rv-pg-abrir" href="#" target="_blank" rel="noopener" class="text-xs text-blue-700 underline">Abrir página ↗</a>
+              </div>
+              <p class="text-xs text-blue-800">Só texto (sem HTML). Em branco usa o texto padrão. É a mesma página que o parceiro edita em “Minha Página”.</p>
+              <div><label class="label">Título</label><input id="rv-pg-titulo" maxlength="80" class="input-field"></div>
+              <div><label class="label">Subtítulo</label><input id="rv-pg-subtitulo" maxlength="160" class="input-field"></div>
+              <div><label class="label">Apresentação</label><textarea id="rv-pg-texto" maxlength="2000" rows="4" class="input-field"></textarea></div>
+              <div class="grid grid-cols-2 gap-3">
+                <div><label class="label">WhatsApp da página</label><input id="rv-pg-whatsapp" maxlength="15" inputmode="numeric" placeholder="(21) 90000-0000" class="input-field"></div>
+                <div><label class="label">Cor</label><input id="rv-pg-cor" type="color" value="#1e3a8a" class="h-10 w-20 border border-gray-300 rounded-lg"></div>
+              </div>
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <div class="label">Logo</div>
+                  <img id="rv-pg-logo-prev" alt="" class="hidden h-16 w-16 object-contain border rounded-lg mb-1 bg-white">
+                  <input type="file" accept="image/png,image/jpeg,image/webp" onchange="rvImagemPagina('logo', this)" class="text-xs w-full min-w-0">
+                  <button type="button" onclick="rvRemoverImagemPagina('logo')" class="text-xs text-red-600 block mt-1">Remover logo</button>
+                </div>
+                <div>
+                  <div class="label">Imagem do topo (banner)</div>
+                  <img id="rv-pg-banner-prev" alt="" class="hidden h-16 w-full object-cover border rounded-lg mb-1">
+                  <input type="file" accept="image/png,image/jpeg,image/webp" onchange="rvImagemPagina('banner', this)" class="text-xs w-full min-w-0">
+                  <button type="button" onclick="rvRemoverImagemPagina('banner')" class="text-xs text-red-600 block mt-1">Remover imagem</button>
+                </div>
+              </div>
+              <p class="text-xs text-blue-800">Imagens: PNG, JPG ou WebP até 800 KB — são salvas na hora em que você escolhe o arquivo. Os textos e a cor são salvos no botão Salvar.</p>
+            </div>
             <div><label class="label">Observação (só o admin vê)</label><textarea id="rv-obs" rows="2" class="input-field"></textarea></div>
             <div id="rv-ativo-box" class="hidden"><label class="flex items-center gap-2 text-sm"><input id="rv-ativo" type="checkbox"> Parceiro ativo (desativado não recebe ganho, não entra no painel e os clientes dele voltam ao preço do site)</label></div>
             <div id="rv-form-erro" class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm"></div>
@@ -214,7 +243,7 @@
         <td class="px-4 py-3 text-right font-semibold ${r.comissao_a_pagar > 0 ? 'text-red-600' : 'text-gray-400'}">${fmt(r.comissao_a_pagar)}${r.comissao_enviando > 0 ? `<div class="text-xs font-normal text-blue-600">${fmt(r.comissao_enviando)} enviando</div>` : ''}</td>
         <td class="px-4 py-3 text-center whitespace-nowrap">
           <button onclick="rvAbrirDetalhe(${r.id})" class="action-btn bg-blue-100 text-blue-700 hover:bg-blue-200" title="Controle, custos e domínio">📊</button>
-          <button onclick="rvAbrirEdicao(${r.id})" class="action-btn bg-gray-100 text-gray-700 hover:bg-gray-200" title="Editar PIX">✏️</button>
+          <button onclick="rvAbrirEdicao(${r.id})" class="action-btn bg-gray-100 text-gray-700 hover:bg-gray-200" title="Editar PIX e página">✏️</button>
         </td>
       </tr>`).join('');
   };
@@ -247,6 +276,7 @@
     document.getElementById('rv-id').value = '';
     document.getElementById('rv-dados-conta').classList.remove('hidden');
     document.getElementById('rv-ativo-box').classList.add('hidden');
+    document.getElementById('rv-pagina-box').classList.add('hidden');
     ['rv-nome', 'rv-doc', 'rv-fone', 'rv-email', 'rv-senha', 'rv-pix-chave', 'rv-obs'].forEach(id => { document.getElementById(id).value = ''; });
     preencherTiposPix('');
     erroForm('');
@@ -264,8 +294,49 @@
     preencherTiposPix(r.pix_tipo);
     document.getElementById('rv-pix-chave').value = r.pix_chave || '';
     document.getElementById('rv-obs').value = r.observacao || '';
+    document.getElementById('rv-pagina-box').classList.remove('hidden');
     erroForm('');
     openModal('modal-revendedor');
+    carregarPaginaEdicao(r.id);
+  };
+
+  // Página (home) do parceiro, editada pelo admin no mesmo ✏️.
+  const campoPg = k => document.getElementById(`rv-pg-${k}`);
+  async function carregarPaginaEdicao(id, soImagens) {
+    try {
+      const r = await fetch(`/api/admin/revendedores/${id}/pagina`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Erro ao carregar a página.');
+      if (!soImagens) {
+        const p = d.pagina || {};
+        ['titulo', 'subtitulo', 'texto', 'whatsapp'].forEach(k => { campoPg(k).value = p[k] || ''; });
+        campoPg('cor').value = p.cor || '#1e3a8a';
+      }
+      document.getElementById('rv-pg-abrir').href = d.slug ? `/r/${encodeURIComponent(d.slug)}` : '#';
+      for (const t of ['logo', 'banner']) {
+        const img = campoPg(`${t}-prev`);
+        if (d[t]) { img.src = d[t]; img.classList.remove('hidden'); } else img.classList.add('hidden');
+      }
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  window.rvImagemPagina = async function (tipo, input) {
+    const id = document.getElementById('rv-id').value;
+    const f = input.files && input.files[0];
+    input.value = '';
+    if (!f || !id) return;
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(f.type)) { toast('Use PNG, JPG ou WebP.', 'error'); return; }
+    if (f.size > 800 * 1024) { toast('Imagem muito grande (máximo 800 KB).', 'error'); return; }
+    const base64 = await new Promise((ok, erro) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = erro; fr.readAsDataURL(f); });
+    const d = await acao(`/api/admin/revendedores/${id}/pagina/imagem/${tipo}`, { method: 'POST', body: JSON.stringify({ base64 }) }, 'Imagem salva.');
+    if (d) carregarPaginaEdicao(id, true);
+  };
+
+  window.rvRemoverImagemPagina = async function (tipo) {
+    const id = document.getElementById('rv-id').value;
+    if (!id || !confirm('Remover esta imagem da página do parceiro?')) return;
+    const d = await acao(`/api/admin/revendedores/${id}/pagina/imagem/${tipo}`, { method: 'DELETE' }, 'Imagem removida.');
+    if (d) carregarPaginaEdicao(id, true);
   };
 
   window.rvSalvar = async function (ev) {
@@ -283,6 +354,13 @@
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Erro ao salvar.');
+      if (id) {
+        const pg = {};
+        ['titulo', 'subtitulo', 'texto', 'whatsapp', 'cor'].forEach(k => { pg[k] = campoPg(k).value; });
+        const rp = await fetch(`/api/admin/revendedores/${id}/pagina`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pg) });
+        const dp = await rp.json();
+        if (!rp.ok) throw new Error(dp.error || 'Erro ao salvar a página.');
+      }
       closeModal('modal-revendedor');
       toast(id ? 'Parceiro atualizado.' : 'Parceiro cadastrado. Envie o e-mail e a senha para ele entrar em /entrar.');
       await rvCarregar();
@@ -409,7 +487,7 @@
         <div class="flex flex-wrap gap-2">
           <button onclick="rvEnviarAgora(${rv.id})" class="btn-secondary" ${rv.comissao_a_pagar > 0 && rv.envio_automatico ? '' : 'disabled style="opacity:.5"'}>💸 Tentar envio automático agora</button>
           <button onclick="rvPagamentoManual(${rv.id}, ${travado})" class="btn-primary" ${rv.comissao_a_pagar > 0 || travado ? '' : 'disabled style="opacity:.5"'}>✅ Registrar pagamento manual</button>
-          <button onclick="rvAbrirEdicao(${rv.id})" class="btn-ghost">✏️ Editar PIX</button>
+          <button onclick="rvAbrirEdicao(${rv.id})" class="btn-ghost">✏️ Editar PIX e página</button>
         </div>
 
         ${blocoDominio(rv, d.dominio)}

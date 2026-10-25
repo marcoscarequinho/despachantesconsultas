@@ -37,9 +37,9 @@
         <img id="logo" alt="" class="hidden h-12 w-12 rounded-lg object-contain bg-white p-1">
         <div class="min-w-0">
           <div id="nome" class="font-bold text-lg truncate"></div>
-          <div class="text-xs text-white/70">Parceiro autorizado · Consultas veiculares</div>
+          <div class="text-xs text-white/70">Consultas veiculares</div>
         </div>
-        <a href="/entrar" class="ml-auto text-sm bg-white/15 hover:bg-white/25 px-3 py-1.5 rounded-lg whitespace-nowrap">Já tenho conta</a>
+        <button type="button" onclick="mostrarAba('entrar')" class="ml-auto text-sm bg-white/15 hover:bg-white/25 px-3 py-1.5 rounded-lg whitespace-nowrap">Entrar</button>
       </div>
     </header>
 
@@ -78,8 +78,35 @@
       </div>
 
       <div class="lg:col-span-2">
-        <div class="bg-white rounded-2xl shadow-sm p-6 sticky top-4">
-          <h2 class="font-bold text-gray-800 text-lg">Crie sua conta</h2>
+        <div id="caixa-conta" class="bg-white rounded-2xl shadow-sm p-6 sticky top-4">
+          <!-- Login e cadastro ficam aqui: quem é cliente do parceiro (ou o
+               próprio parceiro) entra pela página dele, não pela nossa. -->
+          <div class="grid grid-cols-2 gap-1 bg-gray-100 rounded-xl p-1 text-sm font-semibold">
+            <button type="button" id="aba-criar" onclick="mostrarAba('criar')" class="py-2 rounded-lg">Criar conta</button>
+            <button type="button" id="aba-entrar" onclick="mostrarAba('entrar')" class="py-2 rounded-lg">Entrar</button>
+          </div>
+          <div id="painel-entrar" class="hidden">
+            <div id="aviso-sessao" class="hidden text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-4">Sua sessão expirou. Entre de novo para continuar.</div>
+            <form id="form-entrar" class="space-y-3 mt-4" onsubmit="entrar(event)">
+              <input id="l-id" class="input" placeholder="E-mail ou CPF/CNPJ" autocomplete="username" required>
+              <input id="l-senha" type="password" class="input" placeholder="Senha" autocomplete="current-password" required>
+              <div id="erro-entrar" class="hidden text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2"></div>
+              <button id="btn-entrar" class="cor-bg w-full text-white font-semibold py-3 rounded-xl hover:opacity-90">Entrar</button>
+              <button type="button" onclick="mostrarEsqueci()" class="w-full text-sm cor-txt font-semibold">Esqueci minha senha</button>
+            </form>
+            <form id="form-esqueci" class="hidden space-y-3 mt-4" onsubmit="pedirCodigo(event)">
+              <p class="text-sm text-gray-600">Informe o seu e-mail ou CPF/CNPJ. Enviamos um código pelo WhatsApp cadastrado na conta.</p>
+              <input id="r-id" class="input" placeholder="E-mail ou CPF/CNPJ" autocomplete="username" required>
+              <div id="r-etapa2" class="hidden space-y-3">
+                <input id="r-codigo" class="input" placeholder="Código recebido no WhatsApp" inputmode="numeric" maxlength="6">
+                <input id="r-senha" type="password" class="input" placeholder="Nova senha (mínimo 8 caracteres)" minlength="8" autocomplete="new-password">
+              </div>
+              <div id="msg-esqueci" class="hidden text-sm rounded-lg px-3 py-2"></div>
+              <button id="btn-esqueci" class="cor-bg w-full text-white font-semibold py-3 rounded-xl hover:opacity-90">Enviar código</button>
+              <button type="button" onclick="mostrarAba('entrar')" class="w-full text-sm text-gray-500">← Voltar para o login</button>
+            </form>
+          </div>
+          <div id="painel-criar">
           <form id="form" class="space-y-3 mt-4" onsubmit="cadastrar(event)">
             <input id="f-nome" class="input" placeholder="Nome completo" autocomplete="name" required>
             <input id="f-doc" class="input" placeholder="CPF ou CNPJ" inputmode="numeric" maxlength="18" required>
@@ -90,12 +117,13 @@
             <button id="btn" class="cor-bg w-full text-white font-semibold py-3 rounded-xl hover:opacity-90">Criar conta</button>
           </form>
           <div id="sucesso" class="hidden text-sm text-green-800 bg-green-50 border border-green-200 rounded-lg px-4 py-3 mt-4"></div>
+          </div>
         </div>
       </div>
     </main>
 
     <footer class="text-center text-xs text-gray-400 py-6">
-      Consultas fornecidas pela plataforma <a href="/" class="underline">MC Despachadoria Consultas</a>.
+      © <span id="ano"></span> <span id="rodape-nome"></span>
     </footer>
   </div>
 
@@ -129,9 +157,11 @@ async function carregar() {
     document.title = `${d.nome} — Consultas Veiculares`;
     if (/^#[0-9a-fA-F]{6}$/.test(p.cor || '')) document.documentElement.style.setProperty('--cor', p.cor);
     $('nome').textContent = d.nome;
+    $('rodape-nome').textContent = d.nome;
+    $('ano').textContent = new Date().getFullYear();
     $('titulo').textContent = p.titulo || `${d.nome}: consultas veiculares completas`;
     $('subtitulo').textContent = p.subtitulo || 'Débitos, documentos, restrições e muito mais, na hora e direto do seu celular.';
-    $('texto').textContent = p.texto || `Sou parceiro autorizado da plataforma MC Despachadoria Consultas. Crie sua conta ao lado e tenha acesso a todas as consultas veiculares, com atendimento direto comigo.`;
+    $('texto').textContent = p.texto || `Crie sua conta ao lado e tenha acesso às consultas veiculares na hora, com atendimento direto comigo.`;
     if (d.logo) { $('logo').src = d.logo; $('logo').classList.remove('hidden'); }
     if (d.banner) { $('banner').src = d.banner; $('banner').classList.remove('hidden'); }
     if (p.whatsapp) {
@@ -174,6 +204,89 @@ function renderConsultas() {
     el.append(li);
   }
 }
+
+// ── Entrar / criar conta ───────────────────────────────────────────────────
+const params = new URLSearchParams(location.search);
+// Só volta para página do próprio site (evita redirecionar para fora).
+const voltar = /^\/painel(\/|$|\?)/.test(params.get('voltar') || '') ? params.get('voltar') : null;
+function mostrarAba(aba) {
+  const entrarAtiva = aba === 'entrar';
+  $('painel-entrar').classList.toggle('hidden', !entrarAtiva);
+  $('painel-criar').classList.toggle('hidden', entrarAtiva);
+  $('form-entrar').classList.remove('hidden');
+  $('form-esqueci').classList.add('hidden');
+  for (const [id, ativa] of [['aba-entrar', entrarAtiva], ['aba-criar', !entrarAtiva]]) {
+    $(id).classList.toggle('bg-white', ativa);
+    $(id).classList.toggle('shadow-sm', ativa);
+    $(id).classList.toggle('cor-txt', ativa);
+    $(id).classList.toggle('text-gray-500', !ativa);
+  }
+  if (window.innerWidth < 1024) $('caixa-conta').scrollIntoView({ behavior: 'smooth' });
+}
+function destinoDepoisDoLogin(role) {
+  if (voltar && (role === 'reseller') === voltar.startsWith('/painel/revendedor')) return voltar;
+  return role === 'reseller' ? '/painel/revendedor' : '/painel/usuario';
+}
+async function entrar(e) {
+  e.preventDefault();
+  $('erro-entrar').classList.add('hidden');
+  $('btn-entrar').disabled = true; $('btn-entrar').textContent = 'Entrando…';
+  try {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: $('l-id').value, password: $('l-senha').value }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Não foi possível entrar.');
+    location.href = destinoDepoisDoLogin(d.user && d.user.role);
+  } catch (err) {
+    $('erro-entrar').textContent = err.message;
+    $('erro-entrar').classList.remove('hidden');
+    $('btn-entrar').disabled = false; $('btn-entrar').textContent = 'Entrar';
+  }
+}
+function mostrarEsqueci() {
+  $('form-entrar').classList.add('hidden');
+  $('form-esqueci').classList.remove('hidden');
+  $('r-id').value = $('l-id').value;
+  $('r-etapa2').classList.add('hidden');
+  $('msg-esqueci').classList.add('hidden');
+  $('btn-esqueci').textContent = 'Enviar código';
+}
+function msgEsqueci(texto, ok) {
+  const el = $('msg-esqueci');
+  el.textContent = texto;
+  el.className = `text-sm rounded-lg px-3 py-2 ${ok ? 'text-green-800 bg-green-50 border border-green-200' : 'text-red-700 bg-red-50 border border-red-200'}`;
+}
+async function pedirCodigo(e) {
+  e.preventDefault();
+  const etapa2 = !$('r-etapa2').classList.contains('hidden');
+  $('btn-esqueci').disabled = true;
+  try {
+    const r = await fetch(etapa2 ? '/api/auth/reset-password' : '/api/auth/forgot-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(etapa2
+        ? { identifier: $('r-id').value, code: $('r-codigo').value, new_password: $('r-senha').value }
+        : { identifier: $('r-id').value }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Não foi possível continuar.');
+    if (!etapa2) {
+      msgEsqueci(d.message || 'Código enviado pelo WhatsApp.', true);
+      $('r-etapa2').classList.remove('hidden');
+      $('btn-esqueci').textContent = 'Trocar a senha';
+    } else {
+      mostrarAba('entrar');
+      $('l-id').value = $('r-id').value;
+      $('erro-entrar').className = 'text-sm text-green-800 bg-green-50 border border-green-200 rounded-lg px-3 py-2';
+      $('erro-entrar').textContent = 'Senha trocada. Entre com a nova senha.';
+    }
+  } catch (err) {
+    msgEsqueci(err.message, false);
+  } finally { $('btn-esqueci').disabled = false; }
+}
+mostrarAba(params.get('entrar') ? 'entrar' : 'criar');
+if (params.get('entrar') && voltar) $('aviso-sessao').classList.remove('hidden');
 
 async function cadastrar(e) {
   e.preventDefault();
