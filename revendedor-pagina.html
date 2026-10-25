@@ -16,7 +16,8 @@
     .texto-livre { white-space: pre-line; overflow-wrap: anywhere; }
   </style>
 </head>
-<!-- Página pública de um revendedor (/r/<slug>). Tudo o que vem do revendedor
+<!-- Página pública de um parceiro (/r/<slug>, ou a raiz do domínio próprio
+     dele). Tudo o que vem do parceiro
      (nome, títulos, textos) entra com textContent — nunca innerHTML —, porque é
      conteúdo de terceiro no nosso domínio. As imagens vêm de
      /api/public/revendedor/<slug>/imagem/*, que só serve PNG/JPG/WebP. -->
@@ -36,7 +37,7 @@
         <img id="logo" alt="" class="hidden h-12 w-12 rounded-lg object-contain bg-white p-1">
         <div class="min-w-0">
           <div id="nome" class="font-bold text-lg truncate"></div>
-          <div class="text-xs text-white/70">Revendedor autorizado · Consultas veiculares</div>
+          <div class="text-xs text-white/70">Parceiro autorizado · Consultas veiculares</div>
         </div>
         <a href="/entrar" class="ml-auto text-sm bg-white/15 hover:bg-white/25 px-3 py-1.5 rounded-lg whitespace-nowrap">Já tenho conta</a>
       </div>
@@ -55,7 +56,13 @@
         <div class="bg-white rounded-2xl shadow-sm p-6">
           <p id="texto" class="texto-livre text-gray-700 leading-relaxed"></p>
         </div>
-        <div class="bg-white rounded-2xl shadow-sm p-6">
+        <div id="consultas-box" class="hidden bg-white rounded-2xl shadow-sm p-6">
+          <h2 class="font-bold text-gray-800 mb-3">Consultas e preços</h2>
+          <input id="consultas-busca" class="input mb-3" placeholder="Buscar consulta…" oninput="renderConsultas()">
+          <div id="consultas-lista" class="divide-y divide-gray-100 text-sm"></div>
+          <p class="text-xs text-gray-400 mt-3">Pré-pago: você recarrega por PIX ou cartão e paga só o que consultar.</p>
+        </div>
+        <div id="consultas-padrao" class="bg-white rounded-2xl shadow-sm p-6">
           <h2 class="font-bold text-gray-800 mb-3">O que você consulta aqui</h2>
           <ul class="grid sm:grid-cols-2 gap-2 text-sm text-gray-700">
             <li>🚗 Dados do veículo, base estadual e nacional</li>
@@ -73,7 +80,6 @@
       <div class="lg:col-span-2">
         <div class="bg-white rounded-2xl shadow-sm p-6 sticky top-4">
           <h2 class="font-bold text-gray-800 text-lg">Crie sua conta</h2>
-          <p id="aviso-adesao" class="hidden text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-2"></p>
           <form id="form" class="space-y-3 mt-4" onsubmit="cadastrar(event)">
             <input id="f-nome" class="input" placeholder="Nome completo" autocomplete="name" required>
             <input id="f-doc" class="input" placeholder="CPF ou CNPJ" inputmode="numeric" maxlength="18" required>
@@ -94,7 +100,10 @@
   </div>
 
 <script>
-const slug = decodeURIComponent(location.pathname.split('/').filter(Boolean)[1] || '');
+// /r/<slug> ou a raiz do domínio próprio do parceiro (o servidor acha o
+// parceiro pelo endereço e devolve o slug, usado depois no cadastro).
+let slug = decodeURIComponent(location.pathname.split('/').filter(Boolean)[1] || '');
+let consultas = [];
 const $ = id => document.getElementById(id);
 
 function mascaraDoc(v) {
@@ -112,31 +121,57 @@ $('f-fone').addEventListener('input', e => { e.target.value = mascaraFone(e.targ
 
 async function carregar() {
   try {
-    const r = await fetch(`/api/public/revendedor/${encodeURIComponent(slug)}`);
+    const r = await fetch(slug ? `/api/public/revendedor/${encodeURIComponent(slug)}` : '/api/public/revendedor-host');
     if (!r.ok) throw new Error();
     const d = await r.json();
+    slug = d.slug;
     const p = d.pagina || {};
     document.title = `${d.nome} — Consultas Veiculares`;
     if (/^#[0-9a-fA-F]{6}$/.test(p.cor || '')) document.documentElement.style.setProperty('--cor', p.cor);
     $('nome').textContent = d.nome;
     $('titulo').textContent = p.titulo || `${d.nome}: consultas veiculares completas`;
     $('subtitulo').textContent = p.subtitulo || 'Débitos, documentos, restrições e muito mais, na hora e direto do seu celular.';
-    $('texto').textContent = p.texto || `Sou revendedor autorizado da plataforma MC Despachadoria Consultas. Crie sua conta ao lado e tenha acesso a todas as consultas veiculares, com atendimento direto comigo.`;
+    $('texto').textContent = p.texto || `Sou parceiro autorizado da plataforma MC Despachadoria Consultas. Crie sua conta ao lado e tenha acesso a todas as consultas veiculares, com atendimento direto comigo.`;
     if (d.logo) { $('logo').src = d.logo; $('logo').classList.remove('hidden'); }
     if (d.banner) { $('banner').src = d.banner; $('banner').classList.remove('hidden'); }
     if (p.whatsapp) {
       $('whatsapp').href = `https://wa.me/55${encodeURIComponent(p.whatsapp)}`;
       $('whatsapp').classList.remove('hidden');
     }
-    if (d.adesao) {
-      $('aviso-adesao').textContent = `Depois do cadastro, ${d.nome} entra em contato para combinar a adesão e libera o seu acesso.`;
-      $('aviso-adesao').classList.remove('hidden');
+    consultas = d.consultas || [];
+    if (consultas.length) {
+      $('consultas-box').classList.remove('hidden');
+      $('consultas-padrao').classList.add('hidden');
+      renderConsultas();
     }
     $('carregando').classList.add('hidden');
     $('pagina').classList.remove('hidden');
   } catch {
     $('carregando').classList.add('hidden');
     $('nao-encontrada').classList.remove('hidden');
+  }
+}
+
+const fmt = v => 'R$ ' + Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const semAcento = v => String(v || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+// Texto do parceiro e nomes das consultas entram por textContent (ver o topo).
+function renderConsultas() {
+  const q = semAcento($('consultas-busca').value).trim();
+  const lista = consultas.filter(c => !q || q.split(/s+/).every(p => semAcento(`${c.name} ${c.group}`).includes(p)));
+  const el = $('consultas-lista');
+  el.replaceChildren();
+  if (!lista.length) { el.textContent = 'Nenhuma consulta encontrada.'; return; }
+  for (const c of lista) {
+    const li = document.createElement('div');
+    li.className = 'flex items-center justify-between gap-3 py-2';
+    const nome = document.createElement('span');
+    nome.className = 'text-gray-700';
+    nome.textContent = `${c.icon || ''} ${c.name}`.trim();
+    const preco = document.createElement('span');
+    preco.className = 'font-semibold cor-txt whitespace-nowrap';
+    preco.textContent = fmt(c.preco);
+    li.append(nome, preco);
+    el.append(li);
   }
 }
 
@@ -151,10 +186,7 @@ async function cadastrar(e) {
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || 'Não foi possível criar a conta.');
-    if (!d.aguardandoAdesao) { location.href = '/painel/usuario'; return; }
-    $('form').classList.add('hidden');
-    $('sucesso').textContent = `Cadastro recebido! ${d.revendedor} vai falar com você para combinar a adesão e liberar o seu acesso. Depois disso é só entrar com o seu e-mail e senha.`;
-    $('sucesso').classList.remove('hidden');
+    location.href = '/painel/usuario';
   } catch (err) {
     $('erro').textContent = err.message;
     $('erro').classList.remove('hidden');

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Painel do Revendedor — DESPACHANTES CONSULTAS</title>
+  <title>Painel do Parceiro — DESPACHANTES CONSULTAS</title>
   <link rel="icon" href="/favicon.ico" sizes="any">
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -53,7 +53,7 @@
     </div>
     <div>
       <div class="text-white font-bold text-sm leading-tight">DESPACHANTES CONSULTAS</div>
-      <div class="text-blue-300 text-xs">Painel do Revendedor</div>
+      <div class="text-blue-300 text-xs">Painel do Parceiro</div>
     </div>
   </div>
 
@@ -90,15 +90,19 @@
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
           d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
       </svg>
-      Comissões
+      Meus Ganhos
     </div>
     <div class="nav-item" data-section="pagina" onclick="showSection('pagina')">
       <span class="w-5 text-center flex-shrink-0">🌐</span>
       Minha Página
     </div>
     <div class="nav-item" data-section="catalog" onclick="showSection('catalog')">
-      <span class="w-5 text-center flex-shrink-0">🔎</span>
-      Consultas para Revender
+      <span class="w-5 text-center flex-shrink-0">🏷️</span>
+      Minhas Consultas e Preços
+    </div>
+    <div class="nav-item" data-section="dominio" onclick="showSection('dominio')">
+      <span class="w-5 text-center flex-shrink-0">🔗</span>
+      Domínio Próprio
     </div>
     <a href="/painel/usuario" class="nav-item">
       <span class="w-5 text-center flex-shrink-0">🚗</span>
@@ -182,7 +186,7 @@
         </div>
         <div class="stat-card border-l-green-500">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-xs font-medium text-gray-500 uppercase tracking-wide">Comissões / Mês</span>
+            <span class="text-xs font-medium text-gray-500 uppercase tracking-wide">Ganhos / Mês</span>
             <span class="text-green-500 text-lg">📈</span>
           </div>
           <div id="stat-month" class="text-2xl font-bold text-gray-800">R$ 0,00</div>
@@ -194,17 +198,18 @@
             <span class="text-purple-500 text-lg">🏆</span>
           </div>
           <div id="stat-total" class="text-2xl font-bold text-gray-800">R$ 0,00</div>
-          <div class="text-xs text-gray-400 mt-1">Todas as comissões</div>
+          <div class="text-xs text-gray-400 mt-1"><span id="stat-vendas">0</span> consultas vendidas</div>
         </div>
       </div>
 
-      <!-- Como funciona: chave PIX e adesão -->
+      <!-- Como funciona: preço próprio, chave PIX e página -->
       <div class="grid lg:grid-cols-2 gap-6">
         <div class="card bg-gradient-to-br from-green-50 to-white border border-green-100">
-          <h2 class="font-semibold text-gray-800 mb-2">💸 Sua comissão</h2>
+          <h2 class="font-semibold text-gray-800 mb-2">💸 Seu ganho</h2>
           <p class="text-sm text-gray-600">
-            Você recebe <strong><span id="info-taxa">20</span>% de cada recarga</strong> que os seus clientes pagarem
-            (PIX ou cartão), enviados <strong>na hora</strong> para a sua chave PIX:
+            Em <strong>Minhas Consultas e Preços</strong> você escolhe as consultas da sua página e o <strong>preço que o seu cliente paga</strong>
+            (nunca abaixo do seu custo). O que passar do custo é <strong>todo seu</strong>, em cada consulta feita pelos seus clientes,
+            e vai por PIX para a sua chave na hora:
           </p>
           <div class="mt-3 bg-white border border-green-200 rounded-lg px-4 py-2">
             <div id="info-pix-tipo" class="text-xs text-green-700 font-semibold">—</div>
@@ -213,9 +218,13 @@
           <p class="text-xs text-gray-500 mt-2">Para trocar a chave PIX, fale com o suporte.</p>
         </div>
         <div class="card">
-          <h2 class="font-semibold text-gray-800 mb-2">🧾 Taxa de adesão</h2>
-          <div id="adesao-info" class="text-sm text-gray-600"></div>
-          <button onclick="showSection('pagina')" class="mt-3 text-sm text-blue-700 hover:text-orange-500 font-semibold">🌐 Minha página de cadastro →</button>
+          <h2 class="font-semibold text-gray-800 mb-2">🌐 Sua página</h2>
+          <p class="text-sm text-gray-600"><strong id="info-na-pagina">0</strong> consulta(s) na sua página. Quem se cadastra por ela vira seu cliente e paga os seus preços.</p>
+          <div class="flex flex-wrap gap-3 mt-3">
+            <button onclick="showSection('catalog')" class="text-sm text-blue-700 hover:text-orange-500 font-semibold">🏷️ Consultas e preços →</button>
+            <button onclick="showSection('pagina')" class="text-sm text-blue-700 hover:text-orange-500 font-semibold">🌐 Minha página →</button>
+            <button onclick="showSection('dominio')" class="text-sm text-blue-700 hover:text-orange-500 font-semibold">🔗 Domínio próprio →</button>
+          </div>
         </div>
       </div>
 
@@ -242,7 +251,7 @@
         <!-- Comissões recentes -->
         <div class="card">
           <div class="flex items-center justify-between mb-4">
-            <h2 class="font-semibold text-gray-800">Comissões Recentes</h2>
+            <h2 class="font-semibold text-gray-800">Ganhos Recentes</h2>
             <button onclick="showSection('commissions')" class="text-xs text-blue-600 hover:text-orange-500 font-medium">
               Ver todas →
             </button>
@@ -264,7 +273,7 @@
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h2 class="text-xl font-bold text-gray-800">Meus Clientes</h2>
-          <p class="text-sm text-gray-500">Clientes vinculados à sua conta de revendedor</p>
+          <p class="text-sm text-gray-500">Clientes vinculados à sua conta de parceiro</p>
         </div>
         <button onclick="openModal()" class="btn-primary">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -295,10 +304,9 @@
               <tr>
                 <th class="px-5 py-3 text-left font-semibold text-gray-600">Nome</th>
                 <th class="px-5 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">E-mail</th>
-                <th class="px-5 py-3 text-right font-semibold text-gray-600">Recargas</th>
-                <th class="px-5 py-3 text-right font-semibold text-gray-600 hidden sm:table-cell">Sua comissão</th>
+                <th class="px-5 py-3 text-right font-semibold text-gray-600">Consultas</th>
+                <th class="px-5 py-3 text-right font-semibold text-gray-600 hidden sm:table-cell">Seu ganho</th>
                 <th class="px-5 py-3 text-center font-semibold text-gray-600">Status</th>
-                <th class="px-5 py-3 text-center font-semibold text-gray-600 adesao-col hidden">Adesão</th>
                 <th class="px-5 py-3 text-left font-semibold text-gray-600 hidden lg:table-cell">Cadastro</th>
                 <th class="px-5 py-3 text-center font-semibold text-gray-600">Ações</th>
               </tr>
@@ -322,8 +330,8 @@
     <section id="section-commissions" class="dash-section hidden space-y-5">
 
       <div>
-        <h2 class="text-xl font-bold text-gray-800">Comissões</h2>
-        <p class="text-sm text-gray-500">Histórico de comissões recebidas por depósitos de clientes</p>
+        <h2 class="text-xl font-bold text-gray-800">Meus Ganhos</h2>
+        <p class="text-sm text-gray-500">O que você ganhou em cada consulta dos seus clientes (o seu preço menos o seu custo)</p>
       </div>
 
       <!-- Summary cards -->
@@ -350,9 +358,9 @@
       <div class="card bg-amber-50 border border-amber-200 flex gap-3">
         <span class="text-amber-600 text-xl flex-shrink-0 mt-0.5">💡</span>
         <p class="text-sm text-amber-800">
-          Você ganha <strong><span class="info-taxa-txt">20</span>% de cada recarga</strong> aprovada dos seus clientes (PIX ou cartão,
-          e também da fatura de quem é pós-pago). A comissão é enviada na hora para a sua chave PIX; se o envio
-          automático falhar, ela fica "a receber" e a MC Despachadoria paga em seguida.
+          Cada consulta que um cliente seu faz, numa consulta da sua página, gera o ganho da diferença entre o seu preço e o seu custo.
+          O ganho é enviado <strong>na hora</strong> para a sua chave PIX; se o envio automático falhar, ele fica "a receber"
+          e a MC Despachadoria paga em seguida. Consulta estornada desconta o ganho dela.
         </p>
       </div>
 
@@ -364,9 +372,10 @@
               <tr>
                 <th class="px-5 py-3 text-left font-semibold text-gray-600">Data</th>
                 <th class="px-5 py-3 text-left font-semibold text-gray-600">Cliente</th>
-                <th class="px-5 py-3 text-right font-semibold text-gray-600 hidden sm:table-cell">Recarga</th>
-                <th class="px-5 py-3 text-center font-semibold text-gray-600 hidden sm:table-cell">Taxa</th>
-                <th class="px-5 py-3 text-right font-semibold text-gray-600">Comissão</th>
+                <th class="px-5 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">Consulta</th>
+                <th class="px-5 py-3 text-right font-semibold text-gray-600 hidden sm:table-cell">Venda</th>
+                <th class="px-5 py-3 text-right font-semibold text-gray-600 hidden sm:table-cell">Seu custo</th>
+                <th class="px-5 py-3 text-right font-semibold text-gray-600">Ganho</th>
                 <th class="px-5 py-3 text-center font-semibold text-gray-600">Situação</th>
               </tr>
             </thead>
@@ -386,7 +395,7 @@
       <div>
         <h2 class="text-xl font-bold text-gray-800">Minha Página</h2>
         <p class="text-sm text-gray-500">
-          Sua página de divulgação, com o seu nome. Quem se cadastrar por ela vira seu cliente automaticamente.
+          Sua página de divulgação, com o seu nome e as consultas que você escolheu, com os seus preços. Quem se cadastrar por ela vira seu cliente automaticamente.
           Ela já vem com um texto padrão — troque os textos e as imagens como quiser.
         </p>
       </div>
@@ -438,20 +447,60 @@
     <!-- ── CONSULTAS PARA REVENDER ───────────────────────────────────── -->
     <section id="section-catalog" class="dash-section hidden space-y-5">
       <div>
-        <h2 class="text-xl font-bold text-gray-800">Consultas para Revender</h2>
+        <h2 class="text-xl font-bold text-gray-800">Minhas Consultas e Preços</h2>
         <p class="text-sm text-gray-500">
-          Todas as consultas do site, com o preço que o seu cliente paga. Cada cliente seu faz as consultas
-          no próprio painel, com o saldo dele — e você ganha <span class="info-taxa-txt">20</span>% de cada recarga.
+          Todas as consultas da plataforma, com o <strong>seu custo</strong>. Escolha as que vão para a sua página e digite o
+          preço que o seu cliente vai pagar — ele não pode ser menor que o seu custo, e a diferença é o seu ganho em cada consulta.
+          Os seus clientes pagam esse preço no painel deles; consulta fora da sua página sai pelo preço normal do site, sem ganho para você.
         </p>
       </div>
       <div class="card flex flex-col sm:flex-row gap-3">
         <input id="catalog-search" type="text" placeholder="Buscar consulta..."
           class="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           oninput="renderCatalog()">
-        <a href="/painel/usuario" class="btn-primary justify-center">🚗 Fazer uma consulta</a>
+        <select id="catalog-filtro" onchange="renderCatalog()"
+          class="px-4 py-2 border border-gray-300 rounded-lg text-sm bg-white">
+          <option value="todas">Todas</option>
+          <option value="pagina">Só as da minha página</option>
+          <option value="fora">Só as fora da página</option>
+        </select>
       </div>
       <div id="catalog-list" class="space-y-5">
         <div class="skeleton h-12 w-full"></div>
+      </div>
+    </section>
+
+    <!-- ── DOMÍNIO PRÓPRIO ───────────────────────────────────────────── -->
+    <section id="section-dominio" class="dash-section hidden space-y-5 max-w-3xl">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Domínio Próprio</h2>
+        <p class="text-sm text-gray-500">
+          Use um endereço seu (ex.: <span class="font-mono">suaempresa.com.br</span>) para a sua página de parceiro.
+          A MC Despachadoria cuida de toda a configuração (domínio, DNS) e o seu domínio fica ativo em até <strong>48 horas</strong>
+          depois do pagamento.
+        </p>
+      </div>
+      <div class="card bg-blue-50 border border-blue-200 text-sm text-blue-900">
+        <div class="font-semibold">💳 Anuidade: <span id="dom-valor">R$ 200,00</span> a cada 12 meses</div>
+        <p class="mt-1">O valor <strong>não é só o domínio</strong>: ele inclui o registro do domínio <strong>e a taxa de administração do serviço</strong>
+          (configuração, DNS, hospedagem da sua página no seu endereço e suporte). É renovado a cada 12 meses — avisamos pelo WhatsApp antes de vencer.</p>
+      </div>
+      <div id="dom-status" class="hidden card"></div>
+      <div id="dom-form" class="card space-y-4">
+        <label class="flex items-start gap-2 text-sm font-semibold text-gray-700">
+          <input id="dom-quero" type="checkbox" class="mt-0.5" onchange="toggleDominioForm()">
+          <span>Quero usar domínio próprio na minha página</span>
+        </label>
+        <div id="dom-campos" class="hidden space-y-3">
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1">Opções de domínio (até 5, uma por linha, em ordem de preferência)</label>
+            <textarea id="dom-opcoes" rows="5" class="w-full px-4 py-2 border border-gray-300 rounded-lg text-sm font-mono"
+              placeholder="suaempresa.com.br&#10;suaempresaconsultas.com.br"></textarea>
+            <p class="text-xs text-gray-400 mt-1">Só domínios terminados em <strong>.com.br</strong>. Se a primeira opção não estiver disponível, usamos a próxima.</p>
+          </div>
+          <div id="dom-erro" class="hidden bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm"></div>
+          <button id="dom-btn" onclick="aderirDominio()" class="btn-primary">🔗 Aderir Domínio Próprio</button>
+        </div>
       </div>
     </section>
 
@@ -530,6 +579,18 @@
 <!-- ── TOAST ──────────────────────────────────────────────────────────── -->
 <div id="toast" class="toast hide"></div>
 
+<!-- ── MODAL: PIX DO DOMÍNIO PRÓPRIO ─────────────────────────────────── -->
+<div id="modal-dominio-pix" class="fixed inset-0 z-50 flex items-center justify-center p-4 hidden">
+  <div class="absolute inset-0 bg-black/50"></div>
+  <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[92vh] overflow-y-auto">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+      <h3 class="text-lg font-bold text-gray-800">🔗 Domínio Próprio + Administração — <span id="dpix-valor">R$ 200,00</span>/ano</h3>
+      <button onclick="fecharDominioPix()" class="text-gray-400 hover:text-gray-600 text-xl font-bold" aria-label="Fechar">✕</button>
+    </div>
+    <div id="dpix-corpo" class="px-6 py-5 space-y-4 text-sm text-gray-700"></div>
+  </div>
+</div>
+
 <!-- ── MODAL: CRIAR CLIENTE ───────────────────────────────────────────── -->
 <div id="modal-create-client"
   class="fixed inset-0 z-50 flex items-center justify-center p-4 hidden"
@@ -541,7 +602,7 @@
     <div class="flex items-center justify-between px-6 py-5 border-b border-gray-100">
       <div>
         <h3 class="text-lg font-bold text-gray-800">Criar Novo Cliente</h3>
-        <p class="text-sm text-gray-500 mt-0.5">O cliente ficará vinculado à sua conta de revendedor</p>
+        <p class="text-sm text-gray-500 mt-0.5">O cliente ficará vinculado à sua conta de parceiro e pagará os seus preços</p>
       </div>
       <button onclick="closeModal()"
         class="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100 transition">
@@ -646,11 +707,6 @@
         </div>
       </div>
 
-      <label id="mc-adesao-box" class="hidden flex items-start gap-2 text-sm bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-        <input id="mc-exigir-adesao" type="checkbox" checked class="mt-0.5">
-        <span>Cobrar adesão deste cliente — a conta fica <strong>bloqueada</strong> até você receber e clicar em “Liberar acesso”.</span>
-      </label>
-
       <!-- Footer -->
       <div class="flex gap-3 pt-2">
         <button type="button" onclick="closeModal()"
@@ -679,8 +735,9 @@ let allComms     = [];
 const sectionTitles = {
   overview:    'Visão Geral',
   clients:     'Meus Clientes',
-  commissions: 'Comissões',
-  catalog:     'Consultas para Revender',
+  commissions: 'Meus Ganhos',
+  catalog:     'Minhas Consultas e Preços',
+  dominio:     'Domínio Próprio',
   pagina:      'Minha Página',
   profile:     'Perfil',
 };
@@ -694,6 +751,7 @@ const STATUS_COMISSAO = {
   ENVIANDO: '<span class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full text-xs font-medium">Enviando PIX</span>',
   PAGA:     '<span class="badge-green">Recebida</span>',
 };
+const ORIGEM_GANHO = { CONSULTA: '', ESTORNO: ' <span class="text-xs text-red-500">(estorno)</span>', RECARGA: ' <span class="text-xs text-gray-400">(recarga, modelo antigo)</span>', FATURA: ' <span class="text-xs text-gray-400">(fatura, modelo antigo)</span>' };
 
 // ── Formatação ─────────────────────────────────────────────────────────────
 const fmt = (v) =>
@@ -744,6 +802,7 @@ function showSection(id) {
   if (id === 'commissions') renderCommissionsTable();
   if (id === 'catalog') loadCatalog();
   if (id === 'pagina') loadPagina();
+  if (id === 'dominio') loadDominio();
 }
 
 // ── Inicialização ──────────────────────────────────────────────────────────
@@ -794,35 +853,12 @@ async function loadStats() {
     document.getElementById('comm-total').textContent   = fmt(d.total_commissions);
     document.getElementById('comm-paga').textContent      = fmt(d.comissao_paga);
     document.getElementById('comm-a-receber').textContent = fmt(aReceber);
-    document.getElementById('info-taxa').textContent = d.taxa_comissao;
-    document.querySelectorAll('.info-taxa-txt').forEach(el => { el.textContent = d.taxa_comissao; });
+    document.getElementById('stat-vendas').textContent = d.vendas;
+    document.getElementById('info-na-pagina').textContent = d.consultas_na_pagina;
     document.getElementById('info-pix-tipo').textContent  = d.pix_tipo_nome ? `Chave ${d.pix_tipo_nome}` : 'Chave PIX ainda não cadastrada';
     document.getElementById('info-pix-chave').textContent = d.pix_chave || 'Fale com o suporte para cadastrar.';
-    document.getElementById('adesao-info').innerHTML = d.cobra_adesao
-      ? `<p><strong class="text-green-700">Liberada para você.</strong> O valor é o que você combinou com a MC e é <strong>todo seu</strong> — você cobra direto do cliente.</p>
-         <p class="mt-2">Cliente novo (pela sua página ou criado por você) fica <strong>bloqueado</strong> até você receber a adesão e clicar em <strong>“🔓 Liberar acesso”</strong> em Meus Clientes.</p>
-         ${d.adesoes_pendentes ? `<p class="mt-2 text-amber-700 font-semibold">${d.adesoes_pendentes} cliente(s) aguardando liberação.</p>` : ''}`
-      : '<p>A cobrança de adesão não está liberada para a sua conta. Seus clientes entram direto, sem adesão. Para cobrar adesão, combine com a MC Despachadoria.</p>';
-    document.getElementById('mc-adesao-box').classList.toggle('hidden', !d.cobra_adesao);
-    document.querySelectorAll('.adesao-col').forEach(el => el.classList.toggle('hidden', !(d.cobra_adesao || d.adesoes_pagas || d.adesoes_pendentes)));
     renderClientsTable();
   } catch { /* silencioso */ }
-}
-
-// ── Adesão: o revendedor recebe por fora e libera o acesso ─────────────────
-async function liberarAdesao(id) {
-  const c = allClients.find(x => x.id === id);
-  if (!confirm(`Confirmar que você recebeu a adesão de ${c ? c.name : 'este cliente'} e liberar o acesso dele?`)) return;
-  try {
-    const r = await fetch(`/api/reseller/clients/${id}/adesao`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paga: true }),
-    });
-    const d = await r.json();
-    if (!r.ok) { toast(d.error || 'Erro.', 'error'); return; }
-    if (c) { c.adesao_paga_em = d.adesao_paga_em; c.active = d.active; }
-    renderClientsTable(); renderRecentClients(); loadStats();
-    toast('Acesso liberado. O cliente já pode entrar.');
-  } catch { toast('Erro ao liberar.', 'error'); }
 }
 
 // ── Minha Página (/r/<slug>) ───────────────────────────────────────────────
@@ -898,21 +934,31 @@ async function removerImagemPagina(tipo) {
   } catch { toast('Erro ao remover.', 'error'); }
 }
 
-// ── Catálogo para revender ─────────────────────────────────────────────────
-async function loadCatalog() {
-  if (allServices) { renderCatalog(); return; }
+// ── Minhas Consultas e Preços ──────────────────────────────────────────────
+// Lista de /api/reseller/consultas: custo do parceiro (catálogo ou desconto da
+// MC) e o preço dele nas que estão na página. O servidor recusa preço abaixo
+// do custo; aqui a conta do ganho é só para mostrar.
+async function loadCatalog(forcar) {
+  if (allServices && !forcar) { renderCatalog(); return; }
   try {
-    const r = await fetch('/api/services');
+    const r = await fetch('/api/reseller/consultas');
     const d = await r.json();
-    allServices = (d.services || []).filter(s => !s.unavailable && !s.adminOnly);
+    if (!r.ok) throw new Error(d.error);
+    allServices = d.consultas || [];
     renderCatalog();
   } catch { document.getElementById('catalog-list').innerHTML = '<p class="text-sm text-red-600">Erro ao carregar as consultas.</p>'; }
 }
 
+const precoTela = v => (v == null ? '' : Number(v).toFixed(2).replace('.', ','));
+const lerPreco = v => { const n = parseFloat(String(v || '').replace(/\./g, '').replace(',', '.')); return isFinite(n) ? Math.round(n * 100) / 100 : NaN; };
+
 function renderCatalog() {
   const sem = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
   const q = sem(document.getElementById('catalog-search').value).trim();
-  const lista = (allServices || []).filter(s => !q || q.split(/\s+/).every(p => sem(`${s.name} ${s.group}`).includes(p)));
+  const filtro = document.getElementById('catalog-filtro').value;
+  const lista = (allServices || []).filter(s =>
+    (!q || q.split(/\s+/).every(p => sem(`${s.name} ${s.group}`).includes(p))) &&
+    (filtro === 'todas' || (filtro === 'pagina') === s.na_pagina));
   const grupos = {};
   lista.forEach(s => { (grupos[s.group || 'Outras'] = grupos[s.group || 'Outras'] || []).push(s); });
   const el = document.getElementById('catalog-list');
@@ -921,12 +967,175 @@ function renderCatalog() {
     <div class="card p-0 overflow-hidden">
       <div class="px-5 py-3 bg-gray-50 border-b border-gray-100 font-semibold text-gray-700">${esc(g)} <span class="text-xs text-gray-400 font-normal">(${ss.length})</span></div>
       <div class="divide-y divide-gray-50">${ss.map(s => `
-        <div class="flex items-center justify-between px-5 py-2.5 text-sm">
-          <span class="text-gray-800">${esc(s.icon || '')} ${esc(s.name)}</span>
-          <span class="font-semibold ${s.price > 0 ? 'text-gray-800' : 'text-green-600'} whitespace-nowrap ml-3">${s.price > 0 ? fmt(s.price) : 'Grátis*'}</span>
+        <div class="flex flex-col md:flex-row md:items-center gap-2 px-5 py-3 text-sm ${s.na_pagina ? 'bg-green-50/50' : ''}">
+          <div class="flex-1 min-w-0">
+            <div class="text-gray-800">${esc(s.icon || '')} ${esc(s.name)} ${s.na_pagina ? '<span class="badge-green ml-1">na página</span>' : ''}</div>
+            <div class="text-xs text-gray-500">Seu custo: <strong>${fmt(s.custo)}</strong>${s.desconto ? ` <span class="text-green-700">(desconto da MC — site: ${fmt(s.catalogo)})</span>` : ''}
+              ${s.na_pagina ? ` · seu ganho: <strong class="text-green-700">${fmt(Math.max(0, s.venda - s.custo))}</strong> por consulta` : ''}</div>
+            ${s.na_pagina && s.preco < s.custo ? '<div class="text-xs text-amber-700">Seu custo subiu acima do seu preço: o cliente paga o custo e você não ganha nesta consulta. Atualize o preço.</div>' : ''}
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-gray-500">R$</span>
+            <input id="preco-${esc(s.id)}" inputmode="decimal" value="${precoTela(s.na_pagina ? s.preco : s.custo)}"
+              class="w-24 px-2 py-1.5 border border-gray-300 rounded-lg text-sm text-right" aria-label="Preço para o seu cliente">
+            <button onclick="salvarConsulta('${esc(s.id)}')" class="btn-primary !px-3 !py-1.5 text-xs">${s.na_pagina ? 'Salvar' : '+ Adicionar'}</button>
+            ${s.na_pagina ? `<button onclick="removerConsulta('${esc(s.id)}')" class="text-xs text-red-600 hover:underline">Remover</button>` : ''}
+          </div>
         </div>`).join('')}
       </div>
-    </div>`).join('') + '<p class="text-xs text-gray-400">* Grátis para quem tem a Assinatura Coisas de Despachantes.</p>';
+    </div>`).join('');
+}
+
+async function salvarConsulta(id) {
+  const s = (allServices || []).find(x => x.id === id);
+  const preco = lerPreco(document.getElementById(`preco-${id}`).value);
+  if (!(preco > 0)) { toast('Digite um preço válido.', 'error'); return; }
+  if (s && preco < s.custo) { toast(`O preço não pode ser menor que o seu custo (${fmt(s.custo)}).`, 'error'); return; }
+  try {
+    const r = await fetch(`/api/reseller/consultas/${encodeURIComponent(id)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ preco }),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Erro ao salvar.', 'error'); return; }
+    toast(`Na sua página por ${fmt(d.preco)} — você ganha ${fmt(d.ganho)} por consulta.`);
+    await loadCatalog(true); loadStats();
+  } catch { toast('Erro ao salvar.', 'error'); }
+}
+
+async function removerConsulta(id) {
+  if (!confirm('Tirar esta consulta da sua página? Os seus clientes passam a pagar o preço normal do site nela.')) return;
+  try {
+    await fetch(`/api/reseller/consultas/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    toast('Consulta removida da sua página.');
+    await loadCatalog(true); loadStats();
+  } catch { toast('Erro ao remover.', 'error'); }
+}
+
+// ── Domínio Próprio ────────────────────────────────────────────────────────
+// Taxa anual paga por PIX; a MC configura em até 48 h depois do pagamento. O
+// pagamento é confirmado pelo mesmo /api/pix/status da recarga.
+let dominioInfo = null, dominioPoll = null;
+const fmtDataHora = s => new Date(s).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+
+async function loadDominio() {
+  try {
+    const r = await fetch('/api/reseller/dominio');
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error);
+    dominioInfo = d;
+    renderDominio();
+  } catch { toast('Erro ao carregar o domínio.', 'error'); }
+}
+
+function renderDominio() {
+  const d = dominioInfo || {};
+  const dom = d.dominio;
+  document.getElementById('dom-valor').textContent = fmt(d.valor);
+  const st = document.getElementById('dom-status');
+  const form = document.getElementById('dom-form');
+  const opcoes = dom && (dom.opcoes || []).length ? `<div class="text-xs text-gray-500 mt-2">Opções enviadas: ${dom.opcoes.map(esc).join(', ')}</div>` : '';
+  const renovar = d.podeRenovar ? `<button onclick="renovarDominio()" class="btn-primary mt-3">🔄 Renovar por mais 12 meses (${fmt(d.valor)} — domínio + taxa de administração)</button>` : '';
+  const validade = dom && dom.valido_ate ? `<div class="text-xs text-gray-500 mt-1">Válido até <strong>${fmtDate(dom.valido_ate)}</strong> — renovação anual de ${fmt(d.valor)} (domínio + taxa de administração do serviço).</div>` : '';
+  let html = '';
+  if (dom && dom.status === 'ATIVO' && !dom.vencido) {
+    html = `<div class="text-green-700 font-semibold">✅ Domínio ativo</div>
+      <a class="font-mono text-blue-700 underline break-all" target="_blank" rel="noopener" href="https://${esc(dom.dominio)}">https://${esc(dom.dominio)}</a>${validade}${renovar}`;
+  } else if (dom && dom.vencido) {
+    html = `<div class="text-red-700 font-semibold">⚠️ Domínio vencido</div>
+      <p class="text-sm text-gray-600 mt-1">A anuidade venceu em ${fmtDate(dom.valido_ate)}. Renove para a sua página voltar a abrir pelo seu domínio.</p>${renovar}`;
+  } else if (dom && dom.status === 'CONFIGURANDO') {
+    html = `<div class="text-blue-700 font-semibold">⏳ Pagamento recebido — domínio em configuração</div>
+      <p class="text-sm text-gray-600 mt-1">A MC Despachadoria está configurando o seu domínio. Ele fica ativo até <strong>${dom.prazo_ate ? fmtDataHora(dom.prazo_ate) : 'em 48 horas'}</strong>.</p>${validade}${opcoes}`;
+  } else if (dom && dom.status === 'AGUARDANDO_PAGAMENTO') {
+    html = `<div class="text-amber-700 font-semibold">💳 Aguardando o pagamento da taxa</div>
+      <p class="text-sm text-gray-600 mt-1">Gere o PIX de novo abaixo se o anterior expirou.</p>${opcoes}`;
+  }
+  st.innerHTML = html;
+  st.classList.toggle('hidden', !html);
+  const ocupado = dom && (dom.status === 'ATIVO' || dom.status === 'CONFIGURANDO');
+  form.classList.toggle('hidden', !!ocupado);
+  if (dom && dom.status === 'AGUARDANDO_PAGAMENTO' && !document.getElementById('dom-opcoes').value) {
+    document.getElementById('dom-opcoes').value = (dom.opcoes || []).join('\n');
+    document.getElementById('dom-quero').checked = true;
+    toggleDominioForm();
+  }
+}
+
+function toggleDominioForm() {
+  document.getElementById('dom-campos').classList.toggle('hidden', !document.getElementById('dom-quero').checked);
+}
+
+function erroDominio(msg) {
+  const el = document.getElementById('dom-erro');
+  el.textContent = msg || '';
+  el.classList.toggle('hidden', !msg);
+}
+
+async function aderirDominio() {
+  const opcoes = document.getElementById('dom-opcoes').value.split(/[\n,;]+/).map(v => v.trim()).filter(Boolean);
+  erroDominio('');
+  if (!opcoes.length) { erroDominio('Informe pelo menos uma opção de domínio.'); return; }
+  if (opcoes.length > 5) { erroDominio('Informe no máximo 5 opções.'); return; }
+  const ruim = opcoes.find(o => !/\.com\.br\/?$/i.test(o.replace(/^https?:\/\//i, '')));
+  if (ruim) { erroDominio(`"${ruim}" não termina em .com.br. Só aceitamos domínio .com.br.`); return; }
+  await gerarPixDominio({ opcoes });
+}
+
+async function renovarDominio() { await gerarPixDominio({ renovar: true }); }
+
+async function gerarPixDominio(corpo) {
+  const btn = document.getElementById('dom-btn');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/reseller/dominio/pix', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo),
+    });
+    const d = await r.json();
+    if (!r.ok) { erroDominio(d.error || 'Erro ao gerar o PIX.'); toast(d.error || 'Erro ao gerar o PIX.', 'error'); return; }
+    abrirDominioPix(d);
+  } catch { erroDominio('Erro de conexão. Tente novamente.'); }
+  finally { btn.disabled = false; }
+}
+
+function abrirDominioPix(d) {
+  document.getElementById('dpix-valor').textContent = fmt(d.value);
+  document.getElementById('dpix-corpo').innerHTML = `
+    <p>Pague por PIX a anuidade do domínio próprio: <strong>${fmt(d.value)} por 12 meses</strong>, que inclui o <strong>domínio e a taxa de administração do serviço</strong>. ${d.renovacao ? 'A validade é estendida por mais 12 meses assim que o pagamento for confirmado.' : 'Assim que o pagamento for confirmado, a MC Despachadoria é avisada e o seu domínio fica ativo em até <strong>48 horas</strong>.'}</p>
+    ${d.opcoes && d.opcoes.length ? `<div class="text-xs text-gray-500">Opções: ${d.opcoes.map(esc).join(', ')}</div>` : ''}
+    <div class="flex justify-center"><img alt="QR Code PIX" class="w-56 h-56 border rounded-lg" src="data:image/png;base64,${esc(d.qrCode || '')}"></div>
+    <div>
+      <div class="text-xs text-gray-500 mb-1">PIX copia e cola</div>
+      <textarea id="dpix-copia" readonly rows="3" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-xs font-mono">${esc(d.pixCopiaECola || '')}</textarea>
+      <button onclick="copiarPixDominio()" class="btn-secondary w-full justify-center mt-2">📋 Copiar código PIX</button>
+    </div>
+    <div id="dpix-situacao" class="text-center text-sm text-amber-700 font-semibold">⏳ Aguardando o pagamento…</div>`;
+  document.getElementById('modal-dominio-pix').classList.remove('hidden');
+  clearInterval(dominioPoll);
+  const inicio = Date.now();
+  dominioPoll = setInterval(async () => {
+    if (Date.now() - inicio > 30 * 60 * 1000) { clearInterval(dominioPoll); return; }
+    try {
+      const r = await fetch(`/api/pix/status/${encodeURIComponent(d.paymentId)}`);
+      const s = await r.json();
+      if (s.credited) {
+        clearInterval(dominioPoll);
+        document.getElementById('dpix-situacao').className = 'text-center text-sm text-green-700 font-semibold';
+        document.getElementById('dpix-situacao').textContent = d.renovacao ? '✅ Pagamento confirmado! Validade estendida por mais 12 meses.' : '✅ Pagamento confirmado! Seu domínio fica ativo em até 48 horas.';
+        loadDominio();
+      }
+    } catch { /* tenta de novo na próxima volta */ }
+  }, 5000);
+}
+
+function copiarPixDominio() {
+  const v = document.getElementById('dpix-copia').value;
+  navigator.clipboard.writeText(v).then(() => toast('Código PIX copiado.'), () => toast('Não deu para copiar.', 'error'));
+}
+
+function fecharDominioPix() {
+  clearInterval(dominioPoll);
+  document.getElementById('modal-dominio-pix').classList.add('hidden');
+  loadDominio();
 }
 
 // ── Clientes ───────────────────────────────────────────────────────────────
@@ -1013,16 +1222,11 @@ function renderClientsTable() {
         </div>
       </td>
       <td class="px-5 py-3 text-gray-600 hidden md:table-cell">${esc(c.email)}</td>
-      <td class="px-5 py-3 text-right font-semibold text-gray-700">${fmt(c.recargas)}</td>
+      <td class="px-5 py-3 text-right font-semibold text-gray-700">${parseInt(c.consultas || 0)}<div class="text-xs font-normal text-gray-400">${fmt(c.gasto)}</div></td>
       <td class="px-5 py-3 text-right text-green-600 hidden sm:table-cell">${fmt(c.comissao)}</td>
       <td class="px-5 py-3 text-center">
         <span class="${c.active ? 'badge-green' : 'badge-red'}">${c.active ? 'Ativo' : 'Bloqueado'}</span>
       </td>
-      ${resellerInfo && (resellerInfo.cobra_adesao || resellerInfo.adesoes_pagas || resellerInfo.adesoes_pendentes) ? `<td class="px-5 py-3 text-center text-xs">
-        ${c.adesao_paga_em ? `<span class="badge-green">Paga ${fmtDate(c.adesao_paga_em)}</span>`
-          : c.adesao_exigida ? `<button onclick="liberarAdesao(${c.id})" class="px-3 py-1 rounded-full bg-amber-100 text-amber-800 font-semibold hover:bg-amber-200">🔓 Liberar acesso</button>`
-          : '<span class="text-gray-400">—</span>'}
-      </td>` : ''}
       <td class="px-5 py-3 text-gray-500 text-xs hidden lg:table-cell">${fmtDate(c.created_at)}</td>
       <td class="px-5 py-3 text-center">
         <button onclick="toggleClient(${c.id})"
@@ -1071,20 +1275,20 @@ function renderRecentCommissions() {
     el.innerHTML = `
       <div class="text-center py-8 text-gray-400">
         <div class="text-4xl mb-2">💰</div>
-        <p class="text-sm">Nenhuma comissão ainda.</p>
-        <p class="text-xs mt-1">Comissões aparecem quando seus clientes recarregam.</p>
+        <p class="text-sm">Nenhum ganho ainda.</p>
+        <p class="text-xs mt-1">Os ganhos aparecem quando seus clientes fazem consultas da sua página.</p>
       </div>`;
     return;
   }
   el.innerHTML = allComms.slice(0, 5).map(c => `
     <div class="flex items-center justify-between py-2.5 border-b border-gray-50 last:border-0">
       <div class="min-w-0">
-        <div class="text-sm font-medium text-gray-800 truncate">${esc(c.client_name)}</div>
-        <div class="text-xs text-gray-400">${fmtDate(c.created_at)} · ${STATUS_COMISSAO[c.status] || ''}</div>
+        <div class="text-sm font-medium text-gray-800 truncate">${esc(c.client_name)}${ORIGEM_GANHO[c.origem] || ''}</div>
+        <div class="text-xs text-gray-400 truncate">${fmtDate(c.created_at)} · ${esc(c.service_name || '')} ${STATUS_COMISSAO[c.status] || ''}</div>
       </div>
       <div class="text-right flex-shrink-0 ml-3">
-        <div class="text-sm font-bold text-green-600">+${fmt(c.amount)}</div>
-        <div class="text-xs text-gray-400">${parseFloat(c.rate)}% sobre ${fmt(c.base)}</div>
+        <div class="text-sm font-bold ${c.amount < 0 ? 'text-red-600' : 'text-green-600'}">${c.amount < 0 ? '' : '+'}${fmt(c.amount)}</div>
+        <div class="text-xs text-gray-400">${c.custo != null ? `venda ${fmt(c.base)}` : ''}</div>
       </div>
     </div>`).join('');
 }
@@ -1092,25 +1296,22 @@ function renderRecentCommissions() {
 function renderCommissionsTable() {
   const tbody = document.getElementById('commissions-table-body');
   if (!allComms.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="text-center py-16 text-gray-400">
+    tbody.innerHTML = `<tr><td colspan="7" class="text-center py-16 text-gray-400">
       <div class="text-5xl mb-3">💰</div>
-      <p class="font-medium">Nenhuma comissão ainda</p>
-      <p class="text-sm mt-1">Comissões são geradas quando seus clientes fazem recargas aprovadas.</p>
+      <p class="font-medium">Nenhum ganho ainda</p>
+      <p class="text-sm mt-1">Os ganhos são gerados quando seus clientes fazem consultas da sua página.</p>
     </td></tr>`;
   } else {
     tbody.innerHTML = allComms.map(c => `
     <tr class="table-row">
       <td class="px-5 py-3 text-gray-500 text-sm">${fmtDate(c.created_at)}</td>
       <td class="px-5 py-3">
-        <div class="font-medium text-gray-800 text-sm">${esc(c.client_name)}${c.origem === 'FATURA' ? ' <span class="text-xs text-gray-400">(fatura)</span>' : ''}</div>
+        <div class="font-medium text-gray-800 text-sm">${esc(c.client_name)}${ORIGEM_GANHO[c.origem] || ''}</div>
       </td>
-      <td class="px-5 py-3 text-right text-gray-600 text-sm hidden sm:table-cell">${fmt(c.base)}</td>
-      <td class="px-5 py-3 text-center hidden sm:table-cell">
-        <span class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full text-xs font-medium">
-          ${parseFloat(c.rate)}%
-        </span>
-      </td>
-      <td class="px-5 py-3 text-right font-bold text-green-600 text-sm">+${fmt(c.amount)}</td>
+      <td class="px-5 py-3 text-gray-600 text-sm hidden md:table-cell">${esc(c.service_name || (c.origem === 'RECARGA' || c.origem === 'FATURA' ? `${parseFloat(c.rate)}% de ${fmt(c.base)}` : '-'))}</td>
+      <td class="px-5 py-3 text-right text-gray-600 text-sm hidden sm:table-cell">${c.custo != null ? fmt(c.base) : '-'}</td>
+      <td class="px-5 py-3 text-right text-gray-600 text-sm hidden sm:table-cell">${c.custo != null ? fmt(c.custo) : '-'}</td>
+      <td class="px-5 py-3 text-right font-bold ${c.amount < 0 ? 'text-red-600' : 'text-green-600'} text-sm">${c.amount < 0 ? '' : '+'}${fmt(c.amount)}</td>
       <td class="px-5 py-3 text-center">${STATUS_COMISSAO[c.status] || ''}</td>
     </tr>`).join('');
   }
@@ -1306,8 +1507,7 @@ async function submitCreateClient(e) {
     const res  = await fetch('/api/reseller/clients', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, cpf_cnpj, email, phone, password,
-        exigir_adesao: document.getElementById('mc-exigir-adesao').checked }),
+      body: JSON.stringify({ name, cpf_cnpj, email, phone, password }),
     });
     const data = await res.json();
     if (!res.ok) { showModalError(data.error); return; }

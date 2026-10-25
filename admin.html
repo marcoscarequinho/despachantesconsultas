@@ -116,7 +116,7 @@
       <span class="text-lg">🧮</span> Clientes Pós-pago
     </div>
     <div class="nav-item" data-section="revendedores" onclick="showSection('revendedores')">
-      <span class="text-lg">🤝</span> Revendedores
+      <span class="text-lg">🤝</span> Parceiros
     </div>
     <div class="nav-item" data-section="directdata" onclick="showSection('directdata')">
       <span class="text-lg">🔎</span> Saldo DirectData
@@ -269,7 +269,7 @@
           <select id="user-role-filter" class="input-field w-36" onchange="filterUsers()">
             <option value="">Todos os roles</option>
             <option value="user">Usuário</option>
-            <option value="reseller">Revendedor</option>
+            <option value="reseller">Parceiro</option>
             <option value="admin">Admin</option>
           </select>
           <select id="user-active-filter" class="input-field w-36" onchange="filterUsers()">
@@ -924,7 +924,7 @@
       </div>
     </section>
 
-    <!-- ── REVENDEDORES (conteúdo montado por assets/admin-revendedores.js) ── -->
+    <!-- ── PARCEIROS (conteúdo montado por assets/admin-revendedores.js) ── -->
     <section id="section-revendedores" class="admin-section hidden space-y-4"></section>
 
     <!-- ── VÍDEO DE APRESENTAÇÃO ─────────────────────────────────────────────── -->
@@ -1017,7 +1017,7 @@
           <label class="label">Role</label>
           <select id="c-role" class="input-field">
             <option value="user">Usuário</option>
-            <option value="reseller">Revendedor</option>
+            <option value="reseller">Parceiro</option>
             <option value="admin">Admin</option>
           </select>
         </div>
@@ -1066,7 +1066,7 @@
           <label class="label">Role</label>
           <select id="e-role" class="input-field">
             <option value="user">Usuário</option>
-            <option value="reseller">Revendedor</option>
+            <option value="reseller">Parceiro</option>
             <option value="admin">Admin</option>
           </select>
         </div>
@@ -1391,7 +1391,7 @@ const fmt = v => 'R$ ' + parseFloat(v||0).toLocaleString('pt-BR',{minimumFractio
 const fmtDate = s => { const d=new Date(s); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
 
 let allUsers = [], allTx = [], allQueries = [], allServices = [], allManualQueries = [];
-const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API', 'assinantes':'Lista de Assinantes Cadastrados', 'atpve':'Pedidos de ATPV-e', 'novas':'Consultas Novas (ATPV-e)', 'pos-pago':'Clientes Pós-pago', revendedores:'Revendedores', directdata:'Saldo DirectData', video:'Vídeo de Apresentação', mensagens:'Mensagens de clientes' };
+const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API', 'assinantes':'Lista de Assinantes Cadastrados', 'atpve':'Pedidos de ATPV-e', 'novas':'Consultas Novas (ATPV-e)', 'pos-pago':'Clientes Pós-pago', revendedores:'Parceiros', directdata:'Saldo DirectData', video:'Vídeo de Apresentação', mensagens:'Mensagens de clientes' };
 
 function toast(msg, type='success') {
   const el = document.getElementById('toast');
@@ -2946,7 +2946,7 @@ function renderDashUsers(users) {
 
 function roleBadge(role) {
   const map = { user:'badge-blue', reseller:'badge-amber', admin:'badge-purple' };
-  const labels = { user:'Usuário', reseller:'Revendedor', admin:'Admin' };
+  const labels = { user:'Usuário', reseller:'Parceiro', admin:'Admin' };
   return `<span class="${map[role]||'badge-blue'}">${labels[role]||role}</span>`;
 }
 

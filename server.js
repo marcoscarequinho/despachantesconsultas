@@ -2483,6 +2483,55 @@ async function initDB() {
   await pool.query(`ALTER TABLE commissions ADD COLUMN IF NOT EXISTS envio_erro TEXT`);
   await pool.query(`ALTER TABLE commissions ADD COLUMN IF NOT EXISTS envio_tentado_em TIMESTAMPTZ`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_commissions_pix_payment ON commissions (pix_payment_id) WHERE pix_payment_id IS NOT NULL`);
+  // Parceria (25/10/2026, substitui o modelo de 20% da recarga): o ganho do
+  // parceiro é o que ele cobra A MAIS em cada consulta. Uma linha CONSULTA por
+  // consulta cobrada (query_id) e, se ela for estornada depois de paga, uma
+  // ESTORNO negativa — o índice garante uma de cada por consulta.
+  await pool.query(`ALTER TABLE commissions ADD COLUMN IF NOT EXISTS query_id INTEGER REFERENCES queries(id) ON DELETE SET NULL`);
+  await pool.query(`ALTER TABLE commissions ADD COLUMN IF NOT EXISTS custo NUMERIC(10,2)`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_commissions_query_origem ON commissions (query_id, origem) WHERE query_id IS NOT NULL`);
+  // Consultas que o parceiro pôs na página dele, com o preço que o cliente dele
+  // paga (nunca abaixo do custo do parceiro — ver precoParceiroDoCliente).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS parceiro_consultas (
+      parceiro_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      service_id  VARCHAR(100) NOT NULL,
+      preco       NUMERIC(10,2) NOT NULL,
+      created_at  TIMESTAMPTZ DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (parceiro_id, service_id)
+    );
+  `);
+  // Domínio próprio do parceiro: ele sugere até 5 opções e paga a taxa por PIX
+  // (purpose 'DOMINIO'); a configuração (DNS, Vercel) é do dono, em até 48 h.
+  // AGUARDANDO_PAGAMENTO → CONFIGURANDO (pago) → ATIVO (admin informou o domínio).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS parceiro_dominios (
+      parceiro_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      opcoes      JSONB NOT NULL DEFAULT '[]'::jsonb,
+      status      VARCHAR(25) NOT NULL DEFAULT 'AGUARDANDO_PAGAMENTO',
+      gateway_id  VARCHAR(60),
+      valor       NUMERIC(10,2),
+      pago_em     TIMESTAMPTZ,
+      prazo_ate   TIMESTAMPTZ,
+      dominio     VARCHAR(253) UNIQUE,
+      ativado_em  TIMESTAMPTZ,
+      valido_ate  TIMESTAMPTZ,
+      aviso_vencimento_em TIMESTAMPTZ,
+      observacao  TEXT,
+      created_at  TIMESTAMPTZ DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`ALTER TABLE parceiro_dominios ADD COLUMN IF NOT EXISTS valido_ate TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE parceiro_dominios ADD COLUMN IF NOT EXISTS aviso_vencimento_em TIMESTAMPTZ`);
+  // A adesão acabou com a Parceria: quem ainda esperava a liberação entra, e
+  // nenhuma conta nova nasce bloqueada (ver criarUsuarioDoRevendedor).
+  await pool.query(
+    `UPDATE users SET active=true, adesao_exigida=false
+      WHERE adesao_exigida AND adesao_paga_em IS NULL AND active=false`
+  );
+  await pool.query(`UPDATE revendedores SET cobra_adesao=false WHERE cobra_adesao`);
   console.log('✅ Tabelas prontas');
 }
 
@@ -2532,6 +2581,15 @@ app.get('/consulta-avulsa.html', (req, res) => {
 // via HTTP) — abre uma exceção só pra essa subpasta, exigida pelo Android pra
 // verificar o Digital Asset Links do app TWA (assetlinks.json).
 app.use('/.well-known', express.static(path.join(__dirname, '.well-known'), { dotfiles: 'allow', etag: false, lastModified: false, setHeaders: (res) => res.set('Cache-Control', 'no-store') }));
+// Domínio próprio do parceiro (ver parceiro_dominios): a raiz desse domínio
+// abre a página do parceiro em vez da home. Antes do express.static, que
+// serviria o index.html. O resto (entrar, painel, API) é o site de sempre.
+app.get('/', async (req, res, next) => {
+  try {
+    if (!(await slugPorDominio(hostDaRequisicao(req)))) return next();
+    noCache(res); res.sendFile(path.join(__dirname, 'revendedor-pagina.html'));
+  } catch { next(); }
+});
 app.use(express.static(path.join(__dirname), { etag: false, lastModified: false, setHeaders: (res) => res.set('Cache-Control', 'no-store') }));
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -2977,21 +3035,21 @@ app.get('/api/affiliate/stats', requireAuth, async (req, res) => {
   }
 });
 
-// ── Painel do revendedor ─────────────────────────────────────────────────────
-// Os clientes do revendedor são os users com revendedor_id = ele (ver initDB).
-// Os números de comissão saem de commissions (20% sobre a recarga, ver
-// registrarComissaoRevendedor).
+// ── Painel do parceiro (antigo revendedor) ───────────────────────────────────
+// Os clientes do parceiro são os users com revendedor_id = ele (ver initDB).
+// Os ganhos saem de commissions: desde 25/10/2026 é o que ele cobra a mais em
+// cada consulta (registrarLucrosParceiros); as linhas RECARGA/FATURA são do
+// modelo antigo de 20% e continuam no extrato dele.
 app.get('/api/reseller/stats', requireAuth, requireReseller, async (req, res) => {
   try {
     const rid = req.user.id;
-    const [info, clientes, com] = await Promise.all([
+    await registrarLucrosParceiros(rid).catch(e => console.error('[parceiro] lucros:', e.message));
+    const [info, clientes, com, pag] = await Promise.all([
       pool.query(
-        `SELECT u.credits, rv.pix_tipo, rv.pix_chave, rv.cobra_adesao, rv.slug
+        `SELECT u.credits, rv.pix_tipo, rv.pix_chave, rv.slug
            FROM users u LEFT JOIN revendedores rv ON rv.user_id = u.id WHERE u.id=$1`, [rid]),
       pool.query(
-        `SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE active) AS ativos,
-                COUNT(*) FILTER (WHERE adesao_paga_em IS NOT NULL) AS adesoes,
-                COUNT(*) FILTER (WHERE adesao_exigida AND adesao_paga_em IS NULL) AS adesoes_pendentes
+        `SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE active) AS ativos
            FROM users WHERE revendedor_id=$1`, [rid]),
       pool.query(
         `SELECT COALESCE(SUM(amount),0) AS gerada,
@@ -2999,24 +3057,22 @@ app.get('/api/reseller/stats', requireAuth, requireReseller, async (req, res) =>
                 COALESCE(SUM(amount) FILTER (WHERE status='ENVIANDO'),0) AS enviando,
                 COALESCE(SUM(amount) FILTER (WHERE status='A_PAGAR'),0) AS a_pagar,
                 COALESCE(SUM(amount) FILTER (WHERE created_at >= date_trunc('month', NOW())),0) AS mes,
-                COALESCE(SUM(base),0) AS recargas
-           FROM commissions WHERE reseller_id=$1 AND pix_payment_id IS NOT NULL`, [rid]),
+                COUNT(*) FILTER (WHERE origem='CONSULTA') AS vendas
+           FROM commissions WHERE reseller_id=$1 AND origem IS NOT NULL AND status <> 'CANCELADA'`, [rid]),
+      pool.query('SELECT COUNT(*) AS n FROM parceiro_consultas WHERE parceiro_id=$1', [rid]),
     ]);
     const i = info.rows[0] || {};
     const c = com.rows[0];
     res.json({
       credits:          parseFloat(i.credits || 0),
-      taxa_comissao:    COMISSAO_REVENDEDOR_PCT,
       pix_tipo:         i.pix_tipo || null,
       pix_tipo_nome:    PIX_TIPOS[i.pix_tipo] || null,
       pix_chave:        i.pix_chave || null,
-      cobra_adesao:     !!i.cobra_adesao,
       slug:             i.slug || null,
       total_clients:    parseInt(clientes.rows[0].total),
       active_clients:   parseInt(clientes.rows[0].ativos),
-      adesoes_pagas:    parseInt(clientes.rows[0].adesoes),
-      adesoes_pendentes: parseInt(clientes.rows[0].adesoes_pendentes),
-      recargas_total:   parseFloat(c.recargas),
+      vendas:           parseInt(c.vendas),
+      consultas_na_pagina: parseInt(pag.rows[0].n),
       month_commissions: parseFloat(c.mes),
       total_commissions: parseFloat(c.gerada),
       comissao_paga:    parseFloat(c.paga),
@@ -3033,10 +3089,10 @@ app.get('/api/reseller/stats', requireAuth, requireReseller, async (req, res) =>
 app.get('/api/reseller/clients', requireAuth, requireReseller, async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT u.id, u.name, u.email, u.cpf_cnpj, u.phone, u.credits, u.active, u.created_at, u.adesao_paga_em, u.adesao_exigida,
-              COALESCE((SELECT SUM(base) FROM commissions c WHERE c.client_id=u.id AND c.reseller_id=$1), 0) AS recargas,
-              COALESCE((SELECT SUM(amount) FROM commissions c WHERE c.client_id=u.id AND c.reseller_id=$1), 0) AS comissao,
-              (SELECT COUNT(*) FROM queries q WHERE q.user_id=u.id AND q.status='success') AS consultas
+      `SELECT u.id, u.name, u.email, u.cpf_cnpj, u.phone, u.credits, u.active, u.created_at,
+              COALESCE((SELECT SUM(amount) FROM commissions c WHERE c.client_id=u.id AND c.reseller_id=$1 AND c.status <> 'CANCELADA'), 0) AS comissao,
+              (SELECT COUNT(*) FROM queries q WHERE q.user_id=u.id AND q.status='success') AS consultas,
+              (SELECT COALESCE(SUM(q.amount),0) FROM queries q WHERE q.user_id=u.id AND q.status='success') AS gasto
          FROM users u WHERE u.revendedor_id=$1 ORDER BY u.created_at DESC`,
       [req.user.id]
     );
@@ -3046,11 +3102,10 @@ app.get('/api/reseller/clients', requireAuth, requireReseller, async (req, res) 
   }
 });
 
-// Cria um usuário vinculado ao revendedor — pelo painel dele ou pela página
-// pública (/r/<slug>). Com a adesão liberada pelo admin e exigirAdesao, a conta
-// nasce bloqueada (adesao_exigida) e só entra depois que o revendedor recebe a
-// adesão e clica em "Liberar acesso". Devolve { status, body }.
-async function criarUsuarioDoRevendedor(revendedorId, dados, { exigirAdesao, ip } = {}) {
+// Cria um usuário vinculado ao parceiro — pelo painel dele ou pela página
+// pública (/r/<slug> ou o domínio próprio). Sem adesão desde 25/10/2026: a
+// conta já nasce ativa. Devolve { status, body }.
+async function criarUsuarioDoRevendedor(revendedorId, dados, { ip } = {}) {
   const { name, cpf_cnpj, email, phone, password } = dados || {};
   if (!name || !String(name).trim() || !cpf_cnpj || !email || !phone || !password)
     return { status: 400, body: { error: 'Preencha todos os campos obrigatórios.' } };
@@ -3066,11 +3121,10 @@ async function criarUsuarioDoRevendedor(revendedorId, dados, { exigirAdesao, ip 
     return { status: 400, body: { error: 'E-mail inválido.' } };
 
   const rv = await pool.query(
-    `SELECT rv.cobra_adesao FROM users u JOIN revendedores rv ON rv.user_id=u.id
+    `SELECT 1 FROM users u JOIN revendedores rv ON rv.user_id=u.id
       WHERE u.id=$1 AND u.role='reseller' AND u.active=true`, [revendedorId]
   );
-  if (!rv.rows.length) return { status: 404, body: { error: 'Revendedor não encontrado.' } };
-  const bloqueado = !!rv.rows[0].cobra_adesao && exigirAdesao !== false;
+  if (!rv.rows.length) return { status: 404, body: { error: 'Parceiro não encontrado.' } };
 
   const dup = await pool.query('SELECT id FROM users WHERE email=$1 OR cpf_cnpj=$2', [mail, doc]);
   if (dup.rows.length > 0)
@@ -3078,21 +3132,19 @@ async function criarUsuarioDoRevendedor(revendedorId, dados, { exigirAdesao, ip 
 
   const hash = await bcrypt.hash(String(password), 12);
   const r = await pool.query(
-    `INSERT INTO users (name, cpf_cnpj, email, phone, password_hash, role, affiliate_code, revendedor_id,
-                        active, adesao_exigida, ip_address)
-     VALUES ($1,$2,$3,$4,$5,'user',$6,$7,$8,$9,$10)
-     RETURNING id, name, email, phone, cpf_cnpj, credits, active, created_at, adesao_exigida, role`,
+    `INSERT INTO users (name, cpf_cnpj, email, phone, password_hash, role, affiliate_code, revendedor_id, ip_address)
+     VALUES ($1,$2,$3,$4,$5,'user',$6,$7,$8)
+     RETURNING id, name, email, phone, cpf_cnpj, credits, active, created_at, role`,
     [String(name).trim(), doc, mail, String(phone).trim(), hash, generateAffiliateCode(String(name)),
-     revendedorId, !bloqueado, bloqueado, ip || null]
+     revendedorId, ip || null]
   );
   return { status: 200, body: { success: true, client: r.rows[0] } };
 }
 
-// ── POST /api/reseller/clients — revendedor cria cliente diretamente ─────────
+// ── POST /api/reseller/clients — parceiro cria cliente diretamente ───────────
 app.post('/api/reseller/clients', requireAuth, requireReseller, async (req, res) => {
   try {
-    const r = await criarUsuarioDoRevendedor(req.user.id, req.body,
-      { exigirAdesao: req.body?.exigir_adesao !== false });
+    const r = await criarUsuarioDoRevendedor(req.user.id, req.body);
     res.status(r.status).json(r.body);
   } catch (err) {
     console.error('Erro ao criar cliente:', err.message);
@@ -3116,23 +3168,293 @@ app.put('/api/reseller/clients/:id/toggle', requireAuth, requireReseller, async 
   }
 });
 
-// Adesão recebida → libera o acesso. A adesão é combinada entre o dono e o
-// revendedor, é toda do revendedor e é cobrada por fora: o sistema só registra
-// quando ele recebeu e libera a conta (active=true). Desmarcar não bloqueia de
-// novo — para bloquear existe o botão Bloquear.
-const SQL_LIBERAR_ADESAO = `
-  UPDATE users SET adesao_paga_em = CASE WHEN $3 THEN COALESCE(adesao_paga_em, NOW()) ELSE NULL END,
-                   active = CASE WHEN $3 THEN true ELSE active END
-   WHERE id=$1 AND revendedor_id=$2 RETURNING adesao_paga_em, active`;
-app.put('/api/reseller/clients/:id/adesao', requireAuth, requireReseller, async (req, res) => {
+// ── Consultas do parceiro (página + preço) ───────────────────────────────────
+// Todas as consultas revendáveis, com o custo dele (catálogo ou o desconto do
+// admin) e, nas que ele pôs na página, o preço que o cliente dele paga.
+const PRECO_PARCEIRO_MAX = 9999.99;
+async function consultasDoParceiro(parceiroId) {
+  const tab = await tabelaParceiro(parceiroId);
+  return SERVICES.filter(servicoRevendavel).map(s => ({
+    id: s.id, name: s.name, group: s.group, icon: s.icon,
+    catalogo: catalogPrice(s),
+    custo: tab.custoDe(s),
+    desconto: tab.custos[s.id] != null,
+    na_pagina: tab.precos[s.id] != null,
+    preco: tab.precos[s.id] ?? null,
+    venda: tab.vendaDe(s),
+  }));
+}
+
+app.get('/api/reseller/consultas', requireAuth, requireReseller, async (req, res) => {
   try {
-    const r = await pool.query(SQL_LIBERAR_ADESAO, [req.params.id, req.user.id, !!req.body?.paga]);
-    if (!r.rows.length) return res.status(404).json({ error: 'Cliente não encontrado.' });
-    res.json({ success: true, adesao_paga_em: r.rows[0].adesao_paga_em, active: r.rows[0].active });
+    res.json({ consultas: await consultasDoParceiro(req.user.id) });
+  } catch (err) {
+    console.error('Erro ao listar consultas do parceiro:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// Põe (ou atualiza o preço de) uma consulta na página. O preço não pode ficar
+// abaixo do custo: o ganho do parceiro é a diferença, e abaixo disso a
+// plataforma pagaria a consulta.
+app.put('/api/reseller/consultas/:serviceId', requireAuth, requireReseller, async (req, res) => {
+  const svc = SERVICES.find(s => s.id === req.params.serviceId);
+  if (!servicoRevendavel(svc)) return res.status(400).json({ error: 'Essa consulta não pode ser revendida.' });
+  const preco = Math.round(parseFloat(String(req.body?.preco ?? '').replace(',', '.')) * 100) / 100;
+  if (!(preco > 0) || preco > PRECO_PARCEIRO_MAX) return res.status(400).json({ error: 'Preço inválido.' });
+  try {
+    const custo = await custoParceiro(req.user.id, svc);
+    if (preco < custo)
+      return res.status(400).json({ error: `O preço não pode ser menor que o seu custo (${fmtMoneyBRL(custo)}).` });
+    await pool.query(
+      `INSERT INTO parceiro_consultas (parceiro_id, service_id, preco) VALUES ($1,$2,$3)
+       ON CONFLICT (parceiro_id, service_id) DO UPDATE SET preco=EXCLUDED.preco, updated_at=NOW()`,
+      [req.user.id, svc.id, preco]
+    );
+    res.json({ success: true, preco, custo, ganho: Math.round((preco - custo) * 100) / 100 });
+  } catch (err) {
+    console.error('Erro ao salvar consulta do parceiro:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+app.delete('/api/reseller/consultas/:serviceId', requireAuth, requireReseller, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM parceiro_consultas WHERE parceiro_id=$1 AND service_id=$2', [req.user.id, req.params.serviceId]);
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Erro interno.' });
   }
 });
+
+// ── Domínio próprio do parceiro ──────────────────────────────────────────────
+// O parceiro sugere até 5 domínios .com.br e paga R$ 200,00 por PIX — taxa
+// ANUAL (regra do dono, 25/10/2026): cada pagamento vale 12 meses. O valor
+// não é só o domínio: inclui a taxa de administração do serviço, e toda tela
+// e mensagem diz isso (pedido do dono). A baixa
+// (purpose 'DOMINIO' em creditPixPaymentIfApproved) avisa o dono no WhatsApp
+// e, no primeiro pagamento, abre o prazo de 48 h; o dono configura DNS/Vercel
+// e marca o domínio como ativo no admin. A partir daí a raiz do domínio serve a
+// página do parceiro (ver o app.get('/') antes do express.static). A
+// renovação estende a validade a partir do fim da atual (pagar adiantado não
+// perde dias); vencido, o domínio ainda abre por DOMINIO_CARENCIA_DIAS e
+// depois volta para a home até renovar.
+const DOMINIO_PROPRIO_VALOR = 200.00;
+const DOMINIO_PROPRIO_MESES = 12;
+const DOMINIO_PROPRIO_PRAZO_HORAS = 48;
+const DOMINIO_PROPRIO_MAX_OPCOES = 5;
+const DOMINIO_RENOVAR_DIAS_ANTES = 30;
+const DOMINIO_CARENCIA_DIAS = 7;
+const DOMINIO_AVISO_WHATSAPP = '5522992090682';
+
+// "https://www.MeuSite.com.br/x" → "meusite.com.br". O www é tirado para
+// guardar e comparar sempre do mesmo jeito (o Host da requisição também).
+function normalizarDominio(v) {
+  let d = String(v || '').trim().toLowerCase()
+    .replace(/^[a-z]+:\/\//, '').split(/[/?#\s]/)[0].replace(/:\d+$/, '').replace(/\.$/, '');
+  if (d.startsWith('www.')) d = d.slice(4);
+  return d;
+}
+// Só .com.br (regra do dono, 25/10/2026): um nome e o sufixo, sem subdomínio.
+const DOMINIO_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?|xn--[a-z0-9-]{1,59})\.com\.br$/;
+
+// Renovação liberada a partir de DOMINIO_RENOVAR_DIAS_ANTES do vencimento (e
+// depois de vencido); antes disso o botão não aparece.
+function situacaoDominio(d) {
+  if (!d) return { vencido: false, podeRenovar: false };
+  const fim = d.valido_ate ? new Date(d.valido_ate).getTime() : null;
+  const ativoOuConfig = d.status === 'ATIVO' || d.status === 'CONFIGURANDO';
+  return {
+    vencido: !!(ativoOuConfig && fim && fim <= Date.now()),
+    podeRenovar: !!(ativoOuConfig && fim && fim - Date.now() <= DOMINIO_RENOVAR_DIAS_ANTES * 86400000),
+  };
+}
+
+function dominioParaTela(d) {
+  if (!d) return null;
+  return {
+    status: d.status, opcoes: d.opcoes || [], dominio: d.dominio || null,
+    pago_em: d.pago_em, prazo_ate: d.prazo_ate, ativado_em: d.ativado_em, valido_ate: d.valido_ate,
+    vencido: situacaoDominio(d).vencido,
+    observacao: d.observacao || null, valor: d.valor != null ? parseFloat(d.valor) : null,
+  };
+}
+
+app.get('/api/reseller/dominio', requireAuth, requireReseller, async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM parceiro_dominios WHERE parceiro_id=$1', [req.user.id]);
+    res.json({
+      dominio: dominioParaTela(r.rows[0]), podeRenovar: situacaoDominio(r.rows[0]).podeRenovar,
+      valor: DOMINIO_PROPRIO_VALOR, meses: DOMINIO_PROPRIO_MESES,
+      prazoHoras: DOMINIO_PROPRIO_PRAZO_HORAS, maxOpcoes: DOMINIO_PROPRIO_MAX_OPCOES,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// Gera o PIX da anuidade: a adesão (com as opções de domínio) ou, com
+// renovar:true, a renovação de quem já tem domínio pago.
+app.post('/api/reseller/dominio/pix', requireAuth, requireReseller, bloquearApiPagamento, async (req, res) => {
+  try {
+    const ur = await pool.query('SELECT id, name, email, cpf_cnpj, active FROM users WHERE id=$1', [req.user.id]);
+    const user = ur.rows[0];
+    if (!user?.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+    const atual = (await pool.query('SELECT * FROM parceiro_dominios WHERE parceiro_id=$1', [req.user.id])).rows[0];
+    const ocupado = atual && (atual.status === 'CONFIGURANDO' || atual.status === 'ATIVO');
+    const renovacao = !!req.body?.renovar;
+    let opcoes = null;
+    if (renovacao) {
+      if (!ocupado) return res.status(400).json({ error: 'Você ainda não tem domínio próprio para renovar.' });
+      if (!situacaoDominio(atual).podeRenovar)
+        return res.status(400).json({ error: `A renovação abre ${DOMINIO_RENOVAR_DIAS_ANTES} dias antes do vencimento (${new Date(atual.valido_ate).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })}).` });
+    } else {
+      if (ocupado)
+        return res.status(409).json({ error: atual.status === 'ATIVO' ? 'Seu domínio próprio já está ativo.' : 'O pagamento já foi recebido e o seu domínio está em configuração.' });
+      const brutas = Array.isArray(req.body?.opcoes) ? req.body.opcoes : String(req.body?.opcoes || '').split(/[\n,;]+/);
+      opcoes = [...new Set(brutas.map(normalizarDominio).filter(Boolean))];
+      if (!opcoes.length) return res.status(400).json({ error: 'Informe pelo menos um domínio.' });
+      if (opcoes.length > DOMINIO_PROPRIO_MAX_OPCOES)
+        return res.status(400).json({ error: `Informe no máximo ${DOMINIO_PROPRIO_MAX_OPCOES} opções de domínio.` });
+      const invalida = opcoes.find(d => !DOMINIO_RE.test(d));
+      if (invalida) return res.status(400).json({ error: `Domínio inválido: "${invalida}". Só aceitamos domínio .com.br, no formato meusite.com.br.` });
+    }
+
+    const doc = (user.cpf_cnpj || '').replace(/\D/g, '');
+    const nameParts = (user.name || 'Parceiro').trim().split(/\s+/);
+    const payment = await mpReq('POST', '/v1/payments', {
+      transaction_amount: DOMINIO_PROPRIO_VALOR,
+      description: `${renovacao ? 'Renovação — ' : ''}Domínio próprio + taxa de administração (12 meses) MC Despachadoria — ${user.name}`,
+      payment_method_id: 'pix',
+      payer: {
+        email: user.email,
+        first_name: nameParts[0],
+        last_name: nameParts.slice(1).join(' ') || nameParts[0],
+        identification: { type: doc.length > 11 ? 'CNPJ' : 'CPF', number: doc },
+      },
+    }, { 'X-Idempotency-Key': crypto.randomUUID() });
+    const txData = payment.point_of_interaction?.transaction_data || {};
+    if (!txData.qr_code) throw new Error('Mercado Pago não retornou o QR Code PIX.');
+
+    await pool.query(
+      `INSERT INTO pix_payments (user_id, gateway_id, value, status, purpose)
+       VALUES ($1,$2,$3,'PENDING','DOMINIO') ON CONFLICT (gateway_id) DO NOTHING`,
+      [req.user.id, String(payment.id), DOMINIO_PROPRIO_VALOR]
+    );
+    if (!renovacao) {
+      await pool.query(
+        `INSERT INTO parceiro_dominios (parceiro_id, opcoes, status, gateway_id, valor)
+         VALUES ($1,$2,'AGUARDANDO_PAGAMENTO',$3,$4)
+         ON CONFLICT (parceiro_id) DO UPDATE SET opcoes=EXCLUDED.opcoes, status='AGUARDANDO_PAGAMENTO',
+           gateway_id=EXCLUDED.gateway_id, valor=EXCLUDED.valor, updated_at=NOW()`,
+        [req.user.id, JSON.stringify(opcoes), String(payment.id), DOMINIO_PROPRIO_VALOR]
+      );
+    }
+    res.json({
+      paymentId: payment.id,
+      qrCode: txData.qr_code_base64,
+      pixCopiaECola: txData.qr_code,
+      expirationDate: payment.date_of_expiration,
+      value: DOMINIO_PROPRIO_VALOR,
+      opcoes: opcoes || [],
+      renovacao,
+    });
+  } catch (err) {
+    console.error('Erro ao criar PIX do domínio próprio:', err.message);
+    await alertAdminPixFalha(err, 'Domínio próprio (/api/reseller/dominio/pix)');
+    res.status(500).json({ error: mpErroAmigavel(err, 'Erro ao criar a cobrança PIX do domínio.') });
+  }
+});
+
+// Baixa da anuidade do domínio (chamada dentro da transação do PIX aprovado).
+// Primeiro pagamento: abre o prazo de 48 h e 12 meses de validade. Renovação
+// (domínio já em configuração ou ativo): soma 12 meses ao fim da validade
+// atual, ou a partir de agora se já venceu. Devolve os dados para o aviso,
+// que sai depois do COMMIT.
+async function baixarPagamentoDominio(client, p, gatewayId) {
+  const meses = String(DOMINIO_PROPRIO_MESES);
+  let r = await client.query(
+    `UPDATE parceiro_dominios SET status='CONFIGURANDO', pago_em=NOW(), gateway_id=$2,
+            prazo_ate=NOW() + ($3 || ' hours')::interval, valido_ate=NOW() + ($4 || ' months')::interval,
+            aviso_vencimento_em=NULL, updated_at=NOW()
+      WHERE parceiro_id=$1 AND status IN ('AGUARDANDO_PAGAMENTO','CANCELADO')
+      RETURNING opcoes, prazo_ate, valido_ate, dominio`,
+    [p.user_id, gatewayId, String(DOMINIO_PROPRIO_PRAZO_HORAS), meses]
+  );
+  let renovacao = false;
+  if (!r.rows.length) {
+    r = await client.query(
+      `UPDATE parceiro_dominios SET pago_em=NOW(), gateway_id=$2, aviso_vencimento_em=NULL, updated_at=NOW(),
+              valido_ate=GREATEST(COALESCE(valido_ate, NOW()), NOW()) + ($3 || ' months')::interval
+        WHERE parceiro_id=$1 AND status IN ('CONFIGURANDO','ATIVO')
+        RETURNING opcoes, prazo_ate, valido_ate, dominio`,
+      [p.user_id, gatewayId, meses]
+    );
+    renovacao = r.rows.length > 0;
+  }
+  const u = await client.query('SELECT name, email, phone FROM users WHERE id=$1', [p.user_id]);
+  return { ...u.rows[0], ...(r.rows[0] || {}), achou: r.rows.length > 0, renovacao, valor: parseFloat(p.value) };
+}
+
+async function avisarPagamentoDominio(d) {
+  const quando = v => v ? new Date(v).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '-';
+  const dia = v => v ? new Date(v).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '-';
+  const opcoes = (d.opcoes || []).map((o, i) => `${i + 1}. ${o}`).join('\n');
+  let msgDono;
+  if (!d.achou) {
+    msgDono = `⚠️ *PIX de domínio próprio pago sem pedido em aberto*\n\nParceiro: ${d.name} (${d.email})\nValor: ${fmtMoneyBRL(d.valor)}\n` +
+      'Não achei pedido de domínio dele para dar baixa — confira em Admin → Parceiros.';
+  } else if (d.renovacao) {
+    msgDono = `🔄 *Domínio próprio renovado*\n\nParceiro: ${d.name}\nE-mail: ${d.email}\nDomínio: ${d.dominio || '(ainda em configuração)'}\n` +
+      `Valor: ${fmtMoneyBRL(d.valor)}\nVálido até: ${dia(d.valido_ate)}`;
+  } else {
+    msgDono = `🌐 *Domínio próprio pago*\n\nParceiro: ${d.name}\nE-mail: ${d.email}\nWhatsApp: ${d.phone || '-'}\n` +
+      `Valor: ${fmtMoneyBRL(d.valor)} (anuidade: domínio + taxa de administração, válido até ${dia(d.valido_ate)})\n\nOpções de domínio (em ordem de preferência):\n${opcoes}\n\n` +
+      `⏱️ Prazo para ativar: ${quando(d.prazo_ate)} (${DOMINIO_PROPRIO_PRAZO_HORAS} h).\nConfigure o DNS/Vercel e marque como ativo em Admin → Parceiros.`;
+  }
+  await sendWhatsApp(DOMINIO_AVISO_WHATSAPP, msgDono).catch(() => {});
+  if (d.achou && d.phone) {
+    await sendWhatsApp(d.phone, d.renovacao
+      ? `✅ Recebemos a renovação do seu *domínio próprio* (${fmtMoneyBRL(d.valor)} — domínio + taxa de administração do serviço). Ele fica ativo até ${dia(d.valido_ate)}.`
+      : `✅ Recebemos o pagamento do seu *domínio próprio* (${fmtMoneyBRL(d.valor)} por ano — domínio + taxa de administração do serviço).\n\n` +
+        `A MC Despachadoria vai configurar o domínio e ele fica ativo em até ${DOMINIO_PROPRIO_PRAZO_HORAS} horas. ` +
+        'Você acompanha pelo seu painel de parceiro, em "Domínio Próprio".'
+    ).catch(() => {});
+  }
+}
+
+// Cron diário (o mesmo das assinaturas): avisa o parceiro uma vez quando
+// faltam DOMINIO_RENOVAR_DIAS_ANTES dias e de novo no vencimento. O claim em
+// aviso_vencimento_em impede repetir o aviso (a renovação zera o campo).
+async function avisarVencimentoDominios() {
+  const r = await pool.query(
+    `UPDATE parceiro_dominios d SET aviso_vencimento_em=NOW()
+       FROM users u
+      WHERE u.id=d.parceiro_id AND d.status IN ('CONFIGURANDO','ATIVO') AND d.valido_ate IS NOT NULL
+        AND d.valido_ate <= NOW() + ($1 || ' days')::interval
+        AND (d.aviso_vencimento_em IS NULL OR (d.valido_ate <= NOW() AND d.aviso_vencimento_em < d.valido_ate))
+      RETURNING u.name, u.phone, d.dominio, d.valido_ate`,
+    [String(DOMINIO_RENOVAR_DIAS_ANTES)]
+  );
+  for (const d of r.rows) {
+    const dia = new Date(d.valido_ate).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+    const vencido = new Date(d.valido_ate).getTime() <= Date.now();
+    if (d.phone) {
+      await sendWhatsApp(d.phone, vencido
+        ? `⚠️ A anuidade do seu domínio próprio${d.dominio ? ` (${d.dominio})` : ''} venceu em ${dia}. ` +
+          `Renove (${fmtMoneyBRL(DOMINIO_PROPRIO_VALOR)}, domínio + taxa de administração do serviço) no seu painel de parceiro, em "Domínio Próprio", para a sua página continuar abrindo por ele.`
+        : `🔔 A anuidade do seu domínio próprio${d.dominio ? ` (${d.dominio})` : ''} vence em ${dia}. ` +
+          `Renove (${fmtMoneyBRL(DOMINIO_PROPRIO_VALOR)}, domínio + taxa de administração do serviço) no seu painel de parceiro, em "Domínio Próprio".`
+      ).catch(() => {});
+    }
+    if (vencido) {
+      await sendWhatsApp(DOMINIO_AVISO_WHATSAPP,
+        `⏰ Domínio próprio vencido sem renovação\n\nParceiro: ${d.name}\nDomínio: ${d.dominio || '-'}\nVenceu em: ${dia}`
+      ).catch(() => {});
+    }
+  }
+  return { avisados: r.rows.length };
+}
 
 // ── Página pública do revendedor (/r/<slug>) ─────────────────────────────────
 // Design provisório com o nome do revendedor, que ele personaliza no painel
@@ -3245,7 +3567,7 @@ app.delete('/api/reseller/pagina/imagem/:tipo', requireAuth, requireReseller, as
 
 async function revendedorPorSlug(slug) {
   const r = await pool.query(
-    `SELECT u.id, u.name, rv.slug, rv.pagina, rv.cobra_adesao, rv.pagina_atualizada_em,
+    `SELECT u.id, u.name, rv.slug, rv.pagina, rv.pagina_atualizada_em,
             rv.logo_mime IS NOT NULL AS tem_logo, rv.banner_mime IS NOT NULL AS tem_banner
        FROM revendedores rv JOIN users u ON u.id=rv.user_id
       WHERE rv.slug=$1 AND u.role='reseller' AND u.active=true`,
@@ -3254,16 +3576,58 @@ async function revendedorPorSlug(slug) {
   return r.rows[0] || null;
 }
 
+// Domínio próprio ATIVO → slug do parceiro. Cache curto (também do "não é de
+// ninguém", que é o caso do nosso próprio domínio em toda visita à home).
+const cacheDominioParceiro = new Map();
+async function slugPorDominio(host) {
+  const h = normalizarDominio(host);
+  if (!h) return null;
+  const c = cacheDominioParceiro.get(h);
+  if (c && c.exp > Date.now()) return c.slug;
+  const r = await pool.query(
+    `SELECT rv.slug FROM parceiro_dominios d JOIN revendedores rv ON rv.user_id=d.parceiro_id
+       JOIN users u ON u.id=d.parceiro_id AND u.role='reseller' AND u.active=true
+      WHERE d.status='ATIVO' AND d.dominio=$1
+        AND (d.valido_ate IS NULL OR d.valido_ate + ($2 || ' days')::interval > NOW())`, [h, String(DOMINIO_CARENCIA_DIAS)]
+  );
+  const slug = r.rows[0]?.slug || null;
+  if (cacheDominioParceiro.size > 500) cacheDominioParceiro.clear();
+  cacheDominioParceiro.set(h, { slug, exp: Date.now() + 60 * 1000 });
+  return slug;
+}
+const hostDaRequisicao = req => String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+
+// O que a página pública mostra: textos, imagens e as consultas que o parceiro
+// escolheu, com o preço dele.
+async function dadosPaginaParceiro(rv) {
+  const v = new Date(rv.pagina_atualizada_em || 0).getTime();
+  const tab = await tabelaParceiro(rv.id);
+  const consultas = SERVICES.filter(s => tab.vendaDe(s) != null)
+    .map(s => ({ name: s.name, group: s.group, icon: s.icon, preco: tab.vendaDe(s) }));
+  return {
+    nome: rv.name, slug: rv.slug, pagina: rv.pagina || {}, consultas,
+    logo: rv.tem_logo ? `/api/public/revendedor/${rv.slug}/imagem/logo?v=${v}` : null,
+    banner: rv.tem_banner ? `/api/public/revendedor/${rv.slug}/imagem/banner?v=${v}` : null,
+  };
+}
+
 app.get('/api/public/revendedor/:slug', async (req, res) => {
   try {
     const rv = await revendedorPorSlug(req.params.slug);
     if (!rv) return res.status(404).json({ error: 'Página não encontrada.' });
-    const v = new Date(rv.pagina_atualizada_em || 0).getTime();
-    res.json({
-      nome: rv.name, slug: rv.slug, pagina: rv.pagina || {}, adesao: !!rv.cobra_adesao,
-      logo: rv.tem_logo ? `/api/public/revendedor/${rv.slug}/imagem/logo?v=${v}` : null,
-      banner: rv.tem_banner ? `/api/public/revendedor/${rv.slug}/imagem/banner?v=${v}` : null,
-    });
+    res.json(await dadosPaginaParceiro(rv));
+  } catch (err) {
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// A mesma página, aberta pela raiz do domínio próprio do parceiro.
+app.get('/api/public/revendedor-host', async (req, res) => {
+  try {
+    const slug = await slugPorDominio(hostDaRequisicao(req));
+    const rv = slug ? await revendedorPorSlug(slug) : null;
+    if (!rv) return res.status(404).json({ error: 'Página não encontrada.' });
+    res.json(await dadosPaginaParceiro(rv));
   } catch (err) {
     res.status(500).json({ error: 'Erro interno.' });
   }
@@ -3289,36 +3653,36 @@ app.get('/api/public/revendedor/:slug/imagem/:tipo', async (req, res) => {
   }
 });
 
-// Cadastro pela página do revendedor: a conta já nasce vinculada a ele. Sem
-// adesão liberada, entra logada e vai para o painel; com adesão, fica
-// aguardando o revendedor liberar.
+// Cadastro pela página do parceiro: a conta já nasce vinculada a ele e entra
+// logada (sem adesão desde 25/10/2026).
 app.post('/api/public/revendedor/:slug/cadastro', async (req, res) => {
   try {
     const rv = await revendedorPorSlug(req.params.slug);
     if (!rv) return res.status(404).json({ error: 'Página não encontrada.' });
-    const r = await criarUsuarioDoRevendedor(rv.id, req.body, { exigirAdesao: true, ip: getClientIP(req) });
+    const r = await criarUsuarioDoRevendedor(rv.id, req.body, { ip: getClientIP(req) });
     if (r.status !== 200) return res.status(r.status).json(r.body);
     const u = r.body.client;
-    if (!u.active) return res.json({ success: true, aguardandoAdesao: true, revendedor: rv.name });
     const token = jwt.sign({ id: u.id, email: u.email, role: u.role }, JWT_SECRET, { expiresIn: '7d' });
     res.cookie('auth_token', token, { httpOnly: true, maxAge: 7 * 24 * 3600 * 1000, sameSite: 'lax' });
-    res.json({ success: true, aguardandoAdesao: false });
+    res.json({ success: true });
   } catch (err) {
-    console.error('Erro no cadastro pela página do revendedor:', err.message);
+    console.error('Erro no cadastro pela página do parceiro:', err.message);
     res.status(500).json({ error: 'Erro interno. Tente novamente.' });
   }
 });
 
 // ── GET /api/reseller/commissions ─────────────────────────────────────────────
+// Extrato do parceiro: ganhos por consulta (e as comissões antigas de recarga).
 app.get('/api/reseller/commissions', requireAuth, requireReseller, async (req, res) => {
   try {
     const [com, pag] = await Promise.all([
       pool.query(
-        `SELECT c.id, c.amount, c.rate, c.base, c.origem, c.status, c.created_at,
-                u.name AS client_name
+        `SELECT c.id, c.amount, c.rate, c.base, c.custo, c.origem, c.status, c.created_at,
+                u.name AS client_name, q.service_name
            FROM commissions c
            JOIN users u ON u.id = c.client_id
-          WHERE c.reseller_id=$1 AND c.pix_payment_id IS NOT NULL
+           LEFT JOIN queries q ON q.id = c.query_id
+          WHERE c.reseller_id=$1 AND c.origem IS NOT NULL AND c.status NOT IN ('CANCELADA','SEM_LUCRO')
           ORDER BY c.created_at DESC LIMIT 300`,
         [req.user.id]
       ),
@@ -3334,41 +3698,45 @@ app.get('/api/reseller/commissions', requireAuth, requireReseller, async (req, r
   }
 });
 
-// ── Admin: revendedores ──────────────────────────────────────────────────────
-// Cadastro só pelo admin (sem autocadastro). Cada revendedor é um users com
-// role 'reseller' + uma linha em revendedores (chave PIX e adesão).
+// ── Admin: parceiros (antigos revendedores) ──────────────────────────────────
+// Cadastro só pelo admin (sem autocadastro). Cada parceiro é um users com
+// role 'reseller' + uma linha em revendedores (chave PIX e página). O desconto
+// que o admin dá a um parceiro numa consulta é um preço fixo dele em
+// user_service_prices — vira o custo dele (e o preço das consultas dele).
 function dadosRevendedorBody(body) {
   const pix = normalizarChavePix(body.pix_tipo, body.pix_chave);
   if (pix.error) return pix;
   return {
-    pix_tipo: body.pix_tipo, pix_chave: pix.chave, cobra_adesao: !!body.cobra_adesao,
+    pix_tipo: body.pix_tipo, pix_chave: pix.chave,
     observacao: String(body.observacao || '').trim().slice(0, 1000) || null,
   };
 }
 
 const SQL_RESUMO_REVENDEDOR = `
   SELECT u.id, u.name, u.email, u.phone, u.cpf_cnpj, u.active, u.created_at,
-         rv.pix_tipo, rv.pix_chave, rv.cobra_adesao, rv.observacao, rv.slug,
+         rv.pix_tipo, rv.pix_chave, rv.observacao, rv.slug,
+         d.status AS dominio_status, d.dominio, d.opcoes AS dominio_opcoes, d.prazo_ate AS dominio_prazo, d.valido_ate AS dominio_valido_ate,
+         (SELECT COUNT(*) FROM parceiro_consultas pc WHERE pc.parceiro_id=u.id) AS consultas_na_pagina,
+         (SELECT COUNT(*) FROM user_service_prices sp WHERE sp.user_id=u.id) AS descontos,
          (SELECT COUNT(*) FROM users c WHERE c.revendedor_id=u.id) AS clientes,
-         (SELECT COUNT(*) FROM users c WHERE c.revendedor_id=u.id AND c.adesao_paga_em IS NOT NULL) AS adesoes_pagas,
-         (SELECT COUNT(*) FROM users c WHERE c.revendedor_id=u.id AND c.adesao_exigida AND c.adesao_paga_em IS NULL) AS adesoes_pendentes,
          (SELECT COUNT(*) FROM queries q JOIN users c ON c.id=q.user_id
            WHERE c.revendedor_id=u.id AND q.status='success') AS consultas,
          (SELECT COALESCE(SUM(q.amount),0) FROM queries q JOIN users c ON c.id=q.user_id
            WHERE c.revendedor_id=u.id AND q.status='success') AS faturamento_consultas,
-         COALESCE(cm.recargas,0) AS recargas, COALESCE(cm.gerada,0) AS comissao_gerada,
+         COALESCE(cm.gerada,0) AS comissao_gerada,
          COALESCE(cm.paga,0) AS comissao_paga, COALESCE(cm.enviando,0) AS comissao_enviando,
          COALESCE(cm.a_pagar,0) AS comissao_a_pagar, cm.ultimo_erro
     FROM users u
     LEFT JOIN revendedores rv ON rv.user_id = u.id
+    LEFT JOIN parceiro_dominios d ON d.parceiro_id = u.id
     LEFT JOIN LATERAL (
-      SELECT SUM(base) AS recargas, SUM(amount) AS gerada,
+      SELECT SUM(amount) AS gerada,
              SUM(amount) FILTER (WHERE status='PAGA') AS paga,
              SUM(amount) FILTER (WHERE status='ENVIANDO') AS enviando,
              SUM(amount) FILTER (WHERE status='A_PAGAR') AS a_pagar,
              (ARRAY_AGG(envio_erro ORDER BY envio_tentado_em DESC NULLS LAST)
                 FILTER (WHERE envio_erro IS NOT NULL AND status <> 'PAGA'))[1] AS ultimo_erro
-        FROM commissions WHERE reseller_id=u.id AND pix_payment_id IS NOT NULL
+        FROM commissions WHERE reseller_id=u.id AND origem IS NOT NULL AND status <> 'CANCELADA'
     ) cm ON true
    WHERE u.role='reseller'`;
 
@@ -3378,9 +3746,9 @@ function numerosRevendedor(r) {
     ...r,
     pix_tipo_nome: PIX_TIPOS[r.pix_tipo] || null,
     envio_automatico: !!PIX_TIPOS_PAYOUT[r.pix_tipo] && COMISSAO_ENVIO_AUTOMATICO,
-    clientes: parseInt(r.clientes), adesoes_pagas: parseInt(r.adesoes_pagas),
-    adesoes_pendentes: parseInt(r.adesoes_pendentes), consultas: parseInt(r.consultas),
-    faturamento_consultas: n('faturamento_consultas'), recargas: n('recargas'),
+    clientes: parseInt(r.clientes), consultas: parseInt(r.consultas),
+    consultas_na_pagina: parseInt(r.consultas_na_pagina), descontos: parseInt(r.descontos),
+    faturamento_consultas: n('faturamento_consultas'),
     comissao_gerada: n('comissao_gerada'), comissao_paga: n('comissao_paga'),
     comissao_enviando: n('comissao_enviando'), comissao_a_pagar: n('comissao_a_pagar'),
   };
@@ -3388,10 +3756,11 @@ function numerosRevendedor(r) {
 
 app.get('/api/admin/revendedores', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
+    await registrarLucrosParceiros().catch(e => console.error('[parceiro] lucros:', e.message));
     const r = await pool.query(`${SQL_RESUMO_REVENDEDOR} ORDER BY u.name`);
-    res.json({ revendedores: r.rows.map(numerosRevendedor), taxa: COMISSAO_REVENDEDOR_PCT, envioAutomatico: COMISSAO_ENVIO_AUTOMATICO, pixTipos: PIX_TIPOS });
+    res.json({ revendedores: r.rows.map(numerosRevendedor), envioAutomatico: COMISSAO_ENVIO_AUTOMATICO, pixTipos: PIX_TIPOS });
   } catch (err) {
-    console.error('Erro ao listar revendedores:', err.message);
+    console.error('Erro ao listar parceiros:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
   }
 });
@@ -3401,7 +3770,7 @@ app.post('/api/admin/revendedores', requireAuth, requireSuperAdmin, async (req, 
   if (!name || !name.trim() || !cpf_cnpj || !email || !phone || !password)
     return res.status(400).json({ error: 'Preencha nome, CPF/CNPJ, e-mail, telefone e senha.' });
   if (String(password).length < 8) return res.status(400).json({ error: 'A senha deve ter ao menos 8 caracteres.' });
-  if (!isValidDoc(cpf_cnpj)) return res.status(400).json({ error: 'CPF ou CNPJ do revendedor inválido.' });
+  if (!isValidDoc(cpf_cnpj)) return res.status(400).json({ error: 'CPF ou CNPJ do parceiro inválido.' });
   if (!isValidPhoneBR(phone)) return res.status(400).json({ error: 'Telefone inválido. Informe com DDD.' });
   const dados = dadosRevendedorBody(req.body);
   if (dados.error) return res.status(400).json({ error: dados.error });
@@ -3409,7 +3778,7 @@ app.post('/api/admin/revendedores', requireAuth, requireSuperAdmin, async (req, 
   const client = await pool.connect();
   try {
     const dup = await client.query('SELECT id FROM users WHERE email=$1 OR cpf_cnpj=$2', [mail, doc]);
-    if (dup.rows.length) return res.status(409).json({ error: 'E-mail ou CPF/CNPJ já cadastrado. Para transformar uma conta existente em revendedor, troque o tipo dela em Usuários.' });
+    if (dup.rows.length) return res.status(409).json({ error: 'E-mail ou CPF/CNPJ já cadastrado. Para transformar uma conta existente em parceiro, troque o tipo dela em Usuários.' });
     const hash = await bcrypt.hash(String(password), 12);
     await client.query('BEGIN');
     const u = await client.query(
@@ -3418,84 +3787,170 @@ app.post('/api/admin/revendedores', requireAuth, requireSuperAdmin, async (req, 
       [name.trim(), doc, mail, String(phone).trim(), hash, generateAffiliateCode(name)]
     );
     await client.query(
-      `INSERT INTO revendedores (user_id, pix_tipo, pix_chave, cobra_adesao, observacao, slug)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
-      [u.rows[0].id, dados.pix_tipo, dados.pix_chave, dados.cobra_adesao, dados.observacao, slugRevendedor(name, u.rows[0].id)]
+      `INSERT INTO revendedores (user_id, pix_tipo, pix_chave, observacao, slug)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [u.rows[0].id, dados.pix_tipo, dados.pix_chave, dados.observacao, slugRevendedor(name, u.rows[0].id)]
     );
     await client.query('COMMIT');
     res.json({ success: true, id: u.rows[0].id });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
-    console.error('Erro ao cadastrar revendedor:', err.message);
+    console.error('Erro ao cadastrar parceiro:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
   } finally { client.release(); }
 });
 
-// Edita PIX/adesão/observação. Também serve para completar o cadastro de quem
-// virou revendedor pela troca de tipo em Usuários (sem linha em revendedores).
+// Edita PIX/observação. Também serve para completar o cadastro de quem virou
+// parceiro pela troca de tipo em Usuários (sem linha em revendedores).
 app.put('/api/admin/revendedores/:id', requireAuth, requireSuperAdmin, async (req, res) => {
   const dados = dadosRevendedorBody(req.body || {});
   if (dados.error) return res.status(400).json({ error: dados.error });
   try {
     const u = await pool.query(`SELECT id, name FROM users WHERE id=$1 AND role='reseller'`, [req.params.id]);
-    if (!u.rows.length) return res.status(404).json({ error: 'Revendedor não encontrado.' });
+    if (!u.rows.length) return res.status(404).json({ error: 'Parceiro não encontrado.' });
     await pool.query(
-      `INSERT INTO revendedores (user_id, pix_tipo, pix_chave, cobra_adesao, observacao, slug)
-       VALUES ($1,$2,$3,$4,$5,$6)
+      `INSERT INTO revendedores (user_id, pix_tipo, pix_chave, observacao, slug)
+       VALUES ($1,$2,$3,$4,$5)
        ON CONFLICT (user_id) DO UPDATE SET pix_tipo=EXCLUDED.pix_tipo, pix_chave=EXCLUDED.pix_chave,
-         cobra_adesao=EXCLUDED.cobra_adesao, observacao=EXCLUDED.observacao,
-         slug=COALESCE(revendedores.slug, EXCLUDED.slug), updated_at=NOW()`,
-      [req.params.id, dados.pix_tipo, dados.pix_chave, dados.cobra_adesao, dados.observacao, slugRevendedor(u.rows[0].name, req.params.id)]
+         observacao=EXCLUDED.observacao, slug=COALESCE(revendedores.slug, EXCLUDED.slug), updated_at=NOW()`,
+      [req.params.id, dados.pix_tipo, dados.pix_chave, dados.observacao, slugRevendedor(u.rows[0].name, req.params.id)]
     );
     if (typeof req.body.active === 'boolean')
       await pool.query('UPDATE users SET active=$2 WHERE id=$1', [req.params.id, req.body.active]);
     res.json({ success: true });
   } catch (err) {
-    console.error('Erro ao editar revendedor:', err.message);
+    console.error('Erro ao editar parceiro:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
   }
 });
 
-// Tela de controle de um revendedor: números, clientes, comissões e pagamentos.
-// Abrir a tela confere os payouts em andamento dele no Mercado Pago.
+// Tela de controle de um parceiro: números, clientes, ganhos, pagamentos, as
+// consultas dele (com custo/desconto) e o domínio próprio. Abrir a tela
+// confere os payouts em andamento dele no Mercado Pago.
 app.get('/api/admin/revendedores/:id', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     const rid = parseInt(req.params.id, 10);
+    await registrarLucrosParceiros(rid).catch(e => console.error('[parceiro] lucros:', e.message));
     await conferirPayoutsRevendedores(rid).catch(() => {});
     const r = await pool.query(`${SQL_RESUMO_REVENDEDOR} AND u.id=$1`, [rid]);
-    if (!r.rows.length) return res.status(404).json({ error: 'Revendedor não encontrado.' });
-    const [clientes, comissoes, pagamentos] = await Promise.all([
+    if (!r.rows.length) return res.status(404).json({ error: 'Parceiro não encontrado.' });
+    const [clientes, comissoes, pagamentos, dominio, consultas] = await Promise.all([
       pool.query(
-        `SELECT u.id, u.name, u.email, u.phone, u.active, u.credits, u.pos_pago, u.created_at, u.adesao_paga_em, u.adesao_exigida,
+        `SELECT u.id, u.name, u.email, u.phone, u.active, u.credits, u.pos_pago, u.created_at,
                 (SELECT COUNT(*) FROM queries q WHERE q.user_id=u.id AND q.status='success') AS consultas,
                 (SELECT COALESCE(SUM(q.amount),0) FROM queries q WHERE q.user_id=u.id AND q.status='success') AS faturamento,
-                COALESCE((SELECT SUM(base) FROM commissions c WHERE c.client_id=u.id AND c.reseller_id=$1), 0) AS recargas,
-                COALESCE((SELECT SUM(amount) FROM commissions c WHERE c.client_id=u.id AND c.reseller_id=$1), 0) AS comissao
+                COALESCE((SELECT SUM(amount) FROM commissions c WHERE c.client_id=u.id AND c.reseller_id=$1 AND c.status <> 'CANCELADA'), 0) AS comissao
            FROM users u WHERE u.revendedor_id=$1 ORDER BY u.created_at DESC`, [rid]),
       pool.query(
-        `SELECT c.id, c.amount, c.base, c.origem, c.status, c.envio_erro, c.payout_id, c.created_at, u.name AS client_name
-           FROM commissions c JOIN users u ON u.id=c.client_id
-          WHERE c.reseller_id=$1 AND c.pix_payment_id IS NOT NULL
+        `SELECT c.id, c.amount, c.base, c.custo, c.origem, c.status, c.envio_erro, c.payout_id, c.created_at,
+                u.name AS client_name, q.service_name
+           FROM commissions c JOIN users u ON u.id=c.client_id LEFT JOIN queries q ON q.id=c.query_id
+          WHERE c.reseller_id=$1 AND c.origem IS NOT NULL AND c.status NOT IN ('CANCELADA','SEM_LUCRO')
           ORDER BY c.created_at DESC LIMIT 300`, [rid]),
       pool.query(
         `SELECT id, valor, origem, payout_id, observacao, created_at FROM revendedor_pagamentos
           WHERE revendedor_id=$1 ORDER BY created_at DESC LIMIT 100`, [rid]),
+      pool.query('SELECT * FROM parceiro_dominios WHERE parceiro_id=$1', [rid]),
+      consultasDoParceiro(rid),
     ]);
-    res.json({ revendedor: numerosRevendedor(r.rows[0]), clientes: clientes.rows, comissoes: comissoes.rows, pagamentos: pagamentos.rows });
+    res.json({
+      revendedor: numerosRevendedor(r.rows[0]), clientes: clientes.rows, comissoes: comissoes.rows,
+      pagamentos: pagamentos.rows, dominio: dominioParaTela(dominio.rows[0]), consultas,
+    });
   } catch (err) {
-    console.error('Erro ao abrir revendedor:', err.message);
+    console.error('Erro ao abrir parceiro:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
   }
 });
 
-// Vincula uma conta existente (e-mail ou CPF/CNPJ) ao revendedor. Não mexe em
-// recargas antigas: a comissão vale a partir do vínculo.
+// Desconto do admin para o parceiro numa consulta: o custo dele passa a ser
+// esse preço (em vez do catálogo). Sem preço → remove o desconto. Se o
+// parceiro já vendia abaixo do custo novo, o cliente dele passa a pagar o custo
+// (ver precoParceiroDoCliente) — a tela avisa.
+app.put('/api/admin/revendedores/:id/custos/:serviceId', requireAuth, requireSuperAdmin, async (req, res) => {
+  const svc = SERVICES.find(s => s.id === req.params.serviceId);
+  if (!servicoRevendavel(svc)) return res.status(400).json({ error: 'Essa consulta não pode ser revendida.' });
+  try {
+    const u = await pool.query(`SELECT id FROM users WHERE id=$1 AND role='reseller'`, [req.params.id]);
+    if (!u.rows.length) return res.status(404).json({ error: 'Parceiro não encontrado.' });
+    const bruto = req.body?.custo;
+    if (bruto === null || bruto === undefined || String(bruto).trim() === '') {
+      await pool.query('DELETE FROM user_service_prices WHERE user_id=$1 AND service_id=$2', [req.params.id, svc.id]);
+      return res.json({ success: true, custo: catalogPrice(svc), desconto: false });
+    }
+    const custo = Math.round(parseFloat(String(bruto).replace(',', '.')) * 100) / 100;
+    if (!(custo >= 0) || custo > PRECO_PARCEIRO_MAX) return res.status(400).json({ error: 'Valor inválido.' });
+    await pool.query(
+      `INSERT INTO user_service_prices (user_id, service_id, price) VALUES ($1,$2,$3)
+       ON CONFLICT (user_id, service_id) DO UPDATE SET price=$3, updated_at=NOW()`,
+      [req.params.id, svc.id, custo]
+    );
+    res.json({ success: true, custo, desconto: true });
+  } catch (err) {
+    console.error('Erro ao salvar custo do parceiro:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// Domínio próprio pelo admin: informar o domínio configurado e ativar, voltar
+// para configuração, cancelar, ou liberar sem PIX (pago por fora → CONFIGURANDO).
+const DOMINIO_STATUS = ['AGUARDANDO_PAGAMENTO', 'CONFIGURANDO', 'ATIVO', 'CANCELADO'];
+app.put('/api/admin/revendedores/:id/dominio', requireAuth, requireSuperAdmin, async (req, res) => {
+  const status = String(req.body?.status || '');
+  if (!DOMINIO_STATUS.includes(status)) return res.status(400).json({ error: 'Situação inválida.' });
+  const dominio = normalizarDominio(req.body?.dominio);
+  if (status === 'ATIVO' && !DOMINIO_RE.test(dominio))
+    return res.status(400).json({ error: 'Informe o domínio configurado, terminado em .com.br (ex.: meusite.com.br), para ativar.' });
+  const observacao = String(req.body?.observacao || '').trim().slice(0, 500) || null;
+  try {
+    const u = await pool.query(`SELECT id, name, phone FROM users WHERE id=$1 AND role='reseller'`, [req.params.id]);
+    if (!u.rows.length) return res.status(404).json({ error: 'Parceiro não encontrado.' });
+    if (dominio) {
+      const dup = await pool.query('SELECT 1 FROM parceiro_dominios WHERE dominio=$1 AND parceiro_id<>$2', [dominio, req.params.id]);
+      if (dup.rows.length) return res.status(409).json({ error: 'Esse domínio já está em outro parceiro.' });
+    }
+    const antes = await pool.query('SELECT status FROM parceiro_dominios WHERE parceiro_id=$1', [req.params.id]);
+    const validoAte = req.body?.valido_ate ? new Date(`${String(req.body.valido_ate).slice(0, 10)}T23:59:59-03:00`) : null;
+    if (validoAte && isNaN(validoAte.getTime())) return res.status(400).json({ error: 'Data de validade inválida.' });
+    await pool.query(
+      `INSERT INTO parceiro_dominios (parceiro_id, status, dominio, observacao, pago_em, prazo_ate, ativado_em, valido_ate)
+       VALUES ($1,$2::text,$3,$4,
+               CASE WHEN $2::text IN ('CONFIGURANDO','ATIVO') THEN NOW() END,
+               CASE WHEN $2::text IN ('CONFIGURANDO','ATIVO') THEN NOW() + ($5 || ' hours')::interval END,
+               CASE WHEN $2::text='ATIVO' THEN NOW() END,
+               COALESCE($6::timestamptz, CASE WHEN $2::text IN ('CONFIGURANDO','ATIVO') THEN NOW() + ($7 || ' months')::interval END))
+       ON CONFLICT (parceiro_id) DO UPDATE SET status=EXCLUDED.status,
+         dominio=COALESCE(NULLIF(EXCLUDED.dominio,''), parceiro_dominios.dominio),
+         observacao=EXCLUDED.observacao,
+         pago_em=CASE WHEN EXCLUDED.status IN ('CONFIGURANDO','ATIVO') THEN COALESCE(parceiro_dominios.pago_em, NOW()) ELSE parceiro_dominios.pago_em END,
+         prazo_ate=CASE WHEN EXCLUDED.status IN ('CONFIGURANDO','ATIVO') THEN COALESCE(parceiro_dominios.prazo_ate, NOW() + ($5 || ' hours')::interval) ELSE parceiro_dominios.prazo_ate END,
+         ativado_em=CASE WHEN EXCLUDED.status='ATIVO' THEN COALESCE(parceiro_dominios.ativado_em, NOW()) ELSE NULL END,
+         valido_ate=COALESCE($6::timestamptz, parceiro_dominios.valido_ate, EXCLUDED.valido_ate),
+         aviso_vencimento_em=CASE WHEN $6::timestamptz IS NOT NULL THEN NULL ELSE parceiro_dominios.aviso_vencimento_em END,
+         updated_at=NOW()`,
+      [req.params.id, status, dominio || null, observacao, String(DOMINIO_PROPRIO_PRAZO_HORAS), validoAte, String(DOMINIO_PROPRIO_MESES)]
+    );
+    cacheDominioParceiro.clear();
+    if (status === 'ATIVO' && antes.rows[0]?.status !== 'ATIVO' && u.rows[0].phone) {
+      await sendWhatsApp(u.rows[0].phone,
+        `🌐 Seu domínio próprio está *ativo*: https://${dominio}\n\nÉ a sua página de parceiro, com as suas consultas e preços.`
+      ).catch(() => {});
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Erro ao salvar domínio do parceiro:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// Vincula uma conta existente (e-mail ou CPF/CNPJ) ao parceiro. Só as
+// consultas feitas a partir daí geram ganho para ele.
 app.post('/api/admin/revendedores/:id/clientes', requireAuth, requireSuperAdmin, async (req, res) => {
   const busca = String(req.body?.busca || '').trim();
   if (!busca) return res.status(400).json({ error: 'Informe o e-mail ou CPF/CNPJ do cliente.' });
   try {
     const rv = await pool.query(`SELECT id FROM users WHERE id=$1 AND role='reseller'`, [req.params.id]);
-    if (!rv.rows.length) return res.status(404).json({ error: 'Revendedor não encontrado.' });
+    if (!rv.rows.length) return res.status(404).json({ error: 'Parceiro não encontrado.' });
     const doc = busca.replace(/\D/g, '');
     const u = await pool.query(
       `SELECT id, name, role, revendedor_id FROM users WHERE LOWER(email)=LOWER($1) OR ($2 <> '' AND cpf_cnpj=$2)`,
@@ -3503,9 +3958,9 @@ app.post('/api/admin/revendedores/:id/clientes', requireAuth, requireSuperAdmin,
     );
     if (!u.rows.length) return res.status(404).json({ error: 'Nenhuma conta com esse e-mail ou CPF/CNPJ.' });
     const c = u.rows[0];
-    if (c.role !== 'user') return res.status(400).json({ error: 'Só contas de usuário podem ser vinculadas a um revendedor.' });
+    if (c.role !== 'user') return res.status(400).json({ error: 'Só contas de usuário podem ser vinculadas a um parceiro.' });
     if (c.revendedor_id && String(c.revendedor_id) !== String(req.params.id))
-      return res.status(409).json({ error: `${c.name} já é cliente de outro revendedor. Desvincule lá primeiro.` });
+      return res.status(409).json({ error: `${c.name} já é cliente de outro parceiro. Desvincule lá primeiro.` });
     await pool.query('UPDATE users SET revendedor_id=$1 WHERE id=$2', [req.params.id, c.id]);
     res.json({ success: true, cliente: { id: c.id, name: c.name } });
   } catch (err) {
@@ -3518,17 +3973,7 @@ app.delete('/api/admin/revendedores/:id/clientes/:uid', requireAuth, requireSupe
     const r = await pool.query(
       'UPDATE users SET revendedor_id=NULL WHERE id=$1 AND revendedor_id=$2 RETURNING id', [req.params.uid, req.params.id]
     );
-    if (!r.rows.length) return res.status(404).json({ error: 'Cliente não encontrado nesse revendedor.' });
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Erro interno.' });
-  }
-});
-
-app.put('/api/admin/revendedores/:id/clientes/:uid/adesao', requireAuth, requireSuperAdmin, async (req, res) => {
-  try {
-    const r = await pool.query(SQL_LIBERAR_ADESAO, [req.params.uid, req.params.id, !!req.body?.paga]);
-    if (!r.rows.length) return res.status(404).json({ error: 'Cliente não encontrado nesse revendedor.' });
+    if (!r.rows.length) return res.status(404).json({ error: 'Cliente não encontrado nesse parceiro.' });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Erro interno.' });
@@ -3541,7 +3986,7 @@ app.post('/api/admin/revendedores/:id/enviar', requireAuth, requireSuperAdmin, a
     const r = await enviarComissoesRevendedor(parseInt(req.params.id, 10), { avisar: false });
     res.json(r);
   } catch (err) {
-    console.error('Erro ao enviar comissão:', err.message);
+    console.error('Erro ao enviar ganhos do parceiro:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
   }
 });
@@ -3559,12 +4004,12 @@ app.post('/api/admin/revendedores/:id/pagamento-manual', requireAuth, requireSup
     await client.query('BEGIN');
     const sel = await client.query(
       `SELECT id, amount FROM commissions
-        WHERE reseller_id=$1 AND pix_payment_id IS NOT NULL
+        WHERE reseller_id=$1 AND origem IS NOT NULL
           AND (status='A_PAGAR' OR ($2 AND status='ENVIANDO' AND (payout_id IS NULL OR payout_id='')))
         FOR UPDATE`,
       [rid, incluirTravados]
     );
-    if (!sel.rows.length) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Não há comissão a pagar para esse revendedor.' }); }
+    if (!sel.rows.length) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Não há ganho a pagar para esse parceiro.' }); }
     const total = sel.rows.reduce((s, c) => s + parseFloat(c.amount), 0);
     const pg = await client.query(
       `INSERT INTO revendedor_pagamentos (revendedor_id, valor, origem, observacao) VALUES ($1,$2,'MANUAL',$3) RETURNING id`,
@@ -3578,7 +4023,7 @@ app.post('/api/admin/revendedores/:id/pagamento-manual', requireAuth, requireSup
     res.json({ success: true, valor: parseFloat(total.toFixed(2)), comissoes: sel.rows.length });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
-    console.error('Erro no pagamento manual de revendedor:', err.message);
+    console.error('Erro no pagamento manual de parceiro:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
   } finally { client.release(); }
 });
@@ -3607,12 +4052,19 @@ app.get('/api/services', requireAuth, async (req, res) => {
     );
     const overrides = {};
     overridesR.rows.forEach(row => { overrides[row.service_id] = parseFloat(row.price); });
+    // Cliente de parceiro vê o preço do parceiro nas consultas que ele escolheu
+    // (a mesma regra da cobrança em getUserServicePrice).
+    const pr = await pool.query(
+      `SELECT u.revendedor_id FROM users u JOIN users ru ON ru.id=u.revendedor_id AND ru.role='reseller' AND ru.active=true
+        WHERE u.id=$1`, [req.user.id]
+    );
+    const tab = pr.rows.length ? await tabelaParceiro(pr.rows[0].revendedor_id) : null;
     res.json({
       services: SERVICES.map(s => ({
         ...s,
         // Serviço de grupo gratuito ignora o preço fixo por usuário (catalogPrice
         // devolve 0) — é a mesma regra aplicada na cobrança em getUserServicePrice.
-        price: isFreeService(s) ? 0 : (overrides[s.id] ?? catalogPrice(s)),
+        price: isFreeService(s) ? 0 : (overrides[s.id] ?? (tab && tab.vendaDe(s)) ?? catalogPrice(s)),
       })),
     });
   } catch (err) {
@@ -8555,7 +9007,65 @@ async function getUserServicePrice(userId, service) {
     [userId, service.id]
   );
   if (r.rows.length) return parseFloat(r.rows[0].price);
+  // Cliente de parceiro paga o preço que o parceiro pôs na página dele. O preço
+  // fixo acima (do admin para ESTE usuário) vem antes, de propósito.
+  const pp = await precoParceiroDoCliente(userId, service);
+  if (pp) return pp.venda;
   return catalogPrice(service);
+}
+
+// ── Parceria: preço do parceiro ──────────────────────────────────────────────
+// Regra do dono (25/10/2026): o parceiro escolhe as consultas da página dele e
+// o preço de cada uma, nunca abaixo do custo dele — o custo é o preço que ele
+// mesmo pagaria (catálogo, ou o desconto que o admin deu a ele em
+// user_service_prices). O ganho dele é só a diferença (ver
+// registrarLucrosParceiros). Fica de fora o que não tem preço próprio para
+// remarcar: grupo gratuito, preço por UF, suspenso e o que custa R$ 0,00.
+function servicoRevendavel(s) {
+  return !!s && !isFreeService(s) && !s.unavailable && !s.adminOnly && !s.precosUf
+    && s.id !== DATACRED_ATPVE_SERVICE_ID && catalogPrice(s) > 0;
+}
+
+// Custo do parceiro numa consulta: o preço fixo que o admin deu a ele, senão o
+// do catálogo. É o mesmo número que ele paga quando consulta por conta própria.
+async function custoParceiro(parceiroId, service) {
+  const r = await pool.query(
+    'SELECT price FROM user_service_prices WHERE user_id=$1 AND service_id=$2', [parceiroId, service.id]
+  );
+  return r.rows.length ? parseFloat(r.rows[0].price) : catalogPrice(service);
+}
+
+// { parceiroId, custo, venda } quando o usuário é cliente de um parceiro ativo
+// que pôs essa consulta na página; senão null. Se o admin subir o custo acima
+// do preço do parceiro, vale o custo: a plataforma nunca vende abaixo dele.
+async function precoParceiroDoCliente(userId, service) {
+  if (!servicoRevendavel(service)) return null;
+  const r = await pool.query(
+    `SELECT u.revendedor_id, pc.preco FROM users u
+       JOIN users ru ON ru.id = u.revendedor_id AND ru.role = 'reseller' AND ru.active = true
+       JOIN parceiro_consultas pc ON pc.parceiro_id = u.revendedor_id AND pc.service_id = $2
+      WHERE u.id = $1`,
+    [userId, service.id]
+  );
+  if (!r.rows.length) return null;
+  const parceiroId = r.rows[0].revendedor_id;
+  const custo = await custoParceiro(parceiroId, service);
+  return { parceiroId, custo, venda: Math.max(parseFloat(r.rows[0].preco), custo) };
+}
+
+// Tabela de preços de um parceiro, de uma vez (catálogo do cliente, página
+// pública, painel do parceiro): { custos: {serviceId: custo}, precos: {serviceId: preco} }.
+async function tabelaParceiro(parceiroId) {
+  const [descontos, lista] = await Promise.all([
+    pool.query('SELECT service_id, price FROM user_service_prices WHERE user_id=$1', [parceiroId]),
+    pool.query('SELECT service_id, preco FROM parceiro_consultas WHERE parceiro_id=$1', [parceiroId]),
+  ]);
+  const custos = {}, precos = {};
+  descontos.rows.forEach(r => { custos[r.service_id] = parseFloat(r.price); });
+  lista.rows.forEach(r => { precos[r.service_id] = parseFloat(r.preco); });
+  const custoDe = s => custos[s.id] ?? catalogPrice(s);
+  const vendaDe = s => (precos[s.id] != null && servicoRevendavel(s)) ? Math.max(precos[s.id], custoDe(s)) : null;
+  return { custos, precos, custoDe, vendaDe };
 }
 
 // Estorna os créditos de uma consulta que foi cobrada mas nunca entregou o
@@ -9405,6 +9915,7 @@ async function processCatalogQuery(userId, serviceId, params, res) {
   } finally {
     if (chave) await pool.query('DELETE FROM consultas_em_andamento WHERE chave=$1', [chave])
       .catch(e => console.error('[trava consulta] falha ao liberar:', e.message));
+    await repassarGanhoParceiro(userId).catch(e => console.error('[parceiro] repasse:', e.message));
   }
 }
 
@@ -14171,18 +14682,16 @@ app.get('/api/admin/assinantes', requireAuth, requireSuperAdmin, async (req, res
   }
 });
 
-// ── Revendedores: comissão de 20% sobre a recarga ────────────────────────────
-// Regra do dono (23/10/2026): quando o usuário de um revendedor paga uma
-// recarga (PIX ou cartão) ou a fatura do pós-pago, 20% do valor LÍQUIDO (sem o
-// acréscimo do cartão) é do revendedor e vai na hora para a chave PIX dele;
-// os 80% ficam com a plataforma. A base é a recarga e não a consulta — decisão
-// do dono com a consequência na mesa: o revendedor ganha mesmo que o crédito
-// nunca seja usado, e consulta/estorno não mexem na comissão.
-// A taxa de adesão NÃO passa por aqui: é opcional, decidida pelo revendedor e
-// 100% dele, cobrada por fora — o sistema só guarda o valor e quem já pagou.
-const COMISSAO_REVENDEDOR_PCT = 20;
+// ── Parceiros: ganho por consulta ────────────────────────────────────────────
+// Regra do dono (25/10/2026, no lugar dos 20% da recarga e da adesão): o
+// cliente do parceiro paga, em cada consulta da página dele, o preço que o
+// parceiro definiu; o ganho do parceiro é o que passa do custo dele (catálogo
+// ou desconto do admin). A plataforma recebe o crédito do cliente como sempre
+// e repassa esse ganho por PIX (Payouts do Mercado Pago) na hora, como era a
+// comissão antes: logo depois da consulta (repassarGanhoParceiro) e, para o
+// que escapar disso, no cron do PIX de 10 em 10 minutos.
 // Envio automático pelo Payouts do Mercado Pago (POST /v1/payouts). Com false,
-// a comissão fica "a pagar" e o admin paga e dá baixa na tela Revendedores.
+// o ganho fica "a pagar" e o admin paga e dá baixa na tela Parceiros.
 const COMISSAO_ENVIO_AUTOMATICO = true;
 // O Payouts recusa transferência abaixo de R$ 1,00: comissão menor espera
 // somar com a próxima.
@@ -14227,38 +14736,98 @@ function mascararChavePix(chave) {
   return `${c.slice(0, 3)}***${c.slice(-3)}`;
 }
 
-// Chamada dentro da transação do creditPixPaymentIfApproved, logo depois da
-// baixa. Em SAVEPOINT: falha da comissão não pode desfazer o crédito do
-// cliente. O índice único em pix_payment_id impede comissão dobrada. Devolve o
-// id do revendedor quando gerou comissão (o envio é feito depois do COMMIT).
-async function registrarComissaoRevendedor(client, p, origem) {
-  await client.query('SAVEPOINT comissao_revendedor');
-  try {
-    const r = await client.query(
-      `SELECT u.revendedor_id FROM users u
-         JOIN users ru ON ru.id = u.revendedor_id AND ru.role = 'reseller' AND ru.active = true
-         JOIN revendedores rv ON rv.user_id = ru.id
-        WHERE u.id = $1`,
-      [p.user_id]
+/// Registra o ganho do parceiro nas consultas cobradas dos clientes dele. É uma
+// varredura, e não um passo dentro de cada cobrança, porque há mais de vinte
+// caminhos que cobram consulta (ver debitarConsulta) — assim nenhum fica de
+// fora. Roda no cron do PIX (10 em 10 min) e quando o painel do parceiro ou o
+// admin abre. Só entra consulta de serviço que estava na página do parceiro
+// quando foi feita (q.created_at >= pc.created_at). O índice único
+// (query_id, origem) impede ganho dobrado; consulta sem ganho (o admin subiu o
+// custo, por exemplo) vira SEM_LUCRO para não ser revista a cada volta.
+// Estorno: ganho ainda a pagar é cancelado; o que já saiu (ou está saindo)
+// ganha uma linha ESTORNO negativa, descontada do próximo pagamento.
+async function registrarLucrosParceiros(parceiroId = null) {
+  const filtro = parceiroId ? 'AND u.revendedor_id = $1' : '';
+  const args = parceiroId ? [parceiroId] : [];
+  const novas = await pool.query(
+    `SELECT q.id, q.user_id, q.service_id, q.amount, u.revendedor_id
+       FROM queries q
+       JOIN users u ON u.id = q.user_id
+       JOIN users ru ON ru.id = u.revendedor_id AND ru.role = 'reseller'
+       JOIN parceiro_consultas pc ON pc.parceiro_id = u.revendedor_id AND pc.service_id = q.service_id
+      WHERE q.status = 'success' AND q.transaction_id IS NOT NULL AND q.amount > 0
+        AND q.created_at >= pc.created_at ${filtro}
+        AND NOT EXISTS (SELECT 1 FROM commissions c WHERE c.query_id = q.id AND c.origem = 'CONSULTA')
+      ORDER BY q.id LIMIT 500`, args
+  );
+  const custos = new Map();
+  let registradas = 0;
+  for (const q of novas.rows) {
+    const svc = SERVICES.find(s => s.id === q.service_id);
+    if (!svc) continue;
+    const chave = `${q.revendedor_id}:${svc.id}`;
+    if (!custos.has(chave)) custos.set(chave, await custoParceiro(q.revendedor_id, svc));
+    const custo = custos.get(chave);
+    const venda = parseFloat(q.amount);
+    const ganho = Math.round((venda - custo) * 100) / 100;
+    const ins = await pool.query(
+      `INSERT INTO commissions (reseller_id, client_id, amount, rate, base, custo, origem, query_id, status)
+       VALUES ($1,$2,$3,0,$4,$5,'CONSULTA',$6,$7)
+       ON CONFLICT (query_id, origem) WHERE query_id IS NOT NULL DO NOTHING RETURNING id`,
+      [q.revendedor_id, q.user_id, Math.max(ganho, 0), venda, custo, q.id, ganho > 0 ? 'A_PAGAR' : 'SEM_LUCRO']
     );
-    if (!r.rows.length) { await client.query('RELEASE SAVEPOINT comissao_revendedor'); return null; }
-    const revendedorId = r.rows[0].revendedor_id;
-    const base = parseFloat(p.value);
-    const valor = Math.round(base * COMISSAO_REVENDEDOR_PCT) / 100;
-    if (!(valor > 0)) { await client.query('RELEASE SAVEPOINT comissao_revendedor'); return null; }
-    const ins = await client.query(
-      `INSERT INTO commissions (reseller_id, client_id, amount, rate, base, origem, pix_payment_id, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'A_PAGAR')
-       ON CONFLICT (pix_payment_id) WHERE pix_payment_id IS NOT NULL DO NOTHING RETURNING id`,
-      [revendedorId, p.user_id, valor, COMISSAO_REVENDEDOR_PCT, base, origem, p.id]
-    );
-    await client.query('RELEASE SAVEPOINT comissao_revendedor');
-    return ins.rows.length ? revendedorId : null;
-  } catch (e) {
-    await client.query('ROLLBACK TO SAVEPOINT comissao_revendedor');
-    console.error(`[revendedor] comissão do PIX ${p.id} não registrada:`, e.message);
-    return null;
+    if (ins.rows.length && ganho > 0) registradas++;
   }
+
+  const filtroEst = parceiroId ? 'AND c.reseller_id = $1' : '';
+  await pool.query(
+    `UPDATE commissions c SET status='CANCELADA', envio_erro=NULL
+       FROM queries q
+      WHERE q.id = c.query_id AND q.status = 'estornado' AND c.origem = 'CONSULTA'
+        AND c.status IN ('A_PAGAR','SEM_LUCRO') ${filtroEst}`, args
+  );
+  const estornar = await pool.query(
+    `SELECT c.reseller_id, c.client_id, c.amount, c.base, c.custo, c.query_id FROM commissions c
+       JOIN queries q ON q.id = c.query_id
+      WHERE q.status = 'estornado' AND c.origem = 'CONSULTA' AND c.status IN ('ENVIANDO','PAGA') ${filtroEst}
+        AND NOT EXISTS (SELECT 1 FROM commissions e WHERE e.query_id = c.query_id AND e.origem = 'ESTORNO')`, args
+  );
+  for (const c of estornar.rows) {
+    await pool.query(
+      `INSERT INTO commissions (reseller_id, client_id, amount, rate, base, custo, origem, query_id, status)
+       VALUES ($1,$2,$3,0,$4,$5,'ESTORNO',$6,'A_PAGAR')
+       ON CONFLICT (query_id, origem) WHERE query_id IS NOT NULL DO NOTHING`,
+      [c.reseller_id, c.client_id, -parseFloat(c.amount), c.base, c.custo, c.query_id]
+    );
+  }
+  return { registradas, estornadas: estornar.rows.length };
+}
+
+// Logo depois de uma consulta de cliente de parceiro: registra o ganho e
+// manda o PIX na hora. Ganho abaixo de R$ 1,00 espera somar com o próximo.
+async function repassarGanhoParceiro(userId) {
+  const r = await pool.query('SELECT revendedor_id FROM users WHERE id=$1 AND revendedor_id IS NOT NULL', [userId]);
+  if (!r.rows.length) return;
+  const pid = r.rows[0].revendedor_id;
+  const { registradas } = await registrarLucrosParceiros(pid);
+  if (registradas) await enviarComissoesRevendedor(pid);
+}
+
+// Cron do PIX: envia o que ficou a pagar com ganho NOVO (nunca tentado) — o
+// lote que já falhou espera o admin ("Tentar envio agora" ou pagamento
+// manual), senão o WhatsApp de falha sairia a cada 10 minutos.
+async function pagarGanhosParceiros() {
+  await registrarLucrosParceiros().catch(e => console.error('[parceiro] lucros:', e.message));
+  const r = await pool.query(
+    `SELECT reseller_id FROM commissions WHERE status='A_PAGAR' AND origem IS NOT NULL
+      GROUP BY reseller_id HAVING SUM(amount) >= $1 AND bool_or(envio_tentado_em IS NULL)`, [PAYOUT_MINIMO]
+  );
+  let enviados = 0;
+  for (const { reseller_id } of r.rows) {
+    const e = await enviarComissoesRevendedor(reseller_id).catch(err => ({ enviado: false, motivo: err.message }));
+    if (e.enviado) enviados++;
+  }
+  return { parceiros: r.rows.length, enviados };
 }
 
 // Envia por PIX tudo o que o revendedor tem "a pagar", num payout só (assim a
@@ -14288,9 +14857,9 @@ async function enviarComissoesRevendedor(revendedorId, { avisar = true } = {}) {
   const avisarAdmin = async (motivo) => {
     if (!avisar || !ADMIN_PHONE) return;
     await sendWhatsApp(ADMIN_PHONE,
-      `💸 *Comissão de revendedor a pagar*\n\nRevendedor: ${name}\nValor a pagar: R$ ${totalAPagar.toFixed(2).replace('.', ',')}\n` +
+      `💸 *Ganho de parceiro a pagar*\n\nParceiro: ${name}\nValor a pagar: R$ ${totalAPagar.toFixed(2).replace('.', ',')}\n` +
       `Chave PIX (${PIX_TIPOS[pix_tipo]}): ${mascararChavePix(pix_chave)}\n\nO envio automático não saiu: ${motivo}\n` +
-      `Pague pelo banco e dê baixa em Admin → Revendedores.`
+      `Pague pelo banco e dê baixa em Admin → Parceiros.`
     ).catch(() => {});
   };
 
@@ -14317,9 +14886,9 @@ async function enviarComissoesRevendedor(revendedorId, { avisar = true } = {}) {
   try {
     resp = await mpReq('POST', '/v1/payouts', {
       external_reference: ref,
-      description: 'Comissao de revendedor MC Despachadoria',
+      description: 'Ganhos de parceiro MC Despachadoria',
       transactions: [{
-        description: `Comissao ${COMISSAO_REVENDEDOR_PCT}% sobre recargas`,
+        description: 'Ganhos de parceiro nas consultas',
         type: 'pix',
         pix: { type: tipoPayout, chave: pix_chave },
         amount: { currency: 'BRL', value: total },
@@ -14511,10 +15080,19 @@ async function creditPixPaymentIfApproved(gatewayId) {
       // Como na assinatura, de propósito não grava em transactions: aquele
       // extrato é o do saldo pré-pago, e a fatura não movimenta saldo. O
       // pagamento fica em pix_payments e a baixa na própria fatura.
-      const revendedorFatura = await registrarComissaoRevendedor(client, p, 'FATURA');
       await client.query('COMMIT');
-      if (revendedorFatura) await enviarComissoesRevendedor(revendedorFatura).catch(e => console.error('[revendedor] envio:', e.message));
       return { credited: true, status: 'approved', value: parseFloat(p.value), purpose: 'FATURA' };
+    }
+
+    // Taxa do domínio próprio do parceiro: não credita saldo — abre o prazo de
+    // configuração e avisa o dono (depois do COMMIT, com await: na Vercel
+    // promessa solta morre com a resposta).
+    if (p.purpose === 'DOMINIO') {
+      const aviso = await baixarPagamentoDominio(client, p, gatewayId);
+      await client.query('COMMIT');
+      cacheDominioParceiro.clear();
+      await avisarPagamentoDominio(aviso).catch(e => console.error('[dominio] aviso:', e.message));
+      return { credited: true, status: 'approved', value: parseFloat(p.value), purpose: 'DOMINIO' };
     }
 
     await client.query('UPDATE users SET credits = credits + $1 WHERE id=$2', [p.value, p.user_id]);
@@ -14522,11 +15100,7 @@ async function creditPixPaymentIfApproved(gatewayId) {
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'deposit',$2,$3)`,
       [p.user_id, p.value, `Recarga ${{ CARTAO: 'cartão de débito', CREDITO: 'cartão de crédito' }[p.method] || 'PIX'} — R$ ${parseFloat(p.value).toFixed(2).replace('.', ',')}`]
     );
-    const revendedorRecarga = await registrarComissaoRevendedor(client, p, 'RECARGA');
     await client.query('COMMIT');
-    // Depois do COMMIT e com await: na Vercel promessa solta morre com a
-    // resposta, e o envio tem de sair "na hora" da recarga.
-    if (revendedorRecarga) await enviarComissoesRevendedor(revendedorRecarga).catch(e => console.error('[revendedor] envio:', e.message));
     return { credited: true, status: 'approved', value: parseFloat(p.value) };
   } catch (e) {
     await client.query('ROLLBACK');
@@ -14600,6 +15174,7 @@ async function runPixReconcile() {
   }
   console.log(`✅ Reconciliação PIX: ${checked} verificados, ${credited} creditados`);
   await conferirPayoutsRevendedores().catch(e => console.error('[revendedor] conferência de payouts:', e.message));
+  await pagarGanhosParceiros().catch(e => console.error('[parceiro] repasse:', e.message));
   return { checked, credited, pending: pendentes.length };
 }
 
@@ -14615,6 +15190,7 @@ app.get('/api/cron/assinaturas-expirar', async (req, res) => {
   }
   try {
     const avisos = await avisarVencimentoAssinaturas();
+    await avisarVencimentoDominios().catch(e => console.error('[dominio] aviso de vencimento:', e.message));
     const r = await pool.query(
       `UPDATE subscriptions SET status='EXPIRED'
        WHERE status='ACTIVE' AND expires_at <= NOW() RETURNING id`

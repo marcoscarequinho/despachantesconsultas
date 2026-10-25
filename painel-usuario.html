@@ -250,7 +250,7 @@
       <a id="topbar-recarga" href="/recarga-pix" class="btn-primary text-xs">💸 Recarga PIX</a>
       <button type="button" onclick="abrirSejaRevendedor()"
         class="text-xs font-semibold px-3 py-2 rounded-lg bg-blue-700 hover:bg-blue-800 text-white whitespace-nowrap">
-        🤝 <span class="hidden sm:inline">Quer ser um </span>Revendedor<span class="hidden sm:inline">?</span>
+        🤝 <span class="hidden sm:inline">Quer ser um </span>Parceiro<span class="hidden sm:inline">?</span>
       </button>
       <div class="flex items-center gap-2">
         <div id="topbar-avatar"
@@ -8537,42 +8537,42 @@ function requeryFromModal() {
 }
 </script>
 
-<!-- Pop-up "Quer ser um Revendedor?" (botão do topo). O cadastro de revendedor é
+<!-- Pop-up "Quer ser um Parceiro?" (botão do topo). O cadastro de parceiro é
      só pelo admin, então aqui é só a apresentação das regras e o WhatsApp do
-     dono para pedir a adesão — as regras espelham a seção Revendedores do CLAUDE.md. -->
+     dono para pedir a parceria — as regras espelham a seção Parceria do CLAUDE.md.
+     (Os ids/funções continuam "revendedor" — é o nome interno do papel.) -->
 <div id="seja-revendedor-modal" class="fixed inset-0 z-[9999] hidden items-center justify-center p-4" style="background:rgba(0,0,0,.6);" onclick="if(event.target===this) fecharSejaRevendedor()">
   <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
     <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-      <h3 class="font-bold text-gray-800 text-lg">🤝 Seja um Revendedor</h3>
+      <h3 class="font-bold text-gray-800 text-lg">🤝 Seja um Parceiro</h3>
       <button onclick="fecharSejaRevendedor()" class="text-gray-400 hover:text-gray-600 text-xl font-bold" aria-label="Fechar">✕</button>
     </div>
     <div class="px-6 py-5 space-y-4 text-sm text-gray-700">
-      <p>Revenda <strong>todas as consultas</strong> da plataforma para os seus clientes e ganhe comissão em cada recarga que eles fizerem.</p>
+      <p>Revenda as consultas da plataforma para os seus clientes <strong>com o seu preço</strong>.</p>
       <ul class="space-y-2.5">
-        <li class="flex gap-2"><span>💸</span><span><strong>20% de cada recarga</strong> dos seus clientes (PIX ou cartão), enviados para a sua chave PIX.</span></li>
-        <li class="flex gap-2"><span>🔎</span><span>Seus clientes têm acesso a todo o catálogo, pelo preço do site, cada um com o próprio painel e saldo.</span></li>
-        <li class="flex gap-2"><span>🌐</span><span>Página própria com o seu nome, que você personaliza com textos e imagens. Quem se cadastra por ela vira seu cliente automaticamente.</span></li>
-        <li class="flex gap-2"><span>🧾</span><span>Taxa de adesão dos seus clientes: opcional, combinada com a MC Despachadoria. Quando liberada, o valor é <strong>todo seu</strong> — você recebe e libera o acesso do cliente.</span></li>
-        <li class="flex gap-2"><span>📊</span><span>Painel de revendedor com seus clientes, comissões recebidas e a receber.</span></li>
-        <li class="flex gap-2"><span>✅</span><span>O cadastro de revendedor é feito pela MC Despachadoria, após a sua solicitação.</span></li>
+        <li class="flex gap-2"><span>🏷️</span><span>Você escolhe as consultas da sua página e <strong>quanto cobrar em cada uma</strong> — nunca abaixo do preço da plataforma.</span></li>
+        <li class="flex gap-2"><span>💸</span><span>O que você cobra a mais é <strong>todo seu</strong>, em cada consulta dos seus clientes, enviado por PIX para a sua chave.</span></li>
+        <li class="flex gap-2"><span>🌐</span><span>Página própria com o seu nome, as suas consultas e os seus preços. Quem se cadastra por ela vira seu cliente automaticamente.</span></li>
+        <li class="flex gap-2"><span>🔗</span><span>Opcional: domínio próprio (.com.br) para a sua página — R$ 200,00 por ano, incluindo o domínio e a taxa de administração do serviço. A configuração é toda nossa.</span></li>
+        <li class="flex gap-2"><span>📊</span><span>Painel de parceiro com seus clientes, preços, ganhos recebidos e a receber.</span></li>
+        <li class="flex gap-2"><span>✅</span><span>Sem taxa de adesão. O cadastro de parceiro é feito pela MC Despachadoria, após a sua solicitação.</span></li>
       </ul>
-      <!-- Mesmos campos do cadastro em Admin → Revendedores (assets/admin-revendedores.js).
-           Senha não é pedida: o admin cria uma e envia ao revendedor. -->
+      <!-- Mesmos campos do cadastro em Admin → Parceiros (assets/admin-revendedores.js).
+           Senha não é pedida: o admin cria uma e envia ao parceiro. -->
       <div class="bg-blue-50 border border-blue-200 rounded-xl p-4">
-        <p class="font-semibold text-blue-900">📋 Para pedir a adesão, envie pelo WhatsApp:</p>
+        <p class="font-semibold text-blue-900">📋 Para pedir a parceria, envie pelo WhatsApp:</p>
         <ol class="list-decimal pl-5 mt-2 space-y-1 text-blue-900">
           <li>Nome completo (ou razão social)</li>
           <li>CPF ou CNPJ</li>
           <li>Telefone / WhatsApp com DDD</li>
           <li>E-mail (será o seu login)</li>
-          <li>Chave PIX para receber as comissões e o tipo dela (CPF, CNPJ, e-mail, telefone ou aleatória)</li>
-          <li>Se quer cobrar taxa de adesão dos seus clientes (sim ou não)</li>
+          <li>Chave PIX para receber os ganhos e o tipo dela (CPF, CNPJ, e-mail, telefone ou aleatória)</li>
         </ol>
         <p class="text-xs text-blue-800 mt-2">A mensagem já vai pronta com esses itens — é só completar. Não envie senha: a sua senha de acesso é criada pela MC e enviada a você.</p>
       </div>
       <a id="seja-revendedor-whatsapp" target="_blank" rel="noopener noreferrer"
         class="flex items-center justify-center gap-2 w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 rounded-xl">
-        💬 Pedir adesão pelo WhatsApp (22) 99209-0682
+        💬 Pedir parceria pelo WhatsApp (22) 99209-0682
       </a>
     </div>
   </div>
@@ -8582,15 +8582,14 @@ const SEJA_REVENDEDOR_WHATSAPP = '5522992090682';
 function abrirSejaRevendedor() {
   const u = (typeof currentUser !== 'undefined' && currentUser) || {};
   const msg = [
-    'Olá! Quero ser revendedor da MC Despachadoria Consultas e gostaria de pedir a adesão. Seguem meus dados:',
+    'Olá! Quero ser parceiro da MC Despachadoria Consultas. Seguem meus dados:',
     '',
     `Nome completo / razão social: ${u.name || ''}`,
     'CPF ou CNPJ: ',
     `Telefone / WhatsApp: ${u.phone || ''}`,
     `E-mail (login): ${u.email || ''}`,
-    'Chave PIX para as comissões: ',
+    'Chave PIX para os ganhos: ',
     'Tipo da chave PIX (CPF, CNPJ, e-mail, telefone ou aleatória): ',
-    'Quero cobrar taxa de adesão dos meus clientes (sim/não): ',
   ].join('\n');
   document.getElementById('seja-revendedor-whatsapp').href =
     `https://wa.me/${SEJA_REVENDEDOR_WHATSAPP}?text=${encodeURIComponent(msg)}`;
