@@ -46,5 +46,37 @@
     }
     const seja = document.getElementById('btn-seja-parceiro');
     if (seja) seja.remove();
+    window.nomeMarcaParceiro = marca.nome;
+    trocarTextos(document.body);
+    // O painel monta muita coisa depois (catálogo, histórico, avisos): o que
+    // entrar no DOM também passa pela troca.
+    new MutationObserver(lista => {
+      for (const m of lista) {
+        if (m.type === 'characterData') trocarNo(m.target);
+        else m.addedNodes.forEach(n => trocarTextos(n));
+      }
+    }).observe(document.body, { childList: true, subtree: true, characterData: true });
   };
+
+  // "MC Despachadoria Consultas" / "DESPACHANTES CONSULTAS" → nome do parceiro,
+  // em texto e nos atributos que aparecem (placeholder, title, alt).
+  const MARCA_MC = /MC Despachadoria Consultas|MC Despachadoria|DESPACHANTES CONSULTAS|Despachantes Consultas/g;
+  function trocarNo(no) {
+    if (no.nodeValue && MARCA_MC.test(no.nodeValue)) { MARCA_MC.lastIndex = 0; no.nodeValue = no.nodeValue.replace(MARCA_MC, marca.nome); }
+    MARCA_MC.lastIndex = 0;
+  }
+  function trocarTextos(raiz) {
+    if (!marca || !raiz) return;
+    if (raiz.nodeType === Node.TEXT_NODE) { trocarNo(raiz); return; }
+    if (raiz.nodeType !== Node.ELEMENT_NODE || raiz.tagName === 'SCRIPT' || raiz.tagName === 'STYLE') return;
+    const andar = document.createTreeWalker(raiz, NodeFilter.SHOW_TEXT);
+    for (let n = andar.nextNode(); n; n = andar.nextNode()) trocarNo(n);
+    const els = [raiz, ...raiz.querySelectorAll('[placeholder],[title],[alt]')];
+    for (const el of els) {
+      for (const a of ['placeholder', 'title', 'alt']) {
+        const v = el.getAttribute && el.getAttribute(a);
+        if (v && v.match(MARCA_MC)) el.setAttribute(a, v.replace(MARCA_MC, marca.nome));
+      }
+    }
+  }
 })();

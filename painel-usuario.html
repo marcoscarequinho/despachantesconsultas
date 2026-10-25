@@ -7475,7 +7475,7 @@ function buildResultV2Canvas({ svc, result, charged, params, ts }) {
   y += fields.length * rowHeight + 20;
   ctx.fillStyle = '#9ca3af';
   ctx.font = '11px Arial';
-  ctx.fillText('DESPACHANTES CONSULTAS — Opção 2 Nova Consulta (Datacube)', padding, y);
+  ctx.fillText(`${window.nomeMarcaParceiro || 'DESPACHANTES CONSULTAS'} — Opção 2 Nova Consulta (Datacube)`, padding, y);
 
   return canvas;
 }
@@ -7804,7 +7804,7 @@ function buildResultV3Canvas({ svc, result, charged, params, ts }) {
   y += fields.length * rowHeight + 20;
   ctx.fillStyle = '#9ca3af';
   ctx.font = '11px Arial';
-  ctx.fillText('DESPACHANTES CONSULTAS — Infosimples Nova Consulta', padding, y);
+  ctx.fillText(`${window.nomeMarcaParceiro || 'DESPACHANTES CONSULTAS'} — Infosimples Nova Consulta`, padding, y);
 
   return canvas;
 }

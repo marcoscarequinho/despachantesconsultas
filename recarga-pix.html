@@ -37,6 +37,7 @@
        aplica a classe antes da primeira pintura. Ver assets/tema.css. -->
   <link rel="stylesheet" href="/assets/tema.css">
   <script src="/assets/tema.js"></script>
+  <script src="/assets/marca-parceiro.js"></script>
   <!-- Cartão de débito (Checkout Bricks do Mercado Pago) — ver assets/pagamento-cartao.js -->
   <script src="/assets/pagamento-cartao.js" defer></script>
 </head>
@@ -45,7 +46,7 @@
   <!-- Header -->
   <header class="bg-white shadow-sm sticky top-0 z-30">
     <div class="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between">
-      <a href="/" class="text-xl font-bold text-blue-900">DESPACHANTES CONSULTAS</a>
+      <a href="/" class="link-site text-xl font-bold text-blue-900">DESPACHANTES CONSULTAS</a>
       <div class="flex items-center gap-3">
         <a href="/painel" class="text-sm text-gray-500 hover:text-blue-700">← Painel</a>
         <div id="saldo-chip" class="flex items-center gap-1.5 bg-green-50 border border-green-200 rounded-lg px-3 py-1">
@@ -267,6 +268,8 @@
         const r = await fetch('/api/auth/me');
         if (!r.ok) { window.location.href = '/entrar'; return; }
         const u = await r.json();
+        // Cliente de parceiro vê a marca do parceiro (ver assets/marca-parceiro.js).
+        aplicarMarcaParceiro(u.parceiro);
         const c = parseFloat(u.credits || 0);
         document.getElementById('saldo-display').textContent =
           'R$ ' + c.toLocaleString('pt-BR', { minimumFractionDigits: 2 });

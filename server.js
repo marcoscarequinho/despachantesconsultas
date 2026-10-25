@@ -1042,9 +1042,78 @@ function formatWhatsAppPhone(phone) {
   return digits.length >= 12 ? digits : `55${digits}`;
 }
 
-async function sendWhatsApp(phone, message) {
+// ── Marca do parceiro fora do painel (Parceria, 25/10/2026) ─────────────────
+// Para o parceiro e os clientes dele nada sai com a marca da MC: o texto dos
+// PDFs (PDFDocument.prototype.text, abaixo), o nome dos arquivos baixados
+// (Content-Disposition), o HTML dos relatórios e o WhatsApp levam o nome do
+// parceiro no lugar de "MC Despachadoria Consultas" / "DESPACHANTES
+// CONSULTAS". Para os clientes da MC nada muda. Nas requisições a marca vem
+// do login (contextoMarca, preenchido no middleware logo depois do
+// cookieParser); no WhatsApp vem do telefone de quem recebe, porque boa parte
+// das mensagens sai de cron, sem requisição nenhuma (marcaPorTelefone).
+const { AsyncLocalStorage } = require('async_hooks');
+const contextoMarca = new AsyncLocalStorage();
+const MARCA_MC_RE = /MC Despachadoria Consultas|MC Despachadoria|DESPACHANTES CONSULTAS|Despachantes Consultas/g;
+const marcaAtual = () => contextoMarca.getStore()?.marca || null;
+function comMarca(texto, marca) {
+  return marca && typeof texto === 'string' ? texto.replace(MARCA_MC_RE, marca.nome) : texto;
+}
+// "mcdespachadoria-crlv-ABC1D23.pdf" → "rj-solucoes-crlv-ABC1D23.pdf".
+function arquivoComMarca(nome, marca) {
+  if (!marca || typeof nome !== 'string') return nome;
+  const prefixo = String(marca.nome).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'documento';
+  return nome.replace(/mcdespachadoria/gi, prefixo);
+}
+const _textoPdf = PDFDocument.prototype.text;
+PDFDocument.prototype.text = function (texto, ...resto) {
+  return _textoPdf.call(this, comMarca(texto, marcaAtual()), ...resto);
+};
+
+// Marca por usuário (middleware) e por telefone (WhatsApp), com cache curto.
+const cacheMarcaUsuario = new Map();
+async function marcaDoUsuarioCache(userId) {
+  const c = cacheMarcaUsuario.get(userId);
+  if (c && c.exp > Date.now()) return c.marca;
+  const marca = await marcaParceiroDoUsuario(userId).catch(() => null);
+  if (cacheMarcaUsuario.size > 2000) cacheMarcaUsuario.clear();
+  cacheMarcaUsuario.set(userId, { marca, exp: Date.now() + 60 * 1000 });
+  return marca;
+}
+const digitosTelefone = t => { const d = String(t || '').replace(/\D/g, ''); return d.length >= 12 && d.startsWith('55') ? d.slice(2) : d; };
+const cacheMarcaTelefone = new Map();
+// Só troca quando TODAS as contas com esse telefone são do mesmo parceiro
+// (dele ou de clientes dele); telefone do dono e dos avisos fica sempre MC.
+async function marcaPorTelefone(phone) {
+  const d = digitosTelefone(phone);
+  if (d.length < 10 || d === digitosTelefone(ADMIN_PHONE) || d === digitosTelefone(DOMINIO_AVISO_WHATSAPP)) return null;
+  const c = cacheMarcaTelefone.get(d);
+  if (c && c.exp > Date.now()) return c.marca;
+  let marca = null;
+  try {
+    const r = await pool.query(
+      `SELECT u.id, p.id AS parceiro_id FROM users u
+         LEFT JOIN users p ON p.id = CASE WHEN u.role='reseller' THEN u.id ELSE u.revendedor_id END
+                          AND p.role='reseller' AND p.active=true
+        WHERE CASE WHEN length(regexp_replace(COALESCE(u.phone,''),'\\D','','g')) >= 12
+                    AND left(regexp_replace(COALESCE(u.phone,''),'\\D','','g'), 2) = '55'
+                   THEN substr(regexp_replace(COALESCE(u.phone,''),'\\D','','g'), 3)
+                   ELSE regexp_replace(COALESCE(u.phone,''),'\\D','','g') END = $1`, [d]
+    );
+    const ids = [...new Set(r.rows.map(x => x.parceiro_id))];
+    if (r.rows.length && ids.length === 1 && ids[0]) marca = await marcaParceiroDoUsuario(r.rows[0].id).catch(() => null);
+  } catch (e) { console.error('[marca] telefone:', e.message); }
+  if (cacheMarcaTelefone.size > 2000) cacheMarcaTelefone.clear();
+  cacheMarcaTelefone.set(d, { marca, exp: Date.now() + 5 * 60 * 1000 });
+  return marca;
+}
+
+// opcoes.marca === false mantém a MC (mensagens da própria parceria, que vão
+// para o parceiro falando da MC).
+async function sendWhatsApp(phone, message, opcoes = {}) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !phone) return false;
   const formatted = formatWhatsAppPhone(phone);
+  if (opcoes.marca !== false) message = comMarca(message, await marcaPorTelefone(phone));
   try {
     const r = await fetch(
       `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/send-text`,
@@ -1082,9 +1151,14 @@ async function notifyAdminNewQuery(user, service, price, params) {
   await sendWhatsApp(ADMIN_PHONE, msg).catch(() => {});
 }
 
-async function sendWhatsAppPdf(phone, pdfBuffer, fileName, caption) {
+async function sendWhatsAppPdf(phone, pdfBuffer, fileName, caption, opcoes = {}) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !phone) return false;
   const formatted = formatWhatsAppPhone(phone);
+  if (opcoes.marca !== false) {
+    const marca = await marcaPorTelefone(phone);
+    fileName = arquivoComMarca(fileName, marca);
+    caption = comMarca(caption, marca);
+  }
   try {
     const r = await fetch(
       `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/send-document/pdf`,
@@ -1112,9 +1186,10 @@ async function sendWhatsAppPdf(phone, pdfBuffer, fileName, caption) {
   }
 }
 
-async function sendWhatsAppImage(phone, base64Png, caption) {
+async function sendWhatsAppImage(phone, base64Png, caption, opcoes = {}) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN || !phone) return false;
   const formatted = formatWhatsAppPhone(phone);
+  if (opcoes.marca !== false) caption = comMarca(caption, await marcaPorTelefone(phone));
   try {
     const r = await fetch(
       `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}/send-image`,
@@ -2570,6 +2645,20 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
+// Marca do parceiro para esta requisição (ver contextoMarca): o texto dos PDFs
+// gerados aqui e o nome do arquivo baixado saem com o nome dele.
+app.use('/api', async (req, res, next) => {
+  const token = req.cookies.auth_token || (req.headers.authorization || '').replace('Bearer ', '');
+  let marca = null;
+  if (token && !token.startsWith('mcd_')) {
+    try { marca = await marcaDoUsuarioCache(jwt.verify(token, JWT_SECRET).id); } catch { marca = null; }
+  }
+  if (!marca) return next();
+  const setHeader = res.setHeader.bind(res);
+  res.setHeader = (nome, valor) => setHeader(nome,
+    String(nome).toLowerCase() === 'content-disposition' ? arquivoComMarca(valor, marca) : valor);
+  contextoMarca.run({ marca }, next);
+});
 // A página avulsa não pode sair pelo servidor de estáticos (isso pularia a
 // validação do código de acesso) — redireciona para a rota controlada, que
 // exige ?codigo=XXXXXX ativo. Registrado ANTES do express.static de propósito.
@@ -3473,7 +3562,8 @@ async function avisarPagamentoDominio(d) {
       ? `✅ Recebemos a renovação do seu *domínio próprio* (${fmtMoneyBRL(d.valor)} — domínio + taxa de administração do serviço). Ele fica ativo até ${dia(d.valido_ate)}.`
       : `✅ Recebemos o pagamento do seu *domínio próprio* (${fmtMoneyBRL(d.valor)} por ano — domínio + taxa de administração do serviço).\n\n` +
         `A MC Despachadoria vai configurar o domínio e ele fica ativo em até ${DOMINIO_PROPRIO_PRAZO_HORAS} horas. ` +
-        'Você acompanha pelo seu painel de parceiro, em "Domínio Próprio".'
+        'Você acompanha pelo seu painel de parceiro, em "Domínio Próprio".',
+      { marca: false }
     ).catch(() => {});
   }
 }
@@ -3499,7 +3589,8 @@ async function avisarVencimentoDominios() {
         ? `⚠️ A anuidade do seu domínio próprio${d.dominio ? ` (${d.dominio})` : ''} venceu em ${dia}. ` +
           `Renove (${fmtMoneyBRL(DOMINIO_PROPRIO_VALOR)}, domínio + taxa de administração do serviço) no seu painel de parceiro, em "Domínio Próprio", para a sua página continuar abrindo por ele.`
         : `🔔 A anuidade do seu domínio próprio${d.dominio ? ` (${d.dominio})` : ''} vence em ${dia}. ` +
-          `Renove (${fmtMoneyBRL(DOMINIO_PROPRIO_VALOR)}, domínio + taxa de administração do serviço) no seu painel de parceiro, em "Domínio Próprio".`
+          `Renove (${fmtMoneyBRL(DOMINIO_PROPRIO_VALOR)}, domínio + taxa de administração do serviço) no seu painel de parceiro, em "Domínio Próprio".`,
+        { marca: false }
       ).catch(() => {});
     }
     if (vencido) {
@@ -3998,7 +4089,8 @@ app.put('/api/admin/revendedores/:id/dominio', requireAuth, requireSuperAdmin, a
     cacheDominioParceiro.clear();
     if (status === 'ATIVO' && antes.rows[0]?.status !== 'ATIVO' && u.rows[0].phone) {
       await sendWhatsApp(u.rows[0].phone,
-        `🌐 Seu domínio próprio está *ativo*: https://${dominio}\n\nÉ a sua página de parceiro, com as suas consultas e preços.`
+        `🌐 Seu domínio próprio está *ativo*: https://${dominio}\n\nÉ a sua página de parceiro, com as suas consultas e preços.`,
+        { marca: false }
       ).catch(() => {});
     }
     res.json({ success: true });
@@ -18912,7 +19004,8 @@ app.get('/api/html/:token', requireAuth, async (req, res) => {
       return res.status(404).send('<p style="font-family:sans-serif;padding:2rem">Relatório não encontrado ou expirado.</p>');
     const buf = Buffer.from(r.rows[0].pdf_data, 'base64');
     res.setHeader('Content-Type', 'text/html; charset=UTF-8');
-    return res.send(buf);
+    const marca = marcaAtual();
+    return res.send(marca ? comMarca(buf.toString('utf8'), marca) : buf);
   } catch (err) {
     res.status(500).send('<p>Erro interno.</p>');
   }
