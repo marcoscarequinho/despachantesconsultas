@@ -3400,7 +3400,10 @@ function normalizarDominio(v) {
   return d;
 }
 // Só .com.br (regra do dono, 25/10/2026): um nome e o sufixo, sem subdomínio.
-const DOMINIO_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?|xn--[a-z0-9-]{1,59})\.com\.br$/;
+// O domínio da própria MC fica de fora: ele segue como sempre foi no projeto
+// da Vercel, e o "Ativo" de parceiro (adicionarDominioVercel) nunca pode
+// mexer nele.
+const DOMINIO_RE = /^(?!despachantesconsultas\.com\.br$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?|xn--[a-z0-9-]{1,59})\.com\.br$/;
 
 // Renovação liberada a partir de DOMINIO_RENOVAR_DIAS_ANTES do vencimento (e
 // depois de vencido); antes disso o botão não aparece.
