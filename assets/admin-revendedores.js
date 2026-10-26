@@ -399,8 +399,8 @@
           <form class="space-y-2" onsubmit="rvSalvarDominio(event, ${rv.id})">
             <div class="text-xs text-gray-500 space-y-1">
               <p>1. Confira no <a href="https://registro.br/" target="_blank" rel="noopener" class="text-blue-700 underline">registro.br</a> qual das opções está <strong>disponível</strong> (é só pesquisar o nome — a consulta não registra nada).</p>
-              <p>2. Registre o domínio, deixe o DNS no ClouDNS (registro A <span class="font-mono">@ → 76.76.21.21</span> e CNAME <span class="font-mono">www → cname.vercel-dns.com</span>) e adicione o domínio em Domains no projeto da Vercel — é isso que faz a Vercel aceitar o endereço e gerar o HTTPS. O domínio → parceiro é pelo banco, como no WordPress multisite.</p>
-              <p>3. Depois que o domínio apontar, informe-o aqui e marque como <strong>Ativo</strong> — a raiz dele passa a abrir a página do parceiro.</p>
+              <p>2. Registre o domínio, deixe o DNS no ClouDNS (registro A <span class="font-mono">@ → 76.76.21.21</span> e CNAME <span class="font-mono">www → cname.vercel-dns.com</span>). O domínio → parceiro é pelo banco, como no WordPress multisite.</p>
+              <p>3. Depois que o domínio apontar, informe-o aqui e marque como <strong>Ativo</strong>: o domínio (e o www) é adicionado sozinho no projeto da Vercel, que gera o HTTPS, e a raiz dele passa a abrir a página do parceiro.</p>
             </div>
             <input id="rvd-dom-nome" class="input-field font-mono" placeholder="dominio.com.br" value="${esc((dom && dom.dominio) || (dom && dom.opcoes && dom.opcoes[0]) || '')}">
             <div class="grid grid-cols-2 gap-2">
@@ -617,9 +617,15 @@
   };
 
   async function gravarDominio(id, dados) {
-    if (dados.status === 'ATIVO' && !confirm(`Confirmar que ${dados.dominio} já está com o DNS no ClouDNS e adicionado no projeto da Vercel? A raiz dele passa a abrir a página do parceiro e ele é avisado no WhatsApp.`)) return;
-    const d = await acao(`/api/admin/revendedores/${id}/dominio`, { method: 'PUT', body: JSON.stringify(dados) }, 'Domínio salvo.');
-    if (d) recarregar(id);
+    if (dados.status === 'ATIVO' && !confirm(`Confirmar que ${dados.dominio} já está com o DNS no ClouDNS? Ele é adicionado ao projeto da Vercel agora, a raiz passa a abrir a página do parceiro e ele é avisado no WhatsApp.`)) return;
+    const d = await acao(`/api/admin/revendedores/${id}/dominio`, { method: 'PUT', body: JSON.stringify(dados) });
+    if (!d) return;
+    const v = d.vercel;
+    if (!v) toast('Domínio salvo.');
+    else if (!v.ok) toast(`Domínio ativado no banco, mas ${v.motivo}`, 'error');
+    else if (v.pendente && v.pendente.length) alert(`Domínio ativado e adicionado na Vercel.\n\nAinda falta:\n- ${v.pendente.join('\n- ')}\n\nO HTTPS sai sozinho depois que o DNS apontar.`);
+    else toast('Domínio ativado e adicionado na Vercel — DNS conferido.');
+    recarregar(id);
   }
 
   function abrirPixAdmin(id, dados) {

@@ -4056,6 +4056,57 @@ app.put('/api/admin/revendedores/:id/custos/:serviceId', requireAuth, requireSup
   }
 });
 
+// Domínio do parceiro no projeto da Vercel (26/10/2026): o mapeamento domínio
+// → parceiro é do banco, mas a Vercel responde 404 (DEPLOYMENT_NOT_FOUND) e não
+// gera HTTPS para domínio que não está em Domains do projeto — por isso o
+// "Ativo" do admin cadastra o domínio lá pela API. O DNS fica no ClouDNS do
+// dono (A @ → 76.76.21.21, CNAME www → cname.vercel-dns.com). O www entra como
+// redirecionamento 308 para o domínio sem www, que é como ele fica guardado.
+// O token é segredo (repositório público): só em VERCEL_TOKEN.
+const VERCEL_TOKEN = process.env.VERCEL_TOKEN || '';
+const VERCEL_PROJECT_ID = process.env.VERCEL_PROJECT_ID || 'prj_iTqLuMXswmjD4uzGvutNERljuUz8';
+const VERCEL_TEAM_ID = process.env.VERCEL_TEAM_ID || 'team_p1K1Odt8vZwXzBBYO5W7qNAx';
+
+async function vercelApi(method, caminho, corpo) {
+  const sep = caminho.includes('?') ? '&' : '?';
+  const r = await fetch(`https://api.vercel.com${caminho}${sep}teamId=${encodeURIComponent(VERCEL_TEAM_ID)}`, {
+    method,
+    headers: { Authorization: `Bearer ${VERCEL_TOKEN}`, 'Content-Type': 'application/json' },
+    body: corpo ? JSON.stringify(corpo) : undefined,
+    signal: AbortSignal.timeout(20000),
+  });
+  const dados = await r.json().catch(() => ({}));
+  return { status: r.status, dados };
+}
+
+// Devolve { ok, motivo?, pendente? } — pendente lista o que ainda falta do lado
+// do DNS (verificação TXT quando o domínio já esteve noutra conta da Vercel, ou
+// DNS ainda não apontado). Já estar no projeto não é erro: o "Ativo" pode ser
+// salvo de novo.
+async function adicionarDominioVercel(dominio) {
+  if (!VERCEL_TOKEN) return { ok: false, semToken: true, motivo: 'VERCEL_TOKEN não configurado — adicione o domínio à mão em Domains no projeto da Vercel.' };
+  const pendente = [];
+  const projeto = `/v10/projects/${encodeURIComponent(VERCEL_PROJECT_ID)}/domains`;
+  for (const corpo of [{ name: dominio }, { name: `www.${dominio}`, redirect: dominio, redirectStatusCode: 308 }]) {
+    let { status, dados } = await vercelApi('POST', projeto, corpo);
+    if (status === 409) {
+      const existente = await vercelApi('GET', `/v9/projects/${encodeURIComponent(VERCEL_PROJECT_ID)}/domains/${encodeURIComponent(corpo.name)}`);
+      if (existente.status !== 200)
+        return { ok: false, motivo: `A Vercel recusou ${corpo.name}: ${dados.error?.message || 'domínio em uso em outro projeto'}.` };
+      dados = existente.dados;
+    } else if (status >= 400) {
+      console.error(`[vercel] domínio ${corpo.name}: ${status} ${dados.error?.code || ''}`);
+      return { ok: false, motivo: `A Vercel recusou ${corpo.name}: ${dados.error?.message || `HTTP ${status}`}.` };
+    }
+    if (dados.verified === false)
+      for (const v of dados.verification || []) pendente.push(`verificação ${v.type} em ${v.domain}: ${v.value}`);
+  }
+  const cfg = await vercelApi('GET', `/v6/domains/${encodeURIComponent(dominio)}/config`).catch(() => null);
+  if (cfg && cfg.status === 200 && cfg.dados.misconfigured)
+    pendente.push('o DNS ainda não aponta para a Vercel (A @ → 76.76.21.21 e CNAME www → cname.vercel-dns.com no ClouDNS)');
+  return { ok: true, pendente };
+}
+
 // Domínio próprio pelo admin: informar o domínio configurado e ativar, voltar
 // para configuração, cancelar, ou liberar sem PIX (pago por fora → CONFIGURANDO).
 const DOMINIO_STATUS = ['AGUARDANDO_PAGAMENTO', 'CONFIGURANDO', 'ATIVO', 'CANCELADO'];
@@ -4076,6 +4127,13 @@ app.put('/api/admin/revendedores/:id/dominio', requireAuth, requireSuperAdmin, a
     const antes = await pool.query('SELECT status FROM parceiro_dominios WHERE parceiro_id=$1', [req.params.id]);
     const validoAte = req.body?.valido_ate ? new Date(`${String(req.body.valido_ate).slice(0, 10)}T23:59:59-03:00`) : null;
     if (validoAte && isNaN(validoAte.getTime())) return res.status(400).json({ error: 'Data de validade inválida.' });
+    // Ativar sem o domínio no projeto da Vercel seria avisar o parceiro de um
+    // endereço que dá 404. Sem token, salva e avisa para fazer à mão.
+    let vercel = null;
+    if (status === 'ATIVO') {
+      vercel = await adicionarDominioVercel(dominio).catch(err => ({ ok: false, motivo: `Sem resposta da Vercel (${err.message}).` }));
+      if (!vercel.ok && !vercel.semToken) return res.status(502).json({ error: `${vercel.motivo} O domínio não foi ativado.` });
+    }
     await pool.query(
       `INSERT INTO parceiro_dominios (parceiro_id, status, dominio, observacao, pago_em, prazo_ate, ativado_em, valido_ate)
        VALUES ($1,$2::text,$3,$4,
@@ -4101,7 +4159,7 @@ app.put('/api/admin/revendedores/:id/dominio', requireAuth, requireSuperAdmin, a
         { marca: false }
       ).catch(() => {});
     }
-    res.json({ success: true });
+    res.json({ success: true, vercel });
   } catch (err) {
     console.error('Erro ao salvar domínio do parceiro:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
