@@ -3758,13 +3758,7 @@ async function slugPorDominio(host) {
   cacheDominioParceiro.set(h, { slug, exp: Date.now() + 60 * 1000 });
   return slug;
 }
-// Domínio de parceiro sem passar pela Vercel (26/10/2026): o DNS aponta para um
-// servidor nosso com nginx + certbot (o HTTPS é dele), que repassa ao app com o
-// Host da Vercel — senão ela recusa — e manda o domínio original em
-// X-Parceiro-Host, porque o x-forwarded-host a Vercel reescreve. Mapeamento
-// pelo banco, como no WordPress multisite. Forjar o cabeçalho só escolhe qual
-// página pública aparece na raiz, nada além disso.
-const hostDaRequisicao = req => String(req.headers['x-parceiro-host'] || req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+const hostDaRequisicao = req => String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
 
 // O que a página pública mostra: textos, imagens e as consultas que o parceiro
 // escolheu, com o preço dele.

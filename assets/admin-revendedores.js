@@ -399,7 +399,7 @@
           <form class="space-y-2" onsubmit="rvSalvarDominio(event, ${rv.id})">
             <div class="text-xs text-gray-500 space-y-1">
               <p>1. Confira no <a href="https://registro.br/" target="_blank" rel="noopener" class="text-blue-700 underline">registro.br</a> qual das opções está <strong>disponível</strong> (é só pesquisar o nome — a consulta não registra nada).</p>
-              <p>2. Registre o domínio e aponte o DNS (registro A) para o nosso servidor com nginx + certbot — a Vercel não é usada aqui. O nginx gera o HTTPS (<span class="font-mono">certbot --nginx -d dominio.com.br -d www.dominio.com.br</span>) e repassa ao site com o cabeçalho <span class="font-mono">X-Parceiro-Host</span>; o mapeamento domínio → parceiro é pelo banco, como no WordPress multisite.</p>
+              <p>2. Registre o domínio, deixe o DNS no ClouDNS (registro A <span class="font-mono">@ → 76.76.21.21</span> e CNAME <span class="font-mono">www → cname.vercel-dns.com</span>) e adicione o domínio em Domains no projeto da Vercel — é isso que faz a Vercel aceitar o endereço e gerar o HTTPS. O domínio → parceiro é pelo banco, como no WordPress multisite.</p>
               <p>3. Depois que o domínio apontar, informe-o aqui e marque como <strong>Ativo</strong> — a raiz dele passa a abrir a página do parceiro.</p>
             </div>
             <input id="rvd-dom-nome" class="input-field font-mono" placeholder="dominio.com.br" value="${esc((dom && dom.dominio) || (dom && dom.opcoes && dom.opcoes[0]) || '')}">
@@ -617,7 +617,7 @@
   };
 
   async function gravarDominio(id, dados) {
-    if (dados.status === 'ATIVO' && !confirm(`Confirmar que ${dados.dominio} já aponta para o nosso servidor (DNS e HTTPS pelo certbot configurados)? A raiz dele passa a abrir a página do parceiro e ele é avisado no WhatsApp.`)) return;
+    if (dados.status === 'ATIVO' && !confirm(`Confirmar que ${dados.dominio} já está com o DNS no ClouDNS e adicionado no projeto da Vercel? A raiz dele passa a abrir a página do parceiro e ele é avisado no WhatsApp.`)) return;
     const d = await acao(`/api/admin/revendedores/${id}/dominio`, { method: 'PUT', body: JSON.stringify(dados) }, 'Domínio salvo.');
     if (d) recarregar(id);
   }
