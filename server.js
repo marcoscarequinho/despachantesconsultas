@@ -4104,9 +4104,16 @@ async function adicionarDominioVercel(dominio) {
     if (dados.verified === false)
       for (const v of dados.verification || []) pendente.push(`verificação ${v.type} em ${v.domain}: ${v.value}`);
   }
+  // Os valores vêm da própria Vercel (rank 1), que é o que ela confere: em
+  // 26/10/2026 o vaniadespachante.com.br ficou "inválido" com o DNS no ClouDNS e
+  // a recomendação dela era 216.150.1.1 + 216.150.16.1 e um CNAME do projeto,
+  // não o 76.76.21.21 / cname.vercel-dns.com antigos.
   const cfg = await vercelApi('GET', `/v6/domains/${encodeURIComponent(dominio)}/config`).catch(() => null);
-  if (cfg && cfg.status === 200 && cfg.dados.misconfigured)
-    pendente.push('o DNS ainda não aponta para a Vercel (A @ → 76.76.21.21 e CNAME www → cname.vercel-dns.com no ClouDNS)');
+  if (cfg && cfg.status === 200 && cfg.dados.misconfigured) {
+    const ips = (cfg.dados.recommendedIPv4 || []).find(r => r.rank === 1)?.value || ['76.76.21.21'];
+    const cname = String((cfg.dados.recommendedCNAME || []).find(r => r.rank === 1)?.value || 'cname.vercel-dns.com').replace(/\.$/, '');
+    pendente.push(`o DNS ainda não aponta para a Vercel — no ClouDNS: ${ips.map(ip => `A @ → ${ip}`).join(' e ')}, CNAME www → ${cname}, e apague qualquer outro A/AAAA ou redirecionamento do @ e do www`);
+  }
   return { ok: true, pendente };
 }
 

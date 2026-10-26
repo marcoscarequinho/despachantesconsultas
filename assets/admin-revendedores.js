@@ -399,7 +399,7 @@
           <form class="space-y-2" onsubmit="rvSalvarDominio(event, ${rv.id})">
             <div class="text-xs text-gray-500 space-y-1">
               <p>1. Confira no <a href="https://registro.br/" target="_blank" rel="noopener" class="text-blue-700 underline">registro.br</a> qual das opções está <strong>disponível</strong> (é só pesquisar o nome — a consulta não registra nada).</p>
-              <p>2. Registre o domínio, deixe o DNS no ClouDNS (registro A <span class="font-mono">@ → 76.76.21.21</span> e CNAME <span class="font-mono">www → cname.vercel-dns.com</span>). O domínio → parceiro é pelo banco, como no WordPress multisite.</p>
+              <p>2. Registre o domínio, deixe o DNS no ClouDNS (dois registros A <span class="font-mono">@ → 216.150.1.1</span> e <span class="font-mono">@ → 216.150.16.1</span>, CNAME <span class="font-mono">www → 04fcb7a5d0e495dc.vercel-dns-016.com</span>, e nenhum outro A/AAAA ou redirecionamento no @ e no www — ao salvar como Ativo, o aviso mostra os valores que a Vercel pedir). O domínio → parceiro é pelo banco, como no WordPress multisite.</p>
               <p>3. Depois que o domínio apontar, informe-o aqui e marque como <strong>Ativo</strong>: o domínio (e o www) é adicionado sozinho no projeto da Vercel, que gera o HTTPS, e a raiz dele passa a abrir a página do parceiro.</p>
             </div>
             <input id="rvd-dom-nome" class="input-field font-mono" placeholder="dominio.com.br" value="${esc((dom && dom.dominio) || (dom && dom.opcoes && dom.opcoes[0]) || '')}">
