@@ -3437,6 +3437,52 @@ app.get('/api/reseller/dominio', requireAuth, requireReseller, async (req, res) 
   }
 });
 
+// PIX da anuidade em nome do parceiro (user = linha de users dele). Serve à
+// tela do parceiro e ao admin, que abre a mesma cobrança antes de salvar o
+// domínio de quem ainda não pagou. Sem renovação, grava as opções e deixa o
+// pedido em AGUARDANDO_PAGAMENTO — a baixa (baixarPagamentoDominio) é a mesma.
+async function criarPixDominio(user, { opcoes, renovacao }) {
+  const doc = (user.cpf_cnpj || '').replace(/\D/g, '');
+  const nameParts = (user.name || 'Parceiro').trim().split(/\s+/);
+  const payment = await mpReq('POST', '/v1/payments', {
+    transaction_amount: DOMINIO_PROPRIO_VALOR,
+    description: `${renovacao ? 'Renovação — ' : ''}Domínio próprio + taxa de administração (12 meses) MC Despachadoria — ${user.name}`,
+    payment_method_id: 'pix',
+    payer: {
+      email: user.email,
+      first_name: nameParts[0],
+      last_name: nameParts.slice(1).join(' ') || nameParts[0],
+      identification: { type: doc.length > 11 ? 'CNPJ' : 'CPF', number: doc },
+    },
+  }, { 'X-Idempotency-Key': crypto.randomUUID() });
+  const txData = payment.point_of_interaction?.transaction_data || {};
+  if (!txData.qr_code) throw new Error('Mercado Pago não retornou o QR Code PIX.');
+
+  await pool.query(
+    `INSERT INTO pix_payments (user_id, gateway_id, value, status, purpose)
+     VALUES ($1,$2,$3,'PENDING','DOMINIO') ON CONFLICT (gateway_id) DO NOTHING`,
+    [user.id, String(payment.id), DOMINIO_PROPRIO_VALOR]
+  );
+  if (!renovacao) {
+    await pool.query(
+      `INSERT INTO parceiro_dominios (parceiro_id, opcoes, status, gateway_id, valor)
+       VALUES ($1,$2,'AGUARDANDO_PAGAMENTO',$3,$4)
+       ON CONFLICT (parceiro_id) DO UPDATE SET opcoes=EXCLUDED.opcoes, status='AGUARDANDO_PAGAMENTO',
+         gateway_id=EXCLUDED.gateway_id, valor=EXCLUDED.valor, updated_at=NOW()`,
+      [user.id, JSON.stringify(opcoes), String(payment.id), DOMINIO_PROPRIO_VALOR]
+    );
+  }
+  return {
+    paymentId: payment.id,
+    qrCode: txData.qr_code_base64,
+    pixCopiaECola: txData.qr_code,
+    expirationDate: payment.date_of_expiration,
+    value: DOMINIO_PROPRIO_VALOR,
+    opcoes: opcoes || [],
+    renovacao,
+  };
+}
+
 // Gera o PIX da anuidade: a adesão (com as opções de domínio) ou, com
 // renovar:true, a renovação de quem já tem domínio pago.
 app.post('/api/reseller/dominio/pix', requireAuth, requireReseller, bloquearApiPagamento, async (req, res) => {
@@ -3464,45 +3510,7 @@ app.post('/api/reseller/dominio/pix', requireAuth, requireReseller, bloquearApiP
       if (invalida) return res.status(400).json({ error: `Domínio inválido: "${invalida}". Só aceitamos domínio .com.br, no formato meusite.com.br.` });
     }
 
-    const doc = (user.cpf_cnpj || '').replace(/\D/g, '');
-    const nameParts = (user.name || 'Parceiro').trim().split(/\s+/);
-    const payment = await mpReq('POST', '/v1/payments', {
-      transaction_amount: DOMINIO_PROPRIO_VALOR,
-      description: `${renovacao ? 'Renovação — ' : ''}Domínio próprio + taxa de administração (12 meses) MC Despachadoria — ${user.name}`,
-      payment_method_id: 'pix',
-      payer: {
-        email: user.email,
-        first_name: nameParts[0],
-        last_name: nameParts.slice(1).join(' ') || nameParts[0],
-        identification: { type: doc.length > 11 ? 'CNPJ' : 'CPF', number: doc },
-      },
-    }, { 'X-Idempotency-Key': crypto.randomUUID() });
-    const txData = payment.point_of_interaction?.transaction_data || {};
-    if (!txData.qr_code) throw new Error('Mercado Pago não retornou o QR Code PIX.');
-
-    await pool.query(
-      `INSERT INTO pix_payments (user_id, gateway_id, value, status, purpose)
-       VALUES ($1,$2,$3,'PENDING','DOMINIO') ON CONFLICT (gateway_id) DO NOTHING`,
-      [req.user.id, String(payment.id), DOMINIO_PROPRIO_VALOR]
-    );
-    if (!renovacao) {
-      await pool.query(
-        `INSERT INTO parceiro_dominios (parceiro_id, opcoes, status, gateway_id, valor)
-         VALUES ($1,$2,'AGUARDANDO_PAGAMENTO',$3,$4)
-         ON CONFLICT (parceiro_id) DO UPDATE SET opcoes=EXCLUDED.opcoes, status='AGUARDANDO_PAGAMENTO',
-           gateway_id=EXCLUDED.gateway_id, valor=EXCLUDED.valor, updated_at=NOW()`,
-        [req.user.id, JSON.stringify(opcoes), String(payment.id), DOMINIO_PROPRIO_VALOR]
-      );
-    }
-    res.json({
-      paymentId: payment.id,
-      qrCode: txData.qr_code_base64,
-      pixCopiaECola: txData.qr_code,
-      expirationDate: payment.date_of_expiration,
-      value: DOMINIO_PROPRIO_VALOR,
-      opcoes: opcoes || [],
-      renovacao,
-    });
+    res.json(await criarPixDominio(user, { opcoes, renovacao }));
   } catch (err) {
     console.error('Erro ao criar PIX do domínio próprio:', err.message);
     await alertAdminPixFalha(err, 'Domínio próprio (/api/reseller/dominio/pix)');
@@ -3750,7 +3758,13 @@ async function slugPorDominio(host) {
   cacheDominioParceiro.set(h, { slug, exp: Date.now() + 60 * 1000 });
   return slug;
 }
-const hostDaRequisicao = req => String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+// Domínio de parceiro sem passar pela Vercel (26/10/2026): o DNS aponta para um
+// servidor nosso com nginx + certbot (o HTTPS é dele), que repassa ao app com o
+// Host da Vercel — senão ela recusa — e manda o domínio original em
+// X-Parceiro-Host, porque o x-forwarded-host a Vercel reescreve. Mapeamento
+// pelo banco, como no WordPress multisite. Forjar o cabeçalho só escolhe qual
+// página pública aparece na raiz, nada além disso.
+const hostDaRequisicao = req => String(req.headers['x-parceiro-host'] || req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
 
 // O que a página pública mostra: textos, imagens e as consultas que o parceiro
 // escolheu, com o preço dele.
@@ -4097,6 +4111,63 @@ app.put('/api/admin/revendedores/:id/dominio', requireAuth, requireSuperAdmin, a
   } catch (err) {
     console.error('Erro ao salvar domínio do parceiro:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// "Salvar domínio" de quem ainda não pagou abre antes o PIX da anuidade
+// (pedido do dono, 26/10/2026): a cobrança sai em nome do parceiro, pela mesma
+// criarPixDominio, e pode ir para o WhatsApp dele. Paga, a baixa é a de sempre
+// (CONFIGURANDO + 12 meses) e o admin segue salvando o domínio. Domínio pago e
+// vencido vira renovação; pago e em dia não tem o que cobrar.
+app.post('/api/admin/revendedores/:id/dominio/pix', requireAuth, requireSuperAdmin, bloquearApiPagamento, async (req, res) => {
+  try {
+    const ur = await pool.query(`SELECT id, name, email, cpf_cnpj, phone, active FROM users WHERE id=$1 AND role='reseller'`, [req.params.id]);
+    const user = ur.rows[0];
+    if (!user) return res.status(404).json({ error: 'Parceiro não encontrado.' });
+    const atual = (await pool.query('SELECT * FROM parceiro_dominios WHERE parceiro_id=$1', [user.id])).rows[0];
+    const ocupado = atual && (atual.status === 'CONFIGURANDO' || atual.status === 'ATIVO');
+    if (ocupado && !situacaoDominio(atual).vencido)
+      return res.status(409).json({ error: 'A anuidade deste parceiro já está paga.' });
+    const renovacao = !!ocupado;
+    let opcoes = null;
+    if (!renovacao) {
+      const dominio = normalizarDominio(req.body?.dominio);
+      if (dominio && !DOMINIO_RE.test(dominio))
+        return res.status(400).json({ error: `Domínio inválido: "${dominio}". Só .com.br, no formato meusite.com.br.` });
+      opcoes = [...new Set([dominio, ...((atual && atual.opcoes) || [])].filter(Boolean))].slice(0, DOMINIO_PROPRIO_MAX_OPCOES);
+      if (!opcoes.length) return res.status(400).json({ error: 'Informe o domínio antes de gerar a cobrança.' });
+    }
+    const pix = await criarPixDominio(user, { opcoes, renovacao });
+    let whatsapp = false;
+    if (req.body?.whatsapp && user.phone) {
+      whatsapp = await sendWhatsAppImage(user.phone, pix.qrCode,
+        `💳 *Domínio próprio — ${fmtMoneyBRL(pix.value)} por 12 meses*\n\nO valor inclui o registro do domínio e a taxa de administração do serviço (configuração e DNS). Pague pelo QR Code ou pelo código PIX da próxima mensagem.`,
+        { marca: false }).catch(() => false);
+      if (whatsapp) await sendWhatsApp(user.phone, pix.pixCopiaECola, { marca: false }).catch(() => {});
+    }
+    res.json({ ...pix, whatsapp, telefone: user.phone || null });
+  } catch (err) {
+    console.error('Erro ao criar PIX do domínio (admin):', err.message);
+    await alertAdminPixFalha(err, 'Domínio próprio (/api/admin/revendedores/:id/dominio/pix)');
+    res.status(500).json({ error: mpErroAmigavel(err, 'Erro ao criar a cobrança PIX do domínio.') });
+  }
+});
+
+// Polling do pop-up do admin: o /api/pix/status só responde ao dono do
+// pagamento, e aqui o dono é o parceiro.
+app.get('/api/admin/revendedores/:id/dominio/pix/:paymentId', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const pr = await pool.query(
+      `SELECT credited, value FROM pix_payments WHERE gateway_id=$1 AND user_id=$2 AND purpose='DOMINIO'`,
+      [req.params.paymentId, req.params.id]
+    );
+    if (!pr.rows.length) return res.status(404).json({ error: 'Pagamento não encontrado.' });
+    if (pr.rows[0].credited) return res.json({ credited: true });
+    const r = await creditPixPaymentIfApproved(req.params.paymentId);
+    res.json({ credited: !!r.credited, status: r.status });
+  } catch (err) {
+    console.error('Erro ao conferir PIX do domínio (admin):', err.message);
+    res.status(500).json({ error: 'Erro ao verificar pagamento.' });
   }
 });
 

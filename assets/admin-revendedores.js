@@ -9,6 +9,7 @@
 (function () {
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
   let revendedores = [], pixTipos = {}, envioAutomatico = true, detalheAtual = null, consultasAtual = [];
+  let dominioAtual = null, foneAtual = null, dominioPixPoll = null, dominioPixPendente = null;
 
   const STATUS_COMISSAO = {
     A_PAGAR:  '<span class="badge-amber">A pagar</span>',
@@ -166,6 +167,15 @@
             <button onclick="closeModal('modal-revendedor-detalhe')" class="text-gray-400 hover:text-gray-600 text-xl font-bold">✕</button>
           </div>
           <div id="rvd-corpo" class="p-6 space-y-5"></div>
+        </div>
+      </div>
+      <div id="modal-dominio-pix-admin" class="modal-backdrop hidden">
+        <div class="modal-box" style="max-width:460px">
+          <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+            <h3 class="font-bold text-gray-800">💳 Domínio próprio — R$ 200,00</h3>
+            <button onclick="rvFecharDominioPix()" class="text-gray-400 hover:text-gray-600 text-xl font-bold">✕</button>
+          </div>
+          <div id="rvdp-corpo" class="p-6 space-y-4 text-sm text-gray-700"></div>
         </div>
       </div>`;
     document.body.appendChild(modais);
@@ -369,6 +379,7 @@
   };
 
   function blocoDominio(rv, dom) {
+    dominioAtual = dom || null; foneAtual = rv.phone || null;
     const st = dom ? dom.status : null;
     const opcoes = dom && dom.opcoes && dom.opcoes.length
       ? `<ol class="list-decimal pl-5 font-mono text-xs text-gray-700">${dom.opcoes.map(o => `<li>${esc(o)}</li>`).join('')}</ol>` : '<span class="text-xs text-gray-400">nenhuma opção enviada</span>';
@@ -386,7 +397,11 @@
         <div class="grid md:grid-cols-2 gap-4">
           <div><div class="text-xs text-gray-500 mb-1">Opções do parceiro (ordem de preferência)</div>${opcoes}</div>
           <form class="space-y-2" onsubmit="rvSalvarDominio(event, ${rv.id})">
-            <div class="text-xs text-gray-500">Depois de registrar o domínio e configurar o DNS e a Vercel, informe o domínio e marque como ativo — a raiz dele passa a abrir a página do parceiro.</div>
+            <div class="text-xs text-gray-500 space-y-1">
+              <p>1. Confira no <a href="https://registro.br/" target="_blank" rel="noopener" class="text-blue-700 underline">registro.br</a> qual das opções está <strong>disponível</strong> (é só pesquisar o nome — a consulta não registra nada).</p>
+              <p>2. Registre o domínio e aponte o DNS (registro A) para o nosso servidor com nginx + certbot — a Vercel não é usada aqui. O nginx gera o HTTPS (<span class="font-mono">certbot --nginx -d dominio.com.br -d www.dominio.com.br</span>) e repassa ao site com o cabeçalho <span class="font-mono">X-Parceiro-Host</span>; o mapeamento domínio → parceiro é pelo banco, como no WordPress multisite.</p>
+              <p>3. Depois que o domínio apontar, informe-o aqui e marque como <strong>Ativo</strong> — a raiz dele passa a abrir a página do parceiro.</p>
+            </div>
             <input id="rvd-dom-nome" class="input-field font-mono" placeholder="dominio.com.br" value="${esc((dom && dom.dominio) || (dom && dom.opcoes && dom.opcoes[0]) || '')}">
             <div class="grid grid-cols-2 gap-2">
               <select id="rvd-dom-status" class="input-field">
@@ -584,16 +599,89 @@
     rvRenderConsultas(id);
   };
 
+  // "Salvar domínio" de quem ainda não pagou a anuidade (sem pedido, aguardando
+  // pagamento, cancelado ou vencido) abre antes o PIX de R$ 200,00 em nome do
+  // parceiro (pedido do dono, 26/10/2026). Cancelar ou voltar para "aguardando"
+  // não cobra nada, e "pago por fora" salva sem PIX, como antes.
+  const anuidadePaga = d => d && (d.status === 'CONFIGURANDO' || d.status === 'ATIVO') && !vencido(d);
+
   window.rvSalvarDominio = async function (ev, id) {
     ev.preventDefault();
     const status = document.getElementById('rvd-dom-status').value;
-    const dominio = document.getElementById('rvd-dom-nome').value;
-    if (status === 'ATIVO' && !confirm(`Confirmar que ${dominio} já aponta para a plataforma (DNS e Vercel configurados)? A raiz dele passa a abrir a página do parceiro e ele é avisado no WhatsApp.`)) return;
-    const d = await acao(`/api/admin/revendedores/${id}/dominio`, {
-      method: 'PUT',
-      body: JSON.stringify({ status, dominio, valido_ate: document.getElementById('rvd-dom-validade').value || null, observacao: document.getElementById('rvd-dom-obs').value }),
-    }, 'Domínio salvo.');
+    const dados = {
+      status, dominio: document.getElementById('rvd-dom-nome').value,
+      valido_ate: document.getElementById('rvd-dom-validade').value || null, observacao: document.getElementById('rvd-dom-obs').value,
+    };
+    if ((status === 'CONFIGURANDO' || status === 'ATIVO') && !anuidadePaga(dominioAtual)) { abrirPixAdmin(id, dados); return; }
+    await gravarDominio(id, dados);
+  };
+
+  async function gravarDominio(id, dados) {
+    if (dados.status === 'ATIVO' && !confirm(`Confirmar que ${dados.dominio} já aponta para o nosso servidor (DNS e HTTPS pelo certbot configurados)? A raiz dele passa a abrir a página do parceiro e ele é avisado no WhatsApp.`)) return;
+    const d = await acao(`/api/admin/revendedores/${id}/dominio`, { method: 'PUT', body: JSON.stringify(dados) }, 'Domínio salvo.');
     if (d) recarregar(id);
+  }
+
+  function abrirPixAdmin(id, dados) {
+    dominioPixPendente = { id, dados };
+    clearInterval(dominioPixPoll);
+    const temFone = !!foneAtual;
+    document.getElementById('rvdp-corpo').innerHTML = `
+      <p>Este parceiro ainda não pagou a anuidade do domínio próprio: <strong>R$ 200,00 por 12 meses</strong>, que inclui a
+        <strong>taxa de registro do domínio e o serviço de configuração</strong> (DNS e HTTPS).</p>
+      <p class="text-xs text-gray-500">Domínio: <span class="font-mono">${esc(dados.dominio || '—')}</span></p>
+      <label class="flex items-center gap-2 text-sm"><input id="rvdp-whats" type="checkbox" ${temFone ? 'checked' : 'disabled'}> Enviar o PIX para o WhatsApp do parceiro${temFone ? '' : ' (sem WhatsApp no cadastro)'}</label>
+      <button id="rvdp-gerar" onclick="rvGerarDominioPix()" class="btn-primary w-full justify-center">Gerar PIX de R$ 200,00</button>
+      <div id="rvdp-pix"></div>
+      <button onclick="rvSalvarSemPix()" class="btn-ghost w-full justify-center text-xs">Já pagou por fora — salvar sem PIX</button>`;
+    openModal('modal-dominio-pix-admin');
+  }
+
+  window.rvGerarDominioPix = async function () {
+    const { id, dados } = dominioPixPendente || {};
+    if (!id) return;
+    const btn = document.getElementById('rvdp-gerar');
+    btn.disabled = true;
+    const d = await acao(`/api/admin/revendedores/${id}/dominio/pix`, {
+      method: 'POST', body: JSON.stringify({ dominio: dados.dominio, whatsapp: document.getElementById('rvdp-whats').checked }),
+    });
+    if (!d) { btn.disabled = false; return; }
+    btn.classList.add('hidden');
+    document.getElementById('rvdp-pix').innerHTML = `
+      <div class="flex justify-center"><img alt="QR Code PIX" class="w-56 h-56 border rounded-lg" src="data:image/png;base64,${esc(d.qrCode || '')}"></div>
+      <div class="text-xs text-gray-500 mt-3 mb-1">PIX copia e cola</div>
+      <textarea id="rvdp-copia" readonly rows="3" class="input-field font-mono text-xs">${esc(d.pixCopiaECola || '')}</textarea>
+      <button onclick="navigator.clipboard.writeText(document.getElementById('rvdp-copia').value).then(() => toast('Código PIX copiado.'))" class="btn-secondary w-full justify-center mt-2">📋 Copiar código PIX</button>
+      ${d.whatsapp ? '<p class="text-xs text-green-700 mt-2">✅ Enviado para o WhatsApp do parceiro.</p>' : ''}
+      <div id="rvdp-situacao" class="text-center text-sm text-amber-700 font-semibold mt-3">⏳ Aguardando o pagamento… o domínio é salvo assim que confirmar.</div>`;
+    const inicio = Date.now();
+    dominioPixPoll = setInterval(async () => {
+      if (Date.now() - inicio > 30 * 60 * 1000) { clearInterval(dominioPixPoll); return; }
+      try {
+        const r = await fetch(`/api/admin/revendedores/${id}/dominio/pix/${encodeURIComponent(d.paymentId)}`);
+        const s = await r.json();
+        if (!s.credited) return;
+        clearInterval(dominioPixPoll);
+        document.getElementById('rvdp-situacao').className = 'text-center text-sm text-green-700 font-semibold mt-3';
+        document.getElementById('rvdp-situacao').textContent = '✅ Pagamento confirmado!';
+        closeModal('modal-dominio-pix-admin');
+        dominioPixPendente = null;
+        await gravarDominio(id, dados);
+      } catch { /* tenta de novo na próxima volta */ }
+    }, 5000);
+  };
+
+  window.rvSalvarSemPix = async function () {
+    const { id, dados } = dominioPixPendente || {};
+    if (!id || !confirm('Salvar sem cobrar? Use só se o parceiro já pagou os R$ 200,00 por fora.')) return;
+    window.rvFecharDominioPix();
+    await gravarDominio(id, dados);
+  };
+
+  window.rvFecharDominioPix = function () {
+    clearInterval(dominioPixPoll);
+    dominioPixPendente = null;
+    closeModal('modal-dominio-pix-admin');
   };
 
   window.rvEnviarAgora = async function (id) {
