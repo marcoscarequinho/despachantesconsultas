@@ -19347,7 +19347,8 @@ app.get('/admin', requirePageAuth, async (req, res) => {
 const BROADCAST_CAMPANHA = {
   imagem: path.join(__dirname, 'assets', 'promo-plataforma.jpg'),
   mensagem:
-`Só na Despachante consultas você tem tantas opções de consultas
+`🛑ATENÇÃO AGORA VOCÊ PODE SER PARCEIRO DA PLATAFORMA COM SUA PRÓPRIA PÁGINA, E GANHAR DINHEIRO VENDENDO CONSULTAS, E MAIS, A SUA PÁGINA TAMBÉM PODE TER DOMÍNIO PRÓPRIO EX:.https://despachantejoaodascoves.com.br (kkk) CLARO QUE COM SEU NOME OU EMPRESA.
+Só na Despachante consultas você tem tantas opções de consultas
 Vá e veja você mesmo, nossa plataforma de consultas é hoje um das mais completas, ela te afasta da burocracia dos DETRAN's
 👉 https://www.despachantesconsultas.com.br`,
 };
