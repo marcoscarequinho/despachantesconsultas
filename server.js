@@ -33,11 +33,9 @@ const isFreeService = s => FREE_SERVICE_GROUPS.includes(s.group);
 // pré-pago e NÃO renova sozinho — cada período exige um novo PIX
 // (ver POST /api/assinatura/pix e o cron /api/cron/assinaturas-expirar).
 //
-// Desde 22/09/2026 o período não é mais "30 dias contados do pagamento": ele
-// vence sempre no dia 30, como a fatura do pós-pago, e por isso o preço e as
-// cotas são pró-rata (ver cicloAssinatura, mais abaixo). Os dois valores aqui
-// passaram a ser a REFERÊNCIA do mês cheio — R$ 30,00 por 30 dias é o que dá
-// R$ 1,00 por dia —, não o que é cobrado em toda compra.
+// Cada período é de 30 dias corridos contados do pagamento, por R$ 30,00 (ver
+// cicloAssinatura). De 22/09 a 27/10/2026 vencia no dia 30 com preço pró-rata;
+// voltou ao modelo anterior a pedido do dono.
 const ASSINATURA_PLACAS_PRICE = 30.00;
 const ASSINATURA_PLACAS_DIAS  = 30;
 // Cota de consultas de placa por período. Só a "Veicular Completa"
@@ -8628,29 +8626,17 @@ function proximoVencimentoPosPago(apartirDe = new Date()) {
 }
 
 // ── Ciclo da Assinatura Coisas de Despachantes ───────────────────────────────
-// Desde 22/09/2026 a assinatura deixou de ser "30 dias contados do pagamento" e
-// passou a acompanhar o calendário: todo período termina no dia 30, o MESMO
-// vencimento do pós-pago (proximoVencimentoPosPago), para quem tem as duas
-// coisas pagar tudo no mesmo dia.
+// Todo período tem ASSINATURA_PLACAS_DIAS (30) dias corridos a partir do
+// pagamento, pelo valor cheio e com as cotas cheias. De 22/09 a 27/10/2026 o
+// período vencia no dia 30 com preço e cotas pró-rata (R$ 1,00 por dia); o dono
+// pediu a volta ao modelo anterior em 27/10/2026. QR desse período ainda pago
+// depois traz periodo_fim/periodo_dias gravados e abre o período que cobrou.
 //
-// A consequência é que o primeiro período — e o de quem renova no meio do mês —
-// é PARCIAL, e por isso o preço é pró-rata: R$ 1,00 por dia
-// (ASSINATURA_PLACAS_PRICE / ASSINATURA_PLACAS_DIAS). Cobrar o mês inteiro por
-// oito dias de uso seria vender o que não se entrega.
-//
-// As cotas do período acompanham o preço pela mesma razão, e por uma a mais:
-// cada consulta de placa custa dinheiro na Datacube, então um período de três
-// dias com as 50 consultas cheias sairia por R$ 3,00 e daria prejuízo. Quem
-// paga um terço do mês leva um terço da cota, arredondando para cima e nunca
-// menos de 1 — período pago sem nenhuma consulta não é período.
-//
-// O início NÃO é sempre "agora": quem renova antes de vencer continua começando
-// o período novo no fim do atual (não perde os dias que faltavam). O que mudou
-// é onde o período termina.
+// O início NÃO é sempre "agora": quem renova antes de vencer começa o período
+// novo no fim do atual (não perde os dias que faltavam).
 function cicloAssinatura(inicio = new Date()) {
-  const fim = proximoVencimentoPosPago(inicio);
-  const dias = Math.max(1, Math.ceil((fim.getTime() - inicio.getTime()) / 86400000));
-  return { inicio, fim, dias };
+  const fim = new Date(inicio.getTime() + ASSINATURA_PLACAS_DIAS * 86400000);
+  return { inicio, fim, dias: ASSINATURA_PLACAS_DIAS };
 }
 
 function fmtDataCicloBR(d) {
@@ -8660,9 +8646,9 @@ function fmtDataCicloBR(d) {
   return `${dia}/${mes}/${t.getUTCFullYear()}`;
 }
 
-// Preço do período, limitado ao valor cheio do plano: o ciclo pode ter 31 dias
-// (mês cheio + a sobra do dia 30), e ninguém paga mais que a mensalidade.
-function precoAssinaturaProRata(dias) {
+// Preço do período: com o ciclo de 30 dias corridos é sempre o valor cheio. A
+// conta por dia ficou para o QR pró-rata antigo ainda em aberto.
+function precoAssinatura(dias) {
   const bruto = (ASSINATURA_PLACAS_PRICE / ASSINATURA_PLACAS_DIAS) * dias;
   return Math.round(Math.min(ASSINATURA_PLACAS_PRICE, bruto) * 100) / 100;
 }
@@ -8672,8 +8658,9 @@ function cotaProRata(cotaCheia, dias) {
   return Math.max(1, Math.ceil((cotaCheia * dias) / ASSINATURA_PLACAS_DIAS));
 }
 
-// As quatro cotas do período, já proporcionais aos dias comprados.
-function cotasAssinaturaProRata(dias) {
+// As quatro cotas do período (cheias nos 30 dias; proporcionais só para o QR
+// pró-rata antigo pago depois, que grava periodo_dias menor).
+function cotasAssinatura(dias) {
   return {
     placas:        cotaProRata(ASSINATURA_PLACAS_COTA, dias),
     crv:           cotaProRata(ASSINATURA_CRV_COTA, dias),
@@ -14594,7 +14581,7 @@ app.post('/api/cartao/assinatura', requireAuth, bloquearApiPagamento, async (req
     if (!user.active) return res.status(403).json({ error: 'Conta bloqueada.' });
 
     const ciclo = await proximoCicloAssinatura(req.user.id);
-    const valorAssinatura = precoAssinaturaProRata(ciclo.dias);
+    const valorAssinatura = precoAssinatura(ciclo.dias);
     const valorCobrado = valorComAcrescimoCartao(valorAssinatura, cartao.tipo);
     const pagamento = await criarPagamentoCartao({
       valorCobrado,
@@ -14698,14 +14685,14 @@ app.post('/api/pix/criar', requireAuth, bloquearApiPagamento, async (req, res) =
 app.get('/api/assinatura/status', requireAuth, async (req, res) => {
   try {
     const assinatura = await getAssinaturaVigente(req.user.id);
-    // Próximo período (o que o botão "Assinar" vai cobrar): vai até o dia 30 e
-    // custa por dia; as cotas saem proporcionais ao mesmo número de dias.
+    // Próximo período (o que o botão "Assinar" vai cobrar): 30 dias a partir
+    // do pagamento, ou do fim do período vigente para quem renova antes.
     const ciclo = await proximoCicloAssinatura(req.user.id);
     const proximo = {
-      proximoPreco: precoAssinaturaProRata(ciclo.dias),
+      proximoPreco: precoAssinatura(ciclo.dias),
       proximoDias: ciclo.dias,
       proximoVencimento: ciclo.fim,
-      proximoCotas: cotasAssinaturaProRata(ciclo.dias),
+      proximoCotas: cotasAssinatura(ciclo.dias),
       precoCheio: ASSINATURA_PLACAS_PRICE,
       diaVencimento: POS_PAGO_DIA_VENCIMENTO,
     };
@@ -14773,10 +14760,10 @@ app.post('/api/assinatura/pix', requireAuth, bloquearApiPagamento, async (req, r
     const firstName = nameParts[0];
     const lastName  = nameParts.slice(1).join(' ') || firstName;
 
-    // O período vai até o dia 30 e o preço acompanha os dias (ver
-    // cicloAssinatura). Quem renova antes de vencer compra o ciclo seguinte.
+    // Período de 30 dias pelo valor cheio (ver cicloAssinatura). Quem renova
+    // antes de vencer compra o ciclo seguinte.
     const ciclo = await proximoCicloAssinatura(req.user.id);
-    const valorAssinatura = precoAssinaturaProRata(ciclo.dias);
+    const valorAssinatura = precoAssinatura(ciclo.dias);
 
     const payment = await mpReq('POST', '/v1/payments', {
       transaction_amount: valorAssinatura,
@@ -15293,7 +15280,7 @@ async function creditPixPaymentIfApproved(gatewayId) {
 
     // Pagamento da Assinatura Coisas de Despachantes: não credita saldo — abre o
     // período que foi COBRADO (periodo_fim/periodo_dias, gravados na criação da
-    // cobrança), que termina no dia 30 e pode ser parcial. Se o assinante renova
+    // cobrança; o QR pró-rata antigo pode ser parcial). Se o assinante renova
     // antes de vencer, o período novo começa no fim do atual (não perde os dias
     // que faltavam); se já venceu, conta a partir de agora. Cada pagamento é um
     // período próprio, com cota própria — por isso uma linha nova em vez de
@@ -15309,7 +15296,7 @@ async function creditPixPaymentIfApproved(gatewayId) {
         fimPeriodo = novo.fim;
       }
       const diasPeriodo = p.periodo_dias || ASSINATURA_PLACAS_DIAS;
-      const cotas = cotasAssinaturaProRata(diasPeriodo);
+      const cotas = cotasAssinatura(diasPeriodo);
       const fimSql = fimPeriodo ? '$3::timestamptz' : "inicio + ($3 || ' days')::interval";
       await client.query(
         `INSERT INTO subscriptions (user_id, plan, status, starts_at, expires_at, gateway_id, origem,
@@ -15531,12 +15518,10 @@ async function avisarVencimentoAssinaturas() {
 
   const primeiroNome = n => (n || 'Cliente').trim().split(/\s+/)[0];
   const dataBR = d => new Date(d).toLocaleDateString('pt-BR');
-  // O valor da renovação não é mais fixo: o período novo vai do fim do atual até
-  // o dia 30, e o preço é por dia (ver cicloAssinatura). Anunciar R$ 30,00 para
-  // quem vai pagar R$ 11,00 seria espantar o cliente com um número errado.
+  // Valor e fim do período novo, que começa no fim do atual (ver cicloAssinatura).
   const valorRenovacao = (inicio) => {
     const ciclo = cicloAssinatura(new Date(inicio));
-    return `R$ ${precoAssinaturaProRata(ciclo.dias).toFixed(2).replace('.', ',')} (até ${fmtDataCicloBR(ciclo.fim)})`;
+    return `R$ ${precoAssinatura(ciclo.dias).toFixed(2).replace('.', ',')} (até ${fmtDataCicloBR(ciclo.fim)})`;
   };
 
   const n5 = await enviar(faltando5, s =>

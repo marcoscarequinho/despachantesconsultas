@@ -168,10 +168,10 @@
     {
       cap: 'Coisas de Despachantes',
       dur: 13000,
-      fala: 'Para despachantes, a assinatura Coisas de Despachantes: consultas de placa, código de segurança do CRV, Declaração de Residência, ASD do Rio, nota de serviços e assinatura digital de documentos, tudo com vencimento no dia 30.',
+      fala: 'Para despachantes, a assinatura Coisas de Despachantes: consultas de placa, código de segurança do CRV, Declaração de Residência, ASD do Rio, nota de serviços e assinatura digital de documentos, por 30 dias.',
       html:
         '<div class="tv-card tv-assin">' +
-          '<div class="tv-card-h">🧰 Coisas de Despachantes <em>assinatura · vence dia 30</em></div>' +
+          '<div class="tv-card-h">🧰 Coisas de Despachantes <em>assinatura · 30 dias</em></div>' +
           '<ul>' +
             li('🔎', 'Consultas de placa', '.3s') +
             li('🔐', 'Código de Segurança CRV', '.7s') +

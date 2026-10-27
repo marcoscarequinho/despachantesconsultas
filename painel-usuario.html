@@ -689,7 +689,7 @@
 
       <div>
         <h2 class="text-xl font-bold text-amber-600">Coisas de Despachantes Assinatura</h2>
-        <p id="assinatura-subtitulo" class="text-sm text-gray-500">Consultas e documentos exclusivos de quem assina — vencimento todo dia 30, sem debitar crédito</p>
+        <p id="assinatura-subtitulo" class="text-sm text-gray-500">Consultas e documentos exclusivos de quem assina — 30 dias por R$ 30,00, sem debitar crédito</p>
       </div>
 
       <!-- Saldo disponível -->
@@ -3054,7 +3054,7 @@ function buildCategoryGrid() {
 
 // ── Assinatura Coisas de Despachantes ─────────────────────────────────────────
 // Os serviços da aba "Coisas de Despachantes" não debitam crédito, mas exigem
-// assinatura ativa, com vencimento todo dia 30 e preço por dia. O bloqueio de
+// assinatura ativa (30 dias a partir do pagamento). O bloqueio de
 // verdade é do servidor
 // (HTTP 402 em /api/query, ver assinaturaGateDespachantes) — o que está aqui é
 // só para abrir o popup ANTES de o usuário preencher o formulário à toa.
@@ -3137,10 +3137,9 @@ function abrirAssinaturaDoServico(svc) {
   abrirModalAssinatura(svc, motivo);
 }
 
-// O período da assinatura vai até o dia 30 e é cobrado por dia, então nenhum
-// número da tela pode ficar fixo em "R$ 30,00 / 30 dias": quem entra dia 22
-// paga 8 dias e leva cota proporcional. Os valores vêm do servidor
-// (/api/assinatura/status), que é quem calcula e quem cobra.
+// Preço, dias, vencimento e cotas vêm do servidor (/api/assinatura/status),
+// que é quem calcula e quem cobra — quem renova antes de vencer vê a data em
+// que o período novo termina.
 function aplicarPrecoAssinatura() {
   if (!assinaturaStatus) return;
   const preco = Number(assinaturaStatus.proximoPreco ?? assinaturaStatus.preco ?? 30);
@@ -3154,11 +3153,11 @@ function aplicarPrecoAssinatura() {
   txt('assinatura-preco', fmt(preco));
   txt('assinatura-periodo', venceEm
     ? `${dias} dia(s) — até ${venceEm}, sem renovação automática`
-    : 'até o dia 30 — sem renovação automática');
+    : '30 dias — sem renovação automática');
   txt('assinatura-cartao-rotulo-periodo', `Assinatura (${dias} dia(s))`);
   txt('assinatura-subtitulo', venceEm
-    ? `Consultas e documentos exclusivos de quem assina — ${fmt(preco)} até ${venceEm} (vence todo dia 30), sem debitar crédito`
-    : 'Consultas e documentos exclusivos de quem assina — vencimento todo dia 30, sem debitar crédito');
+    ? `Consultas e documentos exclusivos de quem assina — ${fmt(preco)} por ${dias} dias (até ${venceEm}), sem debitar crédito`
+    : `Consultas e documentos exclusivos de quem assina — ${fmt(preco)} por ${dias} dias, sem debitar crédito`);
 
   const cotas = assinaturaStatus.proximoCotas;
   if (cotas) {
@@ -3192,7 +3191,7 @@ function renderAssinaturaBanner() {
     const venceBanner = assinaturaStatus.proximoVencimento
       ? ' até ' + new Date(assinaturaStatus.proximoVencimento).toLocaleDateString('pt-BR')
       : '';
-    el.innerHTML = `🔑 Estes serviços são exclusivos de quem assina <strong>Coisas de Despachantes</strong> (${precoBanner}${venceBanner} — vence todo dia 30). ` +
+    el.innerHTML = `🔑 Estes serviços são exclusivos de quem assina <strong>Coisas de Despachantes</strong> (${precoBanner} por 30 dias${venceBanner}). ` +
       `<button onclick="abrirModalAssinatura(null)" class="ml-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold px-3 py-1.5 rounded">🔑 Assinar</button>`;
   }
   el.classList.remove('hidden');
@@ -8663,7 +8662,7 @@ function fecharSejaRevendedor() {
         <p id="assinatura-msg" class="text-sm text-gray-700 leading-relaxed"></p>
         <div class="mt-4 bg-amber-50 border border-amber-200 rounded-lg p-4 text-center">
           <div id="assinatura-preco" class="text-3xl font-extrabold text-amber-700">R$ 30,00</div>
-          <div id="assinatura-periodo" class="text-xs text-amber-700 mt-0.5">até o dia 30 — sem renovação automática</div>
+          <div id="assinatura-periodo" class="text-xs text-amber-700 mt-0.5">30 dias — sem renovação automática</div>
         </div>
         <ul class="mt-4 space-y-1.5 text-sm text-gray-600">
           <li>✅ Veicular Completa — consulta de placa (até <span id="assinatura-cota-placas">50</span> no período)</li>
@@ -8680,9 +8679,8 @@ function fecharSejaRevendedor() {
           <span>Veja modelo da consulta <span class="underline font-semibold">(abrir PDF de exemplo)</span></span>
         </a>
         <p id="assinatura-rodape" class="text-xs text-gray-400 mt-3">
-          A assinatura vence todo dia 30 e não renova sozinha: o primeiro período é
-          proporcional aos dias que faltam (R$ 1,00 por dia) e, para continuar, é só
-          pagar outro PIX quando o período acabar.
+          A assinatura vale 30 dias a partir do pagamento e não renova sozinha: para
+          continuar, é só pagar outro PIX quando o período acabar.
         </p>
         <!-- Meio de pagamento. O acréscimo do cartão é calculado no servidor
              (CARTAO_ACRESCIMO); aqui é só o que o assinante vê para decidir. -->
