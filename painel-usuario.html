@@ -2609,8 +2609,6 @@ let catalogFilter = 'all';
 // continuam contando pelo grupo real do serviço. Destacar outra consulta é
 // acrescentar o id nesta lista.
 const CATALOG_DESTAQUES = [
-  'atpve-vistocar-rj',        // Intenção de Venda / ATPV-e RJ
-  'atpve-vistocar-mg',        // Intenção de Venda / ATPV-e MG
   'consultar-Numero-ATPVE',   // Reemissão da ATPVe Com Comunicação de Venda
   'crlve-comunicacao-venda',  // CRLV-e Rio, com Comunicação de Venda e ou Intenção de Venda, ou Gravame
   'consultar-atpve-v1',       // Reemissão ATPV-e (Placa)
@@ -2622,6 +2620,13 @@ const CATALOG_DESTAQUES = [
   'contrato-arrendamento-veicular', // Contrato de Arrendamento Veicular com IA
 ];
 const CATALOG_GRUPO_DESTAQUE = 'Destaques';
+
+// Consultas que não aparecem na vitrine da Visão Geral. O ATPV-e da Vistocar
+// está suspenso (27/10/2026, pedido do dono): a emissão nova tem faixa própria
+// ("ATPVe's e Consultas Novas"). Continuam na aba "Acesse Aqui...", onde o
+// clique leva para a emissão nova.
+const CATALOG_OCULTOS = new Set(['atpve-vistocar-rj', 'atpve-vistocar-mg']);
+const catalogServices = () => allServices.filter(s => !CATALOG_OCULTOS.has(s.id));
 
 // Ordem dos blocos. Grupo que exista no catálogo e não esteja aqui vai para o
 // fim, na ordem do servidor — grupo novo no server.js aparece sozinho.
@@ -2709,7 +2714,7 @@ function catalogFiltered() {
   // com outras palavras no meio do nome.
   const termos = catNorm(document.getElementById('catalog-search')?.value.trim() || '')
     .split(/\s+/).filter(Boolean);
-  return allServices.filter(s => {
+  return catalogServices().filter(s => {
     if (catalogFilter !== 'all' && s.group !== catalogFilter) return false;
     if (!termos.length) return true;
     const alvo = catNorm(`${s.name} ${s.group} ${s.id}`);
@@ -2723,17 +2728,18 @@ function buildCatalog() {
 }
 
 function renderCatalogFilters() {
-  const grupos = [...new Set(allServices.map(s => s.group))]
+  const vitrine = catalogServices();
+  const grupos = [...new Set(vitrine.map(s => s.group))]
     .sort((a, b) => catalogGroupRank(a) - catalogGroupRank(b));
   const chip = (valor, rotulo, n) => `
     <button type="button" class="cat-chip ${catalogFilter === valor ? 'active' : ''}"
       onclick="setCatalogFilter(${JSON.stringify(valor).replace(/"/g, '&quot;')})">
       ${rotulo} <span class="cat-chip-n">${n}</span>
     </button>`;
-  const html = [chip('all', '⭐ Todas', allServices.length)];
+  const html = [chip('all', '⭐ Todas', vitrine.length)];
   grupos.forEach(g => {
     const meta = CATALOG_GROUP_META[g] || { icon: '📌' };
-    const n = allServices.filter(s => s.group === g).length;
+    const n = vitrine.filter(s => s.group === g).length;
     html.push(chip(g, `${meta.icon} ${escapeHtml(g)}`, n));
   });
   document.getElementById('catalog-filters').innerHTML = html.join('');
@@ -2935,7 +2941,7 @@ function renderCatalog() {
   document.getElementById('catalog-clear')
     .classList.toggle('hidden', !termo && catalogFilter === 'all');
   document.getElementById('catalog-count').textContent =
-    `${svcs.length} de ${allServices.length} consultas`;
+    `${svcs.length} de ${catalogServices().length} consultas`;
 
   if (!svcs.length) {
     grid.innerHTML = `
