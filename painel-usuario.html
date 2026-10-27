@@ -210,6 +210,12 @@
       </svg>
       Perfil
     </div>
+    <a id="nav-painel-parceiro" href="/painel/revendedor"
+      class="nav-item hidden border border-emerald-400/40 bg-emerald-900/20 hover:bg-emerald-900/40"
+      style="color:#6ee7b7;">
+      <span class="text-lg flex-shrink-0">🤝</span>
+      Voltar ao Painel do Parceiro
+    </a>
     <a id="nav-superadmin" href="/admin"
       class="nav-item hidden border border-red-500/40 bg-red-900/20 hover:bg-red-900/40"
       style="color:#fca5a5;">
@@ -247,6 +253,10 @@
       <h1 id="page-title" class="font-bold text-gray-800 text-lg">Visão Geral</h1>
     </div>
     <div class="flex items-center gap-3">
+      <a id="topbar-painel-parceiro" href="/painel/revendedor"
+        class="hidden text-xs font-semibold px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap">
+        ← <span class="hidden sm:inline">Painel do </span>Parceiro
+      </a>
       <a href="/" class="link-site btn-ghost text-xs hidden sm:inline-flex">← Site</a>
       <a id="topbar-recarga" href="/recarga-pix" class="btn-primary text-xs">💸 Recarga PIX</a>
       <button type="button" id="btn-seja-parceiro" onclick="abrirSejaRevendedor()"
@@ -1513,6 +1523,14 @@ async function init() {
     document.getElementById('profile-name').value        = currentUser.name  || '';
     document.getElementById('profile-email').value       = currentUser.email || '';
     document.getElementById('profile-phone').value       = currentUser.phone || '';
+
+    // O parceiro entra aqui pelo "Fazer uma Consulta" do painel dele; sem este
+    // atalho ele ficava sem caminho de volta (o "← Site" leva para a página dele).
+    // Link relativo: vale no domínio próprio do parceiro e no da MC.
+    if (currentUser.role === 'reseller') {
+      document.getElementById('nav-painel-parceiro').classList.remove('hidden');
+      document.getElementById('topbar-painel-parceiro').classList.remove('hidden');
+    }
 
     if (['contato@mygmail.com.br', 'contato@mcdetranrj.com'].includes(currentUser.email))
       document.getElementById('nav-superadmin').classList.remove('hidden');
