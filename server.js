@@ -20032,6 +20032,23 @@ app.post('/api/admin/broadcast-whatsapp-priority', requireAuth, requireSuperAdmi
   }
 });
 
+// Teste da campanha num grupo só (pedido do dono, 28/10/2026): o mesmo
+// runWhatsAppBroadcast dos crons, filtrado pelo nome do grupo (começo do nome,
+// sem acento). Com listar:true só diz quais grupos casam, sem enviar nada —
+// para conferir antes, porque o nome parcial pode pegar mais de um grupo.
+app.post('/api/admin/broadcast-whatsapp-teste', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const grupo = String(req.body?.grupo || '').trim();
+    if (grupo.length < 3) return res.status(400).json({ error: 'Informe o nome do grupo.' });
+    const opts = { canal: 'teste', incluir: [grupo] };
+    if (req.body?.listar) return res.json({ success: true, grupos: (await selecionarDestinosBroadcast(opts)).map(d => d.name) });
+    res.json({ success: true, ...await runWhatsAppBroadcast(opts) });
+  } catch (err) {
+    console.error('Erro no teste do broadcast:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Cron: verifica pedidos de CRLV-e Agendado pendentes e avisa por WhatsApp ──
 async function checkCrlvAgendadoStatus(pedidoId) {
   const pid = String(pedidoId).trim();
