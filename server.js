@@ -10837,6 +10837,8 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
             const uf = String(params?.uf || '').toUpperCase();
             const numero = String(params?.numero_atpve || '').replace(/\D/g, '');
             if (!/^[A-Z]{2}$/.test(uf)) return res.status(400).json({ error: 'Informe a UF do ATPV-e.' });
+            // Só RJ desde 28/10/2026 (decisão do dono). Antes valia nas 27 UFs.
+            if (uf !== 'RJ') return res.status(400).json({ error: 'Por enquanto o cancelamento de ATPV-e é só para o Rio de Janeiro (RJ). Nada foi cobrado.' });
             if (numero.length < 6) return res.status(400).json({ error: 'Informe o número do ATPV-e a cancelar.' });
             // A API pede o renavam (testado com BA em 22/10/2026: depois da UF
             // ela recusa com 'Informe o RENAVAM do veículo').
