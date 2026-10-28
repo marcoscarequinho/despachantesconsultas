@@ -1765,6 +1765,8 @@ function renderNovasPedidos() {
 
   const selo = p => {
     if (p.status === 'success') return '<span class="badge bg-green-100 text-green-700">✅ Entregue</span>';
+    if (p.tipo === 'cancelamento' && p.status === 'cancelado') return '<span class="badge bg-red-100 text-red-700">❌ Não saiu</span>';
+    if (p.tipo === 'cancelamento' && p.status === 'aguardando_pdf') return '<span class="badge bg-amber-100 text-amber-800">⏳ Processando</span>';
     if (p.status === 'cancelado') return '<span class="badge bg-gray-100 text-gray-600">Cancelado</span>';
     if (p.status === 'aguardando_pdf') return '<span class="badge bg-amber-100 text-amber-800">⏳ Em conferência</span>';
     return `<span class="badge bg-gray-100 text-gray-600">${escAtpve(p.status)}</span>`;
@@ -1787,6 +1789,7 @@ function renderNovasPedidos() {
         <div class="text-xs font-mono text-gray-600">${escAtpve(p.emissao || '—')}</div>
         ${p.verificado_em ? `<div class="text-xs text-gray-400">verificado em ${fmtDate(p.verificado_em)}</div>` : ''}
         ${p.motivo ? `<div class="text-xs text-red-500">${escAtpve(p.motivo)}</div>` : ''}
+        ${p.tentativas > 1 ? `<div class="text-xs text-gray-500">${p.tentativas} tentativas</div>` : ''}
         ${p.whatsapp_sent_at ? `<div class="text-xs text-green-600">zap em ${fmtDate(p.whatsapp_sent_at)}</div>` : ''}
         ${p.entrega_manual ? `<div class="text-xs text-purple-600">entregue manualmente em ${fmtDate(p.entrega_manual)}</div>` : ''}
       </td>
@@ -1795,7 +1798,9 @@ function renderNovasPedidos() {
         <div class="text-xs text-gray-400 mt-1">${p.cobrada ? fmt(p.amount) : (p.status === 'aguardando_pdf' ? 'cobra ' + fmt(p.amount) + ' na entrega' : 'sem cobrança')}</div>
       </td>
       <td class="px-4 py-3 align-top text-right whitespace-nowrap">
-        ${p.status === 'aguardando_pdf' ? `
+        ${p.tipo === 'cancelamento' && p.reenviavel && ['cancelado', 'aguardando_pdf'].includes(p.status) ? `
+          <button onclick="tentarCancelamentoNova(${p.id})" class="btn-primary text-xs mb-1">🔁 Tentar novamente</button>` : ''}
+        ${p.status === 'aguardando_pdf' && p.tipo !== 'cancelamento' ? `
           <button onclick="verificarNova(${p.id})" class="btn-primary text-xs mb-1">⚡ Verificar agora</button>
           <button onclick="cancelarNova(${p.id})" class="btn-secondary text-xs mb-1">Cancelar</button>` : ''}
         ${['aguardando_pdf', 'cancelado'].includes(p.status) && !p.tem_pdf && p.tipo === 'emissao' ? `
@@ -1820,7 +1825,7 @@ async function verificarNova(id, silencioso = false) {
 }
 
 async function verificarTodasNovas() {
-  const pend = allNovasPedidos.filter(p => p.status === 'aguardando_pdf');
+  const pend = allNovasPedidos.filter(p => p.status === 'aguardando_pdf' && p.tipo !== 'cancelamento');
   if (!pend.length) { toast('Não há emissões aguardando.', 'error'); return; }
   if (!confirm(`Verificar ${pend.length} emissão(ões) pendente(s) agora?`)) return;
   let ok = 0;
@@ -1837,6 +1842,24 @@ async function cancelarNova(id) {
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { toast(d.error || 'Erro ao cancelar.', 'error'); return; }
     toast('Pedido cancelado, sem cobrança.');
+    await loadNovasPedidos();
+  } catch { toast('Erro de conexão.', 'error'); }
+}
+
+// Reenvia o cancelamento com os dados que o cliente digitou. Cobra o valor do
+// pedido só se a emissora confirmar; se ainda estiver processando, só confere.
+async function tentarCancelamentoNova(id) {
+  const p = allNovasPedidos.find(x => x.id === id);
+  const aviso = p?.status === 'aguardando_pdf'
+    ? 'Este cancelamento ainda pode estar processando na emissora: primeiro confiro a situação, e só reenvio se ele tiver falhado.'
+    : 'Vou reenviar o cancelamento com os mesmos dados que o cliente informou. É um ato no Detran e não pode ser desfeito.';
+  if (!confirm(`${aviso}\n\nPlaca ${p?.placa || '—'} · ${p?.user?.name || '—'}\nSe a emissora confirmar, ${fmt(p?.amount || 0)} serão cobrados do cliente e ele recebe o comprovante no WhatsApp.\n\nContinuar?`)) return;
+  toast('Enviando… pode levar até 1 minuto e meio.');
+  try {
+    const r = await fetch(`/api/admin/novas-pedidos/${id}/tentar-cancelamento`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || 'Erro ao tentar de novo.', 'error'); return; }
+    toast(d.motivo || (d.confirmado ? 'Cancelamento confirmado!' : 'Não saiu.'), d.confirmado ? 'success' : 'error');
     await loadNovasPedidos();
   } catch { toast('Erro de conexão.', 'error'); }
 }

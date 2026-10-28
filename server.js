@@ -2191,6 +2191,21 @@ async function initDB() {
       verificado_em TIMESTAMPTZ
     );
   `);
+  // Cancelamento (DataCred) que não saiu na hora: o corpo inteiro que foi à API
+  // — com o CPF/CNPJ do vendedor, que o queries.params não guarda — para o
+  // "Tentar novamente" do admin reenviar os mesmos dados. Ver tentarCancelamentoDataCred.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS datacred_cancelamentos (
+      query_id         INTEGER PRIMARY KEY REFERENCES queries(id) ON DELETE CASCADE,
+      caminho          TEXT NOT NULL,
+      corpo            JSONB NOT NULL,
+      datacred_id      INTEGER,
+      tentativas       INTEGER NOT NULL DEFAULT 1,
+      ultima_msg       TEXT,
+      em_tentativa_ate TIMESTAMPTZ,
+      atualizado_em    TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
   // DirectData: a API não tem rota de saldo (16/10/2026: Saldo, ConsultaSaldo,
   // Usuario/Saldo e Conta/Saldo dão 404), então o saldo do admin é ESTIMADO —
   // o valor que o admin informa ao recarregar (directdata_saldo) menos o custo
@@ -9816,7 +9831,125 @@ async function runDataCredPendingCheck() {
     try { s = await entregarAtpveDataCred(pend); } catch (e) { console.error(`[${DATACRED_ATPVE_SERVICE_ID}] ${pend.emissao_id}:`, e.message); s = 'erro'; }
     resumo[s] = (resumo[s] || 0) + 1;
   }
-  return { verificadas: r.rows.length, ...resumo };
+  const c = await conferirCancelamentosDataCred().catch(e => { console.error('[datacred] cancelamentos:', e.message); return {}; });
+  return { verificadas: r.rows.length, ...resumo, ...c };
+}
+
+// ── Cancelamentos (DataCred) que não saem na hora ────────────────────────────
+// Todo cancelamento que não sai vira pedido sem cobrança: 'cancelado' quando a
+// emissora recusou, 'aguardando_pdf' quando ainda processava depois da espera.
+// Até 28/10/2026 nada ficava gravado — a FIP0E55 voltou "Detran indisponível"
+// e não havia o que reenviar — e o que passava dos 5 min se perdia: se a
+// emissora confirmasse depois, ela cobrava de nós e o cliente não sabia.
+const datacredCancelFim = x => x?.cancelada === true || ['erro', 'concluida', 'cancelada'].includes(x?.status);
+
+// Uma rodada. Com idExistente só pergunta a situação daquele pedido (mandar o
+// corpo de novo enquanto ele processa seria pedir o ato duas vezes).
+async function tentarCancelamentoDataCred(caminho, corpo, { idExistente = null, limiteMs = 300000 } = {}) {
+  let j, id = idExistente;
+  if (idExistente) {
+    const st = await chamarDataCred(`/comunicados-venda/${idExistente}`);
+    if (st.status >= 300 || !st.json) return { id, erro: erroDataCred(st) };
+    j = st.json;
+  } else {
+    const r = await chamarDataCred(caminho, { method: 'POST', body: corpo });
+    if (r.status >= 300 || !r.json?.id) return { id: null, erro: erroDataCred(r) };
+    id = r.json.id;
+    // Conferido em 22/10/2026: o cancelamento avulso respondeu 200 já com o
+    // resultado (cancelada:false, status "erro"). Se vier em processamento,
+    // acompanha pelo id.
+    j = datacredCancelFim(r.json) ? r.json : await acompanharDataCred(`/comunicados-venda/${id}`, r.json, datacredCancelFim, limiteMs);
+  }
+  if (!datacredCancelFim(j)) return { id, processando: true, erro: { status: 504, error: `O cancelamento (protocolo ${id}) ainda está em processamento na emissora. Nada foi cobrado até agora — o resultado chega no seu WhatsApp assim que ela responder.` } };
+  if (j.cancelada !== true && j.status !== 'cancelada') {
+    // Com o Detran fora a emissora devolve o texto cru do servidor
+    // ("Service Unavailable", 28/10/2026), que não diz nada ao cliente.
+    const msg = msgDataCred(j);
+    const texto = /^\s*service unavailable\s*$/i.test(msg) ? 'O sistema do Detran/emissora está fora do ar no momento — tente novamente mais tarde.' : (msg || 'A emissora não confirmou o cancelamento.');
+    return { id, erro: { status: 422, error: texto.replace(/\.?\s*$/, '.') + ' Nada foi cobrado.' } };
+  }
+  return { id, j };
+}
+
+async function comprovanteCancelamentoDataCred(service, corpo, id, j, log) {
+  const comprovante = JSON.parse(JSON.stringify(limparDadosDataCred({ Resultado: {
+    situacao: 'CANCELAMENTO CONFIRMADO', placa: corpo.placa, protocolo: j.protocolo || j.protocolo_cve || id,
+    numero_atpve: j.numero_atpve || corpo.numero_atpve, numero_duda: j.numero_duda || corpo.numero_duda,
+    mensagem: j.mensagem, data: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+  } }, 1)));
+  return buildDirectDataPdfBuffer(service, null, comprovante, log);
+}
+
+// Grava a tentativa que não saiu (sem transação) e os dados para reenviar.
+async function registrarCancelamentoDataCred(userId, service, price, log, caminho, corpo, t, erro) {
+  const q = await pool.query(
+    `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
+     VALUES ($1,$2,$3,$4,$5,$6,'pdf',$7) RETURNING id`,
+    [userId, service.id, service.name, JSON.stringify(log), t?.processando ? 'aguardando_pdf' : 'cancelado', price,
+     JSON.stringify({ motivo: erro, emissao: t?.id ?? null })]);
+  await pool.query(`INSERT INTO datacred_cancelamentos (query_id, caminho, corpo, datacred_id, ultima_msg) VALUES ($1,$2,$3,$4,$5)`,
+    [q.rows[0].id, caminho, JSON.stringify(corpo), t?.id ?? null, erro]);
+  return q.rows[0].id;
+}
+
+// Confirmado depois (cron ou "Tentar novamente"): cobra o valor gravado no
+// pedido por finalizePendingQuery e entrega o comprovante como o fluxo da hora.
+async function entregarCancelamentoDataCred(queryId, t, corpo) {
+  const qr = await pool.query(
+    `SELECT q.id, q.user_id, q.service_id, q.service_name, q.params, u.phone, u.name
+       FROM queries q JOIN users u ON u.id = q.user_id WHERE q.id=$1`, [queryId]);
+  const q = qr.rows[0];
+  const service = SERVICES.find(x => x.id === q?.service_id);
+  if (!q || !service) return false;
+  let log = {}; try { log = JSON.parse(q.params || '{}'); } catch {}
+  const pdf = await comprovanteCancelamentoDataCred(service, corpo, t.id, t.j, log);
+  await pool.query(`UPDATE queries SET status='aguardando_pdf' WHERE id=$1 AND status='cancelado'`, [q.id]);
+  if (!await finalizePendingQuery(q.id, q.user_id, `Consulta: ${q.service_name} — ${corpo.placa}`)) return false;
+  await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify({ emissao: t.id }), q.id]);
+  await pool.query('DELETE FROM datacred_cancelamentos WHERE query_id=$1', [q.id]);
+  await pool.query(`INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+    [q.id, q.user_id, crypto.randomBytes(32).toString('hex'), pdf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)])
+    .catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+  if (q.phone) {
+    const ok = await sendWhatsAppPdf(q.phone, pdf, `${MC_ARQUIVO_PREFIXO}-${q.service_id.replace(/^dcr-/, '')}-${corpo.placa}.pdf`,
+      `✅ *${q.service_name}*\n🔎 ${corpo.placa}\n\nCancelamento confirmado. Documento gerado pela MC Despachadoria.`).catch(() => false);
+    if (ok) await pool.query('UPDATE queries SET whatsapp_sent_at = NOW() WHERE id=$1', [q.id]).catch(() => {});
+  }
+  if (ADMIN_PHONE) await sendWhatsApp(ADMIN_PHONE, `✅ *${q.service_name} confirmado*\n\n👤 *Cliente:* ${q.name || '-'}\n🔎 *Placa:* ${corpo.placa}\n🧾 Pedido #${q.id}`, { marca: false }).catch(() => {});
+  return true;
+}
+
+// Recusa depois da espera: o pedido vira 'cancelado' e os dois são avisados.
+async function recusarCancelamentoDataCred(queryId, t, avisar) {
+  const r = await pool.query(
+    `UPDATE queries q SET status='cancelado', result_data=$2 FROM users u
+      WHERE q.id=$1 AND u.id=q.user_id AND q.status IN ('aguardando_pdf','cancelado')
+      RETURNING q.service_name, u.phone, u.name`,
+    [queryId, JSON.stringify({ motivo: t.erro.error, emissao: t.id ?? null })]);
+  await pool.query('UPDATE datacred_cancelamentos SET ultima_msg=$2, atualizado_em=NOW() WHERE query_id=$1', [queryId, t.erro.error]);
+  const q = r.rows[0];
+  if (!avisar || !q) return;
+  const placa = (await pool.query('SELECT corpo FROM datacred_cancelamentos WHERE query_id=$1', [queryId])).rows[0]?.corpo?.placa || '';
+  if (q.phone) await sendWhatsApp(q.phone, `❌ *${q.service_name}*\n🔎 ${placa}\n\n${t.erro.error}`).catch(() => {});
+  if (ADMIN_PHONE) await sendWhatsApp(ADMIN_PHONE, `❌ *${q.service_name} não saiu*\n\n👤 *Cliente:* ${q.name || '-'}${q.phone ? ` (${q.phone})` : ''}\n🔎 *Placa:* ${placa}\n🧾 Pedido #${queryId}\n\n${t.erro.error}`, { marca: false }).catch(() => {});
+}
+
+// Cron (carona no do CRLV): pergunta pelos que ficaram processando.
+async function conferirCancelamentosDataCred() {
+  const r = await pool.query(
+    `SELECT d.query_id, d.corpo, d.datacred_id FROM datacred_cancelamentos d JOIN queries q ON q.id = d.query_id
+      WHERE q.status='aguardando_pdf' AND d.datacred_id IS NOT NULL
+        AND (d.em_tentativa_ate IS NULL OR d.em_tentativa_ate < NOW())
+      ORDER BY d.atualizado_em LIMIT 20`);
+  const resumo = { cancelamentos_confirmados: 0, cancelamentos_recusados: 0 };
+  for (const row of r.rows) {
+    const t = await tentarCancelamentoDataCred(null, null, { idExistente: row.datacred_id }).catch(() => null);
+    if (!t) continue;
+    if (t.j) { if (await entregarCancelamentoDataCred(row.query_id, t, row.corpo)) resumo.cancelamentos_confirmados++; }
+    else if (t.processando || t.erro.status >= 500) await pool.query('UPDATE datacred_cancelamentos SET atualizado_em=NOW() WHERE query_id=$1', [row.query_id]);
+    else { await recusarCancelamentoDataCred(row.query_id, t, true); resumo.cancelamentos_recusados++; }
+  }
+  return resumo;
 }
 
 // ── Consulta CNPJ grátis (CNPJá público — ver CNPJA_OPEN_URL) ────────────────
@@ -10637,6 +10770,7 @@ async function processCatalogQueryInterna(userId, serviceId, params, res) {
       const renavam = String(params?.renavam || '').replace(/\D/g, '');
       const placaOk = /^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa);
       let entregue;   // { pdf, rotulo, log } ou { status, error }
+      let cancel = null;   // cancelamentos: { caminho, corpo, log, t }
       try {
         if (s.entrada === 'cancelar_atpve' || s.entrada === 'cancelar_cve') {
           if (!placaOk) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
@@ -10667,25 +10801,11 @@ async function processCatalogQueryInterna(userId, serviceId, params, res) {
             corpo = { confirmar: true, placa, ...(protocolo ? { protocolo } : {}), ...(renavam ? { renavam } : {}), ...(duda ? { numero_duda: duda } : {}) };
             log = { placa, protocolo: protocolo || undefined };
           }
-          const r = await chamarDataCred(caminho, { method: 'POST', body: corpo });
-          if (r.status >= 300 || !r.json?.id) entregue = erroDataCred(r);
-          else {
-            // Conferido em 22/10/2026: o cancelamento avulso respondeu 200 já
-            // com o resultado (cancelada:false, status "erro"). Se vier em
-            // processamento, acompanha pelo id.
-            const j = r.json.cancelada === true || r.json.status === 'erro' ? r.json
-              : await acompanharDataCred(`/comunicados-venda/${r.json.id}`, r.json, x => x?.cancelada === true || ['erro', 'concluida', 'cancelada'].includes(x?.status));
-            if (!j) entregue = { status: 504, error: `O cancelamento (protocolo ${r.json.id}) ainda está em processamento na emissora. Nada foi cobrado até agora — fale com o suporte informando esse protocolo.` };
-            else if (j.cancelada !== true && j.status !== 'cancelada') entregue = { status: 422, error: (msgDataCred(j) || 'A emissora não confirmou o cancelamento.') + ' Nada foi cobrado.' };
-            else {
-              const comprovante = JSON.parse(JSON.stringify(limparDadosDataCred({ Resultado: {
-                situacao: 'CANCELAMENTO CONFIRMADO', placa, protocolo: j.protocolo || j.protocolo_cve || r.json.id,
-                numero_atpve: j.numero_atpve || corpo.numero_atpve, numero_duda: j.numero_duda || corpo.numero_duda,
-                mensagem: j.mensagem, data: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
-              } }, 1)));
-              entregue = { pdf: await buildDirectDataPdfBuffer(service, null, comprovante, log), rotulo: placa, log };
-            }
-          }
+          cancel = { caminho, corpo, log };
+          cancel.t = await tentarCancelamentoDataCred(caminho, corpo);
+          entregue = cancel.t.j
+            ? { pdf: await comprovanteCancelamentoDataCred(service, corpo, cancel.t.id, cancel.t.j, log), rotulo: placa, log }
+            : cancel.t.erro;
         } else {
           let documento;
           if (s.entrada === 'cpf') {
@@ -10730,10 +10850,14 @@ async function processCatalogQueryInterna(userId, serviceId, params, res) {
         // Cancelamento é um ato no Detran e a resposta pode levar minutos: quem
         // fechou a tela não ficava sabendo que não saiu (FIP0E55, 28/10/2026,
         // "Sistema do detran atualmente indisponivel"). Só o comprovante ia
-        // pelo WhatsApp; a recusa também vai, para o cliente e para o dono.
-        if ((s.entrada === 'cancelar_atpve' || s.entrada === 'cancelar_cve') && placaOk) {
-          if (user.phone) await sendWhatsApp(user.phone, `❌ *${service.name}*\n🔎 ${placa}\n\n${entregue.error}`).catch(() => {});
-          if (ADMIN_PHONE) await sendWhatsApp(ADMIN_PHONE, `❌ *${service.name} não saiu*\n\n👤 *Cliente:* ${user.name || '-'}${user.phone ? ` (${user.phone})` : ''}\n🔎 *Placa:* ${placa}\n\n${entregue.error}`, { marca: false }).catch(() => {});
+        // pelo WhatsApp; a recusa também vai, para o cliente e para o dono, e
+        // o pedido fica gravado para o "Tentar novamente" do admin.
+        if (cancel) {
+          const qid = await registrarCancelamentoDataCred(userId, service, price, cancel.log, cancel.caminho, cancel.corpo, cancel.t, entregue.error)
+            .catch(e => { console.error(`[${serviceId}] registrar cancelamento:`, e.message); return null; });
+          const pedido = qid ? `\n🧾 Pedido #${qid}` : '';
+          if (user.phone) await sendWhatsApp(user.phone, `${cancel.t?.processando ? '⏳' : '❌'} *${service.name}*\n🔎 ${placa}\n\n${entregue.error}`).catch(() => {});
+          if (ADMIN_PHONE) await sendWhatsApp(ADMIN_PHONE, `${cancel.t?.processando ? '⏳' : '❌'} *${service.name} ${cancel.t?.processando ? 'em processamento' : 'não saiu'}*\n\n👤 *Cliente:* ${user.name || '-'}${user.phone ? ` (${user.phone})` : ''}\n🔎 *Placa:* ${placa}${pedido}\n\n${entregue.error}${qid ? '\n\nDá para tentar de novo em Admin → Consultas Novas.' : ''}`, { marca: false }).catch(() => {});
         }
         return res.status(entregue.status).json({ error: entregue.error });
       }
@@ -18937,10 +19061,13 @@ app.get('/api/admin/novas-pedidos', requireAuth, requireSuperAdmin, async (req, 
               q.created_at, q.whatsapp_sent_at, q.transaction_id,
               u.id AS user_id, u.name AS user_name, u.email AS user_email, u.phone AS user_phone,
               p.emissao_id AS pendencia_emissao, p.created_at AS pendencia_desde, p.verificado_em,
+              dc.tentativas AS cancel_tentativas, dc.datacred_id AS cancel_datacred_id, dc.atualizado_em AS cancel_atualizado_em,
+              (dc.query_id IS NOT NULL) AS cancel_reenviavel,
               (SELECT 1 FROM pdf_cache c WHERE c.query_id = q.id AND c.expires_at > NOW() LIMIT 1) AS tem_pdf
          FROM queries q
          JOIN users u ON u.id = q.user_id
          LEFT JOIN datacred_pendentes p ON p.query_id = q.id
+         LEFT JOIN datacred_cancelamentos dc ON dc.query_id = q.id
         WHERE q.service_id LIKE 'dcr-%'
         ORDER BY (q.status = 'aguardando_pdf') DESC, q.created_at DESC
         LIMIT 500`
@@ -18956,8 +19083,9 @@ app.get('/api/admin/novas-pedidos', requireAuth, requireSuperAdmin, async (req, 
         status: row.status, amount: row.amount, cobrada: !!row.transaction_id,
         created_at: row.created_at, whatsapp_sent_at: row.whatsapp_sent_at, tem_pdf: !!row.tem_pdf,
         entrega_manual: result.entregaManual || null, motivo: result.motivo || null,
-        emissao: result.emissao || row.pendencia_emissao || null,
-        pendente: !!row.pendencia_emissao, verificado_em: row.verificado_em,
+        emissao: result.emissao || row.pendencia_emissao || row.cancel_datacred_id || null,
+        pendente: !!row.pendencia_emissao, verificado_em: row.verificado_em || row.cancel_atualizado_em,
+        reenviavel: !!row.cancel_reenviavel, tentativas: row.cancel_tentativas || 0,
         placa: String(params.placa || result.placa || '').toUpperCase(),
         documento: params.documento || '', uf: params.uf || (svc?.uf || '').toUpperCase(),
         vendedor: params.vendedor || '', comprador: params.comprador || '',
@@ -19022,6 +19150,60 @@ app.post('/api/admin/novas-pedidos/:id/cancelar', requireAuth, requireSuperAdmin
   } catch (err) {
     console.error('Erro ao cancelar Consulta Nova no admin:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// "Tentar novamente" de um cancelamento que não saiu, com os mesmos dados que
+// o cliente digitou (datacred_cancelamentos). Se o pedido ainda processa na
+// emissora, só pergunta a situação — reenviar pediria o ato duas vezes. Cobra
+// o valor gravado no pedido, e só se a emissora confirmar.
+app.post('/api/admin/novas-pedidos/:id/tentar-cancelamento', requireAuth, requireSuperAdmin, async (req, res) => {
+  let claim = null;
+  try {
+    const { q, erro, http } = await pedidoNovasDoAdmin(req.params.id);
+    if (erro) return res.status(http).json({ error: erro });
+    if (DATACRED_SVCS[q.service_id]?.sub !== 'Cancelamentos') return res.status(400).json({ error: 'Este pedido não é um cancelamento.' });
+    if (!['cancelado', 'aguardando_pdf'].includes(q.status)) return res.status(400).json({ error: 'Este cancelamento já foi confirmado.' });
+    claim = await pool.query(
+      `UPDATE datacred_cancelamentos SET em_tentativa_ate = NOW() + INTERVAL '3 minutes'
+        WHERE query_id=$1 AND (em_tentativa_ate IS NULL OR em_tentativa_ate < NOW()) RETURNING *`, [q.id]);
+    const d = claim.rows[0];
+    if (!d) {
+      const existe = await pool.query('SELECT 1 FROM datacred_cancelamentos WHERE query_id=$1', [q.id]);
+      return res.status(existe.rows.length ? 409 : 400).json({ error: existe.rows.length
+        ? 'Já há uma tentativa em andamento para este pedido. Aguarde e recarregue a lista.'
+        : 'Este pedido é anterior ao controle e não tem os dados guardados — peça ao cliente para enviar de novo.' });
+    }
+
+    let t = null;
+    if (q.status === 'aguardando_pdf' && d.datacred_id) {
+      t = await tentarCancelamentoDataCred(null, null, { idExistente: d.datacred_id });
+      if (t.processando || (!t.j && t.erro.status >= 500))
+        return res.json({ success: true, confirmado: false, motivo: `Ainda em processamento na emissora (protocolo ${d.datacred_id}) — não reenviei para não pedir o cancelamento duas vezes. O sistema confere sozinho a cada 15 minutos.` });
+    }
+    if (!t?.j) {
+      const ur = await pool.query('SELECT id, credits, active, pos_pago, pos_pago_limite FROM users WHERE id=$1', [q.user_id]);
+      const bloqueio = await bloqueioPagamentoConsulta(q.user_id, ur.rows[0], parseFloat(q.amount));
+      if (bloqueio) return res.status(400).json({ error: `O cliente não pode ser cobrado agora: ${bloqueio.body.error}` });
+      t = await tentarCancelamentoDataCred(d.caminho, d.corpo, { limiteMs: 90000 });
+      await pool.query('UPDATE datacred_cancelamentos SET tentativas = tentativas + 1, datacred_id = COALESCE($2, datacred_id), atualizado_em = NOW() WHERE query_id=$1', [q.id, t.id]);
+    }
+    if (t.j) {
+      const ok = await entregarCancelamentoDataCred(q.id, t, d.corpo);
+      return res.json({ success: true, confirmado: ok, motivo: ok ? `Cancelamento confirmado — ${fmtMoneyBRL(parseFloat(q.amount))} cobrado do cliente e comprovante enviado.` : 'Confirmado, mas o pedido foi fechado por outra execução. Recarregue a lista.' });
+    }
+    if (t.processando) {
+      await pool.query(`UPDATE queries SET status='aguardando_pdf', result_data=$2 WHERE id=$1`, [q.id, JSON.stringify({ motivo: t.erro.error, emissao: t.id })]);
+      await pool.query('UPDATE datacred_cancelamentos SET ultima_msg=$2 WHERE query_id=$1', [q.id, t.erro.error]);
+      return res.json({ success: true, confirmado: false, motivo: `Enviado de novo (protocolo ${t.id}) e ainda em processamento. O sistema confere a cada 15 minutos e avisa você e o cliente.` });
+    }
+    await recusarCancelamentoDataCred(q.id, t, false);
+    res.json({ success: true, confirmado: false, motivo: `A emissora recusou de novo: ${t.erro.error}` });
+  } catch (err) {
+    console.error('Erro ao tentar o cancelamento de novo no admin:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  } finally {
+    if (claim?.rows[0]) await pool.query('UPDATE datacred_cancelamentos SET em_tentativa_ate = NULL WHERE query_id=$1', [claim.rows[0].query_id]).catch(() => {});
   }
 });
 
