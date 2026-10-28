@@ -792,6 +792,7 @@
             <option value="todos">Todos os status</option>
             <option value="aguardando">Aguardando</option>
             <option value="entregues">Entregues</option>
+            <option value="naosaiu">❌ Não saíram (dá para reenviar)</option>
             <option value="cancelados">Cancelados</option>
           </select>
           <button onclick="loadNovasPedidos()" class="btn-secondary text-xs">🔄 Atualizar</button>
@@ -1830,6 +1831,7 @@ function renderNovasPedidos() {
     if (filtro === 'aguardando' && p.status !== 'aguardando_pdf') return false;
     if (filtro === 'entregues' && p.status !== 'success') return false;
     if (filtro === 'cancelados' && p.status !== 'cancelado') return false;
+    if (filtro === 'naosaiu' && !(p.status === 'cancelado' && (p.pedido_reenviavel || p.reenviavel))) return false;
     if (!busca) return true;
     return [p.placa, p.documento, p.emissao, p.service_name, p.user.name, p.user.email, p.user.phone, String(p.id)]
       .some(v => String(v || '').toLowerCase().includes(busca));
@@ -1837,7 +1839,7 @@ function renderNovasPedidos() {
 
   const selo = p => {
     if (p.status === 'success') return '<span class="badge bg-green-100 text-green-700">✅ Entregue</span>';
-    if (p.tipo === 'cancelamento' && p.status === 'cancelado') return '<span class="badge bg-red-100 text-red-700">❌ Não saiu</span>';
+    if ((p.tipo === 'cancelamento' || p.pedido_reenviavel) && p.status === 'cancelado') return '<span class="badge bg-red-100 text-red-700">❌ Não saiu</span>';
     if (p.tipo === 'cancelamento' && p.status === 'aguardando_pdf') return '<span class="badge bg-amber-100 text-amber-800">⏳ Processando</span>';
     if (p.status === 'cancelado') return '<span class="badge bg-gray-100 text-gray-600">Cancelado</span>';
     if (p.status === 'aguardando_pdf') return '<span class="badge bg-amber-100 text-amber-800">⏳ Em conferência</span>';
@@ -1872,6 +1874,8 @@ function renderNovasPedidos() {
       <td class="px-4 py-3 align-top text-right whitespace-nowrap">
         ${p.tipo === 'cancelamento' && p.reenviavel && ['cancelado', 'aguardando_pdf'].includes(p.status) ? `
           <button onclick="tentarCancelamentoNova(${p.id})" class="btn-primary text-xs mb-1">🔁 Tentar novamente</button>` : ''}
+        ${p.pedido_reenviavel && p.status === 'cancelado' && !p.cobrada ? `
+          <button onclick="reenviarPedidoNova(${p.id})" class="btn-primary text-xs mb-1">🔁 Tentar novamente</button>` : ''}
         ${p.status === 'aguardando_pdf' && p.tipo !== 'cancelamento' ? `
           <button onclick="verificarNova(${p.id})" class="btn-primary text-xs mb-1">⚡ Verificar agora</button>
           <button onclick="cancelarNova(${p.id})" class="btn-secondary text-xs mb-1">Cancelar</button>` : ''}
@@ -1914,6 +1918,22 @@ async function cancelarNova(id) {
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { toast(d.error || 'Erro ao cancelar.', 'error'); return; }
     toast('Pedido cancelado, sem cobrança.');
+    await loadNovasPedidos();
+  } catch { toast('Erro de conexão.', 'error'); }
+}
+
+// Emissão/consulta que não saiu (Detran ou base fora): roda de novo com os
+// mesmos dados que o cliente enviou, pelo fluxo normal — cobra só se sair.
+async function reenviarPedidoNova(id) {
+  const p = allNovasPedidos.find(x => x.id === id);
+  const ehEmissao = p?.tipo === 'emissao';
+  if (!confirm(`Reenviar ${ehEmissao ? 'a emissão' : 'a consulta'} "${p?.service_name || ''}" com os mesmos dados que o cliente informou?\n\n${p?.placa || p?.documento || '—'} · ${p?.user?.name || '—'}\n${ehEmissao ? 'A emissão do ATPV-e é um ato no Detran. ' : ''}O cliente só é cobrado (${fmt(p?.amount || 0)}) se sair, e recebe o documento no WhatsApp.\n\nContinuar?`)) return;
+  toast('Enviando… pode levar alguns minutos.');
+  try {
+    const r = await fetch(`/api/admin/novas-pedidos/${id}/reenviar-pedido`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || 'Erro ao reenviar.', 'error'); return; }
+    toast(d.motivo || (d.saiu ? 'Saiu!' : 'Não saiu.'), d.saiu ? 'success' : 'error');
     await loadNovasPedidos();
   } catch { toast('Erro de conexão.', 'error'); }
 }

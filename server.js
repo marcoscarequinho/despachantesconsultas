@@ -2206,6 +2206,20 @@ async function initDB() {
       atualizado_em    TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+  // Emissão/consulta da página Consultas Novas que falhou no fornecedor: os
+  // params como o cliente enviou (anexos inclusos) para o "Tentar novamente"
+  // do admin rodar de novo pelo fluxo normal. Ver registrarFalhaNova.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS datacred_reenvios (
+      query_id         INTEGER PRIMARY KEY REFERENCES queries(id) ON DELETE CASCADE,
+      service_id       TEXT NOT NULL,
+      params           JSONB NOT NULL,
+      tentativas       INTEGER NOT NULL DEFAULT 1,
+      ultima_msg       TEXT,
+      em_tentativa_ate TIMESTAMPTZ,
+      atualizado_em    TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
   // DirectData: a API não tem rota de saldo (16/10/2026: Saldo, ConsultaSaldo,
   // Usuario/Saldo e Conta/Saldo dão 404), então o saldo do admin é ESTIMADO —
   // o valor que o admin informa ao recarregar (directdata_saldo) menos o custo
@@ -10310,7 +10324,44 @@ async function travarConsultaRepetida(userId, serviceId, params) {
   return r.rowCount ? chave : null;
 }
 
-async function processCatalogQuery(userId, serviceId, params, res) {
+// Emissão/consulta da página Consultas Novas que falhou DEPOIS de chamar o
+// fornecedor (Detran ou base fora do ar) vira pedido 'cancelado', sem
+// cobrança, com os params guardados em datacred_reenvios para o "Tentar
+// novamente" do admin (pedido do dono, 28/10/2026). Recusa da nossa validação
+// não grava: é dado digitado errado, reenviar daria o mesmo erro. Os
+// cancelamentos têm o controle próprio (registrarCancelamentoDataCred).
+const ehReenviavelNova = serviceId => !!DATACRED_SVCS[serviceId] && DATACRED_SVCS[serviceId].sub !== 'Cancelamentos';
+
+async function registrarFalhaNova(userId, serviceId, params, motivo) {
+  const service = SERVICES.find(s => s.id === serviceId);
+  if (!service) return null;
+  const uf = String(params?.uf || '').toUpperCase();
+  const amount = serviceId === DATACRED_ATPVE_SERVICE_ID ? (DATACRED_ATPVE_PRECOS[uf] ?? service.basePrice) : await getUserServicePrice(userId, service);
+  const doc = String(params?.cpf || params?.cnpj || '').replace(/[^0-9A-Za-z]/g, '');
+  const log = {
+    placa: String(params?.placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '') || undefined,
+    uf: uf || undefined, documento: doc ? maskDocDisplay(doc) : undefined,
+    vendedor: params?.vendedor_documento ? maskDocDisplay(String(params.vendedor_documento).replace(/\D/g, '')) : undefined,
+    comprador: params?.comprador_documento ? maskDocDisplay(String(params.comprador_documento).replace(/\D/g, '')) : undefined,
+  };
+  const q = await pool.query(
+    `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
+     VALUES ($1,$2,$3,$4,'cancelado',$5,'pdf',$6) RETURNING id`,
+    [userId, serviceId, service.name, JSON.stringify(log), amount, JSON.stringify({ motivo })]);
+  await pool.query(`INSERT INTO datacred_reenvios (query_id, service_id, params, ultima_msg) VALUES ($1,$2,$3,$4)`,
+    [q.rows[0].id, serviceId, JSON.stringify(params || {}), motivo]);
+  return q.rows[0].id;
+}
+
+async function processCatalogQuery(userId, serviceId, params, res, opcoes = {}) {
+  // Para saber, no fim, se uma consulta da página Consultas Novas falhou e
+  // precisa ficar gravada para reenvio (ver registrarFalhaNova).
+  const acomp = { chamouFornecedor: false, status: 200, erro: null };
+  if (ehReenviavelNova(serviceId)) {
+    const status = res.status.bind(res), json = res.json.bind(res);
+    res.status = c => { acomp.status = c; return status(c); };
+    res.json = b => { if (acomp.status >= 400) acomp.erro = b?.error || null; return json(b); };
+  }
   let chave;
   try {
     chave = await travarConsultaRepetida(userId, serviceId, params);
@@ -10322,15 +10373,18 @@ async function processCatalogQuery(userId, serviceId, params, res) {
   if (chave === null)
     return res.status(409).json({ error: 'Essa mesma consulta já está em andamento. Aguarde o resultado e confira o Histórico — nada foi cobrado por este segundo envio.' });
   try {
-    return await processCatalogQueryInterna(userId, serviceId, params, res);
+    return await processCatalogQueryInterna(userId, serviceId, params, res, acomp);
   } finally {
+    if (acomp.chamouFornecedor && acomp.status >= 400 && acomp.status !== 409 && !opcoes.reenvioDe)
+      await registrarFalhaNova(userId, serviceId, params, acomp.erro || 'A base não respondeu.')
+        .catch(e => console.error(`[${serviceId}] registrar falha:`, e.message));
     if (chave) await pool.query('DELETE FROM consultas_em_andamento WHERE chave=$1', [chave])
       .catch(e => console.error('[trava consulta] falha ao liberar:', e.message));
     await repassarGanhoParceiro(userId).catch(e => console.error('[parceiro] repasse:', e.message));
   }
 }
 
-async function processCatalogQueryInterna(userId, serviceId, params, res) {
+async function processCatalogQueryInterna(userId, serviceId, params, res, acomp = {}) {
   if (!serviceId) return res.status(400).json({ error: 'Serviço não informado.' });
 
   const service = SERVICES.find(s => s.id === serviceId);
@@ -10682,6 +10736,7 @@ async function processCatalogQueryInterna(userId, serviceId, params, res) {
       const paramsLog = { placa: corpo.placa, uf: corpo.uf, vendedor: maskDocDisplay(corpo.vendedor_documento), comprador: maskDocDisplay(corpo.comprador_documento), anexos: anexos.length };
       let emissao;
       try {
+        acomp.chamouFornecedor = true;
         const r = await chamarDataCred('/comunicados-venda', { method: 'POST', body: corpo });
         if (r.status >= 300 || !r.json?.id) { const e = erroDataCred(r); return res.status(e.status).json({ error: e.error }); }
         emissao = r.json;
@@ -10721,6 +10776,7 @@ async function processCatalogQueryInterna(userId, serviceId, params, res) {
          VALUES ($1,$2,$3,$4,'aguardando_pdf',$5,'pdf',$6) RETURNING id`,
         [userId, serviceId, service.name, JSON.stringify(paramsLog), precoUf, JSON.stringify({ emissao: emissao.id, placa: corpo.placa })]
       );
+      acomp.chamouFornecedor = false;   // o pedido já existe: recusa daqui em diante é dele, não falha para reenviar
       const pend = { emissao_id: emissao.id, query_id: qRow.rows[0].id, user_id: userId, phone: user.phone || null, placa: corpo.placa, created_at: new Date() };
       await pool.query(
         `INSERT INTO datacred_pendentes (emissao_id, query_id, user_id, phone, placa) VALUES ($1,$2,$3,$4,$5)
@@ -10820,6 +10876,7 @@ async function processCatalogQueryInterna(userId, serviceId, params, res) {
             documento = placa;
           }
           const corpo = { tipo: s.codigo, documento, ...(s.entrada === 'placa_renavam' ? { renavam: renavam.padStart(11, '0') } : {}) };
+          acomp.chamouFornecedor = true;
           const r = await chamarDataCred('/consultas', { method: 'POST', body: corpo });
           if (r.status >= 300 || !r.json?.id) entregue = erroDataCred(r);
           else {
@@ -19063,11 +19120,13 @@ app.get('/api/admin/novas-pedidos', requireAuth, requireSuperAdmin, async (req, 
               p.emissao_id AS pendencia_emissao, p.created_at AS pendencia_desde, p.verificado_em,
               dc.tentativas AS cancel_tentativas, dc.datacred_id AS cancel_datacred_id, dc.atualizado_em AS cancel_atualizado_em,
               (dc.query_id IS NOT NULL) AS cancel_reenviavel,
+              (dr.query_id IS NOT NULL) AS pedido_reenviavel, dr.tentativas AS reenvio_tentativas, dr.atualizado_em AS reenvio_atualizado_em,
               (SELECT 1 FROM pdf_cache c WHERE c.query_id = q.id AND c.expires_at > NOW() LIMIT 1) AS tem_pdf
          FROM queries q
          JOIN users u ON u.id = q.user_id
          LEFT JOIN datacred_pendentes p ON p.query_id = q.id
          LEFT JOIN datacred_cancelamentos dc ON dc.query_id = q.id
+         LEFT JOIN datacred_reenvios dr ON dr.query_id = q.id
         WHERE q.service_id LIKE 'dcr-%'
         ORDER BY (q.status = 'aguardando_pdf') DESC, q.created_at DESC
         LIMIT 500`
@@ -19084,8 +19143,9 @@ app.get('/api/admin/novas-pedidos', requireAuth, requireSuperAdmin, async (req, 
         created_at: row.created_at, whatsapp_sent_at: row.whatsapp_sent_at, tem_pdf: !!row.tem_pdf,
         entrega_manual: result.entregaManual || null, motivo: result.motivo || null,
         emissao: result.emissao || row.pendencia_emissao || row.cancel_datacred_id || null,
-        pendente: !!row.pendencia_emissao, verificado_em: row.verificado_em || row.cancel_atualizado_em,
-        reenviavel: !!row.cancel_reenviavel, tentativas: row.cancel_tentativas || 0,
+        pendente: !!row.pendencia_emissao, verificado_em: row.verificado_em || row.cancel_atualizado_em || row.reenvio_atualizado_em,
+        reenviavel: !!row.cancel_reenviavel, pedido_reenviavel: !!row.pedido_reenviavel,
+        tentativas: row.cancel_tentativas || row.reenvio_tentativas || 0,
         placa: String(params.placa || result.placa || '').toUpperCase(),
         documento: params.documento || '', uf: params.uf || (svc?.uf || '').toUpperCase(),
         vendedor: params.vendedor || '', comprador: params.comprador || '',
@@ -19150,6 +19210,62 @@ app.post('/api/admin/novas-pedidos/:id/cancelar', requireAuth, requireSuperAdmin
   } catch (err) {
     console.error('Erro ao cancelar Consulta Nova no admin:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// "Tentar novamente" de uma emissão/consulta da página Consultas Novas que não
+// saiu: roda processCatalogQuery como se o cliente tivesse enviado de novo os
+// mesmos params (saldo, cobrança, PDF, WhatsApp — tudo pelo fluxo normal). A
+// resposta é capturada aqui em vez de ir para o navegador. Deu certo, o pedido
+// que falhou some (o novo é que vale); não deu, ele guarda o motivo novo.
+app.post('/api/admin/novas-pedidos/:id/reenviar-pedido', requireAuth, requireSuperAdmin, async (req, res) => {
+  let claim = null;
+  try {
+    const { q, erro, http } = await pedidoNovasDoAdmin(req.params.id);
+    if (erro) return res.status(http).json({ error: erro });
+    if (q.status !== 'cancelado' || q.transaction_id) return res.status(400).json({ error: 'Só dá para reenviar pedido que não saiu.' });
+    claim = await pool.query(
+      `UPDATE datacred_reenvios SET em_tentativa_ate = NOW() + INTERVAL '6 minutes'
+        WHERE query_id=$1 AND (em_tentativa_ate IS NULL OR em_tentativa_ate < NOW()) RETURNING *`, [q.id]);
+    const d = claim.rows[0];
+    if (!d) {
+      const existe = await pool.query('SELECT 1 FROM datacred_reenvios WHERE query_id=$1', [q.id]);
+      return res.status(existe.rows.length ? 409 : 400).json({ error: existe.rows.length
+        ? 'Já há um reenvio em andamento para este pedido. Aguarde e recarregue a lista.'
+        : 'Este pedido é anterior ao controle e não tem os dados guardados — peça ao cliente para enviar de novo.' });
+    }
+    const saida = { status: 200, json: null, pdf: null, headers: {} };
+    const fake = {
+      headersSent: false,
+      status(c) { saida.status = c; return this; },
+      json(b) { saida.json = b; this.headersSent = true; return this; },
+      setHeader(k, v) { saida.headers[k.toLowerCase()] = v; return this; },
+      set(k, v) { return this.setHeader(k, v); },
+      type() { return this; },
+      send(b) { if (Buffer.isBuffer(b)) saida.pdf = b; else saida.json = b; this.headersSent = true; return this; },
+      end() { this.headersSent = true; return this; },
+    };
+    // Com a marca do CLIENTE (cliente de parceiro recebe o PDF com o nome do
+    // parceiro), não a do admin que clicou.
+    const marca = await marcaDoUsuarioCache(q.user_id).catch(() => null);
+    await contextoMarca.run({ marca }, () => processCatalogQuery(q.user_id, q.service_id, d.params, fake, { reenvioDe: q.id }));
+    if (saida.status < 400) {
+      await pool.query(`DELETE FROM queries WHERE id=$1 AND status='cancelado' AND transaction_id IS NULL`, [q.id]);
+      claim = null;
+      const motivo = saida.pdf ? 'Saiu! O cliente foi cobrado e recebeu o documento no WhatsApp.'
+        : saida.json?.pending ? `Pedido registrado de novo${saida.json?.result?.protocolo ? ` (protocolo ${saida.json.result.protocolo})` : ''} — agora está aguardando o Detran e só é cobrado quando sair.`
+        : 'Saiu! O cliente foi cobrado.';
+      return res.json({ success: true, saiu: true, motivo, novoId: saida.json?.queryId || null });
+    }
+    const msg = saida.json?.error || `Falhou de novo (HTTP ${saida.status}).`;
+    await pool.query('UPDATE datacred_reenvios SET tentativas = tentativas + 1, ultima_msg=$2, atualizado_em=NOW() WHERE query_id=$1', [q.id, msg]);
+    await pool.query('UPDATE queries SET result_data=$2 WHERE id=$1', [q.id, JSON.stringify({ motivo: msg })]);
+    res.json({ success: true, saiu: false, motivo: `Não saiu de novo: ${msg}` });
+  } catch (err) {
+    console.error('Erro ao reenviar pedido de Consultas Novas no admin:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  } finally {
+    if (claim?.rows[0]) await pool.query('UPDATE datacred_reenvios SET em_tentativa_ate = NULL WHERE query_id=$1', [claim.rows[0].query_id]).catch(() => {});
   }
 });
 
