@@ -4573,7 +4573,7 @@ function renderFormFields(inputType, svc) {
           <select id="f-uf" class="input-field" required>
             <option value="RJ" selected>RJ</option>
           </select>
-          <p class="text-xs text-gray-500 mt-1">Por enquanto, só ATPV-e do Rio de Janeiro.</p>
+          <p class="text-xs text-gray-500 mt-1">Aqui, só ATPV-e do Rio de Janeiro. Outros estados: veja o aviso abaixo.</p>
         </div>
         ${field('numero_atpve', 'Número do ATPV-e', 'text', '000000000000', true, 'inputmode="numeric"')}
       </div>
@@ -4586,7 +4586,11 @@ function renderFormFields(inputType, svc) {
       <label class="flex items-start gap-2 text-sm text-red-800 bg-red-50 border border-red-200 rounded p-2 mt-2">
         <input type="checkbox" id="f-dcr_confirmar" class="mt-1">
         <span>Confirmo o cancelamento. <strong>É um ato no Detran e não pode ser desfeito.</strong></span>
-      </label>`,
+      </label>
+      <div class="text-sm text-amber-900 bg-amber-50 border border-amber-300 rounded p-3 mt-3">
+        <p class="font-semibold mb-1">📌 Obs.: ATPV-e dos outros 26 estados — só manualmente</p>
+        <p>Pague <strong>R$ 130,00</strong> pelo PIX <strong>22 99209-0682</strong> (Vania Moraes) e envie para o WhatsApp <a href="https://wa.me/5522992090682" target="_blank" rel="noopener" class="font-semibold underline">22 99209-0682</a> o <strong>comprovante</strong> e os mesmos dados deste formulário, <strong>menos a DUDA</strong>: placa, UF, número do ATPV-e, renavam e CPF/CNPJ do vendedor.</p>
+      </div>`,
 
     dcr_cancelar_cve: placaField + `
       <p class="text-xs text-gray-500 mb-2">Informe o <strong>protocolo da comunicação de venda com o renavam</strong>, ou o <strong>número da DUDA</strong>.</p>
