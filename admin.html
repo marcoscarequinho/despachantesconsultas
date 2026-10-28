@@ -112,6 +112,9 @@
     <div class="nav-item" data-section="novas" onclick="showSection('novas')">
       <span class="text-lg">🚫</span> Consultas Novas (ATPV-e)
     </div>
+    <div class="nav-item" data-section="cancelamentos" onclick="showSection('cancelamentos')">
+      <span class="text-lg">🔁</span> Cancelamentos ATPV-e <span id="cancel-nav-badge" class="hidden ml-auto bg-red-500 text-white text-xs font-bold rounded-full px-2 py-0.5"></span>
+    </div>
     <div class="nav-item" data-section="pos-pago" onclick="showSection('pos-pago')">
       <span class="text-lg">🧮</span> Clientes Pós-pago
     </div>
@@ -680,6 +683,73 @@
          Irmã da "Pedidos ATPV-e": todos os pedidos da página ATPVe's e
          Consultas Novas (emissões, cancelamentos e consultas). As ações chamam
          as mesmas funções do cron (/api/admin/novas-pedidos/*). -->
+    <!-- ── CANCELAMENTOS ATPV-e ───────────────────────────────────────────────
+         Página própria (pedido do dono, 28/10/2026): todo cancelamento de
+         ATPV-e, inclusive os que não saíram (Detran fora do ar). O
+         "Tentar novamente" reenvia os mesmos dados que o cliente digitou. -->
+    <section id="section-cancelamentos" class="admin-section hidden space-y-4">
+      <div>
+        <h2 class="text-xl font-bold text-gray-800">Cancelamentos de ATPV-e</h2>
+        <p class="text-sm text-gray-500">Todos os pedidos de cancelamento de ATPV-e, de todos os clientes. Quando o Detran está fora do ar o pedido fica <strong>❌ Não saiu</strong>, sem cobrança — use <strong>🔁 Tentar novamente</strong> para reenviar com os <strong>mesmos dados que o cliente informou</strong>. O cliente só é cobrado se a emissora confirmar, e recebe o comprovante no WhatsApp. Pedido <strong>⏳ Processando</strong> é conferido sozinho a cada 15 minutos.</p>
+      </div>
+
+      <div class="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        <div class="stat-card border-l-red-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Não saíram</div>
+          <div id="cancel-falhos" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">para tentar de novo</div>
+        </div>
+        <div class="stat-card border-l-amber-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Processando</div>
+          <div id="cancel-processando" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">aguardando a emissora</div>
+        </div>
+        <div class="stat-card border-l-green-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Confirmados</div>
+          <div id="cancel-confirmados" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">cobrados e entregues</div>
+        </div>
+        <div class="stat-card border-l-blue-500">
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Total</div>
+          <div id="cancel-total" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-xs text-gray-400 mt-0.5">pedidos de cancelamento</div>
+        </div>
+      </div>
+
+      <div class="card p-0 overflow-hidden">
+        <div class="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-gray-100">
+          <input id="cancel-search" type="text" class="input-field flex-1 min-w-48" placeholder="Buscar por placa, cliente, e-mail, número do ATPV-e ou protocolo..." oninput="renderCancelamentos()">
+          <select id="cancel-filtro" class="input-field w-auto" onchange="renderCancelamentos()">
+            <option value="pendentes">Não saíram + processando</option>
+            <option value="todos">Todos</option>
+            <option value="falhos">Não saíram</option>
+            <option value="processando">Processando</option>
+            <option value="confirmados">Confirmados</option>
+          </select>
+          <button onclick="loadCancelamentos()" class="btn-secondary text-xs">🔄 Atualizar</button>
+          <button onclick="tentarTodosCancelamentos()" class="btn-primary text-xs">🔁 Tentar de novo todos que não saíram</button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Pedido</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Dados informados</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600">Cliente</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-600 hidden md:table-cell">Último retorno</th>
+                <th class="px-4 py-3 text-center font-semibold text-gray-600">Status</th>
+                <th class="px-4 py-3 text-right font-semibold text-gray-600">Ações</th>
+              </tr>
+            </thead>
+            <tbody id="cancel-tbody" class="divide-y divide-gray-50">
+              <tr><td colspan="6" class="px-4 py-8"><div class="space-y-2"><div class="skeleton"></div><div class="skeleton"></div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="cancel-count" class="px-4 py-2 text-xs text-gray-400 border-t border-gray-100"></div>
+      </div>
+    </section>
+
     <section id="section-novas" class="admin-section hidden space-y-4">
       <div>
         <h2 class="text-xl font-bold text-gray-800">Consultas Novas — ATPV-e e consultas</h2>
@@ -1391,7 +1461,7 @@ const fmt = v => 'R$ ' + parseFloat(v||0).toLocaleString('pt-BR',{minimumFractio
 const fmtDate = s => { const d=new Date(s); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
 
 let allUsers = [], allTx = [], allQueries = [], allServices = [], allManualQueries = [];
-const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API', 'assinantes':'Lista de Assinantes Cadastrados', 'atpve':'Pedidos de ATPV-e', 'novas':'Consultas Novas (ATPV-e)', 'pos-pago':'Clientes Pós-pago', revendedores:'Parceiros', directdata:'Saldo DirectData', video:'Vídeo de Apresentação', mensagens:'Mensagens de clientes' };
+const sectionTitles = { dashboard:'Dashboard', users:'Usuários', finance:'Financeiro', queries:'Consultas', services:'Serviços', manual:'Pedidos Manuais', 'api-keys':'Chaves de API', 'avulsas':'Consultas Avulsas', 'api-cobrancas':'Cobranças API', 'assinantes':'Lista de Assinantes Cadastrados', 'atpve':'Pedidos de ATPV-e', 'novas':'Consultas Novas (ATPV-e)', 'cancelamentos':'Cancelamentos ATPV-e','pos-pago':'Clientes Pós-pago', revendedores:'Parceiros', directdata:'Saldo DirectData', video:'Vídeo de Apresentação', mensagens:'Mensagens de clientes' };
 
 function toast(msg, type='success') {
   const el = document.getElementById('toast');
@@ -1424,6 +1494,7 @@ function showSection(id) {
   if (id === 'assinantes') loadAssinantes();
   if (id === 'atpve') loadAtpvePedidos();
   if (id === 'novas') loadNovasPedidos();
+  if (id === 'cancelamentos') loadCancelamentos();
   if (id === 'pos-pago') loadPosPago();
   if (id === 'revendedores') rvCarregar();
   if (id === 'directdata') loadDirectData();
@@ -1447,6 +1518,7 @@ function refreshCurrentSection() {
   if (id === 'assinantes')    loadAssinantes();
   if (id === 'atpve')         loadAtpvePedidos();
   if (id === 'novas')         loadNovasPedidos();
+  if (id === 'cancelamentos') loadCancelamentos();
   if (id === 'pos-pago')      loadPosPago();
   if (id === 'revendedores')  rvCarregar();
   if (id === 'directdata')    loadDirectData();
@@ -1846,6 +1918,113 @@ async function cancelarNova(id) {
   } catch { toast('Erro de conexão.', 'error'); }
 }
 
+// ── Cancelamentos ATPV-e (página própria) ─────────────────────────────────────
+let allCancelamentos = [];
+async function loadCancelamentos(silencioso = false) {
+  try {
+    const r = await fetch('/api/admin/cancelamentos-atpve');
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { if (!silencioso) toast(d.error || 'Erro ao carregar os cancelamentos.', 'error'); return; }
+    allCancelamentos = d.pedidos || [];
+    if (document.getElementById('cancel-tbody')) renderCancelamentos();
+  } catch { if (!silencioso) toast('Erro de conexão ao carregar os cancelamentos.', 'error'); }
+}
+
+function renderCancelamentos() {
+  const falhos = allCancelamentos.filter(p => p.status === 'cancelado');
+  const proc = allCancelamentos.filter(p => p.status === 'aguardando_pdf');
+  document.getElementById('cancel-falhos').textContent = falhos.length;
+  document.getElementById('cancel-processando').textContent = proc.length;
+  document.getElementById('cancel-confirmados').textContent = allCancelamentos.filter(p => p.status === 'success').length;
+  document.getElementById('cancel-total').textContent = allCancelamentos.length;
+  const selo = document.getElementById('cancel-nav-badge');
+  const reenviaveis = falhos.filter(p => p.reenviavel).length;
+  selo.textContent = reenviaveis; selo.classList.toggle('hidden', !reenviaveis);
+
+  const busca = (document.getElementById('cancel-search').value || '').toLowerCase().trim();
+  const filtro = document.getElementById('cancel-filtro').value;
+  const lista = allCancelamentos.filter(p => {
+    if (filtro === 'pendentes' && !['cancelado', 'aguardando_pdf'].includes(p.status)) return false;
+    if (filtro === 'falhos' && p.status !== 'cancelado') return false;
+    if (filtro === 'processando' && p.status !== 'aguardando_pdf') return false;
+    if (filtro === 'confirmados' && p.status !== 'success') return false;
+    if (!busca) return true;
+    return [p.placa, p.numero_atpve, p.protocolo, p.user.name, p.user.email, p.user.phone, String(p.id)]
+      .some(v => String(v || '').toLowerCase().includes(busca));
+  });
+  const statusSelo = p => p.status === 'success' ? '<span class="badge bg-green-100 text-green-700">✅ Confirmado</span>'
+    : p.status === 'aguardando_pdf' ? '<span class="badge bg-amber-100 text-amber-800">⏳ Processando</span>'
+    : '<span class="badge bg-red-100 text-red-700">❌ Não saiu</span>';
+
+  document.getElementById('cancel-tbody').innerHTML = lista.length ? lista.map(p => `
+    <tr class="hover:bg-gray-50">
+      <td class="px-4 py-3 align-top">
+        <div class="font-semibold text-gray-800">${escAtpve(p.placa || '—')} <span class="text-xs text-gray-500">${escAtpve(p.uf)}</span></div>
+        <div class="text-xs text-gray-500">#${p.id}${p.protocolo ? ` · protocolo ${escAtpve(p.protocolo)}` : ''}</div>
+        <div class="text-xs text-gray-400">${fmtDate(p.created_at)}</div>
+      </td>
+      <td class="px-4 py-3 align-top text-xs text-gray-600">
+        <div>ATPV-e: <span class="font-mono">${escAtpve(p.numero_atpve || '—')}</span></div>
+        ${p.numero_duda ? `<div>DUDA: <span class="font-mono">${escAtpve(p.numero_duda)}</span></div>` : ''}
+        ${p.renavam ? `<div>Renavam: <span class="font-mono">${escAtpve(p.renavam)}</span></div>` : ''}
+        ${p.vendedor ? `<div>Vendedor: <span class="font-mono">${escAtpve(p.vendedor)}</span></div>` : ''}
+        ${!p.reenviavel && p.status !== 'success' ? '<div class="text-gray-400">dados não guardados (pedido antigo)</div>' : ''}
+      </td>
+      <td class="px-4 py-3 align-top">
+        <div class="text-gray-800">${escAtpve(p.user.name || '—')}</div>
+        <div class="text-xs text-gray-500">${escAtpve(p.user.email || '')}</div>
+        <div class="text-xs text-gray-400">📲 ${escAtpve(p.user.phone || 'sem telefone')}</div>
+      </td>
+      <td class="px-4 py-3 align-top hidden md:table-cell">
+        ${p.motivo && p.status !== 'success' ? `<div class="text-xs text-red-500">${escAtpve(p.motivo)}</div>` : ''}
+        ${p.tentativas ? `<div class="text-xs text-gray-500">${p.tentativas} tentativa${p.tentativas > 1 ? 's' : ''}${p.atualizado_em ? ` · última em ${fmtDate(p.atualizado_em)}` : ''}</div>` : ''}
+        ${p.whatsapp_sent_at ? `<div class="text-xs text-green-600">comprovante no zap em ${fmtDate(p.whatsapp_sent_at)}</div>` : ''}
+      </td>
+      <td class="px-4 py-3 align-top text-center">
+        ${statusSelo(p)}
+        <div class="text-xs text-gray-400 mt-1">${p.cobrada ? fmt(p.amount) + ' cobrado' : 'cobra ' + fmt(p.amount) + ' se confirmar'}</div>
+      </td>
+      <td class="px-4 py-3 align-top text-right whitespace-nowrap">
+        ${p.reenviavel && ['cancelado', 'aguardando_pdf'].includes(p.status) ? `
+          <button onclick="tentarCancelamento(${p.id})" class="btn-primary text-xs mb-1">${p.status === 'aguardando_pdf' ? '⚡ Verificar agora' : '🔁 Tentar novamente'}</button>` : ''}
+        ${p.tem_pdf ? `
+          <button onclick="window.open('/api/admin/queries/${p.id}/pdf','_blank')" class="btn-secondary text-xs mb-1">📄 Comprovante</button>
+          <button onclick="reenviarNovaWhatsapp(${p.id})" class="btn-secondary text-xs mb-1">📲 Reenviar</button>` : ''}
+      </td>
+    </tr>`).join('')
+    : '<tr><td colspan="6" class="px-4 py-8 text-center text-gray-400 text-sm">Nenhum cancelamento nesta lista.</td></tr>';
+  document.getElementById('cancel-count').textContent = `${lista.length} de ${allCancelamentos.length} pedidos`;
+}
+
+async function tentarCancelamento(id, silencioso = false) {
+  const p = allCancelamentos.find(x => x.id === id);
+  if (!silencioso) {
+    const aviso = p?.status === 'aguardando_pdf'
+      ? 'Este cancelamento ainda pode estar processando na emissora: vou conferir a situação, e só reenvio se ele tiver falhado.'
+      : 'Vou reenviar o cancelamento com os mesmos dados que o cliente informou. É um ato no Detran e não pode ser desfeito.';
+    if (!confirm(`${aviso}\n\nPlaca ${p?.placa || '—'} · ATPV-e ${p?.numero_atpve || '—'} · ${p?.user?.name || '—'}\nSe a emissora confirmar, ${fmt(p?.amount || 0)} serão cobrados do cliente e ele recebe o comprovante no WhatsApp.\n\nContinuar?`)) return null;
+    toast('Enviando… pode levar até 1 minuto e meio.');
+  }
+  try {
+    const r = await fetch(`/api/admin/novas-pedidos/${id}/tentar-cancelamento`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { if (!silencioso) toast(d.error || 'Erro ao tentar de novo.', 'error'); return false; }
+    if (!silencioso) { toast(d.motivo || (d.confirmado ? 'Cancelamento confirmado!' : 'Não saiu.'), d.confirmado ? 'success' : 'error'); await loadCancelamentos(); }
+    return !!d.confirmado;
+  } catch { if (!silencioso) toast('Erro de conexão.', 'error'); return false; }
+}
+
+async function tentarTodosCancelamentos() {
+  const lista = allCancelamentos.filter(p => p.status === 'cancelado' && p.reenviavel);
+  if (!lista.length) { toast('Não há cancelamentos para tentar de novo.', 'error'); return; }
+  if (!confirm(`Reenviar ${lista.length} cancelamento(s) que não saíram, um por vez, com os dados que os clientes informaram?\n\nCada um é um ato no Detran. Quem for confirmado é cobrado e recebe o comprovante no WhatsApp.`)) return;
+  toast(`Enviando ${lista.length}… pode levar alguns minutos.`);
+  let ok = 0;
+  for (const p of lista) if (await tentarCancelamento(p.id, true)) ok++;
+  await loadCancelamentos();
+  toast(`${ok} de ${lista.length} confirmado(s).`, ok ? 'success' : 'error');
+}
+
 // Reenvia o cancelamento com os dados que o cliente digitou. Cobra o valor do
 // pedido só se a emissora confirmar; se ainda estiver processando, só confere.
 async function tentarCancelamentoNova(id) {
@@ -1907,6 +2086,7 @@ async function init() {
     const user = await r.json();
     if (!['contato@mygmail.com.br', 'contato@mcdetranrj.com'].includes(user.email)) { window.location.href = '/painel'; return; }
     await Promise.all([loadStats(), loadUsers(), loadManualQueries()]);
+    loadCancelamentos(true);   // só para o selo do menu
     verificarMensagensNaoLidas(true);
     setInterval(() => verificarMensagensNaoLidas(false), 60000);
   } catch { window.location.href = '/entrar'; }

@@ -19153,6 +19153,48 @@ app.post('/api/admin/novas-pedidos/:id/cancelar', requireAuth, requireSuperAdmin
   }
 });
 
+// Página própria do admin "Cancelamentos ATPV-e" (pedido do dono, 28/10/2026):
+// só os cancelamentos de ATPV-e, com os dados que o cliente informou — o
+// documento do vendedor vai mascarado, o completo fica no servidor para o
+// reenvio. Pedido sem linha em datacred_cancelamentos é anterior ao controle.
+app.get('/api/admin/cancelamentos-atpve', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    await ensureDbReady();
+    const r = await pool.query(
+      `SELECT q.id, q.status, q.amount, q.params, q.result_data, q.created_at, q.transaction_id, q.whatsapp_sent_at,
+              u.id AS user_id, u.name AS user_name, u.email AS user_email, u.phone AS user_phone,
+              dc.corpo, dc.datacred_id, dc.tentativas, dc.ultima_msg, dc.atualizado_em,
+              (dc.query_id IS NOT NULL) AS reenviavel,
+              (SELECT 1 FROM pdf_cache c WHERE c.query_id = q.id AND c.expires_at > NOW() LIMIT 1) AS tem_pdf
+         FROM queries q
+         JOIN users u ON u.id = q.user_id
+         LEFT JOIN datacred_cancelamentos dc ON dc.query_id = q.id
+        WHERE q.service_id = 'dcr-cancelamento-atpve'
+        ORDER BY (q.status <> 'success') DESC, q.created_at DESC
+        LIMIT 500`);
+    const pedidos = r.rows.map(row => {
+      let params = {}, result = {};
+      try { params = JSON.parse(row.params || '{}'); } catch {}
+      try { result = JSON.parse(row.result_data || '{}'); } catch {}
+      const c = row.corpo || {};
+      return {
+        id: row.id, status: row.status, amount: row.amount, cobrada: !!row.transaction_id,
+        created_at: row.created_at, atualizado_em: row.atualizado_em, whatsapp_sent_at: row.whatsapp_sent_at,
+        tem_pdf: !!row.tem_pdf, reenviavel: !!row.reenviavel, tentativas: row.tentativas || 0,
+        protocolo: row.datacred_id || result.emissao || null, motivo: row.ultima_msg || result.motivo || null,
+        placa: String(c.placa || params.placa || '').toUpperCase(), uf: c.uf || params.uf || '',
+        numero_atpve: c.numero_atpve || params.numero_atpve || '', numero_duda: c.numero_duda || '',
+        renavam: c.renavam || '', vendedor: c.vendedor_documento ? maskDocDisplay(c.vendedor_documento) : '',
+        user: { id: row.user_id, name: row.user_name, email: row.user_email, phone: row.user_phone },
+      };
+    });
+    res.json({ pedidos });
+  } catch (err) {
+    console.error('Erro ao listar os cancelamentos de ATPV-e no admin:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
 // "Tentar novamente" de um cancelamento que não saiu, com os mesmos dados que
 // o cliente digitou (datacred_cancelamentos). Se o pedido ainda processa na
 // emissora, só pergunta a situação — reenviar pediria o ato duas vezes. Cobra
