@@ -248,7 +248,8 @@ const dcr = (codigo, nome, custo, sub, entrada, extra = {}) => {
 // Em destaque no topo da página (pedido do dono): a emissão do ATPV-e.
 dcr('atpve',                         'Emissão de ATPV-e (Intenção de Venda)',      20.00, 'Emissão de ATPV-e', 'atpve', { icon: '📝' });
 // Os dois cancelamentos têm preço fixo do dono (22/10/2026), fora do custo + 60%.
-dcr('cancelamento_atpve',            'Cancelamento de ATPV-e (intenção de venda)', 20.00, 'Cancelamentos', 'cancelar_atpve', { icon: '🚫', precoFixo: 69.90 });
+// ATPV-e: R$ 130,00 desde 28/10/2026 — o custo no RJ é R$ 100,00 (painel e API deles), e os 69,90 davam prejuízo.
+dcr('cancelamento_atpve',            'Cancelamento de ATPV-e (intenção de venda)', 100.00, 'Cancelamentos', 'cancelar_atpve', { icon: '🚫', precoFixo: 130.00 });
 dcr('cancelamento_comunicado_venda', 'Cancelamento de Comunicado de Venda',        20.00, 'Cancelamentos', 'cancelar_cve',   { icon: '↩️', precoFixo: 69.90 });
 dcr('reemissao_atpve',  'Reemissão ATPV-e (PDF)',                 39.90, 'Documentos do veículo', 'placa', { doc: true, icon: '📝' });
 dcr('numero_atpv',      'Número do ATPV-e vigente',               20.00, 'Documentos do veículo', 'placa', { icon: '🔢' });
