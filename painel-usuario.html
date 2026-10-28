@@ -2335,7 +2335,7 @@ function inputTypeLabel(t) {
     assinatura_digital:  'Entrada: PDF + dados de quem assina',
     recurso_multa:       'Entrada: Notificação da multa (foto ou PDF) + perguntas',
     contrato_social:     'Entrada: Dados da empresa e dos sócios (constituição ou alteração)',
-    dcr_cancelar_atpve:  'Entrada: Placa + Renavam + UF + Número do ATPV-e (+ DUDA no RJ)',
+    dcr_cancelar_atpve:  'Entrada: Placa + Renavam + UF + Número do ATPV-e + CPF/CNPJ do vendedor (+ DUDA no RJ)',
     dcr_atpve:           'Entrada: Veículo, vendedor, comprador e venda (+ anexos conforme a UF)',
     dcr_cancelar_cve:    'Entrada: Placa + Protocolo e Renavam, ou DUDA',
     arrendamento_veicular: 'Entrada: Placa + CPF/CNPJ do arrendador e do arrendatário + condições',
@@ -2452,7 +2452,7 @@ function apiExampleParams(inputType) {
     cnh_cpf_nascimento:  { cpf: '00000000000', data_nascimento: '01/01/1990' },
     veiculos_documento:  { documento: '00000000000' },
     cnpj:                { cnpj: '07526557011659' },
-    dcr_cancelar_atpve:  { placa: 'ABC1D23', uf: 'RJ', numero_atpve: '000000000000', numero_duda: '0000000000', confirmar: true },
+    dcr_cancelar_atpve:  { placa: 'ABC1D23', uf: 'RJ', numero_atpve: '000000000000', renavam: '00000000000', numero_duda: '0000000000', vendedor_documento: '00000000000', confirmar: true },
     dcr_cancelar_cve:    { placa: 'ABC1D23', protocolo: '00000000000000', renavam: '00000000000', confirmar: true },
     antt_ciot:           { rntrc: '000000000', renavam: '00000000000' },
     antt_regularidade:   { documento: '00000000000000', rntrc: '000000000' },
@@ -4580,6 +4580,7 @@ function renderFormFields(inputType, svc) {
         ${field('renavam', 'Renavam', 'text', '00000000000', true, 'inputmode="numeric" maxlength="11"')}
         ${field('numero_duda', 'Número da DUDA (obrigatório no RJ)', 'text', '', false, 'inputmode="numeric"')}
       </div>
+      ${field('vendedor_documento', 'CPF/CNPJ do vendedor (proprietário que consta no ATPV-e)', 'text', '000.000.000-00', true, 'inputmode="numeric"')}
       <p class="text-xs text-gray-500 mt-1">Cancela a <strong>intenção de venda</strong> (o ATPV-e). Para desfazer uma comunicação de venda, use o cancelamento de comunicado.</p>
       <label class="flex items-start gap-2 text-sm text-red-800 bg-red-50 border border-red-200 rounded p-2 mt-2">
         <input type="checkbox" id="f-dcr_confirmar" class="mt-1">
@@ -5791,7 +5792,7 @@ function buildParams(inputType) {
     return p;
   }
   if (inputType === 'dcr_cancelar_atpve')
-    return { placa: g('placa'), uf: g('uf'), numero_atpve: g('numero_atpve'), renavam: g('renavam'), numero_duda: g('numero_duda'), confirmar: !!document.getElementById('f-dcr_confirmar')?.checked };
+    return { placa: g('placa'), uf: g('uf'), numero_atpve: g('numero_atpve'), renavam: g('renavam'), numero_duda: g('numero_duda'), vendedor_documento: g('vendedor_documento'), confirmar: !!document.getElementById('f-dcr_confirmar')?.checked };
   if (inputType === 'dcr_cancelar_cve')
     return { placa: g('placa'), protocolo: g('protocolo'), renavam: g('renavam'), numero_duda: g('numero_duda'), confirmar: !!document.getElementById('f-dcr_confirmar')?.checked };
   if (inputType === 'placa_renavam')
@@ -6083,6 +6084,7 @@ function validateParams(inputType, p) {
       if (p.numero_atpve.replace(/\D/g, '').length < 6) return 'Informe o número do ATPV-e.';
       if (String(p.renavam).replace(/\D/g, '').length < 9) return 'Informe o renavam (9 a 11 dígitos).';
       if (p.uf === 'RJ' && !p.numero_duda) return 'No RJ o número da DUDA é obrigatório.';
+      if (![11, 14].includes(String(p.vendedor_documento).replace(/\D/g, '').length)) return 'Informe o CPF/CNPJ do vendedor (o proprietário que consta no ATPV-e).';
     } else if (!(p.protocolo && p.renavam) && !p.numero_duda) return 'Informe o protocolo com o renavam, ou o número da DUDA.';
     if (!p.confirmar) return 'Marque a confirmação do cancelamento.';
   }

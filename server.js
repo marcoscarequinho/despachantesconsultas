@@ -10651,8 +10651,13 @@ async function processCatalogQueryInterna(userId, serviceId, params, res) {
             // ela recusa com 'Informe o RENAVAM do veículo').
             if (renavam.length < 9 || renavam.length > 11) return res.status(400).json({ error: 'Informe o renavam do veículo (9 a 11 dígitos).' });
             if (uf === 'RJ' && !duda) return res.status(400).json({ error: 'No RJ o número da DUDA é obrigatório para cancelar o ATPV-e.' });
+            // Passou a ser exigido em 28/10/2026 ("Informe o CPF/CNPJ do vendedor —
+            // o proprietário que consta no ATPV-e."). O nome do campo é
+            // vendedor_documento: cpf_cnpj e documento levam a mesma recusa.
+            const vendedorDoc = String(params?.vendedor_documento || '').replace(/\D/g, '');
+            if (![11, 14].includes(vendedorDoc.length) || !isValidDoc(vendedorDoc)) return res.status(400).json({ error: 'Informe o CPF/CNPJ do vendedor (o proprietário que consta no ATPV-e).' });
             caminho = '/comunicados-venda/cancelar-atpve';
-            corpo = { confirmar: true, placa, uf, numero_atpve: numero, ...(renavam ? { renavam } : {}), ...(duda ? { numero_duda: duda } : {}) };
+            corpo = { confirmar: true, placa, uf, numero_atpve: numero, vendedor_documento: vendedorDoc, ...(renavam ? { renavam } : {}), ...(duda ? { numero_duda: duda } : {}) };
             log = { placa, uf, numero_atpve: numero };
           } else {
             const protocolo = String(params?.protocolo || '').replace(/\D/g, '');
