@@ -10726,7 +10726,17 @@ async function processCatalogQueryInterna(userId, serviceId, params, res) {
         entregue = e.semChave ? { status: 503, error: 'Serviço temporariamente indisponível. Nada foi cobrado.' }
           : { status: 502, error: 'A base não respondeu agora. Nada foi cobrado — tente de novo em instantes.' };
       }
-      if (!entregue.pdf) return res.status(entregue.status).json({ error: entregue.error });
+      if (!entregue.pdf) {
+        // Cancelamento é um ato no Detran e a resposta pode levar minutos: quem
+        // fechou a tela não ficava sabendo que não saiu (FIP0E55, 28/10/2026,
+        // "Sistema do detran atualmente indisponivel"). Só o comprovante ia
+        // pelo WhatsApp; a recusa também vai, para o cliente e para o dono.
+        if ((s.entrada === 'cancelar_atpve' || s.entrada === 'cancelar_cve') && placaOk) {
+          if (user.phone) await sendWhatsApp(user.phone, `❌ *${service.name}*\n🔎 ${placa}\n\n${entregue.error}`).catch(() => {});
+          if (ADMIN_PHONE) await sendWhatsApp(ADMIN_PHONE, `❌ *${service.name} não saiu*\n\n👤 *Cliente:* ${user.name || '-'}${user.phone ? ` (${user.phone})` : ''}\n🔎 *Placa:* ${placa}\n\n${entregue.error}`, { marca: false }).catch(() => {});
+        }
+        return res.status(entregue.status).json({ error: entregue.error });
+      }
 
       const pdfBuf = entregue.pdf;
       await debitarConsulta(userId, price);
