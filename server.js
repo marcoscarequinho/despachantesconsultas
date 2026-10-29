@@ -7485,7 +7485,10 @@ const ESTADUAL_CAMPOS_CRLVE = {
   documento:          r => r.documento,
   municipio:          r => String(r.municipio || '').replace(/\s*-\s*[A-Z]{2}$/, ''),
   ufjurisdicao:       r => r.uf,
-  datadocrv:          r => DATA_BR_RE.exec(String(r.dataEmissaoCrv || ''))?.[1],
+  // Sem datadocrv de propósito: o "dataEmissaoCrv" da Estadual é a emissão do
+  // CRLV, não do CRV (LPU3C91, 29/10/2026: 24/08/2023 na Estadual, CRV de
+  // 12/08/2019 no portal e na despbrasil). Preencher daqui ainda pulava o
+  // verificar_crlv, que é quem dá a data certa quando o portal manda "—".
 };
 
 // Completa licDados.campos no lugar. Falha da DirectData não recusa nada: o
