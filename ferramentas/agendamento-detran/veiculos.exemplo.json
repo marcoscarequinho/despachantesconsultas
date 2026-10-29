@@ -1,0 +1,58 @@
+{
+  "opcoes": {
+    "intervaloMinutos": 15,
+    "maxTentativas": 0,
+    "esperaCaptchaMinutos": 30,
+    "avisarWhatsApp": ""
+  },
+  "veiculos": [
+    {
+      "servico": "propriedade",
+      "opcao": 1,
+      "placa": "ABC1D23",
+      "renavam": "00000000000",
+      "cpfCnpj": "00000000000",
+      "dataVenda": "01/10/2026",
+      "duda": "0000000000",
+      "cep": "24000000",
+      "regiao": "01",
+      "tipo": "4",
+      "categoria": "01",
+      "solicitante": "03",
+      "matriculaDespachante": "00000",
+      "tipoDespachante": 0,
+      "cidade": "Niterói",
+      "posto": ""
+    },
+    {
+      "servico": "jurisdicao",
+      "opcao": 1,
+      "placa": "XYZ9A88",
+      "renavam": "00000000000",
+      "cpfCnpj": "00000000000",
+      "chassi": "",
+      "crv": "",
+      "ufOrigem": "SP",
+      "cep": "20000000",
+      "regiao": "01",
+      "tipo": "4",
+      "solicitante": "00",
+      "cidade": "Rio de Janeiro",
+      "posto": ""
+    },
+    {
+      "servico": "municipio",
+      "opcao": 1,
+      "placa": "KLM2B45",
+      "renavam": "00000000000",
+      "cpfCnpj": "00000000000",
+      "chassi": "",
+      "cep": "28000000",
+      "regiao": "02",
+      "tipo": "4",
+      "solicitante": "00",
+      "cidade": "Campos",
+      "posto": ""
+    }
+  ]
+}

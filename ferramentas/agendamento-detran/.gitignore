@@ -1,0 +1,6 @@
+# Dados dos clientes (CPF, renavam) e o que o script grava: nunca no
+# repositório, que é público.
+veiculos.json
+registros/
+perfil-chrome/
+node_modules/

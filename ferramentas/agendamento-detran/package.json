@@ -1,0 +1,11 @@
+{
+  "name": "agendamento-detran",
+  "private": true,
+  "description": "Agendamento assistido no Detran RJ: preenche, para no captcha e tenta de novo até conseguir",
+  "scripts": {
+    "agendar": "node agendar.js"
+  },
+  "dependencies": {
+    "playwright": "1.48.2"
+  }
+}

@@ -1,0 +1,51 @@
+# Agendamento assistido — Detran RJ
+
+Agenda **Transferência de Propriedade**, **Transferência de Jurisdição** e **Troca de Município** no site do Detran RJ. O script preenche a identificação e **para no reCAPTCHA**: você marca "Não sou um robô" na janela do Chrome e ele faz o resto (cidade/posto, primeiro dia e horário livres). Sem vaga, ele tenta de novo a cada `intervaloMinutos`, e cada tentativa pede o captcha de novo, com bipe e aviso no WhatsApp.
+
+## Preparar (uma vez)
+
+Precisa do Node e do Google Chrome instalados. Nesta pasta:
+
+```bash
+npm install
+```
+
+## Cadastrar os veículos
+
+Copie `veiculos.exemplo.json` para `veiculos.json` e preencha um bloco por veículo. O `veiculos.json` fica fora do git, porque tem CPF e renavam dos clientes.
+
+| Campo | O que é |
+|---|---|
+| `servico` | `propriedade`, `jurisdicao` ou `municipio` |
+| `opcao` | linha escolhida na 1ª tela do serviço (1 = a primeira). Propriedade: 1 simples, 2 com inclusão de gravame, 3 com baixa de gravame. Jurisdição e Município: 1 a 5, na ordem do site |
+| `placa`, `renavam`, `cpfCnpj` | sem ponto nem traço. Na Propriedade o CPF/CNPJ é do **novo** proprietário; na Troca de Município é do **atual** |
+| `dataVenda`, `duda` | só na Propriedade (`dd/mm/aaaa`; DUDA pago no documento do comprador) |
+| `ufOrigem`, `crv`, `chassi` | Jurisdição (UF de onde o veículo vem); `chassi` só para placa antiga |
+| `cep` | CEP do novo proprietário (Propriedade) ou de destino |
+| `regiao` | `01` Metropolitana, `02` Interior |
+| `tipo` | `1` Ônibus, `2` Táxi, `3` Carga, `4` Outros |
+| `categoria` | `01` Particular, `02` Aluguel… (só na Propriedade) |
+| `solicitante` | quem vai à unidade: `00` Proprietário, `03` Despachante, `11` Cônjuge… |
+| `matriculaDespachante`, `tipoDespachante` | quando `solicitante` é `03`; `tipoDespachante` 0 = Público, 1 = Documentalista |
+| `cidade`, `posto` | você escolhe: o script procura esse texto na tela de posto (sem diferença de acento ou maiúscula). Pode informar só a cidade |
+
+Em `opcoes`: `intervaloMinutos` entre tentativas, `maxTentativas` (0 = até conseguir), `esperaCaptchaMinutos`, e `avisarWhatsApp`, o número que recebe "marque o captcha" e "agendado" pela Z-API do `.env` do site.
+
+## Rodar
+
+```bash
+node agendar.js --teste
+```
+Só preenche e mostra os campos, sem enviar. Faça isso antes da primeira vez.
+
+```bash
+node agendar.js
+```
+Agenda todos os veículos, um de cada vez. Para uma placa só, use `node agendar.js ABC1D23`. Veículo agendado ganha `"feito"` no `veiculos.json` e não roda de novo.
+
+Cada tela fica gravada (imagem + HTML) em `registros/`, junto com o comprovante em PDF.
+
+## Limites
+
+- **As telas depois do captcha (posto, data, horário, conclusão) ainda não foram vistas** — não dava sem um agendamento de verdade. A escolha nelas é por texto, e os textos de "sem vaga" e "concluído" ficam no topo do `agendar.js` (`SEM_VAGA`, `CONCLUIDO`). Se o script não reconhecer uma tela, ele pausa, você faz aquele passo no Chrome e ele continua. Depois do primeiro uso real, mande as telas de `registros/` para acertar o que faltar.
+- O captcha é sempre seu: o script não tenta passar por ele.
