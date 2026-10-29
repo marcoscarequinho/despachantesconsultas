@@ -96,4 +96,10 @@ document.addEventListener('click', async (ev) => {
   window.close();
 });
 
+// Agendamento assistido no Detran: abre a tela da própria extensão.
+$('btn-agendamento').addEventListener('click', () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL('agendamento.html') });
+  window.close();
+});
+
 carregar();

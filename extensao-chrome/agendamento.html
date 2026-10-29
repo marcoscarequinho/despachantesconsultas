@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agendamento Detran RJ</title>
+  <link rel="stylesheet" href="agendamento.css">
+</head>
+<body>
+  <header>
+    <img src="icons/icon-48.png" alt="" width="32" height="32">
+    <h1>Agendamento Detran RJ — assistido</h1>
+    <span id="estado">parado</span>
+  </header>
+  <main>
+    <div id="alerta" hidden>⚠️ Marque o "Não sou um robô" na aba do Detran que a extensão abriu.</div>
+
+    <section class="caixa">
+      <div class="barra entre">
+        <h2>Veículos</h2>
+        <div class="barra">
+          <button data-acao="novo">+ Novo veículo</button>
+          <button data-acao="testar-todos">Testar todos</button>
+          <button class="verde" data-acao="agendar-todos" id="btn-todos">Agendar todos</button>
+          <button class="perigo" data-acao="parar" id="btn-parar" disabled>Parar</button>
+        </div>
+      </div>
+      <p class="dica">Tudo fica salvo neste Chrome, enquanto você digita. <strong>Testar</strong> abre o site do Detran e só preenche o formulário, sem enviar. <strong>Agendar</strong> para no captcha: marque-o na aba do Detran e o resto é automático (cidade, posto, primeiro dia e horário livres). Sem vaga, a extensão tenta de novo sozinha no intervalo escolhido.</p>
+      <p id="msg"></p>
+      <div id="lista"></div>
+    </section>
+
+    <section class="caixa">
+      <h2>Andamento</h2>
+      <div id="log"></div>
+    </section>
+
+    <section class="caixa">
+      <h2>Opções</h2>
+      <div class="grade">
+        <div><label for="o-intervaloMinutos">Minutos entre tentativas</label><input type="number" min="1" id="o-intervaloMinutos"></div>
+        <div><label for="o-maxTentativas">Máx. de tentativas por veículo (0 = até conseguir)</label><input type="number" min="0" id="o-maxTentativas"></div>
+      </div>
+      <p class="dica">Os dados dos veículos ficam só neste navegador e só vão para o site do Detran, no momento do agendamento. Nada é enviado para a Despachantes Consultas.</p>
+    </section>
+  </main>
+  <script src="agendamento.js"></script>
+</body>
+</html>

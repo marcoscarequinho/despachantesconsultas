@@ -37,6 +37,8 @@ button {
 button:hover { background: rgba(255,255,255,.12); }
 button.principal { background: linear-gradient(135deg, var(--acc), var(--acc2)); border: 0; color: #fff; }
 button.principal:hover { filter: brightness(1.08); }
+button.agendamento { margin-top: 4px; border-color: rgba(59,130,246,.5); background: rgba(59,130,246,.14); }
+button.agendamento:hover { background: rgba(59,130,246,.24); }
 .linha { display: flex; gap: 8px; }
 .linha button { font-size: 13px; }
 p { margin: 0 0 12px; color: var(--mut); }

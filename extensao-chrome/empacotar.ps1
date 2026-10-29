@@ -12,7 +12,8 @@ if (Test-Path $saida) { Remove-Item $saida }
 
 # Lista explícita em vez de "tudo menos": arquivo novo na pasta não entra no
 # pacote por acidente (README, CHROMEWEBSTORE.md e este script ficam fora).
-$arquivos = @('manifest.json', 'popup.html', 'popup.css', 'popup.js') +
+$arquivos = @('manifest.json', 'popup.html', 'popup.css', 'popup.js', 'background.js',
+  'agendamento.html', 'agendamento.css', 'agendamento.js', 'detran.js', 'detran-alerta.js') +
   (Get-ChildItem icons -File | ForEach-Object { "icons/$($_.Name)" })
 
 # Não usa Compress-Archive: no PowerShell 5.1 ele grava "icons\icon-16.png"

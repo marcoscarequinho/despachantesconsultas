@@ -1,0 +1,37 @@
+:root { --azul:#0b4f9c; --azul-claro:#e8f0fb; --borda:#d5dbe3; --texto:#1f2933; --cinza:#6b7785; --verde:#15803d; --vermelho:#b91c1c; --ambar:#92400e; }
+* { box-sizing: border-box; }
+body { margin:0; font-family: system-ui, "Segoe UI", Arial, sans-serif; color:var(--texto); background:#f4f6f9; }
+header { background:var(--azul); color:#fff; padding:12px 20px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+header img { border-radius:6px; background:#fff; }
+header h1 { font-size:18px; margin:0; flex:1; }
+#estado { font-size:13px; }
+main { max-width:1100px; margin:0 auto; padding:18px 16px 40px; display:grid; gap:18px; }
+.caixa { background:#fff; border:1px solid var(--borda); border-radius:10px; padding:16px; }
+h2 { font-size:16px; margin:0; }
+.caixa > h2 { margin-bottom:12px; }
+.grade { display:grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap:10px 12px; }
+label { display:block; font-size:12px; font-weight:600; color:var(--cinza); margin-bottom:3px; }
+input, select { width:100%; padding:7px 8px; border:1px solid var(--borda); border-radius:6px; font-size:14px; background:#fff; color:var(--texto); }
+input:focus, select:focus { outline:2px solid #9cc0ef; border-color:var(--azul); }
+.largo { grid-column: span 2; }
+button { border:0; border-radius:7px; padding:8px 14px; font-size:14px; font-weight:600; cursor:pointer; background:var(--azul-claro); color:var(--azul); }
+button.verde { background:var(--verde); color:#fff; }
+button.perigo { background:#fde8e8; color:var(--vermelho); }
+button:disabled { opacity:.5; cursor:default; }
+.barra { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.barra.entre { justify-content:space-between; }
+.dica { font-size:12px; color:var(--cinza); margin:6px 0 0; }
+#msg { font-size:13px; margin:8px 0 0; min-height:1em; }
+.veiculo { border:1px solid var(--borda); border-radius:10px; padding:14px; margin-top:12px; background:#fbfcfe; }
+.veiculo.feito { background:#f0fdf4; border-color:#86efac; }
+.topo-veic { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
+.topo-veic strong { font-size:15px; }
+.selo { font-size:12px; padding:2px 8px; border-radius:20px; background:#dcfce7; color:var(--verde); font-weight:700; }
+.secao { grid-column:1/-1; font-size:12px; font-weight:700; color:var(--azul); text-transform:uppercase; letter-spacing:.04em; margin-top:6px; }
+.vazio { color:var(--cinza); font-size:14px; padding:10px 0; }
+#log { background:#0f172a; color:#e2e8f0; font:13px/1.45 Consolas, monospace; border-radius:8px; padding:12px; height:300px; overflow:auto; white-space:pre-wrap; }
+#log .marque { color:#fde047; font-weight:700; }
+#log .ok { color:#86efac; font-weight:700; }
+#log .erro { color:#fca5a5; }
+#alerta { background:#fef3c7; border:2px solid #f59e0b; color:var(--ambar); padding:12px 14px; border-radius:10px; font-weight:700; }
+@media (max-width:600px) { .largo { grid-column: span 1; } }
