@@ -19705,12 +19705,12 @@ app.get('/admin', requirePageAuth, async (req, res) => {
 const BROADCAST_CAMPANHA = {
   imagem: path.join(__dirname, 'assets', 'promo-plataforma.jpg'),
   mensagem:
-`🛑CANCELAMENTO DE INTENÇÃO (ATPVe) DE OUTROS ESTADOS PODE SER PEDIDO MANUAMNETE PELO wHATSaPP
-🛑CANCELAMENTO DE INTENÇÃO (ATPVe) RIO, PRECISA PAGAR DUDA DE ALTERAÇÃO DE CARCTERISTICA
+`🛑CANCELAMENTO DE INTENÇÃO (ATPVe) DE OUTROS ESTADOS PODE SER PEDIDO MANUALMENTE PELO WHATSAPP
+🛑CANCELAMENTO DE INTENÇÃO (ATPVe) RIO, PRECISA PAGAR DUDA DE ALTERAÇÃO DE CARACTERÍSTICA
 🛑ATENÇÃO AGORA VOCÊ PODE SER PARCEIRO DA PLATAFORMA COM SUA PRÓPRIA PÁGINA, E GANHAR DINHEIRO VENDENDO CONSULTAS, E MAIS, A SUA PÁGINA TAMBÉM PODE TER DOMÍNIO PRÓPRIO EX:.https://despachantejoaodascoves.com.br (kkk) CLARO QUE COM SEU NOME OU EMPRESA.
 Só na Despachante consultas você tem tantas opções de consultas
-Vá e veja você mesmo, nossa plataforma de consultas é hoje um das mais completas, ela te afasta da burocracia dos DETRAN's
-🛑EXTENSÇÃO PARA AGENDAMENTO RIO https://chromewebstore.google.com/detail/despachantes-consultas/cjplmhogifgnenghbgkihdpkghghbiji?hl=pt-BR
+Vá e veja você mesmo, nossa plataforma de consultas é hoje uma das mais completas, ela te afasta da burocracia dos DETRAN's
+🛑EXTENSÃO PARA AGENDAMENTO RIO https://chromewebstore.google.com/detail/despachantes-consultas/cjplmhogifgnenghbgkihdpkghghbiji?hl=pt-BR
 👉 https://www.despachantesconsultas.com.br`,
 };
 
