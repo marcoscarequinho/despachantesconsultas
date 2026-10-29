@@ -19710,7 +19710,8 @@ const BROADCAST_CAMPANHA = {
 🛑ATENÇÃO AGORA VOCÊ PODE SER PARCEIRO DA PLATAFORMA COM SUA PRÓPRIA PÁGINA, E GANHAR DINHEIRO VENDENDO CONSULTAS, E MAIS, A SUA PÁGINA TAMBÉM PODE TER DOMÍNIO PRÓPRIO EX:.https://despachantejoaodascoves.com.br (kkk) CLARO QUE COM SEU NOME OU EMPRESA.
 Só na Despachante consultas você tem tantas opções de consultas
 Vá e veja você mesmo, nossa plataforma de consultas é hoje uma das mais completas, ela te afasta da burocracia dos DETRAN's
-🛑EXTENSÃO PARA AGENDAMENTO RIO https://chromewebstore.google.com/detail/despachantes-consultas/cjplmhogifgnenghbgkihdpkghghbiji?hl=pt-BR
+🛑EXTENSÃO PARA AGENDAMENTO RIO OBS.: SOMENTE PARA NOTEBOOK E PC, CELULAR NÃO FUNCIONA.
+https://chromewebstore.google.com/detail/despachantes-consultas/cjplmhogifgnenghbgkihdpkghghbiji?hl=pt-BR
 👉 https://www.despachantesconsultas.com.br`,
 };
 
