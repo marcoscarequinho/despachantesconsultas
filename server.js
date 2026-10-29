@@ -7301,8 +7301,8 @@ async function buildCrlveComunicacaoPdfBuffer(c, { ocultarPessoais = false } = {
 // Número do CRV para a célula "NÚMERO DO CRV" — o mesmo serviço do catálogo
 // (numero-crv-digital, despbrasil). Só existe para veículo com CRV Digital: o
 // de recibo em papel a despbrasil recusa com 400 ("Este veículo não possui CRV
-// Digital"). Qualquer falha aqui devolve null e passa para a próxima fonte; sem
-// nenhuma, o documento é recusado sem cobrar (ver gerarCrlveComunicacaoVenda).
+// Digital"). Qualquer falha aqui devolve null e a célula sai "***", como no
+// CRLV-e oficial — o número é complemento, não motivo para recusar o documento.
 // V2 (servico "numero_crv_digital_v2", placa + renavam, R$ 5,50): PDF de uma
 // página com o número em "NÚMERO DO CERTIFICADO DE REGISTRO DE VEÍCULO (CRV)" —
 // o mesmo layout que extractNumeroCrvDigitalFromPdf já lê. Conferido na API
@@ -7608,7 +7608,7 @@ async function gerarCrlveComunicacaoVenda(placa) {
   //      127 s, duas vezes).
   // A ATPVe da despbrasil não entra (na KPP9F47 levou 126 s para dar 500), nem
   // o security-code-crv da Vistocar (cobra e só devolve "Solicitação de Número
-  // CRV…": as de 25/09/2026 seguiam assim quase um mês depois). Sem nenhum, recusa.
+  // CRV…": as de 25/09/2026 seguiam assim quase um mês depois). Sem nenhum, "***".
   // Carroceria/exercício/data do CRV não dependem do número: saem juntos.
   const numeroCrvPromise = (async () => {
     if (m.campos.renavam) {
@@ -7630,14 +7630,6 @@ async function gerarCrlveComunicacaoVenda(placa) {
     m.campos.carroceria && m.campos.exercicio && m.campos.dataEmissao ? {} : fetchVerificarCrlvCrlve(placa),
     m.campos.exercicio ? null : fetchAnoLicenciamentoDatacube(placa),
   ]);
-  // Sem o número do CRV o documento não sai (dono, 29/10/2026: "não pode sair
-  // sem"). Na LPU3C91 (CRV em papel) V2/V1 da despbrasil só conhecem CRV Digital
-  // e a Consultas Fácil — a única que dá o número do papel — estava 503, como o
-  // "Número do ATPV-e" da DataCred (mesma base, "Consulta indisponível").
-  if (!numeroCrv) {
-    console.error(`[${CRLVE_COMUNICACAO_SERVICE_ID}] sem número do CRV em nenhuma fonte (placa ${placa}) — documento recusado.`);
-    return { status: 502, error: 'Não conseguimos o número do CRV deste veículo agora: a base que informa esse número está fora do ar. O CRLV-e não sai sem ele. Nada foi cobrado. Tente novamente mais tarde.' };
-  }
   m.campos.numeroCrv = numeroCrv;
   if (!m.campos.exercicio) m.campos.exercicio = sistema.exercicio || anoDatacube || '';
   if (!m.campos.dataEmissao) m.campos.dataEmissao = sistema.dataCrv || '';
