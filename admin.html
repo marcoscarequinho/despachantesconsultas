@@ -1018,6 +1018,23 @@
           Se o vídeo abrir em outra aba em vez de baixar: no computador, clique com o botão direito → “Salvar vídeo como”; no celular, toque nos ⋮ do player → “Baixar”.
         </p>
       </div>
+
+      <!-- Teste do disparo de WhatsApp num grupo só (POST /api/admin/broadcast-whatsapp-teste).
+           "Ver grupos" não envia nada: mostra quais grupos casam com o nome
+           (começo do nome, sem acento — pode pegar mais de um) e o texto. -->
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4 space-y-3">
+        <div>
+          <h3 class="font-bold text-gray-800">📢 Testar disparo de WhatsApp num grupo</h3>
+          <p class="text-sm text-gray-500">Envia a campanha de hoje (este vídeo e, logo depois, a imagem com o texto) só para os grupos cujo nome começa com o que você digitar. Clique em <strong>Ver grupos</strong> antes, para conferir para quem vai.</p>
+        </div>
+        <div class="flex flex-col sm:flex-row gap-2">
+          <input id="bc-teste-grupo" type="text" placeholder="Nome do grupo (ex.: DESPACHANTES REGIÃO DOS LAGOS)"
+            class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm" oninput="bcTesteLimpar()">
+          <button onclick="bcTesteListar()" id="btn-bc-listar" class="bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold px-4 py-2 rounded-lg text-sm">🔎 Ver grupos</button>
+          <button onclick="bcTesteEnviar()" id="btn-bc-enviar" disabled class="bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold px-4 py-2 rounded-lg text-sm">📤 Enviar teste</button>
+        </div>
+        <div id="bc-teste-resultado" class="text-sm"></div>
+      </div>
     </section>
 
     <!-- ── COBRANÇAS API ────────────────────────────────────────────────────── -->
@@ -2457,6 +2474,58 @@ async function loadVideoApresentacao() {
 }
 
 function escHtmlVideo(t) { const d = document.createElement('div'); d.textContent = t || ''; return d.innerHTML; }
+
+// ── Teste do disparo de WhatsApp ──
+// "Enviar teste" só libera depois de "Ver grupos" com o MESMO nome: o filtro
+// é pelo começo do nome e pode pegar mais de um grupo, então quem envia
+// precisa ter visto a lista. Mudar o nome trava de novo.
+let bcTesteConferido = null;
+function bcTesteLimpar() {
+  bcTesteConferido = null;
+  document.getElementById('btn-bc-enviar').disabled = true;
+}
+async function bcTesteListar() {
+  const grupo = document.getElementById('bc-teste-grupo').value.trim();
+  const out = document.getElementById('bc-teste-resultado');
+  const btn = document.getElementById('btn-bc-listar');
+  bcTesteLimpar();
+  if (grupo.length < 3) { out.innerHTML = '<span class="text-red-600">Digite o nome do grupo.</span>'; return; }
+  btn.disabled = true; out.textContent = 'Procurando grupos…';
+  try {
+    const r = await fetch('/api/admin/broadcast-whatsapp-teste', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ grupo, listar: true }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { out.innerHTML = '<span class="text-red-600">' + escHtmlVideo(d.error || 'Erro ao buscar os grupos.') + '</span>'; return; }
+    if (!d.grupos.length) { out.innerHTML = '<span class="text-amber-700">Nenhum grupo começa com esse nome. Confira como ele aparece no WhatsApp.</span>'; return; }
+    out.innerHTML = '<p class="font-semibold text-gray-800">Vai para ' + d.grupos.length + ' grupo(s):</p>'
+      + '<ul class="list-disc ml-5 text-gray-700">' + d.grupos.map(g => '<li>' + escHtmlVideo(g) + '</li>').join('') + '</ul>'
+      + (d.grupos.length > 1 ? '<p class="text-amber-700 mt-1">⚠️ Mais de um grupo: complete o nome se quiser só um.</p>' : '')
+      + '<p class="font-semibold text-gray-800 mt-3">Texto que vai na imagem:</p>'
+      + '<pre class="whitespace-pre-wrap bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs text-gray-700 mt-1">' + escHtmlVideo(d.mensagem || '') + '</pre>';
+    bcTesteConferido = { grupo, total: d.grupos.length };
+    document.getElementById('btn-bc-enviar').disabled = false;
+  } catch { out.innerHTML = '<span class="text-red-600">Erro de conexão.</span>'; }
+  finally { btn.disabled = false; }
+}
+async function bcTesteEnviar() {
+  if (!bcTesteConferido) return;
+  const { grupo, total } = bcTesteConferido;
+  if (!confirm(`Enviar o vídeo e a imagem com o texto para ${total} grupo(s)?`)) return;
+  const out = document.getElementById('bc-teste-resultado');
+  const btn = document.getElementById('btn-bc-enviar');
+  btn.disabled = true; bcTesteConferido = null;
+  out.insertAdjacentHTML('afterbegin', '<p id="bc-teste-enviando" class="text-blue-700 font-semibold mb-2">⏳ Enviando… (o vídeo leva alguns segundos)</p>');
+  try {
+    const r = await fetch('/api/admin/broadcast-whatsapp-teste', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ grupo }) });
+    const d = await r.json().catch(() => ({}));
+    document.getElementById('bc-teste-enviando')?.remove();
+    if (!r.ok) { out.insertAdjacentHTML('afterbegin', '<p class="text-red-600 font-semibold mb-2">' + escHtmlVideo(d.error || 'Erro no envio.') + '</p>'); return; }
+    const formato = d.formato === 'video+imagem' ? 'vídeo + imagem com texto' : 'só a imagem com texto (o vídeo não estava disponível na HeyGen)';
+    out.insertAdjacentHTML('afterbegin', `<p class="${d.failed ? 'text-amber-700' : 'text-green-700'} font-semibold mb-2">✅ ${d.sent} enviado(s), ${d.failed} falha(s) — ${formato}.</p>`);
+  } catch {
+    document.getElementById('bc-teste-enviando')?.remove();
+    out.insertAdjacentHTML('afterbegin', '<p class="text-red-600 font-semibold mb-2">Erro de conexão. Confira no grupo antes de enviar de novo.</p>');
+  }
+}
 
 // Baixa pelo navegador (blob) para sair com nome de arquivo; se o CDN da
 // HeyGen não liberar CORS, abre o vídeo numa aba nova — a dica na tela diz

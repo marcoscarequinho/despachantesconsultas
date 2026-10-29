@@ -20044,7 +20044,8 @@ app.post('/api/admin/broadcast-whatsapp-teste', requireAuth, requireSuperAdmin, 
     const grupo = String(req.body?.grupo || '').trim();
     if (grupo.length < 3) return res.status(400).json({ error: 'Informe o nome do grupo.' });
     const opts = { canal: 'teste', incluir: [grupo] };
-    if (req.body?.listar) return res.json({ success: true, grupos: (await selecionarDestinosBroadcast(opts)).map(d => d.name) });
+    // O texto vai junto para o admin conferir o que sai antes de enviar.
+    if (req.body?.listar) return res.json({ success: true, grupos: (await selecionarDestinosBroadcast(opts)).map(d => d.name), mensagem: BROADCAST_CAMPANHA.mensagem });
     res.json({ success: true, ...await runWhatsAppBroadcast(opts) });
   } catch (err) {
     console.error('Erro no teste do broadcast:', err.message);
