@@ -259,6 +259,14 @@
       </a>
       <a href="/" class="link-site btn-ghost text-xs hidden sm:inline-flex">← Site</a>
       <a id="topbar-recarga" href="/recarga-pix" class="btn-primary text-xs">💸 Recarga PIX</a>
+      <!-- Extensão do Chrome na Chrome Web Store (pedido do dono, 29/10/2026).
+           Some para cliente de parceiro (assets/marca-parceiro.js): a loja
+           mostra a nossa marca. -->
+      <a id="btn-extensao-chrome" href="https://chromewebstore.google.com/detail/despachantes-consultas/cjplmhogifgnenghbgkihdpkghghbiji?hl=pt-BR"
+        target="_blank" rel="noopener" title="Saldo à vista e Agendamento Detran RJ — grátis"
+        class="text-xs font-semibold px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white whitespace-nowrap">
+        🧩 <span class="hidden sm:inline">Baixar </span>Extensão
+      </a>
       <button type="button" id="btn-seja-parceiro" onclick="abrirSejaRevendedor()"
         class="text-xs font-semibold px-3 py-2 rounded-lg bg-blue-700 hover:bg-blue-800 text-white whitespace-nowrap">
         🤝 <span class="hidden sm:inline">Quer ser um </span>Parceiro<span class="hidden sm:inline">?</span>
@@ -314,25 +322,6 @@
           <div class="text-xs text-gray-400 mt-1">Todas as consultas</div>
         </div>
       </div>
-
-      <!-- Extensão do Chrome na Chrome Web Store (pedido do dono, 29/10/2026).
-           Faixa fixa, fora do catálogo: não depende da busca. Some para cliente
-           de parceiro (assets/marca-parceiro.js) — a loja mostra a nossa marca. -->
-      <a id="faixa-extensao-chrome" href="https://chromewebstore.google.com/detail/despachantes-consultas/cjplmhogifgnenghbgkihdpkghghbiji?hl=pt-BR"
-        target="_blank" rel="noopener"
-        class="flex items-center gap-4 bg-gradient-to-r from-blue-50 to-white border border-blue-200 rounded-xl p-4 sm:p-5 mb-6 hover:border-blue-400 hover:shadow-md transition-all">
-        <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center text-2xl flex-shrink-0">🧩</div>
-        <div class="flex-1 min-w-0">
-          <div class="flex items-center gap-2 flex-wrap">
-            <span class="font-bold text-gray-800">Extensão do Chrome — saldo à vista e Agendamento Detran RJ</span>
-            <span class="svc-badge bg-green-100 text-green-700">Grátis</span>
-          </div>
-          <p class="text-xs text-gray-600 mt-1 leading-snug">
-            Veja seu saldo com um clique e agende <strong>Transferência de Propriedade</strong>, <strong>Transferência de Jurisdição</strong> e <strong>Troca de Município</strong> no Detran RJ: você marca o captcha e a extensão escolhe o posto e o primeiro horário livre, tentando de novo enquanto não houver vaga.
-          </p>
-        </div>
-        <span class="svc-cta flex-shrink-0">Instalar</span>
-      </a>
 
       <!-- Catálogo rápido — todas as consultas das abas "Acesse Aqui Para as
            Principais Consultas" e "Coisas de

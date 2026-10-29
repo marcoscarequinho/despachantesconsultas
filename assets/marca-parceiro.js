@@ -47,7 +47,7 @@
     const seja = document.getElementById('btn-seja-parceiro');
     if (seja) seja.remove();
     // A extensão na Chrome Web Store leva a nossa marca.
-    const ext = document.getElementById('faixa-extensao-chrome');
+    const ext = document.getElementById('btn-extensao-chrome');
     if (ext) ext.remove();
     window.nomeMarcaParceiro = marca.nome;
     trocarTextos(document.body);
