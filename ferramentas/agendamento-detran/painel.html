@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agendamento Detran RJ</title>
+<style>
+  :root { --azul:#0b4f9c; --azul-claro:#e8f0fb; --borda:#d5dbe3; --texto:#1f2933; --cinza:#6b7785; --verde:#15803d; --vermelho:#b91c1c; --ambar:#92400e; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, "Segoe UI", Arial, sans-serif; color:var(--texto); background:#f4f6f9; }
+  header { background:var(--azul); color:#fff; padding:14px 20px; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  header h1 { font-size:19px; margin:0; flex:1; }
+  main { max-width:1100px; margin:0 auto; padding:18px 16px 40px; display:grid; gap:18px; }
+  .caixa { background:#fff; border:1px solid var(--borda); border-radius:10px; padding:16px; }
+  .caixa h2 { font-size:16px; margin:0 0 12px; }
+  .grade { display:grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap:10px 12px; }
+  label { display:block; font-size:12px; font-weight:600; color:var(--cinza); margin-bottom:3px; }
+  input, select { width:100%; padding:7px 8px; border:1px solid var(--borda); border-radius:6px; font-size:14px; background:#fff; }
+  input:focus, select:focus { outline:2px solid #9cc0ef; border-color:var(--azul); }
+  .largo { grid-column: span 2; }
+  button { border:0; border-radius:7px; padding:8px 14px; font-size:14px; font-weight:600; cursor:pointer; background:var(--azul-claro); color:var(--azul); }
+  button.prim { background:var(--azul); color:#fff; }
+  button.verde { background:var(--verde); color:#fff; }
+  button.perigo { background:#fde8e8; color:var(--vermelho); }
+  button:disabled { opacity:.5; cursor:default; }
+  .barra { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .veiculo { border:1px solid var(--borda); border-radius:10px; padding:14px; margin-top:12px; background:#fbfcfe; }
+  .veiculo.feito { background:#f0fdf4; border-color:#86efac; }
+  .topo-veic { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
+  .topo-veic strong { font-size:15px; }
+  .selo { font-size:12px; padding:2px 8px; border-radius:20px; background:#dcfce7; color:var(--verde); font-weight:700; }
+  .dica { font-size:12px; color:var(--cinza); margin-top:3px; }
+  .secao { grid-column:1/-1; font-size:12px; font-weight:700; color:var(--azul); text-transform:uppercase; letter-spacing:.04em; margin-top:6px; }
+  #log { background:#0f172a; color:#e2e8f0; font:13px/1.45 Consolas, monospace; border-radius:8px; padding:12px; height:320px; overflow:auto; white-space:pre-wrap; }
+  #log .marque { color:#fde047; font-weight:700; }
+  #log .ok { color:#86efac; font-weight:700; }
+  #log .erro { color:#fca5a5; }
+  #alerta { display:none; background:#fef3c7; border:2px solid #f59e0b; color:var(--ambar); padding:12px 14px; border-radius:10px; font-weight:700; }
+  #estado { font-size:13px; }
+  .vazio { color:var(--cinza); font-size:14px; padding:10px 0; }
+  #msg { font-size:13px; }
+  @media (max-width:600px) { .largo { grid-column: span 1; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Agendamento Detran RJ — assistido</h1>
+  <span id="estado">parado</span>
+</header>
+<main>
+  <div id="alerta">⚠️ Marque o "Não sou um robô" na janela do Chrome que o script abriu.</div>
+
+  <section class="caixa">
+    <div class="barra" style="justify-content:space-between">
+      <h2 style="margin:0">Veículos</h2>
+      <div class="barra">
+        <button onclick="novoVeiculo()">+ Novo veículo</button>
+        <button class="prim" onclick="salvar(true)">Salvar</button>
+        <button onclick="rodar(null, true)">Testar todos</button>
+        <button class="verde" id="btn-todos" onclick="rodar(null, false)">Agendar todos</button>
+        <button class="perigo" id="btn-parar" onclick="parar()" disabled>Parar</button>
+      </div>
+    </div>
+    <p class="dica">"Testar" só preenche o formulário do Detran e mostra os campos, sem enviar. "Agendar" para no captcha: marque-o na janela do Chrome e o resto é automático. Sem vaga, ele tenta de novo sozinho.</p>
+    <span id="msg"></span>
+    <div id="lista"></div>
+  </section>
+
+  <section class="caixa">
+    <h2>Andamento</h2>
+    <div id="log"></div>
+  </section>
+
+  <section class="caixa">
+    <h2>Opções</h2>
+    <div class="grade">
+      <div><label>Minutos entre tentativas</label><input type="number" min="1" id="o-intervaloMinutos"></div>
+      <div><label>Máx. de tentativas (0 = até conseguir)</label><input type="number" min="0" id="o-maxTentativas"></div>
+      <div><label>Minutos esperando o captcha</label><input type="number" min="1" id="o-esperaCaptchaMinutos"></div>
+      <div><label>WhatsApp para avisos</label><input id="o-avisarWhatsApp" placeholder="22999999999"><div class="dica">Recebe "marque o captcha" e "agendado".</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const SERVICOS = {
+  propriedade: { nome: 'Transferência de Propriedade', opcoes: ['Transferência de Propriedade', 'Com inclusão de gravame (comprado financiado)', 'Com baixa de gravame (vendedor quitou)'] },
+  jurisdicao: { nome: 'Transferência de Jurisdição', opcoes: ['Transferência de Jurisdição', 'Com baixa de gravame (proprietário quitou)', 'Com transferência de propriedade', 'Com transf. de propriedade e inclusão de gravame', 'Com transf. de propriedade e baixa de gravame'] },
+  municipio: { nome: 'Troca de Município', opcoes: ['Troca de Município', 'Com baixa de gravame (proprietário quitou)', 'Com transferência de propriedade', 'Com transf. de propriedade e baixa de gravame', 'Com transf. de propriedade e inclusão de gravame'] },
+};
+const TIPOS = [['4', 'Outros'], ['1', 'Ônibus'], ['2', 'Táxi'], ['3', 'Carga']];
+const REGIOES = [['01', 'Região Metropolitana'], ['02', 'Interior']];
+const CATEGORIAS = [['01', 'Particular'], ['02', 'Aluguel'], ['03', 'Oficial'], ['04', 'Experiência'], ['05', 'Aprendizagem'], ['06', 'Fabricante']];
+const SOLICITANTES = [['00', 'Proprietário'], ['03', 'Despachante'], ['01', 'Procurador Advogado'], ['02', 'Procurador Comum'], ['10', 'Ascendente ou Descendente'], ['11', 'Cônjuge do Proprietário'], ['05', 'Representante de Órgão Oficial'], ['06', 'ACB'], ['07', 'Touring Club'], ['08', 'Sindicato dos Taxistas'], ['09', 'Centro Benef. de Motoristas']];
+const UFS = 'AC AL AM AP BA CE DF ES GO MA MG MS MT PA PB PE PI PR RN RO RR RS SC SE SP TO'.split(' ');
+
+let dados = { opcoes: {}, veiculos: [] };
+let rodando = false;
+let proximaLinha = 0;
+let alterado = false;
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function opcoesHtml(lista, valor) {
+  return lista.map(([v, t]) => `<option value="${esc(v)}"${String(valor) === v ? ' selected' : ''}>${esc(t)}</option>`).join('');
+}
+
+function campo(i, nome, rotulo, extra = '', dica = '') {
+  const v = dados.veiculos[i][nome] ?? '';
+  return `<div><label>${rotulo}</label><input data-i="${i}" data-c="${nome}" value="${esc(v)}" ${extra}>${dica ? `<div class="dica">${dica}</div>` : ''}</div>`;
+}
+function escolha(i, nome, rotulo, lista, padrao) {
+  const v = dados.veiculos[i][nome] ?? padrao;
+  return `<div><label>${rotulo}</label><select data-i="${i}" data-c="${nome}" data-redesenha="1">${opcoesHtml(lista, v)}</select></div>`;
+}
+
+function htmlVeiculo(v, i) {
+  const s = SERVICOS[v.servico] || SERVICOS.propriedade;
+  const docRot = v.servico === 'municipio' ? 'CPF/CNPJ do proprietário atual' : v.servico === 'propriedade' ? 'CPF/CNPJ do novo proprietário' : 'CPF/CNPJ do proprietário';
+  const cepRot = v.servico === 'propriedade' ? 'CEP do novo proprietário' : 'CEP de destino';
+  let especificos = '';
+  if (v.servico === 'propriedade') {
+    especificos = campo(i, 'dataVenda', 'Data da venda', 'placeholder="dd/mm/aaaa" maxlength="10"')
+      + campo(i, 'duda', 'Nº do DUDA pago', 'inputmode="numeric"', 'Pago no CPF/CNPJ do comprador')
+      + escolha(i, 'categoria', 'Categoria pretendida', CATEGORIAS, '01');
+  } else if (v.servico === 'jurisdicao') {
+    especificos = escolha(i, 'ufOrigem', 'UF de origem', UFS.map((u) => [u, u]), 'SP')
+      + campo(i, 'crv', 'Nº do CRV', 'inputmode="numeric"')
+      + campo(i, 'chassi', 'Chassi', 'maxlength="17"', 'Só para placa antiga');
+  } else {
+    especificos = campo(i, 'chassi', 'Chassi', 'maxlength="17"', 'Só para placa antiga');
+  }
+  const despachante = String(v.solicitante ?? '00') === '03'
+    ? campo(i, 'matriculaDespachante', 'Matrícula do despachante', 'inputmode="numeric" maxlength="5"')
+      + escolha(i, 'tipoDespachante', 'Despachante', [['0', 'Público'], ['1', 'Documentalista']], '0')
+    : '';
+  return `<div class="veiculo${v.feito ? ' feito' : ''}">
+    <div class="topo-veic">
+      <strong>${esc(v.placa || 'Novo veículo')} · ${esc(s.nome)}</strong>
+      ${v.feito ? `<span class="selo">✓ agendado em ${esc(new Date(v.feito).toLocaleString('pt-BR'))}</span>` : ''}
+      <div class="barra">
+        ${v.feito ? `<button onclick="reabrir(${i})">Agendar de novo</button>` : `<button onclick="rodar(${i}, true)">Testar</button><button class="verde" onclick="rodar(${i}, false)">Agendar</button>`}
+        <button class="perigo" onclick="remover(${i})">Remover</button>
+      </div>
+    </div>
+    <div class="grade">
+      ${escolha(i, 'servico', 'Serviço', Object.entries(SERVICOS).map(([k, x]) => [k, x.nome]), 'propriedade')}
+      <div class="largo"><label>Opção do serviço</label><select data-i="${i}" data-c="opcao">${opcoesHtml(s.opcoes.map((t, n) => [String(n + 1), t]), v.opcao ?? 1)}</select></div>
+      ${campo(i, 'placa', 'Placa', 'maxlength="7" style="text-transform:uppercase"')}
+      ${campo(i, 'renavam', 'Renavam', 'inputmode="numeric" maxlength="11"')}
+      ${campo(i, 'cpfCnpj', docRot, 'inputmode="numeric" maxlength="14"', 'Só números')}
+      ${campo(i, 'cep', cepRot, 'inputmode="numeric" maxlength="8"')}
+      ${escolha(i, 'regiao', 'Região', REGIOES, '01')}
+      ${escolha(i, 'tipo', 'Tipo de veículo', TIPOS, '4')}
+      ${especificos}
+      ${escolha(i, 'solicitante', 'Quem vai à unidade', SOLICITANTES, '00')}
+      ${despachante}
+      <div class="secao">Onde agendar</div>
+      ${campo(i, 'cidade', 'Cidade', 'placeholder="ex.: Niterói"')}
+      ${campo(i, 'posto', 'Posto', 'placeholder="ex.: Icaraí"', 'Opcional: parte do nome do posto como aparece no site')}
+    </div>
+  </div>`;
+}
+
+function desenhar() {
+  const lista = document.getElementById('lista');
+  lista.innerHTML = dados.veiculos.length ? dados.veiculos.map(htmlVeiculo).join('') : '<p class="vazio">Nenhum veículo cadastrado. Clique em "+ Novo veículo".</p>';
+  for (const k of ['intervaloMinutos', 'maxTentativas', 'esperaCaptchaMinutos', 'avisarWhatsApp']) {
+    document.getElementById('o-' + k).value = dados.opcoes[k] ?? '';
+  }
+}
+
+document.addEventListener('input', (e) => {
+  const el = e.target;
+  if (el.id && el.id.startsWith('o-')) {
+    const k = el.id.slice(2);
+    dados.opcoes[k] = el.type === 'number' ? Number(el.value) : el.value;
+    alterado = true;
+    return;
+  }
+  if (el.dataset.c == null) return;
+  const v = dados.veiculos[el.dataset.i];
+  let valor = el.value;
+  if (el.dataset.c === 'placa') valor = valor.toUpperCase();
+  if (el.dataset.c === 'opcao' || el.dataset.c === 'tipoDespachante') valor = Number(valor);
+  v[el.dataset.c] = valor;
+  alterado = true;
+});
+// Só select redesenha: redesenhar no meio da digitação tiraria o foco do campo.
+document.addEventListener('change', (e) => {
+  if (e.target.dataset.redesenha) {
+    if (e.target.dataset.c === 'servico') dados.veiculos[e.target.dataset.i].opcao = 1;
+    desenhar();
+  }
+});
+
+function novoVeiculo() {
+  dados.veiculos.push({ servico: 'propriedade', opcao: 1, placa: '', renavam: '', cpfCnpj: '', cep: '', regiao: '01', tipo: '4', categoria: '01', solicitante: '00', cidade: '', posto: '' });
+  alterado = true;
+  desenhar();
+  const cards = document.querySelectorAll('.veiculo');
+  cards[cards.length - 1].scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+function remover(i) {
+  if (!confirm(`Remover ${dados.veiculos[i].placa || 'este veículo'}?`)) return;
+  dados.veiculos.splice(i, 1);
+  alterado = true;
+  desenhar();
+}
+function reabrir(i) {
+  delete dados.veiculos[i].feito;
+  alterado = true;
+  desenhar();
+}
+
+function mostrarMsg(texto, cor) {
+  const m = document.getElementById('msg');
+  m.textContent = texto;
+  m.style.color = cor || 'var(--cinza)';
+}
+
+async function salvar(avisar) {
+  const r = await fetch('/api/dados', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(dados) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { mostrarMsg(j.erro || 'Não salvou.', 'var(--vermelho)'); return false; }
+  alterado = false;
+  if (avisar) mostrarMsg('Salvo ✓', 'var(--verde)');
+  return true;
+}
+
+async function rodar(i, teste) {
+  if (rodando) return;
+  const placa = i == null ? null : dados.veiculos[i].placa;
+  if (i != null && !placa) { mostrarMsg('Informe a placa antes.', 'var(--vermelho)'); return; }
+  if (!(await salvar(false))) return;
+  if (!teste && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+  const r = await fetch('/api/agendar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ placa, teste }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { mostrarMsg(j.erro || 'Não começou.', 'var(--vermelho)'); return; }
+  mostrarMsg(teste ? 'Testando…' : 'Agendando… acompanhe abaixo.', 'var(--azul)');
+  proximaLinha = 0;
+  document.getElementById('log').innerHTML = '';
+  acompanhar();
+}
+
+async function parar() {
+  await fetch('/api/parar', { method: 'POST' });
+}
+
+// Bipe pela própria página, para quem está olhando outra janela.
+function bipar() {
+  try {
+    const ctx = new AudioContext();
+    [0, 0.35, 0.7].forEach((t) => {
+      const o = ctx.createOscillator(); const g = ctx.createGain();
+      o.frequency.value = 880; o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.25, ctx.currentTime + t); g.gain.setValueAtTime(0, ctx.currentTime + t + 0.2);
+      o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.25);
+    });
+  } catch {}
+}
+
+function classeLinha(l) {
+  if (/MARQUE O/.test(l)) return 'marque';
+  if (/AGENDADO|=== fim \(ok\)/.test(l)) return 'ok';
+  if (/falhou|recusou|inválid|obrigatóri|erro/i.test(l)) return 'erro';
+  return '';
+}
+
+let timer = null;
+async function acompanhar() {
+  clearTimeout(timer);
+  try {
+    const r = await fetch('/api/andamento?desde=' + proximaLinha);
+    const j = await r.json();
+    if (j.inicio > proximaLinha) proximaLinha = j.inicio;
+    const log = document.getElementById('log');
+    let esperaCaptcha = null;
+    for (const l of j.linhas) {
+      const div = document.createElement('div');
+      div.textContent = l;
+      const c = classeLinha(l);
+      if (c) div.className = c;
+      log.appendChild(div);
+      if (/MARQUE O/.test(l)) esperaCaptcha = true;
+      else if (/captcha marcado|falhou|=== /.test(l)) esperaCaptcha = false;
+      if (/AGENDADO!/.test(l) && 'Notification' in window && Notification.permission === 'granted') new Notification('Detran: agendado!', { body: l });
+    }
+    proximaLinha = j.proximo;
+    if (j.linhas.length) log.scrollTop = log.scrollHeight;
+    if (esperaCaptcha === true) {
+      document.getElementById('alerta').style.display = 'block';
+      bipar();
+      if ('Notification' in window && Notification.permission === 'granted') new Notification('Detran: marque o captcha', { body: 'Abra a janela do Chrome do agendamento.' });
+    } else if (esperaCaptcha === false || !j.rodando) {
+      document.getElementById('alerta').style.display = 'none';
+    }
+    const mudou = rodando !== j.rodando;
+    rodando = j.rodando;
+    document.getElementById('estado').textContent = rodando ? '● rodando' : 'parado';
+    document.getElementById('btn-parar').disabled = !rodando;
+    document.getElementById('btn-todos').disabled = rodando;
+    // Terminou: recarrega para mostrar quem ficou "agendado".
+    if (mudou && !rodando) {
+      dados = await (await fetch('/api/dados')).json();
+      desenhar();
+      mostrarMsg('');
+    }
+  } catch {
+    document.getElementById('estado').textContent = 'sem conexão — a janela preta do atalho foi fechada?';
+  }
+  timer = setTimeout(acompanhar, rodando ? 1500 : 4000);
+}
+
+window.addEventListener('beforeunload', (e) => { if (alterado) { e.preventDefault(); e.returnValue = ''; } });
+
+(async () => {
+  dados = await (await fetch('/api/dados')).json();
+  dados.opcoes = dados.opcoes || {};
+  dados.veiculos = dados.veiculos || [];
+  desenhar();
+  acompanhar();
+})();
+</script>
+</body>
+</html>

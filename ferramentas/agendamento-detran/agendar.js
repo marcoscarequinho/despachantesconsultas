@@ -104,6 +104,8 @@ async function avisar(msg) {
 }
 
 function perguntar(texto) {
+  // Rodando pela tela (servidor.js) não há teclado: responde "não".
+  if (!process.stdin.isTTY) { console.log(texto + 'não (sem teclado)'); return Promise.resolve(''); }
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((r) => rl.question(texto, (resp) => { rl.close(); r(resp.trim()); }));
 }
@@ -139,7 +141,13 @@ async function abrirIdentificacao(page, v) {
     return true;
   }, { opcao, fn: s.continuar });
   if (!ok) throw new Error(`a tela de opções de ${s.nome} mudou (opção ${opcao} ou botão Continuar não encontrados)`);
-  await page.waitForSelector('form[name=Form1] input[name=placa]', { timeout: 60000 });
+  try {
+    await page.waitForSelector('form[name=Form1] input[name=placa]', { timeout: 60000 });
+  } catch {
+    const reg = await registrar(page, v, 'sem-identificacao');
+    const txt = (await page.evaluate(() => document.body ? document.body.innerText : '').catch(() => '')).replace(/\s+/g, ' ').trim().slice(0, 200);
+    throw new Error(`o Detran não abriu a tela de identificação (registrada como ${reg}): ${txt || 'página em branco'}`);
+  }
 }
 
 async function preencherIdentificacao(page, v) {

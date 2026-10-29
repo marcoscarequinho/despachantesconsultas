@@ -2,17 +2,19 @@
 
 Agenda **Transferência de Propriedade**, **Transferência de Jurisdição** e **Troca de Município** no site do Detran RJ. O script preenche a identificação e **para no reCAPTCHA**: você marca "Não sou um robô" na janela do Chrome e ele faz o resto (cidade/posto, primeiro dia e horário livres). Sem vaga, ele tenta de novo a cada `intervaloMinutos`, e cada tentativa pede o captcha de novo, com bipe e aviso no WhatsApp.
 
-## Preparar (uma vez)
+## Pelo atalho (sem terminal)
 
-Precisa do Node e do Google Chrome instalados. Nesta pasta:
+Dê dois cliques em **Agendamento Detran** na Área de Trabalho (ou em `Agendamento Detran.bat` nesta pasta). Abre uma janela preta minimizada, que precisa ficar aberta enquanto você usa, e a tela do agendamento no navegador (`http://localhost:3939`). Lá você:
 
-```bash
-npm install
-```
+1. clica em **+ Novo veículo**, escolhe o serviço e preenche os dados, a cidade e o posto;
+2. clica em **Testar** para conferir (só preenche o formulário do Detran, sem enviar);
+3. clica em **Agendar** (ou **Agendar todos**). Quando o aviso amarelo aparecer e a página bipar, marque o captcha na janela do Chrome que o script abriu. **Parar** interrompe.
 
-## Cadastrar os veículos
+Na primeira vez o atalho instala sozinho o que falta. Ele precisa do Node.js e do Google Chrome instalados. A tela só funciona neste computador: ela não fica na internet.
 
-Copie `veiculos.exemplo.json` para `veiculos.json` e preencha um bloco por veículo. O `veiculos.json` fica fora do git, porque tem CPF e renavam dos clientes.
+## Campos
+
+A tela grava tudo em `veiculos.json`, que fica fora do git porque tem CPF e renavam dos clientes. Pelo terminal, dá para editar esse arquivo direto (o modelo é o `veiculos.exemplo.json`).
 
 | Campo | O que é |
 |---|---|
@@ -31,7 +33,11 @@ Copie `veiculos.exemplo.json` para `veiculos.json` e preencha um bloco por veíc
 
 Em `opcoes`: `intervaloMinutos` entre tentativas, `maxTentativas` (0 = até conseguir), `esperaCaptchaMinutos`, e `avisarWhatsApp`, o número que recebe "marque o captcha" e "agendado" pela Z-API do `.env` do site.
 
-## Rodar
+## Pelo terminal
+
+```bash
+npm install
+```
 
 ```bash
 node agendar.js --teste
