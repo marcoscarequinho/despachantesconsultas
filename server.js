@@ -19650,6 +19650,13 @@ app.get('/entrar', async (req, res) => {
 app.get('/extensao/privacidade', (req, res) => {
   noCache(res); res.sendFile(path.join(__dirname, 'privacidade-extensao.html'));
 });
+// Página de download (link no hero da home): instalador do Agendamento Detran
+// (downloads/, gerado por ferramentas/agendamento-detran/instalador/build.ps1)
+// e o .apk. Os dois passam pela function da Vercel, que corta resposta acima de
+// 4,5 MB — o build avisa se o .exe passar disso.
+app.get('/baixar-app', (req, res) => {
+  noCache(res); res.sendFile(path.join(__dirname, 'baixar-app.html'));
+});
 app.get('/cadastrar', async (req, res) => {
   if (await slugPorDominio(hostDaRequisicao(req)).catch(() => null)) return res.redirect('/');
   noCache(res); res.sendFile(path.join(__dirname, 'cadastrar.html'));

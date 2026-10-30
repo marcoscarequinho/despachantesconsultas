@@ -77,7 +77,7 @@
       <div><label>Minutos entre tentativas</label><input type="number" min="1" id="o-intervaloMinutos"></div>
       <div><label>Máx. de tentativas (0 = até conseguir)</label><input type="number" min="0" id="o-maxTentativas"></div>
       <div><label>Minutos esperando o captcha</label><input type="number" min="1" id="o-esperaCaptchaMinutos"></div>
-      <div><label>WhatsApp para avisos</label><input id="o-avisarWhatsApp" placeholder="22999999999"><div class="dica">Recebe "marque o captcha" e "agendado".</div></div>
+      <div id="caixa-whatsapp"><label>WhatsApp para avisos</label><input id="o-avisarWhatsApp" placeholder="22999999999"><div class="dica">Recebe "marque o captcha" e "agendado".</div></div>
     </div>
   </section>
 </main>
@@ -319,6 +319,8 @@ window.addEventListener('beforeunload', (e) => { if (alterado) { e.preventDefaul
   dados.opcoes = dados.opcoes || {};
   dados.veiculos = dados.veiculos || [];
   desenhar();
+  const amb = await (await fetch('/api/ambiente')).json().catch(() => ({}));
+  if (!amb.whatsapp) document.getElementById('caixa-whatsapp').style.display = 'none';
   acompanhar();
 })();
 </script>

@@ -40,6 +40,17 @@ function lerDados() {
   return JSON.parse(fs.readFileSync(ARQ_DADOS, 'utf8'));
 }
 
+// O aviso no WhatsApp usa a Z-API do .env do site (ver lerEnvSite no
+// agendar.js). O instalador do site não leva o .env — as chaves são da MC —,
+// então no computador do cliente o campo some em vez de não fazer nada.
+function temWhatsApp() {
+  if (process.env.ZAPI_INSTANCE_ID && process.env.ZAPI_TOKEN) return true;
+  const arq = path.join(PASTA, '..', '..', '.env');
+  if (!fs.existsSync(arq)) return false;
+  const env = fs.readFileSync(arq, 'utf8');
+  return /^\s*ZAPI_INSTANCE_ID\s*=\s*\S/m.test(env) && /^\s*ZAPI_TOKEN\s*=\s*\S/m.test(env);
+}
+
 function responder(res, status, corpo, tipo = 'application/json; charset=utf-8') {
   res.writeHead(status, { 'Content-Type': tipo, 'Cache-Control': 'no-store' });
   res.end(typeof corpo === 'string' || Buffer.isBuffer(corpo) ? corpo : JSON.stringify(corpo));
@@ -81,6 +92,7 @@ const servidor = http.createServer(async (req, res) => {
       return responder(res, 200, fs.readFileSync(path.join(PASTA, 'painel.html')), 'text/html; charset=utf-8');
     }
     if (req.method === 'GET' && u.pathname === '/api/dados') return responder(res, 200, lerDados());
+    if (req.method === 'GET' && u.pathname === '/api/ambiente') return responder(res, 200, { whatsapp: temWhatsApp() });
     if (req.method === 'PUT' && u.pathname === '/api/dados') {
       if (processo) return responder(res, 409, { erro: 'Espere o agendamento em andamento terminar (ou pare) antes de salvar.' });
       const d = await lerCorpo(req);

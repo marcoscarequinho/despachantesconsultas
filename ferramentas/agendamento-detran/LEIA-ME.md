@@ -2,6 +2,20 @@
 
 Agenda **Transferência de Propriedade**, **Transferência de Jurisdição** e **Troca de Município** no site do Detran RJ. O script preenche a identificação e **para no reCAPTCHA**: você marca "Não sou um robô" na janela do Chrome e ele faz o resto (cidade/posto, primeiro dia e horário livres). Sem vaga, ele tenta de novo a cada `intervaloMinutos`, e cada tentativa pede o captcha de novo, com bipe e aviso no WhatsApp.
 
+## Pelo instalador (computador do cliente)
+
+O site oferece em `/baixar-app` o `downloads/Instalar-Agendamento-Detran.exe`. Ele instala em `%LOCALAPPDATA%\Programs\Agendamento Detran RJ` (sem pedir administrador), baixa e instala o Node.js LTS de nodejs.org se faltar (aí o Windows pede permissão), e cria o atalho no Menu Iniciar e, se marcado, na Área de Trabalho e o início com o Windows. No lugar do `.bat`, quem roda é o `AgendamentoDetran.exe`: sobe o `servidor.js` sem janela, com um ícone perto do relógio (abrir, iniciar com o Windows, sair). A desinstalação fica em Configurações → Aplicativos e pergunta se apaga os veículos cadastrados.
+
+O pacote **não leva o `.env`** (as chaves são da MC): sem a Z-API o painel esconde o campo "WhatsApp para avisos" e o resto funciona igual. Atualizar por cima mantém `veiculos.json`, `registros/` e `perfil-chrome/`.
+
+Para gerar de novo depois de mexer na ferramenta (usa o `csc.exe` do próprio Windows, sem instalar nada):
+
+```bash
+powershell -ExecutionPolicy Bypass -File ferramentas/agendamento-detran/instalador/build.ps1
+```
+
+O `.exe` tem de ficar abaixo de 4,5 MB, o limite de resposta da function da Vercel por onde o site serve o download. O build avisa se passar.
+
 ## Pelo atalho (sem terminal)
 
 Dê dois cliques em **Agendamento Detran** na Área de Trabalho (ou em `Agendamento Detran.bat` nesta pasta). Abre uma janela preta minimizada, que precisa ficar aberta enquanto você usa, e a tela do agendamento no navegador (`http://localhost:3939`). Lá você:
