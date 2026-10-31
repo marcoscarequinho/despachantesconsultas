@@ -30,7 +30,9 @@
       const img = document.createElement('img');
       img.src = marca.logo;
       img.alt = '';
-      img.className = 'w-9 h-9 rounded-lg object-contain bg-white p-0.5';
+      // Altura fixa e largura da própria imagem: a logo larga com fundo
+      // próprio, espremida num quadrado branco, ficava com bordas brancas.
+      img.className = 'h-9 w-auto max-w-[140px] flex-shrink-0 rounded-md object-contain';
       caixa.replaceWith(img);
     }
     if (marca.cor) {
