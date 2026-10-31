@@ -19716,7 +19716,7 @@ app.get('/admin', requirePageAuth, async (req, res) => {
 const BROADCAST_CAMPANHA = {
   imagem: path.join(__dirname, 'assets', 'promo-plataforma.jpg'),
   mensagem:
-`🛑CANCELAMENTO DE INTENÇÃO (ATPVe) SOMENTE RIO. OS DOS OUTROS ESTADOS ESTÃO TEMPORARIAMENTE SUSPENSOS.
+`🛑CANCELAMENTO DE INTENÇÃO (ATPVe) SOMENTE RIO, AS DE OUTROS ESTADOS ESTÃO TEMPORARIAMENTE SUSPENSAS.
 🛑CANCELAMENTO DE INTENÇÃO (ATPVe) RIO, PRECISA PAGAR DUDA DE ALTERAÇÃO DE CARACTERÍSTICA.
 🛑ATENÇÃO AGORA VOCÊ PODE SER PARCEIRO DA PLATAFORMA COM SUA PRÓPRIA PÁGINA, E GANHAR DINHEIRO VENDENDO CONSULTAS, E MAIS, A SUA PÁGINA TAMBÉM PODE TER DOMÍNIO PRÓPRIO EX:. https://vaniadespachante.com.br/?entrar=1 - Galera, como sabem, agora temos a opção parceria: você pode faturar com sua própria página. Veja a página da Vania com DOMÍNIO próprio. Não é necessário que você tenha domínio próprio, pode usar o meu domínio com seu nome de usuário, é tudo igual; com domínio próprio paga-se R$ 200,00 por ano. CLARO QUE COM SEU NOME OU EMPRESA.
 Só na Despachante consultas você tem tantas opções de consultas
