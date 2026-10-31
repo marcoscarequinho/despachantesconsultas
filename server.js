@@ -19716,14 +19716,16 @@ app.get('/admin', requirePageAuth, async (req, res) => {
 const BROADCAST_CAMPANHA = {
   imagem: path.join(__dirname, 'assets', 'promo-plataforma.jpg'),
   mensagem:
-`🛑CANCELAMENTO DE INTENÇÃO (ATPVe) SOMENTE RIO DE JANEIRO
+`🛑CANCELAMENTO DE INTENÇÃO (ATPVe) DE OUTROS ESTADOS PODE SER PEDIDO MANUALMENTE PELO WHATSAPP
 🛑CANCELAMENTO DE INTENÇÃO (ATPVe) RIO, PRECISA PAGAR DUDA DE ALTERAÇÃO DE CARACTERÍSTICA
-🛑ATENÇÃO AGORA VOCÊ PODE SER PARCEIRO DA PLATAFORMA COM SUA PRÓPRIA PÁGINA, E GANHAR DINHEIRO VENDENDO CONSULTAS, E MAIS, A SUA PÁGINA TAMBÉM PODE TER DOMÍNIO PRÓPRIO EX:.https://despachantejoaodascoves.com.br (kkk) CLARO QUE COM SEU NOME OU EMPRESA.
+🛑ATENÇÃO AGORA VOCÊ PODE SER PARCEIRO DA PLATAFORMA COM SUA PRÓPRIA PÁGINA, E GANHAR DINHEIRO VENDENDO CONSULTAS, E MAIS, A SUA PÁGINA TAMBÉM PODE TER DOMÍNIO PRÓPRIO EX:. https://vaniadespachante.com.br/?entrar=1 - Galera, como sabem, agora temos a opção parceria: você pode faturar com sua própria página. Veja a página da Vania com DOMÍNIO próprio. Não é necessário que você tenha domínio próprio, pode usar o meu domínio com seu nome de usuário, é tudo igual; com domínio próprio paga-se R$ 200,00 por ano. CLARO QUE COM SEU NOME OU EMPRESA.
 Só na Despachante consultas você tem tantas opções de consultas
 Vá e veja você mesmo, nossa plataforma de consultas é hoje uma das mais completas, ela te afasta da burocracia dos DETRAN's
-🛑EXTENSÃO PARA AGENDAMENTO RIO OBS.: SOMENTE PARA NOTEBOOK E PC, CELULAR NÃO FUNCIONA.
-https://chromewebstore.google.com/detail/despachantes-consultas/cjplmhogifgnenghbgkihdpkghghbiji?hl=pt-BR
-👉 https://www.despachantesconsultas.com.br`,
+🛑EXTENSÃO DO GOOGLE CHROME PARA AGENDAMENTO RIO FUNCIONA.
+https://chromewebstore.google.com/detail/despachantes-consultas/cjplmhogifgnenghbgkihdpkghghbiji?hl=pt-BR&utm_source=ext_sidebar
+👉 https://www.despachantesconsultas.com.br
+
+SE VOCÊ FOR PREGUIÇOSO E NÃO LER TODO O TEXTO, VEJA A PÁGINA DA VANIA COMO PARCEIRA, COM DOMÍNIO PRÓPRIO 👉 https://vaniadespachante.com.br/?entrar=1`,
 };
 
 // Primeiro dia do disparo dos DEMAIS grupos (fuso de Brasilia); a cadencia de
