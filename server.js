@@ -19715,6 +19715,7 @@ app.get('/admin', requirePageAuth, async (req, res) => {
 // CDN da HeyGen. Se a HeyGen falhar na hora, o grupo recebe so a imagem + texto.
 const BROADCAST_CAMPANHA = {
   imagem: path.join(__dirname, 'assets', 'promo-plataforma.jpg'),
+  legenda: '👉 SITE PRINCIPAL: https://www.despachantesconsultas.com.br',
   mensagem:
 `🛑CANCELAMENTO DE INTENÇÃO (ATPVe) SOMENTE RIO, AS DE OUTROS ESTADOS ESTÃO TEMPORARIAMENTE SUSPENSAS.
 🛑CANCELAMENTO DE INTENÇÃO (ATPVe) RIO, PRECISA PAGAR DUDA DE ALTERAÇÃO DE CARACTERÍSTICA.
@@ -19723,7 +19724,7 @@ Só na Despachante consultas você tem tantas opções de consultas
 Vá e veja você mesmo, nossa plataforma de consultas é hoje uma das mais completas, ela te afasta da burocracia dos DETRAN's
 🛑EXTENSÃO DO GOOGLE CHROME PARA AGENDAMENTO RIO FUNCIONA.
 https://chromewebstore.google.com/detail/despachantes-consultas/cjplmhogifgnenghbgkihdpkghghbiji?hl=pt-BR&utm_source=ext_sidebar
-👉 https://www.despachantesconsultas.com.br
+👉 SITE PRINCIPAL: https://www.despachantesconsultas.com.br
 
 SE VOCÊ FOR PREGUIÇOSO E NÃO LER TODO O TEXTO, VEJA A PÁGINA DA VANIA COMO PARCEIRA, COM DOMÍNIO PRÓPRIO 👉 https://vaniadespachante.com.br/?entrar=1`,
 };
@@ -19950,7 +19951,12 @@ async function runWhatsAppBroadcast(opts = {}) {
           await new Promise(r => setTimeout(r, 1000));
         } catch {}
       }
-      await sendBroadcastImage(dest.phone, imageBase64, BROADCAST_CAMPANHA.mensagem, 'image/jpeg');
+      // Legenda de imagem no WhatsApp para em ~1.024 caracteres e o texto da
+      // campanha passa disso (31/10/2026: o link do site caía no corte). Por
+      // isso a imagem leva só o link e o texto inteiro vai numa mensagem própria.
+      await sendBroadcastImage(dest.phone, imageBase64, BROADCAST_CAMPANHA.legenda, 'image/jpeg');
+      await new Promise(r => setTimeout(r, 1000));
+      await sendBroadcastText(dest.phone, BROADCAST_CAMPANHA.mensagem);
       sent++;
     } catch {
       failed++;
