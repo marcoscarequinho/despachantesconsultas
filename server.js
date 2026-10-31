@@ -19652,8 +19652,9 @@ app.get('/extensao/privacidade', (req, res) => {
 });
 // Página de download (link no hero da home): instalador do Agendamento Detran
 // (downloads/, gerado por ferramentas/agendamento-detran/instalador/build.ps1)
-// e o .apk. Os dois passam pela function da Vercel, que corta resposta acima de
-// 4,5 MB — o build avisa se o .exe passar disso.
+// passa pela function da Vercel, que corta resposta acima de 4,5 MB — o build
+// avisa se o .exe passar disso. O .apk saiu em 31/10/2026 (dava erro depois de
+// instalado).
 app.get('/baixar-app', (req, res) => {
   noCache(res); res.sendFile(path.join(__dirname, 'baixar-app.html'));
 });
