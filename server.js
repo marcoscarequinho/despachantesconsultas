@@ -1773,8 +1773,10 @@ const SERVICES = [
   // SUSPENSOS desde 22/10/2026 (unavailable, decisão do dono): pedido novo é
   // recusado em processCatalogQuery e o painel leva o cliente à emissão nova
   // (dcr-atpve). Os pedidos antigos seguem sendo entregues pelo cron/webhook.
-  { id:'atpve-vistocar-rj', name:'Intenção de Venda / ATPV-e RJ', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'atpve_vistocar', icon:'📝', uf:'rj', unavailable:true,
-    slowNote:'A emissão por este caminho está suspensa temporariamente. Use a nova Emissão de ATPV-e (Intenção de Venda), na página "ATPVe’s e Consultas Novas".' },
+  // O RJ voltou em 01/11/2026 (pedido do dono) a R$ 55,00, como "opção 2" da
+  // emissão nova: card próprio na página "ATPVe's e Consultas Novas", logo
+  // abaixo da Emissão de ATPV-e (buildNovasList). O MG segue suspenso.
+  { id:'atpve-vistocar-rj', name:'Intenção de Venda / ATPV-e RJ', group:'Intenção de Venda (ATPVE)', basePrice:55.00, noMarkup:true, inputType:'atpve_vistocar', icon:'📝', uf:'rj' },
   { id:'atpve-vistocar-mg', name:'Intenção de Venda / ATPV-e MG', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'atpve_vistocar', icon:'📝', uf:'mg', unavailable:true,
     slowNote:'A emissão por este caminho está suspensa temporariamente. Use a nova Emissão de ATPV-e (Intenção de Venda), na página "ATPVe’s e Consultas Novas".' },
 ];
