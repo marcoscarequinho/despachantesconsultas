@@ -837,16 +837,11 @@
           <p class="text-xs text-gray-500">
             Vai para o painel de <strong id="comunicado-destinatarios">...</strong> conta(s) ativa(s) de uma vez e abre em destaque
             para cada um, igual à mensagem individual. Quem responder aparece na lista abaixo como conversa.
-            Marcado o WhatsApp, vai também para o número de cada cadastro (uma vez por número), aos poucos.
           </p>
         </div>
         <textarea id="comunicado-texto" rows="4" maxlength="2000" class="input-field"
           placeholder="Ex.: Atenção: amanhã, das 8h às 10h, o sistema do Detran estará em manutenção."></textarea>
-        <div class="flex items-center justify-between gap-3 flex-wrap">
-          <label class="flex items-center gap-2 text-sm text-gray-700">
-            <input type="checkbox" id="comunicado-whatsapp" checked>
-            Enviar também pelo WhatsApp de cada cliente
-          </label>
+        <div class="flex justify-end">
           <button id="comunicado-enviar-btn" onclick="enviarComunicado()" class="btn-primary">📢 Enviar para todos</button>
         </div>
         <div id="comunicados-lista" class="space-y-2"></div>
@@ -2958,52 +2953,27 @@ async function loadComunicados() {
         <div class="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
           <div class="text-sm text-gray-800" style="white-space:pre-wrap;word-break:break-word">${escMsg(c.texto)}</div>
           <div class="text-[11px] text-gray-500 mt-1">${fmtDate(c.created_at)} · enviado a ${c.total} · <strong>lido por ${c.lidas}</strong>${c.total ? ` (${Math.round(c.lidas * 100 / c.total)}%)` : ''}</div>
-          ${c.wa_total ? `<div class="text-[11px] text-gray-500 mt-0.5">📱 WhatsApp: <strong>${c.wa_enviados} de ${c.wa_total}</strong> enviados${c.wa_falhas ? ` · ${c.wa_falhas} falha(s)` : ''}${c.wa_pendentes ? ` · ${c.wa_pendentes} na fila` : ''}</div>` : ''}
         </div>`).join('')
       : '';
-    // Fila do WhatsApp parada (ex.: admin recarregou a página): continua daqui.
-    const pendente = (d.comunicados || []).find(c => c.wa_pendentes);
-    if (pendente) andarFilaWhatsAppComunicado(pendente.id);
   } catch {}
-}
-
-// A fila sai em lotes de 10 (com 3 s entre uma mensagem e outra) enquanto esta
-// tela estiver aberta; fechada, o cron do servidor continua a cada 10 min.
-// loadComunicados chama de novo a cada lote — a trava faz a volta ser ignorada.
-let filaWhatsAppAndando = false;
-async function andarFilaWhatsAppComunicado(id) {
-  if (filaWhatsAppAndando) return;
-  filaWhatsAppAndando = true;
-  try {
-    for (;;) {
-      const r = await fetch(`/api/admin/comunicados/${id}/whatsapp-lote`, { method: 'POST' });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) { toast(d.error || 'Erro ao enviar pelo WhatsApp.', 'error'); break; }
-      await loadComunicados();
-      if (!d.pendentes) { toast('Comunicado enviado pelo WhatsApp a todos da lista.'); break; }
-      if (!d.enviados && !d.falhas) break; // o resto está com o cron
-    }
-  } catch { toast('A conexão caiu no envio pelo WhatsApp — o servidor continua sozinho em até 10 min.', 'error'); }
-  finally { filaWhatsAppAndando = false; }
 }
 
 async function enviarComunicado() {
   const texto = document.getElementById('comunicado-texto').value.trim();
   if (!texto) { toast('Escreva a mensagem.', 'error'); return; }
-  const whatsapp = document.getElementById('comunicado-whatsapp').checked;
-  if (!confirm(`Enviar esta mensagem para TODOS os ${comunicadoDestinatarios} clientes ativos?\n\nEla abre em destaque no painel de cada um${whatsapp ? ' e vai também pelo WhatsApp (um por número, 3 s entre cada)' : ''}. Não dá para desfazer.`)) return;
+  if (!confirm(`Enviar esta mensagem para TODOS os ${comunicadoDestinatarios} clientes ativos?\n\nEla abre em destaque no painel de cada um e não dá para desfazer.`)) return;
   const btn = document.getElementById('comunicado-enviar-btn');
   btn.disabled = true;
   try {
     const r = await fetch('/api/admin/comunicados', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ texto, whatsapp }),
+      body: JSON.stringify({ texto }),
     });
     const d = await r.json();
     if (!r.ok) { toast(d.error || 'Erro ao enviar.', 'error'); return; }
     document.getElementById('comunicado-texto').value = '';
-    toast(`Mensagem enviada para ${d.total} cliente(s)` + (d.whatsapp ? ` — WhatsApp saindo para ${d.whatsapp} número(s); deixe esta tela aberta para ir mais rápido.` : '.'));
+    toast(`Mensagem enviada para ${d.total} cliente(s).`);
     loadComunicados();
   } catch { toast('Erro de conexão.', 'error'); }
   finally { btn.disabled = false; }

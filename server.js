@@ -2533,20 +2533,6 @@ async function initDB() {
   `);
   await pool.query(`ALTER TABLE mensagens_usuario ADD COLUMN IF NOT EXISTS comunicado_id INTEGER REFERENCES comunicados(id) ON DELETE SET NULL`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_mensagens_usuario_comunicado ON mensagens_usuario (comunicado_id) WHERE comunicado_id IS NOT NULL`);
-  // Fila do comunicado por WhatsApp (01/11/2026): uma linha por TELEFONE (conta
-  // repetida com o mesmo número recebe uma vez só), ver enviarFilaComunicadoWhatsApp.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS comunicado_whatsapp (
-      id            SERIAL PRIMARY KEY,
-      comunicado_id INTEGER NOT NULL REFERENCES comunicados(id) ON DELETE CASCADE,
-      telefone      TEXT NOT NULL,
-      user_id       INTEGER,
-      status        TEXT NOT NULL DEFAULT 'PENDENTE',
-      tentado_em    TIMESTAMPTZ,
-      UNIQUE (comunicado_id, telefone)
-    );
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_comunicado_whatsapp_pendente ON comunicado_whatsapp (id) WHERE status = 'PENDENTE'`);
   // Revendedores (23/10/2026): só o admin cadastra. O vínculo cliente →
   // revendedor é revendedor_id, separado de referred_by — este é do programa
   // de indicação (bônus de R$ 10), que é outra coisa e tem 65 contas marcadas.
@@ -15703,9 +15689,6 @@ async function runPixReconcile() {
   console.log(`✅ Reconciliação PIX: ${checked} verificados, ${credited} creditados`);
   await conferirPayoutsRevendedores().catch(e => console.error('[revendedor] conferência de payouts:', e.message));
   await pagarGanhosParceiros().catch(e => console.error('[parceiro] repasse:', e.message));
-  // Comunicado por WhatsApp que ficou na fila (tela do admin fechada).
-  await enviarFilaComunicadoWhatsApp({ limite: 80, prazoMs: 5 * 60 * 1000 })
-    .catch(e => console.error('[comunicado] fila do WhatsApp:', e.message));
   return { checked, credited, pending: pendentes.length };
 }
 
@@ -18002,18 +17985,10 @@ app.get('/api/admin/comunicados', requireAuth, requireSuperAdmin, async (req, re
     const dest = await pool.query(`SELECT COUNT(*)::int AS n ${COMUNICADO_DESTINATARIOS_SQL}`, [SUPER_ADMIN_EMAILS]);
     const r = await pool.query(
       `SELECT c.id, c.texto, c.total, c.created_at,
-              COUNT(m.id) FILTER (WHERE m.lida_em IS NOT NULL)::int AS lidas,
-              w.wa_total, w.wa_enviados, w.wa_falhas, w.wa_pendentes
+              COUNT(m.id) FILTER (WHERE m.lida_em IS NOT NULL)::int AS lidas
          FROM comunicados c
          LEFT JOIN mensagens_usuario m ON m.comunicado_id = c.id
-         LEFT JOIN LATERAL (
-           SELECT COUNT(*)::int AS wa_total,
-                  COUNT(*) FILTER (WHERE status = 'ENVIADO')::int  AS wa_enviados,
-                  COUNT(*) FILTER (WHERE status = 'FALHA')::int    AS wa_falhas,
-                  COUNT(*) FILTER (WHERE status IN ('PENDENTE','ENVIANDO'))::int AS wa_pendentes
-             FROM comunicado_whatsapp WHERE comunicado_id = c.id
-         ) w ON true
-        GROUP BY c.id, w.wa_total, w.wa_enviados, w.wa_falhas, w.wa_pendentes
+        GROUP BY c.id
         ORDER BY c.created_at DESC
         LIMIT 50`
     );
@@ -18039,88 +18014,15 @@ app.post('/api/admin/comunicados', requireAuth, requireSuperAdmin, async (req, r
       [SUPER_ADMIN_EMAILS, texto, comunicadoId]
     );
     await client.query('UPDATE comunicados SET total=$2 WHERE id=$1', [comunicadoId, ins.rowCount]);
-    // Os mesmos destinatários, por WhatsApp: entra na fila na mesma transação
-    // e sai aos poucos (enviarFilaComunicadoWhatsApp), não aqui dentro.
-    let whatsapp = 0;
-    if (req.body?.whatsapp !== false) {
-      const wa = await client.query(
-        `INSERT INTO comunicado_whatsapp (comunicado_id, telefone, user_id)
-         SELECT DISTINCT ON (tel) $2, tel, id FROM (
-           SELECT id, CASE WHEN length(d) >= 12 AND left(d, 2) = '55' THEN substr(d, 3) ELSE d END AS tel
-             FROM (SELECT id, regexp_replace(COALESCE(phone,''),'[^0-9]','','g') AS d
-                     ${COMUNICADO_DESTINATARIOS_SQL}) u
-         ) t
-         WHERE length(tel) BETWEEN 10 AND 11
-         ORDER BY tel, id`,
-        [SUPER_ADMIN_EMAILS, comunicadoId]
-      );
-      whatsapp = wa.rowCount;
-    }
     await client.query('COMMIT');
-    console.log(`[admin] comunicado #${comunicadoId} enviado a ${ins.rowCount} cliente(s), ${whatsapp} telefone(s) na fila do WhatsApp`);
-    res.json({ success: true, id: comunicadoId, total: ins.rowCount, whatsapp });
+    console.log(`[admin] comunicado #${comunicadoId} enviado a ${ins.rowCount} cliente(s)`);
+    res.json({ success: true, id: comunicadoId, total: ins.rowCount });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('Erro ao enviar comunicado:', err.message);
     res.status(500).json({ error: 'Erro ao enviar o comunicado. Ninguém recebeu; tente de novo.' });
   } finally {
     client.release();
-  }
-});
-
-// ── Comunicado por WhatsApp (01/11/2026, pedido do dono) ─────────────────────
-// São ~320 telefones: tudo de uma vez numa requisição só estouraria o tempo da
-// Vercel e, disparado sem intervalo, é o jeito mais rápido de o número da Z-API
-// ser bloqueado pelo WhatsApp. Por isso sai em lotes, com intervalo entre uma
-// mensagem e outra: quem anda a fila é a tela do admin (POST .../whatsapp-lote,
-// enquanto ela está aberta) e, se ela for fechada, o cron do pix-reconcile.
-// Claim por linha (PENDENTE → ENVIANDO com SKIP LOCKED): os dois juntos não
-// mandam a mesma mensagem duas vezes. ENVIANDO que ficou para trás (instância
-// morta no meio) vira FALHA e não é reenviado — não dá para saber se saiu.
-const COMUNICADO_WHATSAPP_INTERVALO_MS = 3000;
-
-async function enviarFilaComunicadoWhatsApp({ limite = 10, comunicadoId = null, prazoMs = 60 * 1000 } = {}) {
-  await pool.query(
-    `UPDATE comunicado_whatsapp SET status = 'FALHA'
-      WHERE status = 'ENVIANDO' AND tentado_em < NOW() - INTERVAL '15 minutes'`
-  );
-  const inicio = Date.now();
-  let enviados = 0, falhas = 0;
-  for (let i = 0; i < limite && Date.now() - inicio < prazoMs; i++) {
-    const r = await pool.query(
-      `UPDATE comunicado_whatsapp w SET status = 'ENVIANDO', tentado_em = NOW()
-         FROM comunicados c
-        WHERE w.id = (SELECT id FROM comunicado_whatsapp
-                       WHERE status = 'PENDENTE' AND ($1::int IS NULL OR comunicado_id = $1)
-                       ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)
-          AND c.id = w.comunicado_id
-        RETURNING w.id, w.telefone, c.texto`, [comunicadoId]
-    );
-    if (!r.rows.length) break;
-    const item = r.rows[0];
-    if (i > 0) await new Promise(ok => setTimeout(ok, COMUNICADO_WHATSAPP_INTERVALO_MS));
-    const msg = `📢 *Comunicado — MC Despachadoria Consultas*\n\n${item.texto}`;
-    const ok = await sendWhatsApp(item.telefone, msg).catch(() => false);
-    await pool.query(`UPDATE comunicado_whatsapp SET status = $2 WHERE id = $1`, [item.id, ok ? 'ENVIADO' : 'FALHA']);
-    if (ok) enviados++; else falhas++;
-  }
-  const p = await pool.query(
-    `SELECT COUNT(*)::int AS n FROM comunicado_whatsapp
-      WHERE status IN ('PENDENTE','ENVIANDO') AND ($1::int IS NULL OR comunicado_id = $1)`, [comunicadoId]
-  );
-  if (enviados || falhas) console.log(`[comunicado] WhatsApp: ${enviados} enviado(s), ${falhas} falha(s), ${p.rows[0].n} na fila`);
-  return { enviados, falhas, pendentes: p.rows[0].n };
-}
-
-app.post('/api/admin/comunicados/:id/whatsapp-lote', requireAuth, requireSuperAdmin, async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  if (!id) return res.status(400).json({ error: 'Comunicado inválido.' });
-  try {
-    await ensureDbReady();
-    res.json({ success: true, ...(await enviarFilaComunicadoWhatsApp({ limite: 10, comunicadoId: id })) });
-  } catch (err) {
-    console.error('Erro no lote do comunicado por WhatsApp:', err.message);
-    res.status(500).json({ error: 'Erro ao enviar pelo WhatsApp.' });
   }
 });
 
