@@ -2711,6 +2711,26 @@ app.get('/', async (req, res, next) => {
     noCache(res); res.sendFile(path.join(__dirname, 'revendedor-pagina.html'));
   } catch { next(); }
 });
+// Favicon do domínio próprio (01/11/2026, pedido do dono): no domínio do
+// parceiro os caminhos de ícone que todas as páginas já usam devolvem a logo
+// dele. Só no domínio próprio — em /r/<slug> o domínio é o nosso e o ícone
+// seguiria o da MC. Parceiro sem logo fica com o ícone padrão.
+app.get(['/favicon.ico', '/favicon-16x16.png', '/favicon-32x32.png', '/apple-touch-icon.png'], async (req, res, next) => {
+  try {
+    const slug = await slugPorDominio(hostDaRequisicao(req));
+    if (!slug) return next();
+    const r = await pool.query(
+      `SELECT rv.logo_mime AS mime, rv.logo_data AS data FROM revendedores rv JOIN users u ON u.id=rv.user_id
+        WHERE rv.slug=$1 AND u.active=true`, [slug]
+    );
+    const row = r.rows[0];
+    if (!row?.data || !['image/png', 'image/jpeg', 'image/webp'].includes(row.mime)) return next();
+    res.set('Content-Type', row.mime);
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.send(Buffer.from(row.data, 'base64'));
+  } catch { next(); }
+});
 app.use(express.static(path.join(__dirname), { etag: false, lastModified: false, setHeaders: (res) => res.set('Cache-Control', 'no-store') }));
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
