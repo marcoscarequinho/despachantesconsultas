@@ -3835,14 +3835,14 @@ app.get('/api/public/revendedor/:slug', async (req, res) => {
 
 // Faixa "Nossos Parceiros" da Visão Geral (01/11/2026, pedido do dono): todos
 // os parceiros ativos com página, com o link dela (domínio próprio ativo ou
-// /r/<slug>). Parceiro novo entra sozinho. NÃO vai para parceiro nem para
-// cliente de parceiro — o site deles é para parecer só deles (ver Parceria);
-// por isso o filtro é aqui, e não só no painel.
+// /r/<slug>). Parceiro novo entra sozinho. Parceiro também vê (dono, 01/11/2026);
+// cliente de parceiro NÃO — o site dele é para parecer só do parceiro (ver
+// Parceria); por isso o filtro é aqui, e não só no painel.
 app.get('/api/parceiros-lista', requireAuth, async (req, res) => {
   try {
     const eu = await pool.query('SELECT role, revendedor_id FROM users WHERE id=$1', [req.user.id]);
     const u = eu.rows[0];
-    if (!u || u.role === 'reseller' || u.revendedor_id) return res.json({ parceiros: [] });
+    if (!u || (u.role !== 'reseller' && u.revendedor_id)) return res.json({ parceiros: [] });
     const r = await pool.query(
       `SELECT p.name, rv.slug, rv.pagina_atualizada_em, rv.logo_mime IS NOT NULL AS tem_logo,
               (SELECT d.dominio FROM parceiro_dominios d
