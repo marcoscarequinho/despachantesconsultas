@@ -2891,7 +2891,7 @@ function renderParceirosDestaque() {
         <div class="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center text-xl flex-shrink-0">🤝</div>
         <div class="min-w-0 flex-1">
           <div class="font-bold text-gray-800">Nossos Parceiros</div>
-          <p class="text-xs text-gray-600 leading-snug">${parceirosLista.length} parceiro(s) com página própria — clique para abrir em nova janela.</p>
+          <p class="text-xs text-gray-600 leading-snug">${parceirosLista.length} parceiro(s) com página própria — clique para abrir em nova janela${parceirosLista.length > 3 ? '; role a lista para ver todos' : ''}.</p>
         </div>
         <!-- Abre o mesmo pop-up "Seja um Parceiro" do botão do topo. -->
         <button type="button" onclick="abrirSejaRevendedor()"
@@ -2899,7 +2899,10 @@ function renderParceirosDestaque() {
           🤝 Você também quer ser parceiro?
         </button>
       </div>
-      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+      <!-- Quadro com altura fixa (~2 linhas no computador) e rolagem própria:
+           com mais parceiros a faixa não cresce e não empurra as consultas
+           para baixo (pedido do dono, 01/11/2026). -->
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-2 overflow-y-auto pr-1" style="max-height:124px">
         ${parceirosLista.map(p => `
           <a href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer"
             class="flex items-center gap-3 bg-white border border-emerald-100 rounded-lg px-3 py-2 hover:border-emerald-400 hover:bg-emerald-50 transition-all min-w-0">
