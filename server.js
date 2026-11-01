@@ -3833,6 +3833,37 @@ app.get('/api/public/revendedor/:slug', async (req, res) => {
   }
 });
 
+// Faixa "Nossos Parceiros" da Visão Geral (01/11/2026, pedido do dono): todos
+// os parceiros ativos com página, com o link dela (domínio próprio ativo ou
+// /r/<slug>). Parceiro novo entra sozinho. NÃO vai para parceiro nem para
+// cliente de parceiro — o site deles é para parecer só deles (ver Parceria);
+// por isso o filtro é aqui, e não só no painel.
+app.get('/api/parceiros-lista', requireAuth, async (req, res) => {
+  try {
+    const eu = await pool.query('SELECT role, revendedor_id FROM users WHERE id=$1', [req.user.id]);
+    const u = eu.rows[0];
+    if (!u || u.role === 'reseller' || u.revendedor_id) return res.json({ parceiros: [] });
+    const r = await pool.query(
+      `SELECT p.name, rv.slug, rv.pagina_atualizada_em, rv.logo_mime IS NOT NULL AS tem_logo,
+              (SELECT d.dominio FROM parceiro_dominios d
+                WHERE d.parceiro_id = p.id AND d.status='ATIVO' AND d.dominio IS NOT NULL
+                  AND (d.valido_ate IS NULL OR d.valido_ate + ($1 || ' days')::interval > NOW())) AS dominio
+         FROM users p JOIN revendedores rv ON rv.user_id = p.id
+        WHERE p.role='reseller' AND p.active=true AND rv.slug IS NOT NULL
+        ORDER BY p.name`, [String(DOMINIO_CARENCIA_DIAS)]
+    );
+    res.json({ parceiros: r.rows.map(x => ({
+      nome: x.name,
+      url: x.dominio ? `https://${x.dominio}/` : `/r/${x.slug}`,
+      dominio: x.dominio || null,
+      logo: x.tem_logo ? `/api/public/revendedor/${x.slug}/imagem/logo?v=${new Date(x.pagina_atualizada_em || 0).getTime()}` : null,
+    })) });
+  } catch (err) {
+    console.error('Erro ao listar parceiros:', err.message);
+    res.status(500).json({ error: 'Erro ao carregar os parceiros.' });
+  }
+});
+
 // A mesma página, aberta pela raiz do domínio próprio do parceiro.
 app.get('/api/public/revendedor-host', async (req, res) => {
   try {

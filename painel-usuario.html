@@ -357,6 +357,10 @@
         <!-- ATPVe's e Consultas Novas em faixa própria, acima do Contrato Social
              (pedido do dono, 22/10/2026). O clique abre a página do grupo.
              Preenchido por renderNovasDestaque(). -->
+        <!-- Nossos Parceiros, acima das Consultas Novas (pedido do dono,
+             01/11/2026). Só para clientes da MC: o servidor devolve a lista
+             vazia para parceiro e cliente de parceiro. renderParceirosDestaque(). -->
+        <div id="catalog-parceiros-destaque" class="hidden mb-4"></div>
         <div id="catalog-novas-destaque" class="hidden mb-4"></div>
         <!-- Contrato Social LTDA com IA em faixa própria, a primeira de todas,
              acima das Consultas Especiais (pedido do dono, 19/10/2026).
@@ -1554,6 +1558,7 @@ async function init() {
     buildDespachantesList();
     buildExtrasList();
     buildNovasList();
+    carregarParceiros();
     renderServiceListV2();
     await Promise.all([loadStats(), loadQueries(), loadAssinaturaStatus()]);
     carregarMensagens();
@@ -2863,6 +2868,45 @@ function renderEspeciaisDestaque(svcsVisiveis) {
 function abrirEspeciais() {
   setCatalogFilter(GRUPO_ESPECIAIS);
   document.getElementById('catalog-grid')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// Faixa "Nossos Parceiros": cada parceiro com o link da página dele, em nova
+// janela. Não depende da busca/filtro (não é consulta). Lista vazia = some.
+let parceirosLista = [];
+async function carregarParceiros() {
+  try {
+    const r = await fetch('/api/parceiros-lista');
+    parceirosLista = r.ok ? ((await r.json()).parceiros || []) : [];
+  } catch { parceirosLista = []; }
+  renderParceirosDestaque();
+}
+function renderParceirosDestaque() {
+  const wrap = document.getElementById('catalog-parceiros-destaque');
+  if (!wrap) return;
+  if (!parceirosLista.length) { wrap.classList.add('hidden'); wrap.innerHTML = ''; return; }
+  wrap.classList.remove('hidden');
+  wrap.innerHTML = `
+    <div class="bg-gradient-to-r from-emerald-50 to-white border border-emerald-200 rounded-xl p-4 sm:p-5">
+      <div class="flex items-center gap-3 mb-3">
+        <div class="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center text-xl flex-shrink-0">🤝</div>
+        <div class="min-w-0">
+          <div class="font-bold text-gray-800">Nossos Parceiros</div>
+          <p class="text-xs text-gray-600 leading-snug">${parceirosLista.length} parceiro(s) com página própria — clique para abrir em nova janela.</p>
+        </div>
+      </div>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+        ${parceirosLista.map(p => `
+          <a href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer"
+            class="flex items-center gap-3 bg-white border border-emerald-100 rounded-lg px-3 py-2 hover:border-emerald-400 hover:bg-emerald-50 transition-all min-w-0">
+            ${p.logo ? `<img src="${escapeHtml(p.logo)}" alt="" class="h-8 w-auto max-w-[64px] object-contain flex-shrink-0">`
+                     : `<span class="w-8 h-8 bg-emerald-100 rounded-full flex items-center justify-center text-sm font-bold text-emerald-700 flex-shrink-0">${escapeHtml((p.nome || '?').charAt(0).toUpperCase())}</span>`}
+            <div class="min-w-0 flex-1">
+              <div class="font-medium text-gray-800 text-sm truncate">${escapeHtml(p.nome)}</div>
+              <div class="text-[11px] text-emerald-700 truncate">${escapeHtml(p.dominio || 'Página do parceiro')} ↗</div>
+            </div>
+          </a>`).join('')}
+      </div>
+    </div>`;
 }
 
 // Faixa da página ATPVe's e Consultas Novas, acima do Contrato Social. Some
