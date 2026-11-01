@@ -2887,12 +2887,17 @@ function renderParceirosDestaque() {
   wrap.classList.remove('hidden');
   wrap.innerHTML = `
     <div class="bg-gradient-to-r from-emerald-50 to-white border border-emerald-200 rounded-xl p-4 sm:p-5">
-      <div class="flex items-center gap-3 mb-3">
+      <div class="flex items-center gap-3 mb-3 flex-wrap">
         <div class="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center text-xl flex-shrink-0">🤝</div>
-        <div class="min-w-0">
+        <div class="min-w-0 flex-1">
           <div class="font-bold text-gray-800">Nossos Parceiros</div>
           <p class="text-xs text-gray-600 leading-snug">${parceirosLista.length} parceiro(s) com página própria — clique para abrir em nova janela.</p>
         </div>
+        <!-- Abre o mesmo pop-up "Seja um Parceiro" do botão do topo. -->
+        <button type="button" onclick="abrirSejaRevendedor()"
+          class="bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold px-4 py-2 rounded-lg flex-shrink-0">
+          🤝 Você também quer ser parceiro?
+        </button>
       </div>
       <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
         ${parceirosLista.map(p => `
