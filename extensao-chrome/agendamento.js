@@ -2,10 +2,22 @@
 // chrome.storage.local (só neste Chrome) e pede ao background.js para rodar;
 // o andamento vem do log do job, que o background grava no mesmo storage.
 // Sem HTML inline com handler: a CSP do MV3 não deixa, tudo é data-acao.
+//
+// O mesmo arquivo é a tela da página do site (/extensao-chrome): lá não existe
+// chrome.storage, então a página define window.agendPonte, que fala com a
+// ponte-site.js da extensão por postMessage. A lista continua no
+// chrome.storage da extensão — nunca no servidor.
 'use strict';
 
 const CHAVE_DADOS = 'agendDados';
 const CHAVE_JOB = 'agendJob';
+
+const ponte = window.agendPonte || {
+  ler: (chaves) => chrome.storage.local.get(chaves),
+  gravar: (obj) => chrome.storage.local.set(obj),
+  enviar: (msg) => chrome.runtime.sendMessage(msg),
+  aoMudar: (fn) => chrome.storage.onChanged.addListener((mud, area) => { if (area === 'local') fn(mud); }),
+};
 
 const SERVICOS = {
   propriedade: { nome: 'Transferência de Propriedade', opcoes: ['Transferência de Propriedade', 'Com inclusão de gravame (comprado financiado)', 'Com baixa de gravame (vendedor quitou)'] },
@@ -102,7 +114,7 @@ function salvarDepois() {
 }
 async function salvar() {
   clearTimeout(timerSalvar);
-  await chrome.storage.local.set({ [CHAVE_DADOS]: dados });
+  await ponte.gravar({ [CHAVE_DADOS]: dados });
 }
 
 function mostrarMsg(texto, cor) {
@@ -137,7 +149,7 @@ async function rodar(indices, teste) {
   if (problemas.length) {
     return mostrarMsg(problemas.map(([v, e]) => `${v.placa || 'Sem placa'}: ${e.join('; ')}`).join(' · '), 'var(--vermelho)');
   }
-  const r = await chrome.runtime.sendMessage({ tipo: 'iniciar', ids: lista.map((v) => v.id), teste });
+  const r = await ponte.enviar({ tipo: 'iniciar', ids: lista.map((v) => v.id), teste });
   if (r && r.erro) return mostrarMsg(r.erro, 'var(--vermelho)');
   mostrarMsg(teste ? 'Testando… a aba do Detran foi aberta.' : 'Agendando… acompanhe abaixo.', 'var(--azul)');
 }
@@ -195,7 +207,7 @@ document.addEventListener('click', async (e) => {
     case 'testar-todos': return rodar(dados.veiculos.map((_, n) => n), true);
     case 'agendar-todos': return rodar(dados.veiculos.map((_, n) => n), false);
     case 'parar':
-      await chrome.runtime.sendMessage({ tipo: 'parar' });
+      await ponte.enviar({ tipo: 'parar' });
       break;
   }
 });
@@ -246,8 +258,7 @@ function desenharJob() {
   $('btn-todos').disabled = ativo;
 }
 
-chrome.storage.onChanged.addListener((mud, area) => {
-  if (area !== 'local') return;
+ponte.aoMudar((mud) => {
   if (mud[CHAVE_JOB]) {
     const eraAtivo = job && job.ativo;
     job = mud[CHAVE_JOB].newValue || null;
@@ -263,7 +274,7 @@ chrome.storage.onChanged.addListener((mud, area) => {
 });
 
 (async () => {
-  const st = await chrome.storage.local.get([CHAVE_DADOS, CHAVE_JOB]);
+  const st = await ponte.ler([CHAVE_DADOS, CHAVE_JOB]);
   if (st[CHAVE_DADOS]) dados = { ...dados, ...st[CHAVE_DADOS], opcoes: { ...dados.opcoes, ...(st[CHAVE_DADOS].opcoes || {}) } };
   job = st[CHAVE_JOB] || null;
   desenhar();

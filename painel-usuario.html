@@ -360,6 +360,19 @@
         <!-- Nossos Parceiros, acima das Consultas Novas (pedido do dono,
              01/11/2026). Para clientes da MC e parceiros: o servidor devolve a
              lista vazia para cliente de parceiro. renderParceirosDestaque(). -->
+        <!-- Agendamento Detran RJ (página /extensao-chrome, a tela da extensão
+             servida pelo site), acima dos Parceiros (pedido do dono,
+             03/11/2026). Escondido para cliente de parceiro: a página leva a
+             marca Despachantes Consultas. Mostrado em carregarDados(). -->
+        <a id="btn-agendamento-detran" href="/extensao-chrome" target="_blank" rel="noopener"
+          class="hidden mb-3 flex items-center gap-3 bg-gradient-to-r from-blue-800 to-blue-600 hover:from-blue-900 hover:to-blue-700 text-white rounded-xl px-4 py-3 shadow">
+          <span class="text-2xl flex-shrink-0">📅</span>
+          <span class="min-w-0 flex-1">
+            <span class="block font-bold">Agendamento Detran RJ — grátis</span>
+            <span class="block text-xs text-blue-100">Transferência de Propriedade, de Jurisdição e Troca de Município: você marca o captcha e a extensão do Chrome faz o resto.</span>
+          </span>
+          <span class="bg-white text-blue-800 text-sm font-semibold px-3 py-1.5 rounded-lg flex-shrink-0">Abrir ↗</span>
+        </a>
         <div id="catalog-parceiros-destaque" class="hidden mb-4"></div>
         <div id="catalog-novas-destaque" class="hidden mb-4"></div>
         <!-- Contrato Social LTDA com IA em faixa própria, a primeira de todas,
@@ -1526,7 +1539,10 @@ async function init() {
     if (!meRes.ok) { window.location.href = '/entrar'; return; }
     currentUser = await meRes.json();
     aplicarMarcaParceiro(currentUser.parceiro);
-    allServices   = (await svcRes.json()).services  || [];
+    if (!currentUser.parceiro || currentUser.role === 'reseller') {
+      document.getElementById('btn-agendamento-detran')?.classList.remove('hidden');
+    }
+    allServices   =(await svcRes.json()).services  || [];
     allServicesV2 = (await svcRes2.json()).services || [];
     allServicesV3 = (await svcRes3.json()).services || [];
     buildCategoryGridV2();

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Despachantes Consultas",
   "short_name": "Desp. Consultas",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Atalho para o painel da Despachantes Consultas, com o saldo à vista, e agendamento assistido no Detran RJ.",
   "homepage_url": "https://www.despachantesconsultas.com.br/",
   "icons": {
@@ -38,6 +38,11 @@
       "matches": ["https://www5.detran.rj.gov.br/_agendamento.eletronico/*"],
       "js": ["detran.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.despachantesconsultas.com.br/extensao-chrome*"],
+      "js": ["ponte-site.js"],
+      "run_at": "document_start"
     }
   ]
 }

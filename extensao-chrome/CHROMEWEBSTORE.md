@@ -48,7 +48,7 @@ PERMISSÃO
 SUPORTE
 contato@despachantesconsultas.com.br · WhatsApp (22) 99995-1574
 
-Versão 1.1.0 — agendamento assistido no Detran RJ.
+Versão 1.2.0 — agendamento assistido no Detran RJ, também pela página despachantesconsultas.com.br/extensao-chrome.
 ```
 
 **Categoria**: Produtividade (Productivity)
@@ -73,7 +73,7 @@ Ferramenta do despachante: mostra o saldo da conta na plataforma Despachantes Co
 
 | Permissão | Tipo | Justificativa |
 |---|---|---|
-| `https://www.despachantesconsultas.com.br/*` | host_permissions | Ao clicar no ícone, a extensão lê o nome e o saldo (ou o resumo da fatura pós-paga) da conta do próprio usuário no nosso site, usando o login que ele já fez lá. Também é usada para achar uma aba do site já aberta e reaproveitá-la ao abrir o painel. |
+| `https://www.despachantesconsultas.com.br/*` | host_permissions + content_scripts | Ao clicar no ícone, a extensão lê o nome e o saldo (ou o resumo da fatura pós-paga) da conta do próprio usuário no nosso site, usando o login que ele já fez lá. Também é usada para achar uma aba do site já aberta e reaproveitá-la ao abrir o painel. Um script (`ponte-site.js`) roda só na página `/extensao-chrome` do nosso site, que é a mesma tela do agendamento: ele entrega a essa página a lista de veículos guardada na extensão e repassa os botões Agendar/Parar. A lista não é enviada ao nosso servidor. |
 | `https://www5.detran.rj.gov.br/*` | host_permissions + content_scripts | O agendamento assistido preenche o formulário de agendamento de veículo do Detran RJ com os dados que o usuário cadastrou na extensão e escolhe cidade, posto, dia e horário. Os scripts só rodam em `/_agendamento.eletronico/*` e só agem na aba que a própria extensão abriu para o agendamento. O reCAPTCHA é sempre marcado pelo usuário: a extensão espera ele marcar e só então clica em Enviar. Um dos scripts roda no mundo da página (`world: MAIN`) apenas para registrar o texto dos avisos (alert) do site, que continuam aparecendo normalmente. |
 | `storage` | permissions | Guardar no próprio navegador a lista de veículos do agendamento e o andamento, para o usuário não digitar de novo e para o agendamento continuar entre as telas do Detran. |
 | `alarms` | permissions | Sem vaga, agendar a nova tentativa para o intervalo escolhido pelo usuário (o service worker dorme entre tentativas). |
@@ -121,6 +121,7 @@ Não há `tabs`, `cookies`, `scripting` nem `<all_urls>`.
 |---|---|---|---|
 | 1.0.0 | 27/09/2026 | Primeira versão: saldo/fatura e atalho para o painel | Rascunho |
 | 1.1.0 | 29/10/2026 | Agendamento assistido no Detran RJ (propriedade, jurisdição, município): permissões `storage`, `alarms`, `notifications` e host `www5.detran.rj.gov.br` | Rascunho |
+| 1.2.0 | 03/11/2026 | A tela do agendamento também abre como página do site (`/extensao-chrome`), pelo content script `ponte-site.js` só nessa página; nenhuma permissão nova | Rascunho |
 
 ## Observações para a revisão
 

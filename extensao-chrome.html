@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Agendamento assistido no Detran RJ: Transferência de Propriedade, Transferência de Jurisdição e Troca de Município, com a extensão Despachantes Consultas para o Chrome. Grátis.">
+  <title>Agendamento Detran RJ - DESPACHANTES CONSULTAS</title>
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+  <!-- A tela é a mesma da extensão (extensao-chrome/agendamento.*), servida
+       pelo site: o que mudar lá muda aqui. -->
+  <link rel="stylesheet" href="/extensao-chrome/agendamento.css">
+  <style>
+    .faixa-site { background:#0f172a; color:#cbd5e1; font-size:13px; padding:8px 20px; display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+    .faixa-site a { color:#fff; text-decoration:none; font-weight:600; }
+    .faixa-site a:hover { color:#fb923c; }
+    #instalar h2 { font-size:18px; margin-bottom:6px; }
+    #instalar p { font-size:14px; line-height:1.5; margin:8px 0; }
+    #instalar ol { font-size:14px; line-height:1.6; padding-left:20px; margin:8px 0; }
+    #instalar code { background:#eef2f7; padding:1px 5px; border-radius:4px; }
+    .opcoes-instalar { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:14px; margin-top:12px; }
+    .opcao { border:1px solid var(--borda); border-radius:10px; padding:14px; background:#fbfcfe; }
+    .opcao h3 { font-size:15px; margin:0 0 6px; }
+    .botao { display:inline-block; text-decoration:none; border-radius:7px; padding:9px 16px; font-size:14px; font-weight:700; background:var(--verde); color:#fff; margin-top:6px; }
+    .botao.azul { background:var(--azul); }
+    .aviso { background:#fffbeb; border:1px solid #fcd34d; color:var(--ambar); border-radius:8px; padding:10px 12px; font-size:13px; line-height:1.45; margin-top:10px; }
+    #carregando { color:var(--cinza); font-size:14px; padding:20px 0; text-align:center; }
+  </style>
+</head>
+<body>
+  <div class="faixa-site">
+    <a href="/">← DESPACHANTES CONSULTAS</a>
+    <span>Grátis · sem cadastro · os veículos ficam só no seu navegador</span>
+  </div>
+  <header>
+    <img src="/favicon-32x32.png" alt="" width="32" height="32">
+    <h1>Agendamento Detran RJ — assistido</h1>
+    <span id="estado">parado</span>
+  </header>
+
+  <main>
+    <p id="carregando">Procurando a extensão Despachantes Consultas neste navegador…</p>
+
+    <!-- Sem a extensão: uma página da internet não consegue abrir o site do
+         Detran numa aba, preencher e esperar o captcha — quem faz isso é a
+         extensão. Por isso o painel só aparece com ela instalada. -->
+    <section class="caixa" id="instalar" hidden>
+      <h2>🧩 Instale a extensão para agendar por esta página</h2>
+      <p>Agenda <strong>Transferência de Propriedade</strong>, <strong>Transferência de Jurisdição</strong> e <strong>Troca de Município</strong> no site do Detran RJ. Você só marca o "Não sou um robô"; a extensão escolhe a cidade, o posto, o primeiro dia e horário livres e, sem vaga, tenta de novo sozinha.</p>
+      <p>Quem abre o site do Detran e preenche é a extensão, no seu Chrome. Ela é grátis, não precisa de cadastro e <strong>os veículos ficam só no seu navegador</strong>: não vão para o nosso servidor.</p>
+      <p id="nao-chrome" class="aviso" hidden>Funciona no <strong>Google Chrome</strong> (ou no Microsoft Edge) <strong>no computador</strong>. Abra esta página por ele: www.despachantesconsultas.com.br/extensao-chrome</p>
+
+      <div class="opcoes-instalar">
+        <div class="opcao">
+          <h3>1. Baixar a extensão (versão com o agendamento)</h3>
+          <ol>
+            <li>Baixe o arquivo e <strong>descompacte</strong> (botão direito → <em>Extrair tudo</em>).</li>
+            <li>No Chrome, abra <code>chrome://extensions</code> e ligue o <strong>Modo do desenvolvedor</strong> (canto de cima, à direita).</li>
+            <li>Clique em <strong>Carregar sem compactação</strong> e escolha a pasta descompactada.</li>
+            <li>Volte para esta página e <strong>recarregue</strong> (F5).</li>
+          </ol>
+          <a class="botao" href="/assets/extensao-chrome.zip" download>⬇️ Baixar extensão (.zip)</a>
+          <div class="aviso"><strong>Aviso de "modo do desenvolvedor"?</strong> O Chrome mostra essa mensagem para toda extensão instalada fora da loja. <strong>É uma mensagem padrão; não quer dizer que a extensão é perigosa.</strong></div>
+        </div>
+        <div class="opcao">
+          <h3>2. Pela Chrome Web Store</h3>
+          <p>Instalação com um clique. A versão com o agendamento ainda está em análise na loja: se depois de instalar esta página continuar pedindo a extensão, use a opção 1.</p>
+          <a class="botao azul" href="https://chromewebstore.google.com/detail/despachantes-consultas/cjplmhogifgnenghbgkihdpkghghbiji?hl=pt-BR" target="_blank" rel="noopener">Abrir na Chrome Web Store ↗</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- Painel: mesmo HTML do extensao-chrome/agendamento.html. -->
+    <div id="alerta" hidden>⚠️ Marque o "Não sou um robô" na aba do Detran que a extensão abriu.</div>
+
+    <section class="caixa painel" hidden>
+      <div class="barra entre">
+        <h2>Veículos</h2>
+        <div class="barra">
+          <button data-acao="novo">+ Novo veículo</button>
+          <button data-acao="testar-todos">Testar todos</button>
+          <button class="verde" data-acao="agendar-todos" id="btn-todos">Agendar todos</button>
+          <button class="perigo" data-acao="parar" id="btn-parar" disabled>Parar</button>
+        </div>
+      </div>
+      <p class="dica">Tudo fica salvo neste Chrome, enquanto você digita. <strong>Testar</strong> abre o site do Detran e só preenche o formulário, sem enviar. <strong>Agendar</strong> para no captcha: marque-o na aba do Detran e o resto é automático (cidade, posto, primeiro dia e horário livres). Sem vaga, a extensão tenta de novo sozinha no intervalo escolhido.</p>
+      <p id="msg"></p>
+      <div id="lista"></div>
+    </section>
+
+    <section class="caixa painel" hidden>
+      <h2>Andamento</h2>
+      <div id="log"></div>
+    </section>
+
+    <section class="caixa painel" hidden>
+      <h2>Opções</h2>
+      <div class="grade">
+        <div><label for="o-intervaloMinutos">Minutos entre tentativas</label><input type="number" min="1" id="o-intervaloMinutos"></div>
+        <div><label for="o-maxTentativas">Máx. de tentativas por veículo (0 = até conseguir)</label><input type="number" min="0" id="o-maxTentativas"></div>
+      </div>
+      <p class="dica">Os dados dos veículos ficam só neste navegador (na extensão) e só vão para o site do Detran, no momento do agendamento. Nada é enviado para a Despachantes Consultas.</p>
+    </section>
+  </main>
+
+  <script>
+  // Fala com a extensão pela ponte-site.js (content script só desta página).
+  // O agendamento.js usa window.agendPonte no lugar do chrome.storage.
+  (function () {
+    var seq = 0, pendentes = {}, ouvintes = [];
+    window.addEventListener('message', function (e) {
+      var m = e.data;
+      if (e.source !== window || !m || !m.deExtensao) return;
+      if (m.mudou) { ouvintes.forEach(function (fn) { fn(m.mudou); }); return; }
+      if (pendentes[m.id]) { pendentes[m.id](m.resposta); delete pendentes[m.id]; }
+    });
+    function pedir(op, extra, ms) {
+      return new Promise(function (ok, falha) {
+        var id = ++seq;
+        pendentes[id] = function (r) {
+          // Erro de leitura/gravação é exceção; o de iniciar/parar segue para a
+          // tela, que mostra r.erro como na extensão.
+          if (r && r.erro && op !== 'enviar') falha(new Error(r.erro)); else ok(r);
+        };
+        window.postMessage(Object.assign({ paraExtensao: true, id: id, op: op }, extra), location.origin);
+        if (ms) setTimeout(function () { if (pendentes[id]) { delete pendentes[id]; falha(new Error('sem resposta')); } }, ms);
+      });
+    }
+    window.agendPonte = {
+      ler: function (chaves) { return pedir('ler', { chaves: [].concat(chaves) }); },
+      gravar: function (obj) { return pedir('gravar', { obj: obj }); },
+      enviar: function (msg) { return pedir('enviar', { msg: msg }); },
+      aoMudar: function (fn) { ouvintes.push(fn); },
+    };
+
+    async function acharExtensao() {
+      for (var i = 0; i < 5; i++) {
+        try { return await pedir('ping', {}, 400); } catch (e) { /* tenta de novo */ }
+      }
+      return null;
+    }
+
+    acharExtensao().then(function (ext) {
+      document.getElementById('carregando').hidden = true;
+      if (!ext) {
+        document.getElementById('instalar').hidden = false;
+        var chromeDesktop = /Chrome|Edg\//.test(navigator.userAgent) && !/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+        document.getElementById('nao-chrome').hidden = chromeDesktop;
+        return;
+      }
+      document.querySelectorAll('.painel').forEach(function (s) { s.hidden = false; });
+      var s = document.createElement('script');
+      s.src = '/extensao-chrome/agendamento.js';
+      document.body.appendChild(s);
+    });
+  })();
+  </script>
+</body>
+</html>
