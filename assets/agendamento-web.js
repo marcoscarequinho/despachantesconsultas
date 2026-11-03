@@ -238,7 +238,8 @@
       </div>
       <div class="aviso"><strong>Aviso de "modo do desenvolvedor"?</strong> O Chrome mostra essa mensagem para toda extensão instalada fora da loja: é uma mensagem padrão e não quer dizer que a extensão é perigosa. A versão com o agendamento ainda está em análise na Chrome Web Store; até lá, use o .zip.</div>`;
     const main = document.querySelector('main');
+    // Fica escondida até alguém clicar em "Agendar" sem a extensão: ao abrir,
+    // a página é só o painel, igual ao localhost:3939 (pedido do dono).
     if (main) main.prepend(caixa);
-    extensao.then((ext) => { if (!ext) mostrarInstalar(false); });
   });
 })();
