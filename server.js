@@ -2694,12 +2694,19 @@ app.use('/api', async (req, res, next) => {
 // A página avulsa não pode sair pelo servidor de estáticos (isso pularia a
 // validação do código de acesso) — redireciona para a rota controlada, que
 // exige ?codigo=XXXXXX ativo. Registrado ANTES do express.static de propósito.
-// Agendamento assistido no Detran RJ como página do site: é a tela da
-// extensão do Chrome (extensao-chrome/agendamento.*), que fala com a extensão
-// pela ponte-site.js. Antes do express.static porque existe a pasta
-// extensao-chrome/ — o static redirecionaria para "/extensao-chrome/".
+// Agendamento assistido no Detran RJ como página do site: é o MESMO painel do
+// http://localhost:3939 (ferramentas/agendamento-detran/painel.html), sem
+// cópia. O assets/agendamento-web.js entra antes do script do painel e
+// responde as /api dele no lugar do servidor.js — pela extensão do Chrome
+// (ponte-site.js) ou, sem ela, guardando a lista no próprio navegador. Antes
+// do express.static porque existe a pasta extensao-chrome/ — o static
+// redirecionaria para "/extensao-chrome/".
 app.get('/extensao-chrome', (req, res) => {
-  noCache(res); res.sendFile(path.join(__dirname, 'extensao-chrome.html'));
+  const painel = fs.readFileSync(path.join(__dirname, 'ferramentas', 'agendamento-detran', 'painel.html'), 'utf8');
+  noCache(res);
+  res.type('html').send(painel
+    .replace('<title>Agendamento Detran RJ</title>', '<title>Agendamento Detran RJ - DESPACHANTES CONSULTAS</title>\n<link rel="icon" href="/favicon.ico" sizes="any">')
+    .replace('</head>', '<script src="/assets/agendamento-web.js"></script>\n</head>'));
 });
 // Com acento, como o endereço é divulgado: chega codificado (%C3%A3).
 app.get(/^\/extens(?:%C3%A3|%c3%a3|ã)o-chrome\/?$/, (req, res) => res.redirect(301, '/extensao-chrome'));

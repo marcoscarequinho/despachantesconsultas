@@ -2,6 +2,10 @@
 
 Agenda **Transferência de Propriedade**, **Transferência de Jurisdição** e **Troca de Município** no site do Detran RJ. O script preenche a identificação e **para no reCAPTCHA**: você marca "Não sou um robô" na janela do Chrome e ele faz o resto (cidade/posto, primeiro dia e horário livres). Sem vaga, ele tenta de novo a cada `intervaloMinutos`, e cada tentativa pede o captcha de novo, com bipe e aviso no WhatsApp.
 
+## Pelo site (www.despachantesconsultas.com.br/extensao-chrome)
+
+O site serve este mesmo `painel.html` em `/extensao-chrome` (sem cópia: mexer aqui muda lá também). No lugar do `servidor.js`, quem responde as `/api` do painel é o `assets/agendamento-web.js`: com a extensão do Chrome (1.2.0+, `extensao-chrome/ponte-site.js`) a lista fica na extensão e o `background.js` dela faz o papel do `agendar.js`; sem a extensão, a lista fica no navegador e "Agendar" mostra como instalar — e a lista passa para a extensão quando ela aparecer. Nada vai para o servidor do site. Ali o painel esconde o WhatsApp e a "espera do captcha", que são só do `agendar.js`. Rota nova no painel (`/api/...`) precisa de resposta no `agendamento-web.js` também.
+
 ## Pelo instalador (computador do cliente)
 
 O site oferece em `/baixar-app` o `downloads/Instalar-Agendamento-Detran.exe`. Ele instala em `%LOCALAPPDATA%\Programs\Agendamento Detran RJ` (sem pedir administrador), baixa e instala o Node.js LTS de nodejs.org se faltar (aí o Windows pede permissão), e cria o atalho no Menu Iniciar e, se marcado, na Área de Trabalho e o início com o Windows. No lugar do `.bat`, quem roda é o `AgendamentoDetran.exe`: sobe o `servidor.js` sem janela, com um ícone perto do relógio (abrir, iniciar com o Windows, sair). A desinstalação fica em Configurações → Aplicativos e pergunta se apaga os veículos cadastrados.

@@ -1,7 +1,10 @@
 // Ponte entre a página do site (www.despachantesconsultas.com.br/extensao-chrome)
-// e a extensão: a página é a mesma tela do agendamento (agendamento.js), mas
-// numa página da internet não existe chrome.storage nem o background. Este
-// content script roda só nessa página e repassa, por postMessage, o mínimo:
+// e a extensão: a página é o painel do http://localhost:3939
+// (ferramentas/agendamento-detran/painel.html), e o assets/agendamento-web.js
+// do site responde as /api dele por aqui — o background.js faz o papel do
+// agendar.js. Numa página da internet não existe chrome.storage nem o
+// background, então este content script roda só nessa página e repassa, por
+// postMessage, o mínimo:
 // ler a lista e o andamento, gravar a lista, e iniciar/parar. O job continua
 // sendo do background.js (a página não grava agendJob), e a lista continua no
 // chrome.storage deste navegador — nunca vai para o servidor.

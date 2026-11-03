@@ -3,7 +3,7 @@
   "functions": {
     "api/index.js": {
       "maxDuration": 800,
-      "includeFiles": "{*.html,*.css,*.js,*.txt,*.xml,*.ico,*.png,downloads/*.exe,manifest.json,extensao-chrome/agendamento.*,.well-known/*.json,assets/*.pdf,assets/*.jpg,assets/*.png,assets/*.css,assets/*.js,assets/*.zip,assets/tour/*.mp4,assets/tour/*.webp}"
+      "includeFiles": "{*.html,*.css,*.js,*.txt,*.xml,*.ico,*.png,downloads/*.exe,manifest.json,ferramentas/*/painel.html,.well-known/*.json,assets/*.pdf,assets/*.jpg,assets/*.png,assets/*.css,assets/*.js,assets/*.zip,assets/tour/*.mp4,assets/tour/*.webp}"
     }
   },
   "rewrites": [
