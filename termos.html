@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Termos de Uso — DESPACHANTES CONSULTAS</title>
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <meta name="theme-color" content="#0f172a">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/assets/tema.css">
+  <script src="/assets/tema.js"></script>
+  <style>
+    .termos h2 { font-size: 1.05rem; font-weight: 700; color: #1e3a8a; margin: 1.75rem 0 .5rem; }
+    .termos p, .termos li { color: #374151; line-height: 1.65; margin: .4rem 0; }
+    .termos ul { list-style: disc; padding-left: 1.4rem; }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+  <header class="bg-white shadow-sm">
+    <div class="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
+      <a href="/" class="text-xl font-bold text-blue-900">DESPACHANTES CONSULTAS</a>
+      <a href="/painel" class="text-sm text-gray-500 hover:text-blue-700">← Painel</a>
+    </div>
+  </header>
+
+  <!-- Texto do dono (03/11/2026). Mudou o texto? Suba TERMOS_VERSAO no
+       server.js: cada recarga grava a versão que o cliente aceitou. -->
+  <main class="max-w-3xl mx-auto px-4 py-10">
+    <article class="termos bg-white rounded-2xl shadow-sm p-6 sm:p-10">
+      <h1 class="text-2xl font-bold text-gray-900">TERMOS DE USO E CONDIÇÕES DE SERVIÇO</h1>
+      <p class="text-sm text-gray-500">Plataforma: https://www.despachantesconsultas.com.br/ · Última atualização: 03/11/2026</p>
+
+      <h2 id="aceitacao">1. ACEITAÇÃO DOS TERMOS</h2>
+      <p>Ao cadastrar-se e utilizar a plataforma Despachantes Consultas (https://www.despachantesconsultas.com.br/), o usuário concorda expressa e integralmente com os presentes Termos de Uso. Caso não concorde com qualquer disposição aqui estabelecida, o usuário não deverá utilizar a plataforma.</p>
+
+      <h2 id="objeto">2. OBJETO DO SERVIÇO</h2>
+      <p>A Despachantes Consultas é uma plataforma intermediadora de dados que possibilita aos seus usuários a realização de consultas veiculares e cadastrais mediante a integração com bases de dados públicas e privadas, incluindo órgãos oficiais de trânsito como SENATRAN, DETRANs estaduais e fornecedores parceiros.</p>
+
+      <h2 id="recarga">3. SISTEMA DE RECARGA E SALDOS (SISTEMA PRÉ-PAGO)</h2>
+      <p>3.1. O acesso às consultas ocorre mediante o carregamento prévio de créditos (recarga) na conta do usuário dentro da plataforma.</p>
+      <p>3.2. Os valores inseridos na plataforma a título de recarga são destinados exclusivamente para o consumo de consultas disponíveis no site.</p>
+
+      <h2 id="nao-reembolso">4. POLÍTICA DE NÃO REEMBOLSO E CRÉDITOS EM CASO DE INDISPONIBILIDADE (API / SENATRAN / DETRAN)</h2>
+      <p>4.1. <strong>Não Reembolso:</strong> Os valores adicionados à plataforma através de recargas via Pix, boleto, cartão de crédito ou qualquer outro meio de pagamento não serão devolvidos ou estornados sob nenhuma hipótese, uma vez configurada a compra e disponibilização do crédito na conta do usuário.</p>
+      <p>4.2. <strong>Indisponibilidade de APIs e Sistemas Terceiros:</strong> A realização das consultas depende do pleno funcionamento de sistemas externos de terceiros e órgãos governamentais (incluindo, mas não se limitando a, SENATRAN, DETRANs e APIs de parceiros).</p>
+      <p>4.3. Se por qualquer motivo técnico ou instabilidade temporária — tais como: falta de conexão com APIs, manutenção nos sistemas do SENATRAN/DETRAN ou indisponibilidade pontual de servidor — a consulta solicitada não puder ser concluída:</p>
+      <ul>
+        <li><strong>O valor pago pela consulta específica não será perdido:</strong> o crédito correspondente permanecerá disponível na conta do usuário.</li>
+        <li><strong>Uso posterior:</strong> O valor ficará mantido em saldo para que o usuário realize uma nova tentativa de consulta assim que o sistema terceiro reestabelecer a conexão, ou para que seja utilizado em qualquer outro modalidade de consulta disponível na plataforma.</li>
+        <li><strong>Ausência de Estorno Financeiro:</strong> Instabilidades pontuais nos sistemas de trânsito ou de fornecedores de APIs não ensejam o estorno ou a devolução em dinheiro do saldo existente na plataforma.</li>
+      </ul>
+
+      <h2 id="responsabilidade">5. RESPONSABILIDADE SOBRE AS INFORMAÇÕES</h2>
+      <p>5.1. A plataforma atua como ponte de dados e não se responsabiliza por eventuais inconsistências, rasuras, atrasos ou erros de atualização presentes nas bases de dados originais dos órgãos oficiais (DETRAN, SENATRAN e Receita Federal).</p>
+      <p>5.2. Cabe ao usuário garantir a digitação correta dos dados de busca (Placa, Chassi, CPF, CNPJ, etc.). Consultas efetuadas com dados digitados incorretamente pelo próprio usuário serão cobradas normalmente.</p>
+
+      <h2 id="privacidade">6. USO DE DADOS E PRIVACIDADE (LGPD)</h2>
+      <p>O tratamento de dados pessoais e veiculares realizados pela plataforma obedece rigorosamente à Lei Geral de Proteção de Dados (Lei nº 13.709/2018 - LGPD). O usuário declara utilizar a plataforma apenas para finalidades legítimas e dentro do amparo legal.</p>
+
+      <h2 id="modificacoes">7. MODIFICAÇÕES DOS TERMOS</h2>
+      <p>A Despachantes Consultas reserva-se o direito de alterar estes Termos de Uso a qualquer momento, entrando em vigor imediatamente após a sua publicação na plataforma.</p>
+
+      <h2 id="foro">8. FORO</h2>
+      <p>Fica eleito o foro da comarca da sede da empresa administradora do site para dirimir quaisquer dúvidas ou litígios decorrentes destes Termos de Uso.</p>
+    </article>
+  </main>
+</body>
+</html>

@@ -2024,6 +2024,12 @@ async function initDB() {
   // conferência e conciliação com o extrato do Mercado Pago.
   await pool.query(`ALTER TABLE pix_payments ADD COLUMN IF NOT EXISTS method VARCHAR(10) NOT NULL DEFAULT 'PIX'`);
   await pool.query(`ALTER TABLE pix_payments ADD COLUMN IF NOT EXISTS charged_value NUMERIC(10,2)`);
+  // Aceite dos Termos de Uso na recarga (03/11/2026): data, versão e IP de
+  // quem marcou a caixa — é a prova num pedido de devolução ou contestação
+  // do cartão. Recarga anterior a isso fica NULL.
+  await pool.query(`ALTER TABLE pix_payments ADD COLUMN IF NOT EXISTS termos_aceitos_em TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE pix_payments ADD COLUMN IF NOT EXISTS termos_versao VARCHAR(20)`);
+  await pool.query(`ALTER TABLE pix_payments ADD COLUMN IF NOT EXISTS termos_ip VARCHAR(64)`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS subscriptions (
       id           SERIAL PRIMARY KEY,
@@ -8904,6 +8910,13 @@ const RECARGA_POS_PAGO_MSG =
   'Sua conta é pós-paga: as consultas entram na fatura com vencimento dia 30, não em créditos. ' +
   'Recarregar deixaria o dinheiro parado — pague a fatura em "Conta Pós-paga", no painel.';
 
+// Termos de Uso (termos.html, /termos): a recarga só é criada com a caixa
+// "Li e concordo" marcada, e a versão aceita fica no pix_payments junto com a
+// data e o IP. Mudou o texto dos termos? Suba a versão.
+const TERMOS_VERSAO = '2026-11-03';
+const TERMOS_RECARGA_MSG =
+  'Para recarregar, marque que leu e concorda com os Termos de Uso, inclusive a política de recarga e não estorno.';
+
 // Débito de uma consulta. Ponto ÚNICO: todo lugar que cobrava com
 // "UPDATE users SET credits = credits - ..." passa por aqui, senão o pós-pago
 // consumiria saldo que ele não tem e a fatura sairia zerada.
@@ -14797,6 +14810,7 @@ app.post('/api/cartao/recarga', requireAuth, bloquearApiPagamento, async (req, r
   const value = parseFloat(req.body?.value);
   if (!value || value < 5 || value > 10000)
     return res.status(400).json({ error: 'Valor inválido. Mínimo R$ 5,00, máximo R$ 10.000,00.' });
+  if (req.body?.aceite_termos !== true) return res.status(400).json({ error: TERMOS_RECARGA_MSG });
 
   try {
     const ur = await pool.query('SELECT id, name, email, cpf_cnpj, pos_pago FROM users WHERE id=$1', [req.user.id]);
@@ -14822,9 +14836,11 @@ app.post('/api/cartao/recarga', requireAuth, bloquearApiPagamento, async (req, r
       return res.status(402).json({ error: cartaoRecusaMsg(pagamento), statusDetail: pagamento.status_detail });
 
     await pool.query(
-      `INSERT INTO pix_payments (user_id, gateway_id, value, status, method, charged_value)
-       VALUES ($1,$2,$3,'PENDING',$4,$5) ON CONFLICT (gateway_id) DO NOTHING`,
-      [req.user.id, String(pagamento.id), value, metodoDaTabela(cartao.tipo), valorCobrado]
+      `INSERT INTO pix_payments (user_id, gateway_id, value, status, method, charged_value,
+                                 termos_aceitos_em, termos_versao, termos_ip)
+       VALUES ($1,$2,$3,'PENDING',$4,$5,NOW(),$6,$7) ON CONFLICT (gateway_id) DO NOTHING`,
+      [req.user.id, String(pagamento.id), value, metodoDaTabela(cartao.tipo), valorCobrado,
+       TERMOS_VERSAO, getClientIP(req).slice(0, 64)]
     );
 
     const out = respostaPagamentoCartao(pagamento);
@@ -14902,6 +14918,7 @@ app.post('/api/pix/criar', requireAuth, bloquearApiPagamento, async (req, res) =
   const value = parseFloat(req.body.value);
   if (!value || value < 5 || value > 10000)
     return res.status(400).json({ error: 'Valor inválido. Mínimo R$ 5,00, máximo R$ 10.000,00.' });
+  if (req.body?.aceite_termos !== true) return res.status(400).json({ error: TERMOS_RECARGA_MSG });
 
   try {
     const ur = await pool.query(
@@ -14933,9 +14950,9 @@ app.post('/api/pix/criar', requireAuth, bloquearApiPagamento, async (req, res) =
     if (!txData.qr_code) throw new Error('Mercado Pago não retornou o QR Code PIX.');
 
     await pool.query(
-      `INSERT INTO pix_payments (user_id, gateway_id, value, status)
-       VALUES ($1,$2,$3,'PENDING') ON CONFLICT (gateway_id) DO NOTHING`,
-      [req.user.id, String(payment.id), value]
+      `INSERT INTO pix_payments (user_id, gateway_id, value, status, termos_aceitos_em, termos_versao, termos_ip)
+       VALUES ($1,$2,$3,'PENDING',NOW(),$4,$5) ON CONFLICT (gateway_id) DO NOTHING`,
+      [req.user.id, String(payment.id), value, TERMOS_VERSAO, getClientIP(req).slice(0, 64)]
     );
 
     res.json({
@@ -19728,6 +19745,11 @@ app.get('/extensao/privacidade', (req, res) => {
 // instalado).
 app.get('/baixar-app', (req, res) => {
   noCache(res); res.sendFile(path.join(__dirname, 'baixar-app.html'));
+});
+// Termos de Uso (texto do dono, 03/11/2026). O cadastro e a recarga linkam
+// para cá; o aceite da recarga fica gravado no pagamento (ver TERMOS_VERSAO).
+app.get('/termos', (req, res) => {
+  noCache(res); res.sendFile(path.join(__dirname, 'termos.html'));
 });
 app.get('/cadastrar', async (req, res) => {
   if (await slugPorDominio(hostDaRequisicao(req)).catch(() => null)) return res.redirect('/');

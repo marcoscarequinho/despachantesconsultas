@@ -122,6 +122,22 @@
         </p>
       </div>
 
+      <!-- Termos de Uso (03/11/2026, pedidos de devolução): sem a caixa
+           marcada o servidor recusa a recarga (TERMOS_RECARGA_MSG), e o aceite
+           fica gravado no pagamento. Vale para PIX e cartão. -->
+      <div id="bloco-termos" class="bg-slate-50 border border-slate-300 rounded-lg p-4 text-sm text-gray-700 space-y-3">
+        <p class="font-semibold text-gray-800">📄 Política de recarga e não estorno</p>
+        <ul class="list-disc pl-5 space-y-1 text-gray-600">
+          <li>O valor recarregado vira crédito para consultas no site e <strong>não é devolvido nem estornado</strong> depois de creditado na sua conta.</li>
+          <li>Se uma consulta não sair por instabilidade do Detran, Senatran ou dos fornecedores, o valor dela <strong>continua no seu saldo</strong> para tentar de novo ou usar em outra consulta — sem devolução em dinheiro.</li>
+          <li>Consulta feita com dado digitado errado é cobrada normalmente.</li>
+        </ul>
+        <label class="flex items-start gap-3 cursor-pointer pt-1">
+          <input id="aceite-termos" type="checkbox" class="mt-0.5 w-5 h-5 flex-shrink-0 accent-orange-500">
+          <span>Li e concordo com os <a href="/termos" target="_blank" rel="noopener" class="text-blue-700 underline font-semibold">Termos de Uso</a>, inclusive com a política de recarga e não estorno em caso de indisponibilidade de APIs/órgãos oficiais.</span>
+        </label>
+      </div>
+
       <!-- Erro persistente -->
       <div id="erro-box" class="hidden bg-red-50 border border-red-300 rounded-lg p-4 text-sm text-red-800 break-words"></div>
 
@@ -332,7 +348,16 @@
       atualizarAviso();
     });
 
+    function aceitouTermos() {
+      return document.getElementById('aceite-termos').checked;
+    }
+
     function pagar() {
+      if (!aceitouTermos()) {
+        mostrarErro('Para continuar, marque que leu e concorda com os Termos de Uso.');
+        document.getElementById('bloco-termos').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
       if (PagamentoCartao.abrirLinkPagamento()) return;
       return metodo === 'pix' ? gerarPix() : pagarComCartao();
     }
@@ -378,7 +403,7 @@
         email: usuario.email,
         doc: usuario.cpf_cnpj,
         endpoint: '/api/cartao/recarga',
-        corpoExtra: { value: val },
+        corpoExtra: { value: val, aceite_termos: aceitouTermos() },
         textoBotao: 'Pagar ' + PagamentoCartao.brl(total),
         // O resumo acompanha a parcela escolhida em vez de ficar preso no "à
         // vista": parcelado, o total é o do Mercado Pago (com o juro do
@@ -437,7 +462,7 @@
         const r = await fetch('/api/pix/criar', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ value: val }),
+          body: JSON.stringify({ value: val, aceite_termos: aceitouTermos() }),
         });
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || 'Erro ao gerar PIX (HTTP ' + r.status + ')');
