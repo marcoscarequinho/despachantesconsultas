@@ -5821,9 +5821,18 @@ async function submitQuery(e) {
         // 402 = paywall da aba "Coisas de Despachantes". Abre o popup de
         // assinatura em vez do erro genérico, e reconcilia o status local (o
         // servidor é quem manda: a assinatura pode ter vencido com a aba aberta).
-        if (res.status === 402 && data.code) {
+        // Só os codes da assinatura: o pós-pago também responde 402
+        // (FATURA_VENCIDA, LIMITE_POS_PAGO) em QUALQUER consulta, e antes isso
+        // abria o popup de assinar até para quem tem assinatura vitalícia.
+        if (res.status === 402 && ['ASSINATURA_NECESSARIA', 'COTA_ESGOTADA'].includes(data.code)) {
           await loadAssinaturaStatus();
           abrirModalAssinatura(selectedSvc, data.code, data.error);
+          return;
+        }
+        if (res.status === 402 && ['FATURA_VENCIDA', 'LIMITE_POS_PAGO'].includes(data.code)) {
+          // Fatura vencida leva direto à Conta Pós-paga, onde está o PIX.
+          if (data.code === 'FATURA_VENCIDA') { toast(data.error, 'error'); showSection('fatura'); }
+          else showFormError(data.error);
           return;
         }
         showFormError(data.error || 'Erro ao realizar consulta.');
