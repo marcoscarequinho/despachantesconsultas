@@ -2265,6 +2265,36 @@ async function initDB() {
       alerta_enviado_em TIMESTAMPTZ
     );
   `);
+  // Consultas Fácil: também sem rota de saldo (04/11/2026: /saldo,
+  // /consultar-saldo, /api/saldo, /creditos, /me… dão o 404 do Express), então
+  // o saldo é ESTIMADO como o da DirectData — saldo informado pelo admin menos
+  // custo_consulta × respostas com PDF desde então. O que ela diz de verdade é
+  // "Saldo insuficiente para realizar a consulta." (400): isso marca
+  // sem_saldo_em e avisa o admin uma vez (ver registrarConsultaFacil).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS consultasfacil_consumo (
+      id          SERIAL PRIMARY KEY,
+      origem      VARCHAR(80),
+      placa       VARCHAR(10),
+      http_status INTEGER,
+      pdf         BOOLEAN DEFAULT false,
+      custo       NUMERIC(10,2) DEFAULT 0,
+      resposta    VARCHAR(200),
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_consultasfacil_consumo_data ON consultasfacil_consumo(created_at);`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS consultasfacil_saldo (
+      id                INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      saldo_base        NUMERIC(12,2) NOT NULL DEFAULT 0,
+      base_em           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      custo_consulta    NUMERIC(10,2) NOT NULL DEFAULT 0,
+      alerta_abaixo     NUMERIC(12,2) NOT NULL DEFAULT 30,
+      alerta_enviado_em TIMESTAMPTZ,
+      sem_saldo_em      TIMESTAMPTZ
+    );
+  `);
   // Saldo de créditos do CNPJá (Consulta CNPJ Completa) — lido de GET /credit
   // depois de cada consulta; ver conferirSaldoCnpja.
   await pool.query(`
@@ -8133,6 +8163,7 @@ async function fetchAndExtractAtpveFromConsultasFacil(placa) {
     headers: { 'Content-Type': 'application/json', chaveAcesso: CONSULTASFACIL_KEY },
     body: JSON.stringify({ placa }),
   });
+  await registrarConsultaFacil(r, placa, 'Número ATPVe (consulta interna)');
   return extractAtpveFieldsFromConsultasFacilPdf(r, Buffer.from(await r.arrayBuffer()));
 }
 
@@ -10431,6 +10462,53 @@ async function registrarConsumoDirectData({ serviceId, svc, meta, custo, queryId
   } catch (e) { console.error('[directdata] erro ao registrar consumo:', e.message); }
 }
 
+async function saldoConsultaFacil() {
+  await pool.query(`INSERT INTO consultasfacil_saldo (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+  const { rows: [s] } = await pool.query(`SELECT * FROM consultasfacil_saldo WHERE id = 1`);
+  const { rows: [c] } = await pool.query(
+    `SELECT COALESCE(SUM(custo),0)::float AS gasto, COUNT(*) FILTER (WHERE pdf)::int AS n
+       FROM consultasfacil_consumo WHERE created_at >= $1`, [s.base_em]);
+  return {
+    saldoBase: Number(s.saldo_base), baseEm: s.base_em, custoConsulta: Number(s.custo_consulta),
+    gastoDesdeBase: c.gasto, consultasDesdeBase: c.n,
+    saldoEstimado: Math.round((Number(s.saldo_base) - c.gasto) * 100) / 100,
+    alertaAbaixo: Number(s.alerta_abaixo), alertaEnviadoEm: s.alerta_enviado_em,
+    semSaldoEm: s.sem_saldo_em,
+  };
+}
+
+// Registra cada chamada à Consultas Fácil (lê um clone, a resposta segue
+// intacta para quem chamou). Só resposta com PDF desconta o custo. "Saldo
+// insuficiente" e saldo estimado abaixo do alerta avisam o ADMIN_PHONE uma vez
+// cada; os dois avisos rearmam quando o admin informa um saldo novo.
+async function registrarConsultaFacil(resp, placa, origem) {
+  try {
+    const buf = Buffer.from(await resp.clone().arrayBuffer());
+    const pdf = resp.ok && buf.slice(0, 4).toString('latin1') === '%PDF';
+    const texto = pdf ? 'PDF' : buf.toString('utf8').replace(/\s+/g, ' ').slice(0, 200);
+    const s0 = await saldoConsultaFacil();
+    const custo = pdf ? s0.custoConsulta : 0;
+    await pool.query(
+      `INSERT INTO consultasfacil_consumo (origem, placa, http_status, pdf, custo, resposta) VALUES ($1,$2,$3,$4,$5,$6)`,
+      [String(origem || '').slice(0, 80), String(placa || '').toUpperCase().slice(0, 10), resp.status, pdf, custo, texto]);
+    if (!pdf && /saldo insuficiente/i.test(texto)) {
+      const marcou = await pool.query(
+        `UPDATE consultasfacil_saldo SET sem_saldo_em = NOW() WHERE id = 1 AND sem_saldo_em IS NULL RETURNING id`);
+      if (marcou.rowCount && ADMIN_PHONE)
+        await sendWhatsApp(ADMIN_PHONE, `🚨 *Consultas Fácil sem saldo*\nA API respondeu "Saldo insuficiente para realizar a consulta." (placa ${String(placa || '').toUpperCase()}).\n\nEnquanto isso a Reemissão da ATPVe e o Numero ATPVe Brasil vão só pela despbrasil. Recarregue no painel da Consultas Fácil e informe o saldo novo no admin, em *Saldo Consultas Fácil*.`, { marca: false }).catch(() => {});
+      return;
+    }
+    if (!custo) return;
+    const s = await saldoConsultaFacil();
+    if (s.saldoEstimado < s.alertaAbaixo && !s.alertaEnviadoEm) {
+      const marcou = await pool.query(
+        `UPDATE consultasfacil_saldo SET alerta_enviado_em = NOW() WHERE id = 1 AND alerta_enviado_em IS NULL RETURNING id`);
+      if (marcou.rowCount && ADMIN_PHONE)
+        await sendWhatsApp(ADMIN_PHONE, `⚠️ *Saldo Consultas Fácil baixo*\nSaldo estimado: ${fmtMoneyBRL(s.saldoEstimado)} (alerta abaixo de ${fmtMoneyBRL(s.alertaAbaixo)}).\n\nRecarregue no painel da Consultas Fácil e informe o saldo novo no admin, em *Saldo Consultas Fácil*.`, { marca: false }).catch(() => {});
+    }
+  } catch (e) { console.error('[consultasfacil] erro ao registrar consumo:', e.message); }
+}
+
 // Assinatura no padrão Standard Webhooks/Svix (segredo "whsec_<base64>"):
 // HMAC-SHA256 de "<id>.<timestamp>.<corpo>", base64, no header
 // webhook-signature (ou svix-signature) como "v1,<assinatura>" — pode vir mais
@@ -12558,6 +12636,9 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
       fetchOpts.body = JSON.stringify(body);
     }
     let apiRes = await fetch(apiUrl, fetchOpts);
+    // Antes de qualquer reserva trocar o apiRes (ver Numero ATPVe Brasil abaixo).
+    if (apiUrl.startsWith(CONSULTASFACIL_BASE_URL))
+      await registrarConsultaFacil(apiRes, body?.placa, service?.name || serviceId);
     // ATPV-e: cidade recusada pelo nome do IBGE ("PARATY/RJ DO COMPRADOR NAO
     // LOCALIZADO") vai de novo com o nome da tabela do Detran — ver
     // MUNICIPIOS_NOME_DETRAN. A recusa da cidade vem antes do registro e não cobra.
@@ -18359,6 +18440,54 @@ app.post('/api/admin/directdata/saldo', requireAuth, requireSuperAdmin, async (r
     res.json({ ok: true, saldo: await saldoDirectData() });
   } catch (e) {
     console.error('[admin/directdata/saldo] erro:', e.message);
+    res.status(500).json({ error: 'Erro ao salvar.' });
+  }
+});
+
+app.get('/api/admin/consultasfacil', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const saldo = await saldoConsultaFacil();
+    const { rows: [periodo] } = await pool.query(`
+      SELECT COALESCE(SUM(custo) FILTER (WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'),0)::float AS hoje,
+             COUNT(*) FILTER (WHERE pdf AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo')::int AS hoje_n,
+             COALESCE(SUM(custo) FILTER (WHERE created_at >= date_trunc('month', NOW() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'),0)::float AS mes,
+             COUNT(*) FILTER (WHERE pdf AND created_at >= date_trunc('month', NOW() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo')::int AS mes_n
+        FROM consultasfacil_consumo`);
+    const { rows: consumo } = await pool.query(`
+      SELECT id, origem, placa, http_status, pdf, custo::float AS custo, resposta, created_at
+        FROM consultasfacil_consumo ORDER BY created_at DESC LIMIT 50`);
+    res.json({ saldo, hoje: periodo.hoje, hojeConsultas: periodo.hoje_n, mes: periodo.mes, mesConsultas: periodo.mes_n,
+      consumo, chaveConfigurada: !!CONSULTASFACIL_KEY });
+  } catch (e) {
+    console.error('[admin/consultasfacil] erro:', e.message);
+    res.status(500).json({ error: 'Erro ao carregar o saldo da Consultas Fácil.' });
+  }
+});
+
+// Admin informa o saldo do painel da Consultas Fácil, o custo de cada consulta
+// e/ou o valor do alerta. Informar saldo rearma os dois avisos.
+app.post('/api/admin/consultasfacil/saldo', requireAuth, requireSuperAdmin, async (req, res) => {
+  const num = v => (v === undefined || v === null || v === '') ? null : Number(String(v).replace(',', '.'));
+  const saldo = num(req.body?.saldo), alerta = num(req.body?.alertaAbaixo), custo = num(req.body?.custoConsulta);
+  if (saldo !== null && (!Number.isFinite(saldo) || saldo < 0 || saldo > 1e7))
+    return res.status(400).json({ error: 'Saldo inválido.' });
+  if (alerta !== null && (!Number.isFinite(alerta) || alerta < 0 || alerta > 1e6))
+    return res.status(400).json({ error: 'Valor do alerta inválido.' });
+  if (custo !== null && (!Number.isFinite(custo) || custo < 0 || custo > 1000))
+    return res.status(400).json({ error: 'Custo por consulta inválido.' });
+  if (saldo === null && alerta === null && custo === null)
+    return res.status(400).json({ error: 'Informe o saldo, o custo por consulta ou o valor do alerta.' });
+  try {
+    await pool.query(`INSERT INTO consultasfacil_saldo (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+    if (saldo !== null)
+      await pool.query(`UPDATE consultasfacil_saldo SET saldo_base = $1, base_em = NOW(), alerta_enviado_em = NULL, sem_saldo_em = NULL WHERE id = 1`, [saldo]);
+    if (custo !== null)
+      await pool.query(`UPDATE consultasfacil_saldo SET custo_consulta = $1 WHERE id = 1`, [custo]);
+    if (alerta !== null)
+      await pool.query(`UPDATE consultasfacil_saldo SET alerta_abaixo = $1 WHERE id = 1`, [alerta]);
+    res.json({ ok: true, saldo: await saldoConsultaFacil() });
+  } catch (e) {
+    console.error('[admin/consultasfacil/saldo] erro:', e.message);
     res.status(500).json({ error: 'Erro ao salvar.' });
   }
 });
