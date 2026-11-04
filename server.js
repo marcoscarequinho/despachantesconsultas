@@ -373,6 +373,10 @@ const DESPBRASIL_SVCS = {
   // buildVerificarCrlvDataCrvPdfBuffer) e tem preço próprio.
   'verificar-crlv-data-crv': { servico: 'verificar_crlv' },
   'consulta-renavam':  { servico: 'consulta_renavam' },
+  // Comunicação de Venda só com a placa (R$ 4,50 de custo, ~19 s), 04/11/2026.
+  // O PDF deles não tem marca (KGU3A76). É também a reserva da Consulta
+  // Comunicado do portal no ATPVe (fetchComunicadoDataVendaDespbrasil).
+  'comunicado-venda-placa': { servico: 'comunicado_venda', arquivo: 'mcdespachadoria-comunicado-venda' },
   'consultar-Numero-ATPVE': { servico: 'numero_atpve' },
   // CRLV-e SP v2. Conferido em 01/10/2026 (EFE5600, ~10 s, PDF de 1 página).
   // Mais cedo no mesmo dia a rota devolvia 500 "Erro interno" para toda placa
@@ -1317,6 +1321,8 @@ const SERVICES = [
   { id:'verificar-crlv',         name:'Verificar CRLV e Último Licenciamento', group:'Consultas Básicas', basePrice:3.00, noMarkup:true, inputType:'placa', icon:'📑' },
   // API despbrasil.com.br (serviço "consulta_renavam") — ver DESPBRASIL_SVCS.
   { id:'consulta-renavam',       name:'Consulta RENAVAM',                     group:'Consultas Básicas', basePrice:3.00, noMarkup:true, inputType:'placa', icon:'🧾' },
+  // API despbrasil.com.br (serviço "comunicado_venda") — ver DESPBRASIL_SVCS.
+  { id:'comunicado-venda-placa', name:'Comunicação de Venda',                 group:'Consultas Básicas', basePrice:12.00, noMarkup:true, inputType:'placa', icon:'📝' },
   // ── Débitos e Documentação ──
   { id:'consulta-debitos-portal',          name:'Consulta de Débitos',          group:'Débitos e Documentação', basePrice:1.0714, inputType:'placa',       icon:'💳' },
   { id:'consultar-licenciamento',         name:'Licenciamento + BIN',          group:'Débitos e Documentação', basePrice:10.00, inputType:'placa',        icon:'📋' },
@@ -7060,6 +7066,9 @@ async function fetchComunicadoDataVendaUmaVez(placa, renavam) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', chaveAcesso: PORTAL_DESP_KEY },
     body: JSON.stringify({ placa, renavam }),
+    // Fora do ar o portal leva ~135 s para dizer "Consulta indisponível"
+    // (KGU3A76, 04/11/2026) — com a reserva da despbrasil, esperar isso só atrasa.
+    signal: AbortSignal.timeout(PORTAL_PROP_TIMEOUT_MS),
   });
   const buf = Buffer.from(await r.arrayBuffer());
   if (!r.ok) throw new Error(`HTTP ${r.status} — resposta: ${buf.toString('utf8').slice(0, 300)}`);
@@ -7091,12 +7100,77 @@ async function fetchComunicadoDataVenda(placa, renavam) {
       console.error(`[consultar-Numero-ATPVE] Consulta Comunicado falhou na tentativa ${tentativa}/${TENTATIVAS} (placa ${placa}):`, e.message);
       if (tentativa < TENTATIVAS && /simult[aâ]neas|aguarde a libera/i.test(e.message)) {
         await new Promise(r => setTimeout(r, 16000));
+      } else if (e.name === 'TimeoutError' || /indispon[ií]vel/i.test(e.message)) {
+        break;   // fora do ar: repetir é esperar de novo à toa — a despbrasil cobre
       } else if (tentativa >= 2) {
         break;   // erro que não é de limite: duas tentativas bastam, como antes
       }
     }
   }
+  // Reserva: comunicado_venda da despbrasil (pedido do dono, 04/11/2026). Na
+  // KGU3A76 o portal estava fora e o ATPVe saía recusado por falta da data.
+  try {
+    return await fetchComunicadoDataVendaDespbrasil(placa);
+  } catch (e) {
+    console.error(`[consultar-Numero-ATPVE] Comunicado de venda da despbrasil (reserva) falhou (placa ${placa}):`, e.message);
+  }
   return { consultado: false, dataVenda: null };
+}
+
+// comunicado_venda da despbrasil (R$ 4,50, só placa, ~19 s). A doc mostra
+// dados.data_venda, mas a resposta real (KGU3A76, 04/11/2026) traz a lista
+// dados.ocorrencias[] com dataVenda em ISO — as duas formas são lidas. A data
+// NÃO vem com o dia a menos do portal: a venda saiu 2025-03-26 10:52 e a
+// intenção do ATPVe é de 26/03/2025 09:13, então não leva o +1.
+// Com mais de uma ocorrência vale a "Ativo"; sem ela, a de data mais recente.
+async function fetchComunicadoDataVendaDespbrasil(placa) {
+  const r = await fetch(DESPBRASIL_BASE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', chaveAcesso: DESPBRASIL_KEY },
+    body: JSON.stringify({ servico: 'comunicado_venda', placa }),
+    signal: AbortSignal.timeout(60000),
+  });
+  const j = await r.json().catch(() => null);
+  if (!r.ok || !j?.sucesso) throw new Error(`HTTP ${r.status} — resposta: ${JSON.stringify(j?.erro || j?.mensagem || j).slice(0, 300)}`);
+  // Placa já consultada volta do cache deles SEM "dados", só com o PDF
+  // (from_cache:true, pdf_base64 + arquivo_url — KGU3A76, 04/11/2026). Aí a
+  // data sai do texto: cada "COMUNICAÇÃO n DE m" tem "DATA DA VENDA" e
+  // "SITUAÇÃO" com o valor na linha seguinte.
+  if (!j.dados) {
+    let buf = j.pdf_base64 ? Buffer.from(j.pdf_base64, 'base64') : null;
+    if ((!buf || buf.slice(0, 4).toString('latin1') !== '%PDF') && j.arquivo_url) {
+      const p = await fetch(j.arquivo_url, { signal: AbortSignal.timeout(30000) });
+      if (!p.ok) throw new Error(`PDF do cache HTTP ${p.status}`);
+      buf = Buffer.from(await p.arrayBuffer());
+    }
+    if (!buf) throw new Error('resposta do cache sem dados e sem PDF');
+    const { text } = await pdfParseTolerante(buf);
+    const blocos = String(text || '').split(/COMUNICA[ÇC][ÃA]O\s+\d+\s+DE\s+\d+/i).slice(1);
+    const ocorrencias = blocos.map(b => ({
+      dataVenda: (/DATA DA VENDA\s*\n\s*([^\n]+)/i.exec(b) || [])[1],
+      situacao:  (/SITUA[ÇC][ÃA]O\s*\n\s*([^\n]+)/i.exec(b) || [])[1],
+    }));
+    if (!ocorrencias.length && !/\b0\s+COMUNICA/i.test(text || '')) {
+      throw new Error(`PDF do cache sem comunicação legível: ${String(text || '').replace(/\s+/g, ' ').slice(0, 200)}`);
+    }
+    j.dados = { ocorrencias };
+  }
+  const d = j.dados;
+  const paraBr = (v) => {
+    const s = String(v || '').trim();
+    const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+    if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
+    const br = DATA_BR_RE.exec(s);
+    return br ? br[1] : null;
+  };
+  const ocorrencias = (Array.isArray(d.ocorrencias) ? d.ocorrencias : [])
+    .map(o => ({ data: paraBr(o?.dataVenda), ativo: /^ativ/i.test(String(o?.situacao || '')), iso: String(o?.dataVenda || '') }))
+    .filter(o => o.data);
+  const escolhida = ocorrencias.find(o => o.ativo) || ocorrencias.sort((a, b) => b.iso.localeCompare(a.iso))[0];
+  const dataVenda = escolhida?.data || paraBr(d.data_venda);
+  // Respondeu sem data: a placa não tem comunicação registrada (como o
+  // consultado:true do portal) — a data da ATPVe é a impressa.
+  return { consultado: true, dataVenda };
 }
 
 // ── CRLV-e Rio, com Comunicação de Venda ────────────────────────────────────────
