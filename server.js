@@ -1322,7 +1322,7 @@ const SERVICES = [
   // API despbrasil.com.br (serviço "consulta_renavam") — ver DESPBRASIL_SVCS.
   { id:'consulta-renavam',       name:'Consulta RENAVAM',                     group:'Consultas Básicas', basePrice:3.00, noMarkup:true, inputType:'placa', icon:'🧾' },
   // API despbrasil.com.br (serviço "comunicado_venda") — ver DESPBRASIL_SVCS.
-  { id:'comunicado-venda-placa', name:'Comunicação de Venda',                 group:'Consultas Básicas', basePrice:12.00, noMarkup:true, inputType:'placa', icon:'📝' },
+  { id:'comunicado-venda-placa', name:'Consulta do Comunicação de Venda',     group:'Consultas Básicas', basePrice:12.00, noMarkup:true, inputType:'placa', icon:'📝' },
   // ── Débitos e Documentação ──
   { id:'consulta-debitos-portal',          name:'Consulta de Débitos',          group:'Débitos e Documentação', basePrice:1.0714, inputType:'placa',       icon:'💳' },
   { id:'consultar-licenciamento',         name:'Licenciamento + BIN',          group:'Débitos e Documentação', basePrice:10.00, inputType:'placa',        icon:'📋' },
