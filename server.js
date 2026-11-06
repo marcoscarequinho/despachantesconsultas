@@ -19943,6 +19943,13 @@ app.get('/extensao/privacidade', (req, res) => {
 app.get('/baixar-app', (req, res) => {
   noCache(res); res.sendFile(path.join(__dirname, 'baixar-app.html'));
 });
+// Versão Java do Agendamento Detran (06/11/2026, ferramentas/agendamento-detran-java):
+// .zip com Java reduzido da Microsoft (assinado) + .jar, sem .exe nosso, para
+// não cair no aviso do SmartScreen. Tem ~15 MB, acima dos 4,5 MB da function,
+// então o arquivo fica no GitHub (repositório público) e esta rota só redireciona
+// — trocar onde ele mora é mexer só aqui.
+const AGENDAMENTO_JAVA_ZIP = 'https://github.com/marcoscarequinho/despachantesconsultas/raw/main/downloads-java/Agendamento-Detran-RJ-Java.zip';
+app.get('/baixar-app/java', (req, res) => res.redirect(302, AGENDAMENTO_JAVA_ZIP));
 // Termos de Uso (texto do dono, 03/11/2026). O cadastro e a recarga linkam
 // para cá; o aceite da recarga fica gravado no pagamento (ver TERMOS_VERSAO).
 app.get('/termos', (req, res) => {
