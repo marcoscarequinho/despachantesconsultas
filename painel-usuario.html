@@ -3734,7 +3734,8 @@ const NOVAS_SUBGRUPOS = ['Emissão de ATPV-e', 'Cancelamentos', 'Documentos do v
 // ATPV-e RJ da Vistocar (voltou em 01/11/2026, pedido do dono): é de outro
 // grupo, mas aparece aqui como "opção 2", logo abaixo da Emissão de ATPV-e.
 function novasAtpveOpcao2Card() {
-  const s = allServices.find(x => x.id === 'atpve-vistocar-rj' && !x.unavailable);
+  // Fica visível mesmo suspenso: abre o formulário com o aviso do servidor.
+  const s = allServices.find(x => x.id === 'atpve-vistocar-rj');
   if (!s) return '';
   return `
     <button type="button" onclick="selectService(${JSON.stringify(s).replace(/"/g,"&quot;")})"

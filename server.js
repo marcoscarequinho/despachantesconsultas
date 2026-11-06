@@ -1789,6 +1789,22 @@ const SERVICES = [
     slowNote:'A emissão por este caminho está suspensa temporariamente. Use a nova Emissão de ATPV-e (Intenção de Venda), na página "ATPVe’s e Consultas Novas".' },
 ];
 
+// Vistocar fora (06/11/2026, decisão do dono): contrato com o fornecedor em
+// reformulação. Toda consulta que chama a Vistocar fica "unavailable" com este
+// aviso — o painel mostra o selo "Em manutenção" e o alerta no formulário com o
+// botão desligado, e processCatalogQuery recusa o pedido (inclusive pela API de
+// chave). Pedidos antigos seguem pelo cron/webhook. Para religar: VISTOCAR_FORA = false.
+const VISTOCAR_FORA = true;
+const VISTOCAR_FORA_MSG = 'ESSA CONSULTA ESTÁ TEMPORARIAMENTE FORA, ESTAMOS REFORMULANDO NOSSO CONTRATO COM O FORNECEDOR, TENTE OUTRA CONSULTA SIMILAR NA PLATAFORMA';
+if (VISTOCAR_FORA) {
+  // Os do VISTOCAR_ENDPOINTS + o Código de Segurança da assinatura, que usa a
+  // mesma rota security-code num bloco próprio.
+  const ids = new Set([...Object.keys(VISTOCAR_ENDPOINTS), ASSINATURA_CRV_SERVICE_ID]);
+  for (const s of SERVICES) {
+    if (ids.has(s.id)) { s.unavailable = true; s.slowNote = VISTOCAR_FORA_MSG; }
+  }
+}
+
 // Serviços desta categoria não retornam resultado na hora: o pedido fica
 // pendente até o super admin subir o PDF manualmente (ver /api/admin/manual-queries).
 const MANUAL_UPLOAD_GROUP = 'Número CRV (Apenas antigos)';
