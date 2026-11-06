@@ -6,7 +6,7 @@ Segunda opção da página `/baixar-app` (06/11/2026, pedido do dono): o mesmo a
 
 - Os únicos executáveis do pacote são os do **Java da Microsoft** (`java/bin/javaw.exe` e DLLs), que vêm assinados por ela.
 - O Java vai **reduzido pelo jlink** (só `java.base`, `java.net.http`, `jdk.httpserver`, ~25 MB). O jlink monta o runtime a partir dos `.jmod`, que trazem os binários **sem assinatura**. Por isso o `build.ps1` copia por cima os mesmos `.exe`/`.dll` do JDK instalado (idênticos, só que assinados) e **falha se algum ficar sem assinatura**.
-- Quem a pessoa clica é `Abrir Agendamento Detran.cmd` (só um `start javaw -jar`). Foi testado com o arquivo marcado como baixado da internet (Zone.Identifier 3): o `.cmd` abriu direto, e o `.vbs` parou numa janela de "Aviso de segurança", por isso ele ficou de fora.
+- Quem a pessoa clica é `Abrir Agendamento Detran.cmd` (entra na pasta e chama `javaw -cp … Main`). A primeira versão, com `start "" "%~dp0javabinjavaw.exe" -jar …`, fez o Windows Defender marcar o .zip como `Trojan:Script/Ulthar.A!ml` (palpite do modelo, só com .cmd + .jar + Java juntos); o build agora escaneia o pacote e falha se o Defender reclamar. Foi testado com o arquivo marcado como baixado da internet (Zone.Identifier 3): o `.cmd` abriu direto, e o `.vbs` parou numa janela de "Aviso de segurança", por isso ele ficou de fora.
 - **Não confirmado:** neste computador o SmartScreen deixou passar até um .exe de teste sem assinatura, então não deu para reproduzir o aviso. Falta conferir num PC "limpo", baixando pelo site.
 
 ## Como é por dentro

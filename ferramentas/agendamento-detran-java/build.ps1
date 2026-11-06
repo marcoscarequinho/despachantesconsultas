@@ -52,7 +52,13 @@ if ($semAssinatura) { throw "binários sem assinatura válida: $($semAssinatura.
 # 6) atalho e instruções. .cmd e não .vbs: o .vbs baixado da internet para numa
 #    janela de "Aviso de segurança"; o .cmd só abre o javaw (sem janela preta).
 $raiz = "$tmp\pacote\Agendamento Detran RJ"
-$cmd = "@echo off`r`nstart `"`" `"%~dp0java\bin\javaw.exe`" -jar `"%~dp0app\agendamento.jar`"`r`n"
+#    O texto do .cmd importa: com 'start "" "%~dp0java\bin\javaw.exe" -jar
+#    "%~dp0app\agendamento.jar"' o Windows Defender marcou o .zip inteiro como
+#    Trojan:Script/Ulthar.A!ml (06/11/2026) — palpite do modelo de "script que
+#    roda o executável que veio junto", só com .cmd + .jar + Java no mesmo zip.
+#    Entrando na pasta e chamando a classe pelo -cp, o mesmo pacote passou
+#    limpo no MpCmdRun. Mexeu aqui? Rode o build: ele escaneia o .zip no fim.
+$cmd = "@echo off`r`nrem Agendamento Detran RJ - Despachantes Consultas`r`ncd /d `"%~dp0`"`r`nstart `"Agendamento Detran`" java\bin\javaw.exe -cp app\agendamento.jar br.com.despachantesconsultas.agendamento.Main`r`n"
 [IO.File]::WriteAllText("$raiz\Abrir Agendamento Detran.cmd", $cmd, [Text.Encoding]::ASCII)
 $leia = @"
 AGENDAMENTO DETRAN RJ - versão Java
@@ -85,4 +91,12 @@ try {
   }
 } finally { $zip.Dispose() }
 $mb = (Get-Item $saida).Length / 1MB
+
+# 8) o Defender aceita? (o modelo dele já barrou este pacote uma vez)
+$mp = "$env:ProgramFiles\Windows Defender\MpCmdRun.exe"
+if (Test-Path $mp) {
+  $scan = (& $mp -Scan -ScanType 3 -File (Resolve-Path $saida) -DisableRemediation | Out-String)
+  if ($scan -notmatch 'found no threats') { throw "o Windows Defender marcou o pacote:`n$scan" }
+  Write-Output 'Windows Defender: nenhuma ameaça.'
+}
 Write-Output ("Pacote: {0} ({1:N1} MB)" -f (Resolve-Path $saida), $mb)
