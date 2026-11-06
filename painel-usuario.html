@@ -1459,7 +1459,7 @@ const fmtDate = s => {
 
 // ── Toast ──────────────────────────────────────────────────────────────────────
 function toast(msg, type = 'success') {
-  document.getElementById('toast-icon').textContent = type === 'success' ? '✅' : '❌';
+  document.getElementById('toast-icon').textContent = type === 'success' ? '✅' : type === 'aviso' ? '⚠️' : '❌';
   document.getElementById('toast-msg').textContent = msg;
   const modal = document.getElementById('toast-modal');
   modal.classList.remove('hidden');
@@ -3122,6 +3122,8 @@ function catalogKeydown(ev) {
 function openCatalogService(id) {
   const svc = allServices.find(s => s.id === id);
   if (!svc) { toast('Este serviço não está mais disponível.', 'error'); return; }
+  // Suspenso: só o pop-up, sem sair da Visão Geral (ver selectService).
+  if (svc.unavailable && svc.slowNote && svc.id !== 'atpve-vistocar-mg') { toast(svc.slowNote, 'aviso'); return; }
   quickSelect(id);
 }
 
@@ -3874,6 +3876,10 @@ function selectService(svc) {
     if (uf) iniciarAtpveNovaUf(uf);
     return;
   }
+  // Serviço suspenso (hoje: tudo da Vistocar, 06/11/2026): o aviso do servidor
+  // abre num pop-up e o formulário NÃO abre — a faixa amarela dentro dele
+  // passava despercebida (dono: "nunca prestam atenção").
+  if (svc.unavailable && svc.slowNote) { toast(svc.slowNote, 'aviso'); return; }
   // Serviços da aba "Coisas de Despachantes": sem assinatura ativa, abre o
   // popup em vez do formulário (ver assinaturaLiberada).
   if (!assinaturaLiberada(svc.id)) { abrirAssinaturaDoServico(svc); return; }
