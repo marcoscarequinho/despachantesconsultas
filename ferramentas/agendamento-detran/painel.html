@@ -39,6 +39,10 @@
   #estado { font-size:13px; }
   .vazio { color:var(--cinza); font-size:14px; padding:10px 0; }
   #msg { font-size:13px; }
+  .todo { grid-column:1/-1; }
+  .itens { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:4px 14px; }
+  label.item { font-weight:400; color:var(--texto); font-size:13px; display:flex; gap:6px; align-items:center; margin:0; }
+  label.item input { width:auto; }
   @media (max-width:600px) { .largo { grid-column: span 1; } }
 </style>
 </head>
@@ -83,15 +87,35 @@
 </main>
 
 <script>
+// Mesmo catálogo do agendar.js e da extensão (background.js/detran.js).
+// "opcoes": linhas de rádio da 1ª tela do serviço; "itens": caixas de marcar
+// (serv<código> no site); sem nenhum dos dois, o serviço abre direto no formulário.
 const SERVICOS = {
   propriedade: { nome: 'Transferência de Propriedade', opcoes: ['Transferência de Propriedade', 'Com inclusão de gravame (comprado financiado)', 'Com baixa de gravame (vendedor quitou)'] },
   jurisdicao: { nome: 'Transferência de Jurisdição', opcoes: ['Transferência de Jurisdição', 'Com baixa de gravame (proprietário quitou)', 'Com transferência de propriedade', 'Com transf. de propriedade e inclusão de gravame', 'Com transf. de propriedade e baixa de gravame'] },
   municipio: { nome: 'Troca de Município', opcoes: ['Troca de Município', 'Com baixa de gravame (proprietário quitou)', 'Com transferência de propriedade', 'Com transf. de propriedade e baixa de gravame', 'Com transf. de propriedade e inclusão de gravame'] },
+  licenca: { nome: '1ª Licença (veículo 0 km)' },
+  alteracao: { nome: 'Alteração de Características em Geral', itens: [['28', 'Baixa de gravame (proprietário quitou)'], ['29', 'Inclusão de gravame (comprado financiado)'], ['30', 'Mudança de nome'], ['64', 'Mudança de razão social'], ['31', 'Mudança de cor'], ['33', 'Transformação de categoria'], ['34', 'Alteração de marca/modelo'], ['36', 'Alteração de características - tipo'], ['37', 'Alteração de características - espécie'], ['38', 'Alteração de altura/peso/CMT/largura/potência'], ['40', 'Transformação de combustível']] },
+  segundaVia: { nome: '2ª Via de CRV / Código de Segurança' },
+  retificacao: { nome: 'Retificação de Dados', itens: [['28', 'Baixa de gravame (comprador quitou)'], ['29', 'Inclusão de gravame (comprado financiado)'], ['31', 'Mudança de cor'], ['33', 'Transformação de categoria'], ['34', 'Alteração de marca/modelo'], ['36', 'Alteração de características - tipo'], ['37', 'Alteração de características - espécie'], ['38', 'Alteração de altura/peso/CMT/largura/potência'], ['40', 'Transformação de combustível']] },
+  intencao: { nome: 'ATPV-e / Intenção de Venda' },
 };
+const COMBUSTIVEIS = ['ALCOOL', 'GASOLINA', 'DIESEL', 'GASOGENIO', 'GAS METANO', 'GASOL/GNV', 'ALCOOL/GNV', 'DIESEL/GNV', 'GNV', 'ALCO/GASOL', 'GAS/ALC/GNV', 'GASOL/ELET'];
+// O formulário do Detran só tem DUDA e data da venda quando há transferência
+// de propriedade (na Jurisdição e no Município, só nas opções 3 a 5). A 1ª
+// Licença pede o DUDA, sem data. Os outros serviços não pedem nenhum dos dois.
+const temTransferencia = (v) => v.servico === 'propriedade' || ((v.servico === 'jurisdicao' || v.servico === 'municipio') && Number(v.opcao) >= 3);
+const pedeDuda = (v) => temTransferencia(v) || v.servico === 'licenca';
+const pedeData = (v) => temTransferencia(v);
+const itensDe = (v) => (Array.isArray(v.itens) ? v.itens.map(String) : []);
+const pedeCategoria = (v) => v.servico === 'propriedade' || v.servico === 'retificacao' || (v.servico === 'alteracao' && itensDe(v).includes('33'));
+// A 1ª Licença não tem placa ainda: o DUDA identifica o pedido na lista.
+const ident = (v) => (v.servico === 'licenca' ? (v.duda ? 'DUDA ' + String(v.duda).replace(/\D/g, '') : '') : String(v.placa || '').toUpperCase());
 const TIPOS = [['4', 'Outros'], ['1', 'Ônibus'], ['2', 'Táxi'], ['3', 'Carga']];
 const REGIOES = [['01', 'Região Metropolitana'], ['02', 'Interior']];
 const CATEGORIAS = [['01', 'Particular'], ['02', 'Aluguel'], ['03', 'Oficial'], ['04', 'Experiência'], ['05', 'Aprendizagem'], ['06', 'Fabricante']];
 const SOLICITANTES = [['00', 'Proprietário'], ['03', 'Despachante'], ['01', 'Procurador Advogado'], ['02', 'Procurador Comum'], ['10', 'Ascendente ou Descendente'], ['11', 'Cônjuge do Proprietário'], ['05', 'Representante de Órgão Oficial'], ['06', 'ACB'], ['07', 'Touring Club'], ['08', 'Sindicato dos Taxistas'], ['09', 'Centro Benef. de Motoristas']];
+const SOLICITANTES_INTENCAO = SOLICITANTES.filter(([c]) => ['00', '02', '01', '03', '10', '11'].includes(c));
 const UFS = 'AC AL AM AP BA CE DF ES GO MA MG MS MT PA PB PE PI PR RN RO RR RS SC SE SP TO'.split(' ');
 
 let dados = { opcoes: {}, veiculos: [] };
@@ -116,27 +140,49 @@ function escolha(i, nome, rotulo, lista, padrao) {
 
 function htmlVeiculo(v, i) {
   const s = SERVICOS[v.servico] || SERVICOS.propriedade;
-  const docRot = v.servico === 'municipio' ? 'CPF/CNPJ do proprietário atual' : v.servico === 'propriedade' ? 'CPF/CNPJ do novo proprietário' : 'CPF/CNPJ do proprietário';
-  const cepRot = v.servico === 'propriedade' ? 'CEP do novo proprietário' : 'CEP de destino';
+  const transf = temTransferencia(v);
+  const docRot = transf ? 'CPF/CNPJ do novo proprietário' : v.servico === 'municipio' ? 'CPF/CNPJ do proprietário atual' : 'CPF/CNPJ do proprietário';
+  const cepRot = v.servico === 'propriedade' ? 'CEP do novo proprietário' : v.servico === 'licenca' ? 'CEP do proprietário' : 'CEP de destino';
+  const comCep = ['propriedade', 'jurisdicao', 'municipio', 'licenca'].includes(v.servico);
+
+  let opcao = '';
+  if (s.opcoes) {
+    opcao = `<div class="largo"><label>Opção do serviço</label><select data-i="${i}" data-c="opcao" data-redesenha="1">${opcoesHtml(s.opcoes.map((t, n) => [String(n + 1), t]), String(v.opcao ?? 1))}</select></div>`;
+  } else if (s.itens) {
+    const marcados = itensDe(v);
+    const caixas = s.itens.map(([cod, t]) => `<label class="item"><input type="checkbox" data-i="${i}" data-item="${cod}"${marcados.includes(cod) ? ' checked' : ''}> ${esc(t)}</label>`).join('');
+    const combustivel = marcados.includes('40')
+      ? `<div style="margin-top:6px;max-width:260px"><label>Alterar combustível para</label><select data-i="${i}" data-c="combustivel">${opcoesHtml([['', '— escolha —'], ...COMBUSTIVEIS.map((c) => [c, c])], v.combustivel || '')}</select></div>` : '';
+    const dica = v.servico === 'retificacao' ? 'A retificação já vai junto. Marque só o que mais for alterado (ou nada).' : 'Marque pelo menos um.';
+    opcao = `<div class="todo"><label>Serviços</label><div class="itens">${caixas}</div><div class="dica">${dica}</div>${combustivel}</div>`;
+  }
+
+  // DUDA e data logo abaixo do serviço: é o que o Detran recusa se faltar, e
+  // só aparecem onde o formulário dele pede.
+  const duda = pedeDuda(v)
+    ? `<div class="secao">DUDA${pedeData(v) ? ' e data da venda' : ''}</div>`
+      + campo(i, 'duda', 'Nº do DUDA pago', 'inputmode="numeric" maxlength="10"', transf ? 'Pago no CPF/CNPJ do comprador' : '')
+      + (pedeData(v) ? campo(i, 'dataVenda', 'Data da venda', 'placeholder="dd/mm/aaaa" maxlength="10"') : '')
+    : '';
+
   let especificos = '';
-  if (v.servico === 'propriedade') {
-    especificos = campo(i, 'dataVenda', 'Data da venda', 'placeholder="dd/mm/aaaa" maxlength="10"')
-      + campo(i, 'duda', 'Nº do DUDA pago', 'inputmode="numeric"', 'Pago no CPF/CNPJ do comprador')
-      + escolha(i, 'categoria', 'Categoria pretendida', CATEGORIAS, '01');
-  } else if (v.servico === 'jurisdicao') {
+  if (v.servico === 'jurisdicao') {
     especificos = escolha(i, 'ufOrigem', 'UF de origem', UFS.map((u) => [u, u]), 'SP')
       + campo(i, 'crv', 'Nº do CRV', 'inputmode="numeric"')
       + campo(i, 'chassi', 'Chassi', 'maxlength="17"', 'Só para placa antiga');
-  } else {
+  } else if (v.servico === 'municipio') {
     especificos = campo(i, 'chassi', 'Chassi', 'maxlength="17"', 'Só para placa antiga');
   }
+  if (pedeCategoria(v)) especificos += escolha(i, 'categoria', 'Categoria pretendida', CATEGORIAS, '01');
+
   const despachante = String(v.solicitante ?? '00') === '03'
     ? campo(i, 'matriculaDespachante', 'Matrícula do despachante', 'inputmode="numeric" maxlength="5"')
       + escolha(i, 'tipoDespachante', 'Despachante', [['0', 'Público'], ['1', 'Documentalista']], '0')
     : '';
+  const titulo = ident(v) || (v.servico === 'licenca' ? 'Novo pedido' : 'Novo veículo');
   return `<div class="veiculo${v.feito ? ' feito' : ''}">
     <div class="topo-veic">
-      <strong>${esc(v.placa || 'Novo veículo')} · ${esc(s.nome)}</strong>
+      <strong>${esc(titulo)} · ${esc(s.nome)}</strong>
       ${v.feito ? `<span class="selo">✓ agendado em ${esc(new Date(v.feito).toLocaleString('pt-BR'))}</span>` : ''}
       <div class="barra">
         ${v.feito ? `<button onclick="reabrir(${i})">Agendar de novo</button>` : `<button onclick="rodar(${i}, true)">Testar</button><button class="verde" onclick="rodar(${i}, false)">Agendar</button>`}
@@ -145,15 +191,16 @@ function htmlVeiculo(v, i) {
     </div>
     <div class="grade">
       ${escolha(i, 'servico', 'Serviço', Object.entries(SERVICOS).map(([k, x]) => [k, x.nome]), 'propriedade')}
-      <div class="largo"><label>Opção do serviço</label><select data-i="${i}" data-c="opcao">${opcoesHtml(s.opcoes.map((t, n) => [String(n + 1), t]), v.opcao ?? 1)}</select></div>
-      ${campo(i, 'placa', 'Placa', 'maxlength="7" style="text-transform:uppercase"')}
-      ${campo(i, 'renavam', 'Renavam', 'inputmode="numeric" maxlength="11"')}
+      ${opcao}
+      ${duda}
+      ${duda ? '<div class="secao">Veículo e proprietário</div>' : ''}
+      ${v.servico === 'licenca' ? '' : campo(i, 'placa', 'Placa', 'maxlength="7" style="text-transform:uppercase"') + campo(i, 'renavam', 'Renavam', 'inputmode="numeric" maxlength="11"')}
       ${campo(i, 'cpfCnpj', docRot, 'inputmode="numeric" maxlength="14"', 'Só números')}
-      ${campo(i, 'cep', cepRot, 'inputmode="numeric" maxlength="8"')}
+      ${comCep ? campo(i, 'cep', cepRot, 'inputmode="numeric" maxlength="8"') : ''}
       ${escolha(i, 'regiao', 'Região', REGIOES, '01')}
-      ${escolha(i, 'tipo', 'Tipo de veículo', TIPOS, '4')}
+      ${v.servico === 'intencao' ? '' : escolha(i, 'tipo', 'Tipo de veículo', TIPOS, '4')}
       ${especificos}
-      ${escolha(i, 'solicitante', 'Quem vai à unidade', SOLICITANTES, '00')}
+      ${escolha(i, 'solicitante', 'Quem vai à unidade', v.servico === 'intencao' ? SOLICITANTES_INTENCAO : SOLICITANTES, '00')}
       ${despachante}
       <div class="secao">Onde agendar</div>
       ${campo(i, 'cidade', 'Cidade', 'placeholder="ex.: Niterói"')}
@@ -178,6 +225,14 @@ document.addEventListener('input', (e) => {
     alterado = true;
     return;
   }
+  if (el.dataset.item != null) {
+    const v = dados.veiculos[el.dataset.i];
+    const lista = new Set(itensDe(v));
+    if (el.checked) lista.add(el.dataset.item); else lista.delete(el.dataset.item);
+    v.itens = [...lista];
+    alterado = true;
+    return;
+  }
   if (el.dataset.c == null) return;
   const v = dados.veiculos[el.dataset.i];
   let valor = el.value;
@@ -188,8 +243,9 @@ document.addEventListener('input', (e) => {
 });
 // Só select redesenha: redesenhar no meio da digitação tiraria o foco do campo.
 document.addEventListener('change', (e) => {
-  if (e.target.dataset.redesenha) {
-    if (e.target.dataset.c === 'servico') dados.veiculos[e.target.dataset.i].opcao = 1;
+  // A caixa de serviço também redesenha: a 33 traz a categoria, a 40 o combustível.
+  if (e.target.dataset.redesenha || e.target.dataset.item != null) {
+    if (e.target.dataset.c === 'servico') { const v = dados.veiculos[e.target.dataset.i]; v.opcao = 1; v.itens = []; }
     desenhar();
   }
 });
@@ -202,7 +258,7 @@ function novoVeiculo() {
   cards[cards.length - 1].scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 function remover(i) {
-  if (!confirm(`Remover ${dados.veiculos[i].placa || 'este veículo'}?`)) return;
+  if (!confirm(`Remover ${ident(dados.veiculos[i]) || 'este veículo'}?`)) return;
   dados.veiculos.splice(i, 1);
   alterado = true;
   desenhar();
@@ -230,8 +286,8 @@ async function salvar(avisar) {
 
 async function rodar(i, teste) {
   if (rodando) return;
-  const placa = i == null ? null : dados.veiculos[i].placa;
-  if (i != null && !placa) { mostrarMsg('Informe a placa antes.', 'var(--vermelho)'); return; }
+  const placa = i == null ? null : ident(dados.veiculos[i]);
+  if (i != null && !placa) { mostrarMsg(dados.veiculos[i].servico === 'licenca' ? 'Informe o DUDA antes.' : 'Informe a placa antes.', 'var(--vermelho)'); return; }
   if (!(await salvar(false))) return;
   if (!teste && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
   const r = await fetch('/api/agendar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ placa, teste }) });

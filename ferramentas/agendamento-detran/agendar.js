@@ -23,13 +23,30 @@ const { chromium } = require('playwright');
 
 const BASE = 'https://www5.detran.rj.gov.br/_agendamento.eletronico/renavam2/';
 
-// Menu de cada serviço (é o iframe das páginas de detran.rj.gov.br) e a função
-// da própria página que manda para o formulário de identificação.
+// Página de entrada de cada serviço (é o iframe das páginas de
+// detran.rj.gov.br/todos-os-agendamentos/agendamento-drv/…) e, quando ela é um
+// menu, o endereço para onde o "Continuar"/"Finalizar" do site manda o form.
+// Menu de rádio (parte1 = opcao) ou de caixas (serv<código> = itens). Sem
+// "acao", a entrada já é o formulário de identificação (1ª Licença, Intenção
+// de Venda). Mesmo catálogo do painel.html e da extensão (detran.js).
 const SERVICOS = {
-  propriedade: { nome: 'Transferência de Propriedade', menu: 'menu02.asp', continuar: 'finalizarAgendamento' },
-  jurisdicao: { nome: 'Transferência de Jurisdição', menu: 'menu03.asp', continuar: 'finalizar' },
-  municipio: { nome: 'Troca de Município', menu: 'menu04.asp', continuar: 'finalizar' },
+  propriedade: { nome: 'Transferência de Propriedade', menu: 'menu02.asp', acao: 'menu0204.asp' },
+  jurisdicao: { nome: 'Transferência de Jurisdição', menu: 'menu03.asp', acao: 'menu0303.asp' },
+  municipio: { nome: 'Troca de Município', menu: 'menu04.asp', acao: 'menu0403.asp' },
+  licenca: { nome: '1ª Licença', menu: 'tela0c.asp' },
+  alteracao: { nome: 'Alteração de Características em Geral', menu: 'menu05.asp', acao: 'menu0502.asp', itens: true },
+  segundaVia: { nome: '2ª Via de CRV / Código de Segurança', menu: 'menu01.asp', acao: 'menu0102.asp' },
+  retificacao: { nome: 'Retificação de Dados', menu: 'menu08.asp', acao: 'menu0802.asp', itens: true },
+  intencao: { nome: 'ATPV-e / Intenção de Venda', menu: 'intencao_venda.asp' },
 };
+// DUDA e data da venda só existem no formulário quando há transferência de
+// propriedade (Jurisdição e Município: opções 3 a 5); a 1ª Licença tem DUDA.
+const temTransferencia = (v) => v.servico === 'propriedade' || ((v.servico === 'jurisdicao' || v.servico === 'municipio') && Number(v.opcao) >= 3);
+const itensDe = (v) => (Array.isArray(v.itens) ? v.itens.map(String) : []);
+// A 1ª Licença não tem placa: o DUDA identifica o pedido (filtro, logs, arquivos).
+function ident(v) {
+  return v.servico === 'licenca' ? (v.duda ? 'DUDA ' + soDigitos(v.duda) : '') : String(v.placa || '').toUpperCase();
+}
 
 const PASTA = __dirname;
 const REGISTROS = path.join(PASTA, 'registros');
@@ -69,7 +86,7 @@ function mascarar(doc) {
 
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 const agora = () => new Date().toLocaleTimeString('pt-BR');
-function log(v, msg) { console.log(`[${agora()}] ${v ? v.placa + ' — ' : ''}${msg}`); }
+function log(v, msg) { console.log(`[${agora()}] ${v ? ident(v) + ' — ' : ''}${msg}`); }
 
 function bip(vezes = 3) {
   for (let i = 0; i < vezes; i++) process.stdout.write('\x07');
@@ -112,16 +129,19 @@ function perguntar(texto) {
 
 function validar(v) {
   const erros = [];
-  if (!SERVICOS[v.servico]) erros.push(`servico deve ser ${Object.keys(SERVICOS).join(', ')}`);
-  if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(String(v.placa || '').toUpperCase())) erros.push('placa inválida');
-  if (!/^\d{9,11}$/.test(soDigitos(v.renavam))) erros.push('renavam inválido');
+  if (!SERVICOS[v.servico]) { erros.push(`servico deve ser ${Object.keys(SERVICOS).join(', ')}`); return erros; }
+  if (v.servico !== 'licenca') {
+    if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(String(v.placa || '').toUpperCase())) erros.push('placa inválida');
+    if (!/^\d{9,11}$/.test(soDigitos(v.renavam))) erros.push('renavam inválido');
+  }
   const doc = soDigitos(v.cpfCnpj);
   if (doc.length !== 11 && doc.length !== 14) erros.push('cpfCnpj deve ter 11 ou 14 dígitos');
-  if (!/^\d{8}$/.test(soDigitos(v.cep))) erros.push('cep inválido');
-  if (v.servico === 'propriedade') {
-    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(v.dataVenda || '')) erros.push('dataVenda no formato dd/mm/aaaa');
-  }
+  if (['propriedade', 'jurisdicao', 'municipio', 'licenca'].includes(v.servico) && !/^\d{8}$/.test(soDigitos(v.cep))) erros.push('cep inválido');
+  if ((temTransferencia(v) || v.servico === 'licenca') && !/^\d{1,10}$/.test(soDigitos(v.duda))) erros.push('informe o DUDA pago (até 10 dígitos)');
+  if (temTransferencia(v) && !/^\d{2}\/\d{2}\/\d{4}$/.test(v.dataVenda || '')) erros.push('dataVenda no formato dd/mm/aaaa');
   if (v.servico === 'jurisdicao' && !v.ufOrigem) erros.push('ufOrigem é obrigatória na Transferência de Jurisdição');
+  if (v.servico === 'alteracao' && !itensDe(v).length) erros.push('marque pelo menos um serviço da Alteração de Características');
+  if (itensDe(v).includes('40') && !v.combustivel) erros.push('escolha o combustível novo');
   if (String(v.solicitante) === '03' && !v.matriculaDespachante) erros.push('matriculaDespachante é obrigatória quando quem vai é o despachante');
   if (!v.posto && !v.cidade) erros.push('informe cidade e/ou posto');
   return erros;
@@ -132,17 +152,35 @@ function validar(v) {
 async function abrirIdentificacao(page, v) {
   const s = SERVICOS[v.servico];
   await page.goto(BASE + s.menu, { waitUntil: 'domcontentloaded' });
-  const opcao = String(v.opcao || 1);
-  const ok = await page.evaluate(({ opcao, fn }) => {
-    const r = document.querySelector(`input[name=parte1][value="${opcao}"]`);
-    if (!r || typeof window[fn] !== 'function') return false;
-    r.checked = true;
-    window[fn]();
-    return true;
-  }, { opcao, fn: s.continuar });
-  if (!ok) throw new Error(`a tela de opções de ${s.nome} mudou (opção ${opcao} ou botão Continuar não encontrados)`);
+  if (s.acao) {
+    // Faz o que o "Continuar" do site faz: marca a escolha e submete o form.
+    const erro = await page.evaluate(({ acao, itens, opcao, combustivel }) => {
+      const f = document.forms.form;
+      if (!f) return 'formulário do menu não encontrado';
+      if (itens) {
+        // O site já vem com a "Baixa de gravame" marcada: desmarca tudo antes.
+        for (const cb of f.querySelectorAll('input[type=checkbox]')) cb.checked = false;
+        for (const cod of itens) {
+          const cb = f.elements['serv' + cod];
+          if (!cb) return `o serviço ${cod} não existe mais na tela`;
+          cb.checked = true;
+        }
+        if (combustivel && f.elements.tipoCombustivel) f.elements.tipoCombustivel.value = combustivel;
+      } else {
+        const r = f.querySelector(`input[name=parte1][value="${opcao}"]`);
+        if (!r) return `a opção ${opcao} não existe mais na tela`;
+        r.checked = true;
+      }
+      f.action = acao;
+      f.submit();
+      return null;
+    }, { acao: s.acao, itens: s.itens ? itensDe(v) : null, opcao: String(v.opcao || 1), combustivel: v.combustivel || '' });
+    if (erro) throw new Error(`a tela de opções de ${s.nome} mudou: ${erro}`);
+  }
   try {
-    await page.waitForSelector('form[name=Form1] input[name=placa]', { timeout: 60000 });
+    // attached, não visible: em alguns serviços o campo do CPF só aparece depois
+    // de escolher CPF ou CNPJ.
+    await page.waitForSelector('form[name=Form1] input[name=cpf]', { state: 'attached', timeout: 60000 });
   } catch {
     const reg = await registrar(page, v, 'sem-identificacao');
     const txt = (await page.evaluate(() => document.body ? document.body.innerText : '').catch(() => '')).replace(/\s+/g, ' ').trim().slice(0, 200);
@@ -153,7 +191,7 @@ async function abrirIdentificacao(page, v) {
 async function preencherIdentificacao(page, v) {
   const doc = soDigitos(v.cpfCnpj);
   const campos = {
-    placa: String(v.placa).toUpperCase(),
+    placa: String(v.placa || "").toUpperCase(),
     renavam: soDigitos(v.renavam),
     chassi: v.chassi || '',
     crv: v.crv || '',
@@ -166,6 +204,7 @@ async function preencherIdentificacao(page, v) {
   };
   const selects = {
     tipo: String(v.tipo || '4'),
+    tipoVeiculo: String(v.tipo || '4'), // a 2ª Via chama o mesmo campo assim
     RegiaoRenavam: String(v.regiao || '01'),
     categoria: String(v.categoria || '01'),
     solicitante: String(v.solicitante || '00'),
@@ -197,7 +236,7 @@ async function esperarCaptchaEEnviar(page, v) {
   bip();
   await page.bringToFront();
   await page.locator('.g-recaptcha').scrollIntoViewIfNeeded().catch(() => {});
-  await avisar(`Agendamento Detran: marque o captcha da placa ${v.placa} (${SERVICOS[v.servico].nome}).`);
+  await avisar(`Agendamento Detran: marque o captcha de ${ident(v)} (${SERVICOS[v.servico].nome}).`);
   await page.waitForFunction(
     () => window.grecaptcha && window.grecaptcha.getResponse && window.grecaptcha.getResponse() !== '',
     null,
@@ -217,7 +256,7 @@ async function textoDaPagina(page) {
 let contadorRegistro = 0;
 async function registrar(page, v, etapa) {
   fs.mkdirSync(REGISTROS, { recursive: true });
-  const nome = `${v.placa}-${new Date().toISOString().replace(/[:.]/g, '-')}-${++contadorRegistro}-${etapa}`;
+  const nome = `${ident(v).replace(/ /g, "")}-${new Date().toISOString().replace(/[:.]/g, '-')}-${++contadorRegistro}-${etapa}`;
   await page.screenshot({ path: path.join(REGISTROS, nome + '.png'), fullPage: true }).catch(() => {});
   fs.writeFileSync(path.join(REGISTROS, nome + '.html'), await page.content().catch(() => ''));
   return nome;
@@ -281,7 +320,7 @@ async function clicarAvancar(page) {
 async function esperarPassoManual(page, v, motivo) {
   log(v, `${motivo} — faça este passo no Chrome; o script continua quando a página mudar.`);
   bip(2);
-  await avisar(`Agendamento Detran ${v.placa}: ${motivo}. Faça este passo no navegador.`);
+  await avisar(`Agendamento Detran ${ident(v)}: ${motivo}. Faça este passo no navegador.`);
   const antes = await page.evaluate(() => location.href + '|' + document.body.innerText.length);
   await page.waitForFunction((antes) => location.href + '|' + document.body.innerText.length !== antes, antes, { timeout: 0, polling: 1500 });
   await page.waitForLoadState('domcontentloaded').catch(() => {});
@@ -297,7 +336,7 @@ async function etapasDoAgendamento(page, v) {
     const reg = await registrar(page, v, 'passo' + passo);
 
     if (CONCLUIDO.test(txt)) {
-      const pdf = path.join(REGISTROS, `${v.placa}-AGENDADO.pdf`);
+      const pdf = path.join(REGISTROS, `${ident(v).replace(/ /g, "")}-AGENDADO.pdf`);
       await page.pdf({ path: pdf }).catch(() => {});
       log(v, `AGENDADO! Comprovante salvo em registros (${reg}.png${fs.existsSync(pdf) ? ' e ' + path.basename(pdf) : ''}).`);
       return 'ok';
@@ -370,7 +409,7 @@ async function agendarVeiculo(context, v) {
       await esperarCaptchaEEnviar(page, v);
       const r = await etapasDoAgendamento(page, v);
       if (r === 'ok') {
-        await avisar(`Agendamento Detran: placa ${v.placa} AGENDADA (${s.nome}). Comprovante na pasta registros.`);
+        await avisar(`Agendamento Detran: ${ident(v)} AGENDADO (${s.nome}). Comprovante na pasta registros.`);
         return true;
       }
       if (r === 'erro') {
@@ -392,13 +431,13 @@ const MODO_TESTE = process.argv.includes('--teste');
 
 async function main() {
   const filtro = (process.argv.slice(2).find((a) => !a.startsWith('--')) || '').toUpperCase();
-  const veiculos = (CONFIG.veiculos || []).filter((v) => !v.feito && (!filtro || String(v.placa).toUpperCase() === filtro));
+  const veiculos = (CONFIG.veiculos || []).filter((v) => !v.feito && (!filtro || ident(v) === filtro));
   if (!veiculos.length) { console.log('Nenhum veículo para agendar em veiculos.json.'); return; }
 
   let invalido = false;
   for (const v of veiculos) {
     const erros = validar(v);
-    if (erros.length) { invalido = true; console.log(`${v.placa || '(sem placa)'}: ${erros.join('; ')}`); }
+    if (erros.length) { invalido = true; console.log(`${ident(v) || '(sem placa)'}: ${erros.join('; ')}`); }
   }
   if (invalido) process.exit(1);
 
@@ -414,7 +453,7 @@ async function main() {
   const resultado = [];
   for (const v of veiculos) {
     const ok = await agendarVeiculo(context, v);
-    resultado.push(`${v.placa}: ${MODO_TESTE ? 'teste' : ok ? 'AGENDADO' : 'não agendado'}`);
+    resultado.push(`${ident(v)}: ${MODO_TESTE ? 'teste' : ok ? 'AGENDADO' : 'não agendado'}`);
     if (ok && !MODO_TESTE) {
       v.feito = new Date().toISOString();
       fs.writeFileSync(path.join(PASTA, 'veiculos.json'), JSON.stringify(CONFIG, null, 2));

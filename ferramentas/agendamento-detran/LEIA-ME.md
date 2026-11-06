@@ -1,6 +1,6 @@
 # Agendamento assistido — Detran RJ
 
-Agenda **Transferência de Propriedade**, **Transferência de Jurisdição** e **Troca de Município** no site do Detran RJ. O script preenche a identificação e **para no reCAPTCHA**: você marca "Não sou um robô" na janela do Chrome e ele faz o resto (cidade/posto, primeiro dia e horário livres). Sem vaga, ele tenta de novo a cada `intervaloMinutos`, e cada tentativa pede o captcha de novo, com bipe e aviso no WhatsApp.
+Agenda no site do Detran RJ **Transferência de Propriedade**, **Transferência de Jurisdição**, **Troca de Município**, **1ª Licença**, **Alteração de Características**, **2ª Via de CRV**, **Retificação de Dados** e **ATPV-e / Intenção de Venda**. O script preenche a identificação e **para no reCAPTCHA**: você marca "Não sou um robô" na janela do Chrome e ele faz o resto (cidade/posto, primeiro dia e horário livres). Sem vaga, ele tenta de novo a cada `intervaloMinutos`, e cada tentativa pede o captcha de novo, com bipe e aviso no WhatsApp.
 
 ## Pelo site (www.despachantesconsultas.com.br/extensao-chrome)
 
@@ -36,10 +36,11 @@ A tela grava tudo em `veiculos.json`, que fica fora do git porque tem CPF e rena
 
 | Campo | O que é |
 |---|---|
-| `servico` | `propriedade`, `jurisdicao` ou `municipio` |
+| `servico` | `propriedade`, `jurisdicao`, `municipio`, `licenca` (1ª Licença, `tela0c.asp`), `alteracao` (Alteração de Características, `menu05.asp`), `segundaVia` (2ª Via de CRV / Código de Segurança, `menu01.asp`), `retificacao` (`menu08.asp`) ou `intencao` (ATPV-e / Intenção de Venda, `intencao_venda.asp`) — entradas e campos levantados no site em 06/11/2026 |
 | `opcao` | linha escolhida na 1ª tela do serviço (1 = a primeira). Propriedade: 1 simples, 2 com inclusão de gravame, 3 com baixa de gravame. Jurisdição e Município: 1 a 5, na ordem do site |
-| `placa`, `renavam`, `cpfCnpj` | sem ponto nem traço. Na Propriedade o CPF/CNPJ é do **novo** proprietário; na Troca de Município é do **atual** |
-| `dataVenda`, `duda` | só na Propriedade (`dd/mm/aaaa`; DUDA pago no documento do comprador) |
+| `itens`, `combustivel` | Alteração e Retificação: códigos das caixas do site (`serv<código>`: 28 baixa de gravame, 29 inclusão, 30 nome, 64 razão social, 31 cor, 33 categoria, 34 marca/modelo, 36 tipo, 37 espécie, 38 altura/peso…, 40 combustível). O site já vem com a 28 marcada; o script desmarca tudo antes. A Alteração exige pelo menos um; a Retificação pode ir sem nenhum |
+| `placa`, `renavam`, `cpfCnpj` | sem ponto nem traço (a 1ª Licença não tem placa nem renavam: o DUDA identifica o pedido). Com transferência de propriedade o CPF/CNPJ é do **novo** proprietário; na Troca de Município simples é do **atual** |
+| `dataVenda`, `duda` | só onde o formulário do Detran tem: Propriedade, Jurisdição e Município nas opções 3 a 5 (com transferência de propriedade). A 1ª Licença pede só o DUDA. `dd/mm/aaaa`; DUDA pago no documento do comprador |
 | `ufOrigem`, `crv`, `chassi` | Jurisdição (UF de onde o veículo vem); `chassi` só para placa antiga |
 | `cep` | CEP do novo proprietário (Propriedade) ou de destino |
 | `regiao` | `01` Metropolitana, `02` Interior |

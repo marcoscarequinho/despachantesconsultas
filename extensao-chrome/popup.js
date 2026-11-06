@@ -96,9 +96,10 @@ document.addEventListener('click', async (ev) => {
   window.close();
 });
 
-// Agendamento assistido no Detran: abre a tela da própria extensão.
+// Agendamento assistido no Detran: abre a página do site, que é a mesma tela
+// do programa para Windows e usa esta extensão para rodar (ponte-site.js).
 $('btn-agendamento').addEventListener('click', () => {
-  chrome.tabs.create({ url: chrome.runtime.getURL('agendamento.html') });
+  chrome.tabs.create({ url: 'https://www.despachantesconsultas.com.br/extensao-chrome' });
   window.close();
 });
 

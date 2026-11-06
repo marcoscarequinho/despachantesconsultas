@@ -14,11 +14,22 @@
 'use strict';
 
 (() => {
+  // Página de entrada e, quando ela é um menu, para onde o "Continuar" do site
+  // manda o form: rádio parte1 (opcao) ou caixas serv<código> (itens). Sem
+  // "continuar", a entrada já é a identificação (1ª Licença, Intenção de Venda).
+  // Mesmo catálogo do background.js, do painel.html e do agendar.js.
   const SERVICOS = {
     propriedade: { menu: 'menu02.asp', continuar: 'menu0204.asp' },
     jurisdicao: { menu: 'menu03.asp', continuar: 'menu0303.asp' },
     municipio: { menu: 'menu04.asp', continuar: 'menu0403.asp' },
+    licenca: { menu: 'tela0c.asp' },
+    alteracao: { menu: 'menu05.asp', continuar: 'menu0502.asp', itens: true },
+    segundaVia: { menu: 'menu01.asp', continuar: 'menu0102.asp' },
+    retificacao: { menu: 'menu08.asp', continuar: 'menu0802.asp', itens: true },
+    intencao: { menu: 'intencao_venda.asp' },
   };
+  // A 1ª Licença não tem placa: o DUDA identifica o pedido nos avisos.
+  const ident = (v) => (v.servico === 'licenca' ? 'DUDA ' + String(v.duda || '').replace(/\D/g, '') : String(v.placa || '').toUpperCase());
   // Textos do Detran para "não tem horário" e "deu certo" (sem acento, minúsculo).
   const SEM_VAGA = /nao ha (vagas?|horarios?|datas?)|sem (vagas?|horarios?) disponive|nenhum(a)? (vaga|horario|data) disponive|esgotad|indisponive/;
   const CONCLUIDO = /agendamento (realizado|efetuado|confirmado) com sucesso|comprovante de agendamento|numero do agendamento|seu agendamento foi/;
@@ -48,6 +59,7 @@
     if (radioDoc) radioDoc.click();
     const selects = {
       tipo: String(v.tipo || '4'),
+      tipoVeiculo: String(v.tipo || '4'), // a 2ª Via chama o mesmo campo assim
       RegiaoRenavam: String(v.regiao || '01'),
       categoria: String(v.categoria || '01'),
       solicitante: String(v.solicitante || '00'),
@@ -212,26 +224,44 @@
   (async () => {
     const est = await msg({ tipo: 'estado' });
     if (!est || !est.meu || !est.veiculo) return;
-    const { job, veiculo: v } = est;
+    const { job } = est;
     if (job.etapa === 'aguardando' || job.etapa === 'fim') return;
+    // O resto do arquivo usa v.placa nos avisos ao background: na 1ª Licença
+    // vai o DUDA no lugar.
+    const v = { ...est.veiculo, placa: ident(est.veiculo) };
+    est.veiculo = v;
     const s = SERVICOS[v.servico];
+    if (!s) return msg({ tipo: 'fimVeiculo', placa: v.placa, resultado: 'erro', detalhe: 'serviço desconhecido — atualize a extensão.' });
 
-    const menu = document.querySelector('form[name=form] input[name=parte1]');
     const f = document.forms.Form1;
+    const pagina = location.pathname.toLowerCase();
 
-    if (menu) {
-      if (!location.pathname.endsWith('/' + s.menu)) return;
-      const form = menu.form;
-      const radio = form.querySelector(`input[name=parte1][value="${Number(v.opcao) || 1}"]`);
-      if (!radio) return msg({ tipo: 'fimVeiculo', placa: v.placa, resultado: 'erro', detalhe: `a opção ${v.opcao} não existe mais na tela do serviço.` });
-      radio.checked = true;
+    if (s.continuar && job.etapa === 'inicio' && pagina.endsWith('/' + s.menu) && document.forms.form) {
+      const form = document.forms.form;
+      if (s.itens) {
+        // O site já vem com a "Baixa de gravame" marcada: desmarca tudo antes.
+        for (const cb of form.querySelectorAll('input[type=checkbox]')) cb.checked = false;
+        for (const cod of (Array.isArray(v.itens) ? v.itens : [])) {
+          const cb = form.elements['serv' + cod];
+          if (!cb) return msg({ tipo: 'fimVeiculo', placa: v.placa, resultado: 'erro', detalhe: `o serviço ${cod} não existe mais na tela.` });
+          cb.checked = true;
+        }
+        if (v.combustivel && form.elements.tipoCombustivel) form.elements.tipoCombustivel.value = v.combustivel;
+      } else {
+        const radio = form.querySelector(`input[name=parte1][value="${Number(v.opcao) || 1}"]`);
+        if (!radio) return msg({ tipo: 'fimVeiculo', placa: v.placa, resultado: 'erro', detalhe: `a opção ${v.opcao} não existe mais na tela do serviço.` });
+        radio.checked = true;
+      }
       await msg({ tipo: 'atualizar', patch: { etapa: 'identificacao' } });
       form.action = s.continuar;
       form.submit();
       return;
     }
-    if (f && f.elements.placa) return telaIdentificacao(f, est);
+    if (f && f.elements.cpf && document.querySelector('.g-recaptcha')) return telaIdentificacao(f, est);
     if (job.etapa === 'pos-captcha') return telaDepoisDoCaptcha(est);
+    // Página de passagem entre o menu e a identificação (menu0204.asp etc.):
+    // ela se submete sozinha.
+    if (/\/menu\d+\.asp$/.test(pagina) && job.etapa === 'identificacao') return;
 
     // Tela fora do caminho antes do captcha (erro do site, manutenção…).
     const trecho = textoPagina().replace(/\s+/g, ' ').trim().slice(0, 160);

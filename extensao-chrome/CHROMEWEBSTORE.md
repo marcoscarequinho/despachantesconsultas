@@ -48,7 +48,7 @@ PERMISSÃO
 SUPORTE
 contato@despachantesconsultas.com.br · WhatsApp (22) 99995-1574
 
-Versão 1.2.0 — agendamento assistido no Detran RJ, também pela página despachantesconsultas.com.br/extensao-chrome.
+Versão 1.3.0 — agendamento assistido no Detran RJ, também pela página despachantesconsultas.com.br/extensao-chrome.
 ```
 
 **Categoria**: Produtividade (Productivity)
@@ -122,6 +122,7 @@ Não há `tabs`, `cookies`, `scripting` nem `<all_urls>`.
 | 1.0.0 | 27/09/2026 | Primeira versão: saldo/fatura e atalho para o painel | Rascunho |
 | 1.1.0 | 29/10/2026 | Agendamento assistido no Detran RJ (propriedade, jurisdição, município): permissões `storage`, `alarms`, `notifications` e host `www5.detran.rj.gov.br` | Rascunho |
 | 1.2.0 | 03/11/2026 | A tela do agendamento também abre como página do site (`/extensao-chrome`), pelo content script `ponte-site.js` só nessa página; nenhuma permissão nova | Rascunho |
+| 1.3.0 | 06/11/2026 | Novos serviços no agendamento: 1ª Licença, Alteração de Características, 2ª Via de CRV, Retificação de Dados e ATPV-e / Intenção de Venda; DUDA e data da venda na tela também na Jurisdição e no Município com transferência de propriedade. A tela própria (`agendamento.html`) saiu: o botão do popup abre a página do site. Nenhuma permissão nova | Rascunho |
 
 ## Observações para a revisão
 

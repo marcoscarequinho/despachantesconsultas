@@ -4,9 +4,9 @@ Atalho na barra do Chrome: mostra quem está logado, o **saldo** (pré-pago) ou 
 
 ## Agendamento Detran RJ
 
-Transferência de Propriedade, Transferência de Jurisdição e Troca de Município, de graça e sem conta. É a mesma lógica da ferramenta de linha de comando em `ferramentas/agendamento-detran`, só que dentro do Chrome de quem agenda.
+Transferência de Propriedade, Transferência de Jurisdição, Troca de Município, 1ª Licença, Alteração de Características, 2ª Via de CRV, Retificação de Dados e ATPV-e / Intenção de Venda, de graça e sem conta (catálogo igual em `detran.js`, `background.js`, no `painel.html` e no `agendar.js`). É a mesma lógica da ferramenta de linha de comando em `ferramentas/agendamento-detran`, só que dentro do Chrome de quem agenda.
 
-- **[agendamento.html](agendamento.html)/[agendamento.js](agendamento.js)**: tela da extensão (botão no popup) com os veículos. Lista em `chrome.storage.local` (`agendDados`), **nunca** no nosso servidor: são CPF e renavam de clientes.
+- **Tela**: desde a 1.3.0 é a página do site `/extensao-chrome` (o mesmo `painel.html` do programa para Windows), aberta pelo botão do popup; a `agendamento.html` própria saiu. Lista em `chrome.storage.local` (`agendDados`), **nunca** no nosso servidor: são CPF e renavam de clientes.
 - **[background.js](background.js)**: dono do estado do agendamento (`agendJob`). Abre a aba do Detran, recebe os eventos das páginas em ordem e agenda a nova tentativa sem vaga com `chrome.alarms`. Cada veículo abre numa aba nova, para a do anterior (comprovante, erro) ficar aberta. Fechar a aba do agendamento para tudo.
 - **[detran.js](detran.js)**: roda nas páginas `www5.detran.rj.gov.br/_agendamento.eletronico/*` e só age na aba do agendamento. Menu do serviço → submete direto para a identificação (como o "Continuar" do site); identificação → preenche e **para no reCAPTCHA** (espera o token no `#g-recaptcha-response` e então clica Enviar); depois → cidade/posto por texto, primeiro dia/horário, `SEM_VAGA`/`CONCLUIDO` por texto. **As telas depois do captcha não foram vistas** (exigem agendamento real): tela não reconhecida vira notificação "faça este passo" e a extensão segue na próxima.
 - **[detran-alerta.js](detran-alerta.js)** (`world: MAIN`): o site avisa recusa por `alert()`, invisível ao mundo isolado; o texto fica em `data-detran-alertas` no `<html>`.

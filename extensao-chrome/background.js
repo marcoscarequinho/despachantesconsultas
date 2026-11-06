@@ -12,16 +12,28 @@
 'use strict';
 
 const BASE = 'https://www5.detran.rj.gov.br/_agendamento.eletronico/renavam2/';
+// Página de entrada de cada serviço (o iframe das páginas do Detran). Mesmo
+// catálogo do detran.js, do painel.html e do agendar.js.
 const SERVICOS = {
   propriedade: { nome: 'Transferência de Propriedade', menu: 'menu02.asp' },
   jurisdicao: { nome: 'Transferência de Jurisdição', menu: 'menu03.asp' },
   municipio: { nome: 'Troca de Município', menu: 'menu04.asp' },
+  licenca: { nome: '1ª Licença', menu: 'tela0c.asp' },
+  alteracao: { nome: 'Alteração de Características em Geral', menu: 'menu05.asp' },
+  segundaVia: { nome: '2ª Via de CRV / Código de Segurança', menu: 'menu01.asp' },
+  retificacao: { nome: 'Retificação de Dados', menu: 'menu08.asp' },
+  intencao: { nome: 'ATPV-e / Intenção de Venda', menu: 'intencao_venda.asp' },
 };
 const CHAVE_DADOS = 'agendDados';
 const CHAVE_JOB = 'agendJob';
 const ALARME = 'agendNovaTentativa';
 const MAX_LOG = 800;
-const PAGINA = 'agendamento.html';
+// Desde a 1.3.0 a lista de veículos é a página do site (o mesmo painel do
+// programa para Windows), que conversa com esta extensão pelo ponte-site.js.
+// A tela própria da extensão (agendamento.html) saiu: eram duas telas iguais
+// para manter, e a dela já não tinha os serviços novos.
+const PAGINA = 'https://www.despachantesconsultas.com.br/extensao-chrome';
+const ident = (v) => (v.servico === 'licenca' ? 'DUDA ' + String(v.duda || '').replace(/\D/g, '') : String(v.placa || '').toUpperCase());
 
 const DADOS_VAZIO = { opcoes: { intervaloMinutos: 15, maxTentativas: 0 }, veiculos: [] };
 
@@ -73,7 +85,7 @@ async function abrirVeiculoAtual(job) {
   job.passo = 0;
   job.localEscolhido = false;
   job.recusas = 0;
-  addLog(job, `${v.placa} — ${SERVICOS[v.servico].nome}, tentativa ${job.tentativa}`);
+  addLog(job, `${ident(v)} — ${SERVICOS[v.servico].nome}, tentativa ${job.tentativa}`);
   const aba = await chrome.tabs.create({ url: urlMenu(v), active: true });
   job.tabId = aba.id;
   await gravarJob(job);
@@ -230,7 +242,7 @@ chrome.notifications.onClicked.addListener((id) => {
   emOrdem(async () => {
     const job = await lerJob();
     if (id.startsWith('agend-fim')) {
-      chrome.tabs.create({ url: chrome.runtime.getURL(PAGINA) });
+      chrome.tabs.create({ url: PAGINA });
     } else if (job && job.tabId != null) {
       try {
         const aba = await chrome.tabs.update(job.tabId, { active: true });

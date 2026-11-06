@@ -70,7 +70,7 @@ function iniciar({ placa, teste }) {
   if (teste) args.push('--teste');
   linhas = [];
   inicioLog = 0;
-  addLinha(`=== ${teste ? 'TESTE' : 'AGENDAMENTO'} ${placa ? 'da placa ' + placa : 'de todos os veículos'} — ${new Date().toLocaleString('pt-BR')} ===`);
+  addLinha(`=== ${teste ? 'TESTE' : 'AGENDAMENTO'} ${placa ? 'de ' + placa : 'de todos os veículos'} — ${new Date().toLocaleString('pt-BR')} ===`);
   processo = spawn(process.execPath, args, { cwd: PASTA, stdio: ['ignore', 'pipe', 'pipe'] });
   processo.stdout.on('data', addLinha);
   processo.stderr.on('data', addLinha);

@@ -95,18 +95,27 @@
   // Mesmas regras do validar() do agendar.js: lá o erro saía no andamento;
   // aqui volta antes de abrir o Detran (poupa um captcha perdido).
   const soDigitos = (s) => String(s || '').replace(/\D/g, '');
+  // DUDA e data só onde o formulário do Detran tem: transferência de
+  // propriedade (Jurisdição e Município nas opções 3 a 5) e, o DUDA, na 1ª Licença.
+  const temTransferencia = (v) => v.servico === 'propriedade' || ((v.servico === 'jurisdicao' || v.servico === 'municipio') && Number(v.opcao) >= 3);
+  const itensDe = (v) => (Array.isArray(v.itens) ? v.itens.map(String) : []);
+  const ident = (v) => (v.servico === 'licenca' ? (v.duda ? 'DUDA ' + soDigitos(v.duda) : '') : String(v.placa || '').toUpperCase());
+  const SERVICOS_OK = ['propriedade', 'jurisdicao', 'municipio', 'licenca', 'alteracao', 'segundaVia', 'retificacao', 'intencao'];
   function validar(v) {
     const erros = [];
-    if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(String(v.placa || '').toUpperCase())) erros.push('placa inválida');
-    if (!/^\d{9,11}$/.test(soDigitos(v.renavam))) erros.push('renavam inválido');
+    if (!SERVICOS_OK.includes(v.servico)) return ['serviço desconhecido'];
+    if (v.servico !== 'licenca') {
+      if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(String(v.placa || '').toUpperCase())) erros.push('placa inválida');
+      if (!/^\d{9,11}$/.test(soDigitos(v.renavam))) erros.push('renavam inválido');
+    }
     const doc = soDigitos(v.cpfCnpj);
     if (doc.length !== 11 && doc.length !== 14) erros.push('CPF/CNPJ deve ter 11 ou 14 dígitos');
-    if (!/^\d{8}$/.test(soDigitos(v.cep))) erros.push('CEP inválido');
-    if (v.servico === 'propriedade') {
-      if (!/^\d{2}\/\d{2}\/\d{4}$/.test(v.dataVenda || '')) erros.push('data da venda no formato dd/mm/aaaa');
-      if (!soDigitos(v.duda)) erros.push('informe o DUDA');
-    }
+    if (['propriedade', 'jurisdicao', 'municipio', 'licenca'].includes(v.servico) && !/^\d{8}$/.test(soDigitos(v.cep))) erros.push('CEP inválido');
+    if ((temTransferencia(v) || v.servico === 'licenca') && !/^\d{1,10}$/.test(soDigitos(v.duda))) erros.push('informe o DUDA pago');
+    if (temTransferencia(v) && !/^\d{2}\/\d{2}\/\d{4}$/.test(v.dataVenda || '')) erros.push('data da venda no formato dd/mm/aaaa');
     if (v.servico === 'jurisdicao' && !v.ufOrigem) erros.push('informe a UF de origem');
+    if (v.servico === 'alteracao' && !itensDe(v).length) erros.push('marque pelo menos um serviço');
+    if (itensDe(v).includes('40') && !v.combustivel) erros.push('escolha o combustível novo');
     if (String(v.solicitante) === '03' && !soDigitos(v.matriculaDespachante)) erros.push('informe a matrícula do despachante');
     if (!v.cidade && !v.posto) erros.push('informe a cidade e/ou o posto');
     return erros;
@@ -136,10 +145,18 @@
       if (job && job.ativo) return [409, { erro: 'Já tem um agendamento rodando.' }];
       const d = await lerDados();
       const placa = corpo && corpo.placa ? String(corpo.placa).toUpperCase() : null;
-      const lista = d.veiculos.filter((v) => !v.feito && (!placa || String(v.placa).toUpperCase() === placa));
+      const lista = d.veiculos.filter((v) => !v.feito && (!placa || ident(v) === placa));
       if (!lista.length) return [400, { erro: placa ? 'Esse veículo já foi agendado ou não está salvo.' : 'Nenhum veículo pendente para agendar.' }];
+      // A extensão 1.2.0 só conhece os três serviços antigos: o background dela
+      // quebraria ao abrir um dos novos. Pede para atualizar antes.
+      const versao = String(((await extensao) || {}).versao || '0').split('.').map(Number);
+      const antiga = versao[0] < 1 || (versao[0] === 1 && (versao[1] || 0) < 3);
+      if (antiga && lista.some((v) => !['propriedade', 'jurisdicao', 'municipio'].includes(v.servico))) {
+        mostrarInstalar(true);
+        return [400, { erro: 'Sua extensão é de antes dos serviços novos (1ª Licença, Alteração, 2ª Via, Retificação, Intenção de Venda). Baixe a nova no topo da página, troque a pasta em chrome://extensions e recarregue.' }];
+      }
       const problemas = lista.map((v) => [v, validar(v)]).filter(([, e]) => e.length);
-      if (problemas.length) return [400, { erro: problemas.map(([v, e]) => `${v.placa || 'Sem placa'}: ${e.join('; ')}`).join(' · ') }];
+      if (problemas.length) return [400, { erro: problemas.map(([v, e]) => `${ident(v) || 'Sem placa'}: ${e.join('; ')}`).join(' · ') }];
       const r = await pedir('enviar', { msg: { tipo: 'iniciar', ids: lista.map((v) => v.id), teste: !!(corpo && corpo.teste) } });
       if (r && r.erro) return [409, { erro: r.erro }];
       etapaAnterior = null;
