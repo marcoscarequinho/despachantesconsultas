@@ -1,5 +1,7 @@
 # Agendamento Detran RJ — versão Java
 
+> **Fora do site desde 06/11/2026.** Mesmo com o `.cmd` reescrito (que passou no `MpCmdRun` local), o .zip **baixado pelo navegador** continuou sendo barrado como `Trojan:Script/Ulthar.A!ml` em todos os navegadores: no download o Defender consulta a nuvem com a origem do arquivo, e o veredito de lá é outro. O card saiu da `/baixar-app`, `/baixar-app/java` volta para a página e o .zip saiu do repositório (o build agora gera em `build\`). Só vale religar depois de a Microsoft aceitar o falso positivo (microsoft.com/wdsi/filesubmission) **e** de um download de teste pelo navegador passar.
+
 Segunda opção da página `/baixar-app` (06/11/2026, pedido do dono): o mesmo agendamento assistido da [versão Node](../agendamento-detran/LEIA-ME.md), com a mesma tela, entregue como **.zip sem nenhum .exe nosso**. O objetivo é escapar do aviso "O Windows protegeu o computador", que o SmartScreen mostra para executável **sem assinatura** (o `Instalar-Agendamento-Detran.exe` não tem assinatura).
 
 ## Por que funciona sem certificado

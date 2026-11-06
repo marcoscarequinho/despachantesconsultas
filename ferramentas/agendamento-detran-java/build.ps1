@@ -79,7 +79,9 @@ COMO USAR
 
 # 7) zip (barra "/" nos caminhos, como na extensão)
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
-$saida = Join-Path $PSScriptRoot '..\..\downloads-java\Agendamento-Detran-RJ-Java.zip'
+# Fora do git e do site desde 06/11/2026: o Defender marcava o .zip baixado
+# como vírus (ver LEIA-ME). Fica em build\ para testes e envio à Microsoft.
+$saida = Join-Path $PSScriptRoot 'build\Agendamento-Detran-RJ-Java.zip'
 New-Item -ItemType Directory -Force (Split-Path $saida) | Out-Null
 if (Test-Path $saida) { Remove-Item $saida }
 $zip = [IO.Compression.ZipFile]::Open($saida, 'Create')

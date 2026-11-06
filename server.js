@@ -19949,7 +19949,9 @@ app.get('/baixar-app', (req, res) => {
 // então o arquivo fica no GitHub (repositório público) e esta rota só redireciona
 // — trocar onde ele mora é mexer só aqui.
 const AGENDAMENTO_JAVA_ZIP = 'https://github.com/marcoscarequinho/despachantesconsultas/raw/main/downloads-java/Agendamento-Detran-RJ-Java.zip';
-app.get('/baixar-app/java', (req, res) => res.redirect(302, AGENDAMENTO_JAVA_ZIP));
+// Fora do ar desde 06/11/2026: o Defender marcava o .zip como vírus ao baixar
+// (Trojan:Script/Ulthar.A!ml). Para religar, volte o redirect para AGENDAMENTO_JAVA_ZIP.
+app.get('/baixar-app/java', (req, res) => res.redirect(302, '/baixar-app'));
 // Termos de Uso (texto do dono, 03/11/2026). O cadastro e a recarga linkam
 // para cá; o aceite da recarga fica gravado no pagamento (ver TERMOS_VERSAO).
 app.get('/termos', (req, res) => {
