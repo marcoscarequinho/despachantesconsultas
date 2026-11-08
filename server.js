@@ -16899,18 +16899,11 @@ const BOT_WHATS_MENU = [
   { id: 'base-nacional', rotulo: '🗺️ Base Nacional' },
   { id: 'comunicado-venda-placa', rotulo: '📝 Consulta do Comunicação de Venda' },
   { id: 'crlv-rj-reemissao-2', rotulo: '🔑 📄 CRLV 2 Rio Reemissão' },
-  { id: 'dcr-cancelamento-atpve', rotulo: '🚫 Cancelamento de ATPV-e (RJ)' },
   { id: 'dcr-reemissao-atpve', rotulo: '📝 Reemissão ATPV-e (PDF)' },
   { id: 'dcr-pacote-completa-top', rotulo: '🚘 Pacote Veicular Completa TOP' },
 ];
-// Passos do cancelamento de ATPV-e (os mesmos campos do formulário do painel).
-const BOT_WHATS_CANCEL_PASSOS = [
-  { campo: 'placa', pergunta: 'Informe a *placa* do veículo (ex.: ABC1D23):' },
-  { campo: 'renavam', pergunta: 'Informe o *renavam* do veículo:' },
-  { campo: 'numero_atpve', pergunta: 'Informe o *número do ATPV-e* a cancelar:' },
-  { campo: 'vendedor_documento', pergunta: 'Informe o *CPF/CNPJ do vendedor* (o proprietário que consta no ATPV-e):' },
-  { campo: 'numero_duda', pergunta: 'Informe o *número da DUDA* (obrigatório no RJ):' },
-];
+// Só consultas que pedem só a placa entram aqui (dono, 08/11/2026: o
+// Cancelamento de ATPV-e saiu por pedir renavam, nº do ATPV-e, CPF e DUDA).
 
 // Token do webhook de mensagens recebidas, derivado do JWT_SECRET: a Z-API não
 // assina o webhook, e sem isso qualquer um poderia mandar um "@consultar" com
@@ -17039,8 +17032,7 @@ async function gerarPixBot(phone, chave, user, serviceId, params) {
     `INSERT INTO whatsapp_pedidos (user_id, phone, service_id, params, valor, gateway_id) VALUES ($1,$2,$3,$4,$5,$6)`,
     [user.id, phone, serviceId, JSON.stringify(params), valor, String(payment.id)]
   );
-  const irreversivel = serviceId === 'dcr-cancelamento-atpve' ? '\n⚠️ O cancelamento do ATPV-e *não pode ser desfeito*.' : '';
-  const legenda = `💳 *${s.name}*\n🔎 Placa ${params.placa}\n💰 *${fmtMoneyBRL(valor)}*${irreversivel}\n\n` +
+  const legenda = `💳 *${s.name}*\n🔎 Placa ${params.placa}\n💰 *${fmtMoneyBRL(valor)}*\n\n` +
     `Pague com o QR Code ou com o *PIX copia e cola* da próxima mensagem. Assim que o pagamento cair, a consulta roda e o PDF chega aqui. Se não sair, o PIX é devolvido.`;
   if (tx.qr_code_base64) await sendWhatsAppImage(phone, tx.qr_code_base64, legenda);
   else await sendWhatsApp(phone, legenda);
@@ -17236,10 +17228,6 @@ async function processarMensagemBot(phone, texto) {
       await salvarSessaoBot(chave, user.id, 'crlv_uf', {});
       return sendWhatsApp(phone, 'Informe a *UF* do veículo (ex.: RJ, SP, BA):');
     }
-    if (id === 'dcr-cancelamento-atpve') {
-      await salvarSessaoBot(chave, user.id, 'cancel', { passo: 0, params: { uf: 'RJ', confirmar: true } });
-      return sendWhatsApp(phone, `*Cancelamento de ATPV-e (só RJ)*\n\n${BOT_WHATS_CANCEL_PASSOS[0].pergunta}`);
-    }
     await salvarSessaoBot(chave, user.id, 'placa', { serviceId: id });
     return sendWhatsApp(phone, 'Informe a *placa* do veículo (ex.: ABC1D23):');
   }
@@ -17260,23 +17248,6 @@ async function processarMensagemBot(phone, texto) {
     const placa = placaBot(texto);
     if (!placaBotOk(placa)) return sendWhatsApp(phone, 'Placa inválida. Informe no formato ABC1D23.');
     return gerarPixBot(phone, chave, user, d.serviceId, { placa });
-  }
-
-  if (sessao.etapa === 'cancel') {
-    const passo = BOT_WHATS_CANCEL_PASSOS[d.passo];
-    const valor = passo.campo === 'placa' ? placaBot(texto) : texto.replace(/\D/g, '');
-    if (passo.campo === 'placa' && !placaBotOk(valor)) return sendWhatsApp(phone, 'Placa inválida. Informe no formato ABC1D23.');
-    if (passo.campo === 'renavam' && (valor.length < 9 || valor.length > 11)) return sendWhatsApp(phone, 'Renavam inválido (9 a 11 dígitos).');
-    if (passo.campo === 'numero_atpve' && valor.length < 6) return sendWhatsApp(phone, 'Número do ATPV-e inválido.');
-    if (passo.campo === 'vendedor_documento' && (![11, 14].includes(valor.length) || !isValidDoc(valor))) return sendWhatsApp(phone, 'CPF/CNPJ inválido. Confira e envie de novo.');
-    if (passo.campo === 'numero_duda' && !valor) return sendWhatsApp(phone, 'Informe o número da DUDA (só números).');
-    const params = { ...(d.params || {}), [passo.campo]: valor };
-    const prox = d.passo + 1;
-    if (prox < BOT_WHATS_CANCEL_PASSOS.length) {
-      await salvarSessaoBot(chave, user.id, 'cancel', { passo: prox, params });
-      return sendWhatsApp(phone, BOT_WHATS_CANCEL_PASSOS[prox].pergunta);
-    }
-    return gerarPixBot(phone, chave, user, 'dcr-cancelamento-atpve', params);
   }
 
   await encerrarSessaoBot(chave);
