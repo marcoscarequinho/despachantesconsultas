@@ -17280,6 +17280,8 @@ async function processarMensagemBot(phone, texto) {
 // mensagem recebida com o token certo (ZAPI_RECEBIDAS_URL) chega ao robô.
 app.post('/api/webhooks/zapi', async (req, res) => {
   const event = req.body;
+  // Diagnóstico do @consultar (08/11/2026): o que a Z-API manda, sem o texto.
+  console.log(`[zapi webhook] type=${event?.type} ct=${req.headers['content-type']} token=${req.query.token ? (req.query.token === ZAPI_RECEBIDAS_TOKEN ? 'ok' : 'errado') : 'sem'} fone=…${String(event?.phone || '').slice(-4)} fromMe=${event?.fromMe} grupo=${event?.isGroup} inst=${event?.instanceId === ZAPI_INSTANCE_ID ? 'nossa' : event?.instanceId ? 'outra' : 'sem'}`);
   if (!event || event.type !== 'ReceivedCallback') return res.sendStatus(200);
   try {
     const phone      = event.phone || '';
