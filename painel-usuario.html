@@ -374,6 +374,11 @@
           <span class="bg-white text-blue-800 text-sm font-semibold px-3 py-1.5 rounded-lg flex-shrink-0">Abrir ↗</span>
         </a>
         <div id="catalog-parceiros-destaque" class="hidden mb-4"></div>
+        <!-- Consultas pelo WhatsApp (@consultar), entre os Parceiros e as
+             Consultas Novas (pedido do dono, 08/11/2026). Para parceiro e
+             cliente da MC; escondido para cliente de parceiro (fala do preço
+             do parceiro e da MC). renderWhatsappDestaque(). -->
+        <div id="catalog-whatsapp-destaque" class="hidden mb-4"></div>
         <div id="catalog-novas-destaque" class="hidden mb-4"></div>
         <!-- Contrato Social LTDA com IA em faixa própria, a primeira de todas,
              acima das Consultas Especiais (pedido do dono, 19/10/2026).
@@ -1593,6 +1598,7 @@ async function init() {
     buildExtrasList();
     buildNovasList();
     carregarParceiros();
+    carregarWhatsappDestaque();
     renderServiceListV2();
     esconderAbasSemConsulta();
     await Promise.all([loadStats(), loadQueries(), loadAssinaturaStatus()]);
@@ -2951,6 +2957,184 @@ function renderParceirosDestaque() {
           </a>`).join('')}
       </div>
     </div>`;
+}
+
+// ── Card "Consultas pelo WhatsApp" (@consultar) ──────────────────────────────
+// Espelha o menu do robô no servidor (BOT_WHATS_MENU / BOT_WHATS_CRLV_UF): se
+// mudar lá, muda aqui. Para o parceiro, cada linha diz se a consulta já está na
+// página dele (só o que está na página aparece no WhatsApp do cliente dele).
+const WHATS_NUMERO = '5522999951574';
+const WHATS_CRLV_UF = {
+  AC: ['dcr-crlv-ac'], AL: ['dcr-crlv-ag-al'], BA: ['consultar-crlv-ba'],
+  CE: ['crlv-ce-instantaneo', 'dcr-crlv-ag-ce'], GO: ['dcr-crlv-go'], MS: ['dcr-crlv-ms'],
+  MT: ['dcr-crlv-mt'], PE: ['crlv-pe-instantaneo'], PI: ['dcr-crlv-pi'], PR: ['dcr-crlv-ag-pr'],
+  RJ: ['consultar-crlv-rj'], RO: ['dcr-crlv-ro'], RS: ['dc-crlve-rs-v2'], SE: ['dcr-crlv-se'],
+  SP: ['crlv-sp-v2', 'consultar-crlv-sp', 'dd-crlv-sp'],
+};
+const WHATS_CONSULTAS = [
+  { id: 'base-nacional',            icon: '🗺️', nome: 'Base Nacional' },
+  { id: 'comunicado-venda-placa',   icon: '📝', nome: 'Consulta do Comunicação de Venda' },
+  { id: 'crlv-rj-reemissao-2',      icon: '🔑', nome: 'CRLV 2 Rio Reemissão' },
+  { id: 'dcr-cancelamento-atpve',   icon: '🚫', nome: 'Cancelamento de ATPV-e (RJ)' },
+  { id: 'dcr-reemissao-atpve',      icon: '📝', nome: 'Reemissão ATPV-e (PDF)' },
+  { id: 'dcr-pacote-completa-top',  icon: '🚘', nome: 'Pacote Veicular Completa TOP' },
+];
+let whatsMinhas = null;   // parceiro: { serviceId: {na_pagina, venda} } de /api/reseller/consultas
+
+async function carregarWhatsappDestaque() {
+  if (currentUser?.role === 'reseller') {
+    try {
+      const r = await fetch('/api/reseller/consultas');
+      if (r.ok) {
+        whatsMinhas = {};
+        ((await r.json()).consultas || []).forEach(c => { whatsMinhas[c.id] = c; });
+      }
+    } catch { whatsMinhas = null; }
+  }
+  renderWhatsappDestaque();
+}
+
+function renderWhatsappDestaque() {
+  const wrap = document.getElementById('catalog-whatsapp-destaque');
+  if (!wrap) return;
+  const parceiro = currentUser?.role === 'reseller';
+  // Cliente de parceiro não vê: o site dele tem de parecer só do parceiro.
+  if (!parceiro && currentUser?.parceiro) { wrap.classList.add('hidden'); wrap.innerHTML = ''; return; }
+  wrap.classList.remove('hidden');
+
+  const naPagina = id => !!whatsMinhas?.[id]?.na_pagina;
+  const precoDe = id => whatsMinhas?.[id]?.venda ?? allServices.find(s => s.id === id)?.price;
+  const selo = ok => !parceiro || !whatsMinhas ? ''
+    : ok ? '<span class="text-[11px] font-semibold text-emerald-700 bg-emerald-100 rounded px-1.5 py-0.5 flex-shrink-0">✅ no seu WhatsApp</span>'
+         : '<span class="text-[11px] font-semibold text-red-700 bg-red-100 rounded px-1.5 py-0.5 flex-shrink-0">⛔ não aparece — marque o preço</span>';
+
+  const ufsLiberadas = Object.entries(WHATS_CRLV_UF).filter(([, ids]) => ids.some(naPagina)).map(([uf]) => uf);
+  const linhaCrlv = `
+    <li class="flex items-start gap-2 bg-white rounded-lg border border-gray-100 px-3 py-2">
+      <span class="text-lg leading-none">📄</span>
+      <div class="min-w-0 flex-1">
+        <div class="text-sm font-semibold text-gray-800">CRLV-e na hora — o cliente informa a UF e a placa</div>
+        <div class="text-[11px] text-gray-500">${Object.keys(WHATS_CRLV_UF).join(' · ')}. Estado que pede mais que a placa responde "Não cobrimos essa UF".</div>
+        ${parceiro && whatsMinhas ? `<div class="text-[11px] mt-0.5 ${ufsLiberadas.length ? 'text-emerald-700' : 'text-red-700'}">${ufsLiberadas.length
+          ? `No seu WhatsApp: ${ufsLiberadas.join(', ')} (${ufsLiberadas.length} de ${Object.keys(WHATS_CRLV_UF).length})`
+          : 'Nenhum estado no seu WhatsApp ainda — marque o preço do CRLV-e de cada estado.'}</div>` : ''}
+      </div>
+    </li>`;
+  const linhas = WHATS_CONSULTAS.map(c => {
+    const p = precoDe(c.id);
+    return `
+    <li class="flex items-center gap-2 bg-white rounded-lg border border-gray-100 px-3 py-2">
+      <span class="text-lg leading-none">${c.icon}</span>
+      <div class="min-w-0 flex-1">
+        <div class="text-sm font-semibold text-gray-800">${c.nome}</div>
+        ${p != null ? `<div class="text-[11px] text-gray-500">${parceiro && naPagina(c.id) ? 'Seu preço' : 'Preço do site'}: ${fmtPrice(p)}</div>` : ''}
+      </div>
+      ${selo(naPagina(c.id))}
+    </li>`;
+  }).join('');
+
+  // Conversa de exemplo: as bolhas entram uma a uma quando o card abre.
+  const balao = (quem, html, atraso) => `
+    <div class="wz-msg flex ${quem === 'eu' ? 'justify-end' : 'justify-start'}" style="animation-delay:${atraso}s">
+      <div class="${quem === 'eu' ? 'bg-[#d9fdd3]' : 'bg-white'} text-gray-800 text-[12px] leading-snug rounded-lg px-2.5 py-1.5 shadow-sm max-w-[85%]">${html}</div>
+    </div>`;
+  const conversa = [
+    balao('eu', '@consultar', 0.2),
+    balao('bot', '<b>Consultas pelo WhatsApp</b><br>1 - 📄 CRLV-e (UF e placa)<br>2 - 🗺️ Base Nacional<br>3 - 📝 Comunicação de Venda<br>…<br><i>Responda com o número.</i>', 0.9),
+    balao('eu', '1', 1.8),
+    balao('bot', 'Informe a <b>UF</b> do veículo:', 2.4),
+    balao('eu', 'RJ', 3.1),
+    balao('bot', 'Informe a <b>placa</b>:', 3.7),
+    balao('eu', 'ABC1D23', 4.4),
+    balao('bot', `<div class="flex items-center gap-2"><span class="text-3xl leading-none">🔳</span><span>💳 <b>CRLV-e Rio</b><br>🔎 ABC1D23<br>Pague o PIX e pronto</span></div>`, 5.1),
+    balao('bot', '<span class="font-mono text-[10px] break-all">00020126360014br.gov.bcb.pix…</span>', 5.6),
+    balao('bot', '⏳ Pagamento recebido! Consultando…', 6.6),
+    balao('bot', '📎 <b>crlv-e-ABC1D23.pdf</b><br>✅ Pronto!', 7.6),
+  ].join('');
+
+  wrap.innerHTML = `
+    <style>
+      @keyframes wzEntra { from { opacity: 0; transform: translateY(6px) scale(.97); } to { opacity: 1; transform: none; } }
+      #catalog-whatsapp-destaque details[open] .wz-msg { opacity: 0; animation: wzEntra .35s ease-out forwards; }
+      @keyframes wzAlerta { 0%,100% { box-shadow: 0 0 0 0 rgba(220,38,38,.45); } 50% { box-shadow: 0 0 0 6px rgba(220,38,38,0); } }
+      #catalog-whatsapp-destaque summary { animation: wzAlerta 2s ease-in-out infinite; list-style: none; }
+      #catalog-whatsapp-destaque details[open] summary { animation: none; }
+      #catalog-whatsapp-destaque summary::-webkit-details-marker { display: none; }
+      #catalog-whatsapp-destaque .wz-fechar, #catalog-whatsapp-destaque details[open] .wz-abrir { display: none; }
+      #catalog-whatsapp-destaque details[open] .wz-fechar { display: inline-block; }
+    </style>
+    <details class="rounded-xl border-2 border-red-500 bg-white overflow-hidden">
+      <summary class="cursor-pointer select-none bg-gradient-to-r from-red-600 via-red-500 to-orange-500 text-white px-4 py-3 rounded-t-lg flex items-center gap-3">
+        <span class="text-2xl animate-pulse flex-shrink-0">🛑</span>
+        <span class="min-w-0 flex-1">
+          <span class="block font-extrabold tracking-wide text-sm sm:text-base">ATENÇÃO, MUITA ATENÇÃO PARCEIROS — UMA NOVA! CLIQUE E LEIA</span>
+          <span class="block text-xs text-red-50">Seu cliente agora consulta pelo WhatsApp: sem formulário, sem site, sem senha.</span>
+        </span>
+        <span class="wz-abrir bg-white text-red-600 text-xs font-bold px-3 py-1.5 rounded-lg flex-shrink-0">Abrir ▾</span>
+        <span class="wz-fechar bg-white text-red-600 text-xs font-bold px-3 py-1.5 rounded-lg flex-shrink-0">Fechar ▴</span>
+      </summary>
+
+      <div class="p-4 sm:p-5 bg-gradient-to-b from-red-50/40 to-white">
+        <div class="grid lg:grid-cols-5 gap-5">
+          <div class="lg:col-span-3 space-y-4">
+            <div>
+              <div class="text-lg font-extrabold text-gray-800 leading-tight">📲 A consulta que cabe numa conversa de WhatsApp</div>
+              <p class="text-sm text-gray-700 mt-1">
+                Isto <b>não é para despachante</b>. É para o <b>SEU cliente</b>: o dono do carro, o vendedor da loja, a pessoa que
+                manda áudio de cinco minutos sem pensar duas vezes, mas trava na hora de achar o campo "Renavam" num formulário.
+                Para ele, consultar vira conversa: <b>manda @consultar, escolhe um número, manda a placa, paga o PIX e recebe o PDF</b>.
+              </p>
+            </div>
+
+            <div class="bg-amber-50 border-l-4 border-amber-500 rounded-r-lg p-3">
+              <div class="font-bold text-amber-900 text-sm">⚠️ Sem preço marcado, não aparece</div>
+              <p class="text-xs text-amber-900 mt-0.5">
+                O menu do WhatsApp do seu cliente mostra <b>só as consultas que você marcou e precificou</b> em
+                <b>Minhas Consultas e Preços</b>, e pelo <b>seu preço</b>. Consulta não marcada simplesmente não existe para ele.
+              </p>
+            </div>
+
+            <div>
+              <div class="font-bold text-gray-800 text-sm mb-2">🧾 Consultas que entram no WhatsApp</div>
+              <ul class="space-y-1.5">${linhaCrlv}${linhas}</ul>
+            </div>
+
+            <div class="grid sm:grid-cols-2 gap-3">
+              <div class="bg-white border border-gray-200 rounded-lg p-3">
+                <div class="font-bold text-gray-800 text-sm">👤 Crie a conta por ele</div>
+                <p class="text-xs text-gray-600 mt-0.5">Em <b>Meus Clientes</b> você cadastra o cliente com o <b>WhatsApp dele</b>. É por esse número que o robô o reconhece; ele nem precisa saber que existe senha.</p>
+              </div>
+              <div class="bg-white border border-gray-200 rounded-lg p-3">
+                <div class="font-bold text-gray-800 text-sm">💳 Pago na hora, no PIX</div>
+                <p class="text-xs text-gray-600 mt-0.5">Cada consulta gera seu QR Code e copia e cola. <b>Não usa saldo.</b> Se não sair, o PIX volta sozinho. Seu ganho (preço − custo) entra como nas consultas do site.</p>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap gap-2">
+              ${parceiro ? `
+                <a href="/painel/revendedor#catalog" class="bg-red-600 hover:bg-red-700 text-white text-sm font-bold px-4 py-2 rounded-lg">🏷️ Marcar consultas e preços</a>
+                <a href="/painel/revendedor#clients" class="bg-white border border-red-300 text-red-700 hover:bg-red-50 text-sm font-semibold px-4 py-2 rounded-lg">👤 Cadastrar meus clientes</a>
+                <a href="https://wa.me/${WHATS_NUMERO}?text=%40consultar" target="_blank" rel="noopener" class="bg-[#25D366] hover:bg-[#1ebe5b] text-white text-sm font-semibold px-4 py-2 rounded-lg">💬 Testar agora (@consultar)</a>`
+              : `
+                <button type="button" onclick="abrirSejaRevendedor()" class="bg-red-600 hover:bg-red-700 text-white text-sm font-bold px-4 py-2 rounded-lg">🤝 Quero ser parceiro e oferecer isso</button>
+                <span class="text-xs text-gray-500 self-center">Disponível só para parceiros e os clientes deles.</span>`}
+            </div>
+            <p class="text-[11px] text-gray-500">O número é o <b>(22) 99995-1574</b>. Você, parceiro, também consulta por lá: mande <b>@consultar</b> do WhatsApp do seu cadastro.</p>
+          </div>
+
+          <div class="lg:col-span-2">
+            <div class="mx-auto max-w-[300px] rounded-[28px] border-[6px] border-gray-800 bg-gray-800 shadow-xl overflow-hidden">
+              <div class="bg-[#075e54] text-white px-3 py-2 flex items-center gap-2">
+                <span class="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center text-sm">🚗</span>
+                <div class="leading-tight"><div class="text-xs font-bold">Consultas</div><div class="text-[10px] text-green-100">online</div></div>
+              </div>
+              <div class="bg-[#efeae2] p-2 space-y-1.5" style="min-height:360px">${conversa}</div>
+            </div>
+            <p class="text-center text-[11px] text-gray-500 mt-2">É isso que o seu cliente vê. Nada mais.</p>
+          </div>
+        </div>
+      </div>
+    </details>`;
 }
 
 // Faixa da página ATPVe's e Consultas Novas, acima do Contrato Social. Some

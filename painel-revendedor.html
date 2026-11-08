@@ -843,6 +843,10 @@ async function init() {
     document.getElementById('profile-phone').value = currentUser.phone || '';
 
     await loadDashboard();
+    // Link direto para uma seção (/painel/revendedor#catalog ou #clients) — o
+    // card do @consultar no painel do cliente leva o parceiro direto para lá.
+    const secaoDoLink = location.hash.replace('#', '');
+    if (sectionTitles[secaoDoLink]) showSection(secaoDoLink);
   } catch {
     window.location.href = '/entrar';
   }
