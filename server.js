@@ -4534,15 +4534,20 @@ app.get('/api/services', requireAuth, async (req, res) => {
         WHERE u.id=$1`, [req.user.id]
     );
     const tab = pr.rows.length ? await tabelaParceiro(pr.rows[0].revendedor_id) : null;
-    // Cliente de parceiro só vê o que o parceiro remarcou (consultasLiberadasClienteParceiro).
+    // Cliente de parceiro só consulta o que o parceiro remarcou
+    // (consultasLiberadasClienteParceiro). O resto continua na vitrine para a
+    // página não ficar vazia (dono, 08/11/2026), mas sem preço e marcado
+    // naoLiberada: o painel mostra o aviso para falar com o consultor, e o
+    // /api/query recusa do mesmo jeito.
     const liberadas = await consultasLiberadasClienteParceiro(req.user.id);
     res.json({
-      services: SERVICES.filter(s => !liberadas || liberadas.has(s.id)).map(s => ({
+      services: SERVICES.map(s => (liberadas && !liberadas.has(s.id)) ? { ...s, price: null, naoLiberada: true } : {
         ...s,
         // Serviço de grupo gratuito ignora o preço fixo por usuário (catalogPrice
         // devolve 0) — é a mesma regra aplicada na cobrança em getUserServicePrice.
         price: isFreeService(s) ? 0 : (overrides[s.id] ?? (tab && tab.vendaDe(s)) ?? catalogPrice(s)),
-      })),
+      }),
+      consultaNaoLiberadaMsg: liberadas ? CONSULTA_FORA_DO_PARCEIRO_MSG : undefined,
     });
   } catch (err) {
     res.status(500).json({ error: 'Erro interno.' });
@@ -9609,7 +9614,9 @@ async function consultasLiberadasClienteParceiro(userId) {
   return new Set(lista.rows.map(x => x.service_id)
     .filter(id => servicoRevendavel(SERVICES.find(s => s.id === id))));
 }
-const CONSULTA_FORA_DO_PARCEIRO_MSG = 'Esta consulta não está disponível na sua conta.';
+// Texto do dono (08/11/2026): aparece no painel ao clicar numa consulta que o
+// parceiro ainda não marcou, e na recusa do /api/query.
+const CONSULTA_FORA_DO_PARCEIRO_MSG = 'Essa consulta ainda não está adicionada para esse usuário. Entre em contato com seu CONSULTOR para adicioná-la.';
 
 // Tabela de preços de um parceiro, de uma vez (catálogo do cliente, página
 // pública, painel do parceiro): { custos: {serviceId: custo}, precos: {serviceId: preco} }.

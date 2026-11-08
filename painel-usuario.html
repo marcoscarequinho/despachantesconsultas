@@ -1449,13 +1449,17 @@ let selectedCatV3 = null;
 let lastResultV3  = null;
 
 // ── Formatação ─────────────────────────────────────────────────────────────────
-const fmt = v =>
+// price null = consulta que o parceiro ainda não liberou para este cliente
+// (naoLiberada, ver /api/services): no lugar do preço vai o cadeado.
+const PRECO_NAO_LIBERADO = '🔒 Não adicionada';
+let consultaNaoLiberadaMsg = 'Essa consulta ainda não está adicionada para esse usuário. Entre em contato com seu CONSULTOR para adicioná-la.';
+const fmt = v => v === null ? PRECO_NAO_LIBERADO :
   'R$ ' + parseFloat(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
 
 // Preço de serviço: serviços gratuitos (grupo "Para os Despachantes", ver
 // FREE_SERVICE_GROUPS no server.js) chegam com price 0 e aparecem como "Grátis"
 // em vez de "R$ 0,00".
-const fmtPrice = v => (parseFloat(v || 0) === 0 ? 'Grátis' : fmt(v));
+const fmtPrice = v => (v === null ? PRECO_NAO_LIBERADO : parseFloat(v || 0) === 0 ? 'Grátis' : fmt(v));
 
 const fmtDate = s => {
   const d = new Date(s);
@@ -1565,7 +1569,9 @@ async function init() {
     if (!currentUser.parceiro || currentUser.role === 'reseller') {
       document.getElementById('btn-agendamento-detran')?.classList.remove('hidden');
     }
-    allServices   =(await svcRes.json()).services  || [];
+    const svcJson = await svcRes.json();
+    allServices   = svcJson.services || [];
+    if (svcJson.consultaNaoLiberadaMsg) consultaNaoLiberadaMsg = svcJson.consultaNaoLiberadaMsg;
     allServicesV2 = (await svcRes2.json()).services || [];
     allServicesV3 = (await svcRes3.json()).services || [];
     buildCategoryGridV2();
@@ -3747,7 +3753,9 @@ function buildDespachantesList() {
   // "Assinar" no lugar do preço — clicar nele ou no card abre o mesmo popup do
   // PIX. Quem já assina continua vendo os serviços normalmente, com o "Grátis".
   document.getElementById('despachantes-service-list').innerHTML = svcs.map(s => {
-    const liberado = assinaturaLiberada(s.id);
+    // Cliente de parceiro com a consulta não liberada: mostra o cadeado no
+    // lugar do "Assinar" (o clique abre o aviso do consultor em selectService).
+    const liberado = s.naoLiberada || assinaturaLiberada(s.id);
     const svcAttr  = JSON.stringify(s).replace(/"/g, "&quot;");
     // <button> dentro de <button> é HTML inválido: o "Assinar" é um span com
     // role=button e stopPropagation, para não disparar o clique do card também.
@@ -4069,6 +4077,9 @@ function renderServiceList(cat) {
 
 function selectService(svc) {
   if (typeof svc === 'string') svc = JSON.parse(svc);
+  // Cliente de parceiro: consulta que o parceiro ainda não marcou com o preço
+  // dele (dono, 08/11/2026). O card aparece, mas o formulário não abre.
+  if (svc.naoLiberada) { toast(consultaNaoLiberadaMsg, 'aviso'); return; }
   // ATPV-e da Vistocar suspenso (22/10/2026): vai para a emissão nova, com a UF dele.
   // O RJ voltou em 01/11/2026 como opção 2 (card na página Consultas Novas).
   if (svc.id === 'atpve-vistocar-mg' && allServices.some(s => s.id === 'dcr-atpve')) {
