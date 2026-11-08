@@ -2345,6 +2345,21 @@ async function initDB() {
       dados         JSONB NOT NULL DEFAULT '{}',
       atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS whatsapp_pedidos (
+      id            SERIAL PRIMARY KEY,
+      user_id       INTEGER NOT NULL,
+      phone         VARCHAR(30) NOT NULL,
+      service_id    VARCHAR(80) NOT NULL,
+      params        JSONB NOT NULL DEFAULT '{}',
+      valor         NUMERIC(10,2) NOT NULL,
+      gateway_id    VARCHAR(60) UNIQUE NOT NULL,
+      status        VARCHAR(20) NOT NULL DEFAULT 'PENDENTE',
+      query_id      INTEGER,
+      refund_status VARCHAR(20),
+      erro          TEXT,
+      pago_em       TIMESTAMPTZ,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
     CREATE TABLE IF NOT EXISTS whatsapp_inbox (
       id           SERIAL PRIMARY KEY,
       phone        VARCHAR(30),
@@ -8995,6 +9010,9 @@ async function resumoPosPago(userId) {
 // como sempre foi (saldo < preço barra); o pós-pago não tem saldo a conferir —
 // o que barra é fatura vencida além da carência e o teto do ciclo.
 async function bloqueioPagamentoConsulta(userId, user, price) {
+  // Consulta pelo WhatsApp já paga por PIX (ver processarPagamentoWhats): não
+  // depende de saldo nem de fatura.
+  if (contextoBotWhats.getStore()?.pagoPix) return null;
   if (!user.pos_pago) {
     if (parseFloat(user.credits) < price) {
       return { status: 400, body: {
@@ -9042,6 +9060,11 @@ const TERMOS_RECARGA_MSG =
 async function debitarConsulta(userId, amount) {
   const valor = parseFloat(amount);
   if (!(valor > 0)) return;
+  // Consulta pelo WhatsApp: o cliente já pagou esta consulta por PIX. O débito
+  // não sai do saldo nem entra na fatura (só a transação fica, para o histórico
+  // e o ganho do parceiro). Vale para UM débito, o da consulta paga.
+  const bot = contextoBotWhats.getStore();
+  if (bot?.pagoPix && !bot.debitoPago) { bot.debitoPago = true; return; }
   const ur = await pool.query('SELECT pos_pago FROM users WHERE id=$1', [userId]);
   if (!ur.rows[0]?.pos_pago) {
     await pool.query('UPDATE users SET credits = credits - $1 WHERE id=$2', [valor, userId]);
@@ -9064,6 +9087,10 @@ async function debitarConsulta(userId, amount) {
 async function estornarConsulta(userId, amount) {
   const valor = parseFloat(amount);
   if (!(valor > 0)) return;
+  // Consulta do WhatsApp paga por PIX: o estorno é do PIX (processarPagamentoWhats
+  // devolve), não vira crédito no saldo.
+  const bot = contextoBotWhats.getStore();
+  if (bot?.pagoPix) { bot.estornou = true; return; }
   const ur = await pool.query('SELECT pos_pago FROM users WHERE id=$1', [userId]);
   if (!ur.rows[0]?.pos_pago) {
     await pool.query('UPDATE users SET credits = credits + $1 WHERE id=$2', [valor, userId]);
@@ -15903,10 +15930,23 @@ app.get('/api/pix/status/:paymentId', requireAuth, async (req, res) => {
 // Mercado Pago envia notificações leves (só o id) — sempre confirmamos o status
 // consultando a API diretamente, nunca confiando no corpo do webhook.
 app.post('/api/pix/webhook', async (req, res) => {
-  res.sendStatus(200);
   const body = req.body || {};
   const type = body.type || body.topic || req.query.type || req.query.topic;
   const paymentId = body.data?.id || req.query['data.id'] || req.query.id;
+  // Consulta pelo WhatsApp paga: roda depois da resposta pelo waitUntil (a
+  // consulta pode levar minutos e o Mercado Pago não espera).
+  if (type === 'payment' && paymentId) {
+    try {
+      const w = await pool.query('SELECT 1 FROM whatsapp_pedidos WHERE gateway_id=$1', [String(paymentId)]);
+      if (w.rows.length) {
+        depoisDaResposta(processarPagamentoWhats(String(paymentId)));
+        return res.sendStatus(200);
+      }
+    } catch (err) {
+      console.error('Webhook PIX (WhatsApp) erro:', err.message);
+    }
+  }
+  res.sendStatus(200);
   if (type !== 'payment' || !paymentId) return;
 
   try {
@@ -16046,6 +16086,7 @@ app.get('/api/cron/pix-reconcile', async (req, res) => {
   try {
     // Consultas pelo WhatsApp (@consultar): liga o webhook de mensagens recebidas na Z-API.
     await garantirWebhookRecebidasZapi().catch(e => console.error('[zapi] webhook recebidas:', e.message));
+    await conferirPedidosWhats().catch(e => console.error('[whatsapp] conferir pedidos:', e.message));
     const result = await runPixReconcile();
     res.json({ success: true, ...result });
   } catch (err) {
@@ -16825,7 +16866,14 @@ app.post('/api/admin/vistocar-webhook', requireAuth, requireSuperAdmin, async (r
 // parceiro, trava de repetida, cobrança só com resultado e o filtro do cliente
 // de parceiro (só o que está na página dele) valem iguais. Menu numerado e não
 // lista/botão do WhatsApp porque esses o WhatsApp restringe e somem em
-// alguns aparelhos. Toda consulta pede confirmação ("1") antes de cobrar.
+// alguns aparelhos.
+// Pagamento (dono, 08/11/2026): cada consulta do WhatsApp é paga na hora por
+// PIX, como a consulta avulsa — NÃO sai do saldo nem entra na fatura. A placa
+// (ou o último dado do cancelamento) gera o QR + copia e cola
+// (gerarPixBot/whatsapp_pedidos); o pagamento aprovado (webhook do Mercado Pago
+// ou o cron pix-reconcile) roda a consulta com contextoBotWhats.pagoPix, que faz
+// debitarConsulta/bloqueioPagamentoConsulta pularem o saldo. Não saiu: estorno
+// automático do PIX (mpRefundPayment).
 const BOT_WHATS_GATILHO = /^@consultar\b/i;
 const BOT_WHATS_SESSAO_MIN = 30;
 // CRLV-e de emissão na hora que pedem só a placa, por UF, em ordem de
@@ -16846,6 +16894,7 @@ const BOT_WHATS_MENU = [
   { id: 'crlv-rj-reemissao-2', rotulo: '🔑 📄 CRLV 2 Rio Reemissão' },
   { id: 'dcr-cancelamento-atpve', rotulo: '🚫 Cancelamento de ATPV-e (RJ)' },
   { id: 'dcr-reemissao-atpve', rotulo: '📝 Reemissão ATPV-e (PDF)' },
+  { id: 'dcr-consulta-veicular-completa', rotulo: '🔎 Veicular Completa' },
 ];
 // Passos do cancelamento de ATPV-e (os mesmos campos do formulário do painel).
 const BOT_WHATS_CANCEL_PASSOS = [
@@ -16893,7 +16942,7 @@ async function garantirWebhookRecebidasZapi() {
 // parceiro ativo ou cliente de parceiro ativo. { user } | { erro } | null.
 async function contaBotWhats(chave) {
   const r = await pool.query(
-    `SELECT u.id, u.name, u.role, u.phone, u.credits, u.pos_pago FROM users u
+    `SELECT u.id, u.name, u.email, u.role, u.phone FROM users u
        LEFT JOIN users p ON p.id = u.revendedor_id AND p.role = 'reseller' AND p.active = true
       WHERE u.active = true AND right(regexp_replace(COALESCE(u.phone,''),'[^0-9]','','g'), 8) = $1
         AND (u.role = 'reseller' OR p.id IS NOT NULL)`, [chave.slice(-8)]
@@ -16944,31 +16993,59 @@ async function enviarMenuBot(phone, chave, user, liberadas) {
     return sendWhatsApp(phone, 'Ainda não há consultas liberadas para a sua conta pelo WhatsApp.');
   }
   await salvarSessaoBot(chave, user.id, 'menu', { opcoes: opcoes.map(o => o.id) });
-  const saldo = user.pos_pago ? '' : `\n💰 Saldo: ${fmtMoneyBRL(user.credits)}\n`;
   return sendWhatsApp(phone, [
     `*Consultas pelo WhatsApp — MC Despachadoria Consultas*`,
-    `Olá, ${String(user.name || '').split(' ')[0] || 'tudo bem'}!${saldo}`,
+    `Olá, ${String(user.name || '').split(' ')[0] || 'tudo bem'}! Cada consulta é paga na hora por PIX.`,
+    ``,
     ...opcoes.map((o, i) => `*${i + 1}* - ${o.texto}`),
     ``,
     `Responda com o *número* da consulta. Para sair, digite *sair*.`,
   ].join('\n'));
 }
 
-async function pedirConfirmacaoBot(phone, chave, user, serviceId, params) {
+// Gera o PIX da consulta (Mercado Pago, como a consulta avulsa) e manda o QR
+// e o copia e cola. A consulta só roda quando o pagamento for aprovado
+// (processarPagamentoWhats). O notification_url garante o aviso do Mercado
+// Pago mesmo sem webhook cadastrado no app; o cron pix-reconcile é a reserva.
+async function gerarPixBot(phone, chave, user, serviceId, params) {
   const s = SERVICES.find(x => x.id === serviceId);
-  const preco = await getUserServicePrice(user.id, s);
-  await salvarSessaoBot(chave, user.id, 'confirmar', { serviceId, params });
+  const valor = await getUserServicePrice(user.id, s);
+  await encerrarSessaoBot(chave);
+  if (!(valor > 0)) return sendWhatsApp(phone, 'Esta consulta não está disponível pelo WhatsApp. Digite *@consultar* para ver o menu.');
+  let payment;
+  try {
+    payment = await mpReq('POST', '/v1/payments', {
+      transaction_amount: Number(valor.toFixed(2)),
+      description: `${s.name} - ${params.placa} (WhatsApp)`,
+      payment_method_id: 'pix',
+      payer: { email: user.email, first_name: String(user.name || 'Cliente').split(' ')[0] },
+      notification_url: `${WEBHOOK_BASE_URL || 'https://www.despachantesconsultas.com.br'}/api/pix/webhook`,
+    }, { 'X-Idempotency-Key': crypto.randomUUID() });
+  } catch (err) {
+    console.error('[whatsapp] erro ao gerar PIX:', err.message);
+    await alertAdminPixFalha(err, 'Consulta pelo WhatsApp (@consultar)').catch(() => {});
+    return sendWhatsApp(phone, `❌ ${mpErroAmigavel(err, 'Não consegui gerar o PIX agora.')} Tente de novo com *@consultar*.`);
+  }
+  const tx = payment.point_of_interaction?.transaction_data || {};
+  if (!tx.qr_code) return sendWhatsApp(phone, '❌ Não consegui gerar o PIX agora. Tente de novo com *@consultar*.');
+  await pool.query(
+    `INSERT INTO whatsapp_pedidos (user_id, phone, service_id, params, valor, gateway_id) VALUES ($1,$2,$3,$4,$5,$6)`,
+    [user.id, phone, serviceId, JSON.stringify(params), valor, String(payment.id)]
+  );
   const irreversivel = serviceId === 'dcr-cancelamento-atpve' ? '\n⚠️ O cancelamento do ATPV-e *não pode ser desfeito*.' : '';
-  return sendWhatsApp(phone,
-    `Confirma *${s.name}* da placa *${params.placa}* por *${fmtMoneyBRL(preco)}*?${irreversivel}\n\n` +
-    `*1* - Confirmar\n*0* - Cancelar\n\nSó é cobrado se o resultado sair.`);
+  const legenda = `💳 *${s.name}*\n🔎 Placa ${params.placa}\n💰 *${fmtMoneyBRL(valor)}*${irreversivel}\n\n` +
+    `Pague com o QR Code ou com o *PIX copia e cola* da próxima mensagem. Assim que o pagamento cair, a consulta roda e o PDF chega aqui. Se não sair, o PIX é devolvido.`;
+  if (tx.qr_code_base64) await sendWhatsAppImage(phone, tx.qr_code_base64, legenda);
+  else await sendWhatsApp(phone, legenda);
+  return sendWhatsApp(phone, tx.qr_code);
 }
 
 // Roda a consulta pelo fluxo do painel com uma resposta capturada (mesmo
 // desenho do reenvio do admin) e devolve o resultado na conversa.
-async function executarConsultaBot(phone, chave, user, serviceId, params) {
+// { tipo: 'ok' | 'erro' | 'pendente', erro? }
+async function executarConsultaBot(phone, chave, user, serviceId, params, pagoPix = false) {
   const s = SERVICES.find(x => x.id === serviceId);
-  await sendWhatsApp(phone, `⏳ Consultando *${s.name}* da placa *${params.placa}*... isso pode levar alguns minutos.`);
+  await sendWhatsApp(phone, `⏳ Pagamento recebido! Consultando *${s.name}* da placa *${params.placa}*... isso pode levar alguns minutos.`);
   const saida = { status: 200, json: null, pdf: null, headers: {} };
   const fake = {
     headersSent: false,
@@ -16987,14 +17064,14 @@ async function executarConsultaBot(phone, chave, user, serviceId, params) {
     send(b) { if (Buffer.isBuffer(b)) saida.pdf = b; else saida.json = b; this.headersSent = true; return this; },
     end(b) { if (Buffer.isBuffer(b)) saida.pdf = b; this.headersSent = true; return this; },
   };
-  const bot = { chave, pdfs: 0 };
+  const bot = { chave, pdfs: 0, pagoPix };
   const marca = await marcaDoUsuarioCache(user.id).catch(() => null);
   await contextoBotWhats.run(bot, () =>
     contextoMarca.run({ marca }, () => processCatalogQuery(user.id, serviceId, params, fake)));
 
-  if (saida.status >= 400) {
+  if (saida.status >= 400 || bot.estornou) {
     const msg = (saida.json && typeof saida.json === 'object' ? saida.json.error : null) || 'A consulta não saiu.';
-    return sendWhatsApp(phone, `❌ *${s.name}* — ${params.placa}\n\n${msg}\n\nPara tentar de novo, digite *@consultar*.`);
+    return { tipo: 'erro', erro: msg };
   }
   if (saida.pdf) {
     if (!bot.pdfs) {
@@ -17004,16 +17081,113 @@ async function executarConsultaBot(phone, chave, user, serviceId, params) {
       try { nomeArq = decodeURIComponent(nome); } catch { nomeArq = nome; }
       await sendWhatsAppPdf(phone, saida.pdf, nomeArq, `✅ *${s.name}*\n🔎 ${params.placa}`);
     }
-    return sendWhatsApp(phone, `✅ Pronto! O documento também fica no Histórico do painel.\nPara outra consulta, digite *@consultar*.`);
+    await sendWhatsApp(phone, `✅ Pronto! O documento também fica no Histórico do painel.\nPara outra consulta, digite *@consultar*.`);
+    return { tipo: 'ok' };
   }
   const j = saida.json && typeof saida.json === 'object' ? saida.json : {};
   if (j.pending) {
-    return sendWhatsApp(phone, `⏳ ${j.result?.mensagem || 'Pedido registrado. O resultado chega aqui no WhatsApp e no Histórico quando sair — só é cobrado se sair.'}`);
+    await sendWhatsApp(phone, `⏳ ${j.result?.mensagem || 'Pedido registrado. O resultado chega aqui no WhatsApp quando sair.'}`);
+    return { tipo: 'pendente', queryId: j.queryId || null };
   }
   if (j.html_token) {
-    return sendWhatsApp(phone, `✅ *${s.name}* — ${params.placa}\n\nResultado: ${WEBHOOK_BASE_URL || 'https://www.despachantesconsultas.com.br'}/api/html/${j.html_token}\n\nPara outra consulta, digite *@consultar*.`);
+    await sendWhatsApp(phone, `✅ *${s.name}* — ${params.placa}\n\nResultado: ${WEBHOOK_BASE_URL || 'https://www.despachantesconsultas.com.br'}/api/html/${j.html_token}\n\nPara outra consulta, digite *@consultar*.`);
+    return { tipo: 'ok' };
   }
-  return sendWhatsApp(phone, `✅ *${s.name}* concluída. Veja o resultado no Histórico do painel.\nPara outra consulta, digite *@consultar*.`);
+  await sendWhatsApp(phone, `✅ *${s.name}* concluída. Veja o resultado no Histórico do painel.\nPara outra consulta, digite *@consultar*.`);
+  return { tipo: 'ok' };
+}
+
+// Pagamento de um pedido do WhatsApp: confere no Mercado Pago e, aprovado, roda
+// a consulta. Claim atômico (PENDENTE → EXECUTANDO): webhook repetido e cron
+// juntos nunca rodam a consulta duas vezes.
+async function processarPagamentoWhats(gatewayId) {
+  const r = await pool.query(`SELECT * FROM whatsapp_pedidos WHERE gateway_id=$1`, [String(gatewayId)]);
+  const ped = r.rows[0];
+  if (!ped || ped.status !== 'PENDENTE') return;
+  const pg = await mpReq('GET', `/v1/payments/${ped.gateway_id}`);
+  if (['cancelled', 'rejected', 'refunded'].includes(pg.status)) {
+    await pool.query(`UPDATE whatsapp_pedidos SET status='EXPIRADO' WHERE id=$1 AND status='PENDENTE'`, [ped.id]);
+    return;
+  }
+  if (pg.status !== 'approved') return;
+  if (Math.abs(Number(pg.transaction_amount) - Number(ped.valor)) > 0.009) {
+    console.error(`[whatsapp] pedido ${ped.id}: valor pago ${pg.transaction_amount} difere de ${ped.valor}`);
+    return;
+  }
+  const claim = await pool.query(
+    `UPDATE whatsapp_pedidos SET status='EXECUTANDO', pago_em=NOW() WHERE id=$1 AND status='PENDENTE' RETURNING id`, [ped.id]);
+  if (!claim.rows.length) return;
+
+  const inicio = new Date();
+  const user = (await pool.query('SELECT id, name, email, role, phone FROM users WHERE id=$1', [ped.user_id])).rows[0];
+  let res;
+  try {
+    res = await executarConsultaBot(ped.phone, chaveTelefone(ped.phone), user, ped.service_id, ped.params || {}, true);
+  } catch (err) {
+    console.error(`[whatsapp] pedido ${ped.id}: erro na consulta:`, err.message);
+    res = { tipo: 'erro', erro: 'Erro interno ao consultar.' };
+  }
+  const q = (await pool.query(
+    `SELECT id, transaction_id FROM queries WHERE user_id=$1 AND service_id=$2 AND created_at >= $3 ORDER BY id DESC LIMIT 1`,
+    [ped.user_id, ped.service_id, inicio])).rows[0];
+  const s = SERVICES.find(x => x.id === ped.service_id);
+
+  if (res.tipo === 'erro') {
+    let devolvido = false;
+    try { await mpRefundPayment(ped.gateway_id); devolvido = true; } catch (e) { console.error(`[whatsapp] estorno do pedido ${ped.id}:`, e.message); }
+    await pool.query(`UPDATE whatsapp_pedidos SET status='ERRO', erro=$2, refund_status=$3, query_id=$4 WHERE id=$1`,
+      [ped.id, res.erro, devolvido ? 'DEVOLVIDO' : 'FALHOU', q?.id || null]);
+    return sendWhatsApp(ped.phone, `❌ *${s?.name || 'Consulta'}* — ${ped.params?.placa || ''}\n\n${res.erro}\n\n` +
+      (devolvido ? `O PIX de ${fmtMoneyBRL(ped.valor)} foi devolvido automaticamente.` : `Não consegui devolver o PIX automaticamente — fale com o suporte informando o pedido WhatsApp #${ped.id}.`) +
+      `\n\nPara tentar de novo, digite *@consultar*.`);
+  }
+  if (q?.transaction_id)
+    await pool.query(`UPDATE transactions SET description = description || ' (pago por PIX no WhatsApp)' WHERE id=$1`, [q.transaction_id]);
+  if (res.tipo === 'pendente' && q) {
+    // Pedido que fica processando (cancelamento de ATPV-e): já está pago, então
+    // ganha a transação agora — finalizePendingQuery vê o transaction_id e não
+    // tira do saldo quando confirmar. Se terminar recusado, conferirPedidosWhats
+    // devolve o PIX.
+    if (!q.transaction_id) {
+      const tx = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [ped.user_id, ped.valor, `Consulta: ${s?.name || ped.service_id} (pago por PIX no WhatsApp)`]);
+      await pool.query('UPDATE queries SET transaction_id=$1 WHERE id=$2', [tx.rows[0].id, q.id]);
+    }
+    await pool.query(`UPDATE whatsapp_pedidos SET status='AGUARDANDO', query_id=$2 WHERE id=$1`, [ped.id, q.id]);
+    return;
+  }
+  await pool.query(`UPDATE whatsapp_pedidos SET status='CONCLUIDO', query_id=$2 WHERE id=$1`, [ped.id, q?.id || null]);
+}
+
+// Cron (pix-reconcile): pagamento que o webhook não avisou, PIX vencido e
+// pedido que ficou processando (pago → devolve o PIX se terminar recusado).
+async function conferirPedidosWhats() {
+  await ensureDbReady();
+  await pool.query(`UPDATE whatsapp_pedidos SET status='EXPIRADO' WHERE status='PENDENTE' AND created_at < NOW() - INTERVAL '2 days'`);
+  const pend = await pool.query(`SELECT gateway_id FROM whatsapp_pedidos WHERE status='PENDENTE' ORDER BY id LIMIT 50`);
+  for (const p of pend.rows)
+    await processarPagamentoWhats(p.gateway_id).catch(e => console.error(`[whatsapp] conferir ${p.gateway_id}:`, e.message));
+  const agu = await pool.query(
+    `SELECT w.*, q.status AS q_status, q.transaction_id FROM whatsapp_pedidos w JOIN queries q ON q.id = w.query_id
+      WHERE w.status='AGUARDANDO' AND q.status <> 'aguardando_pdf'`);
+  for (const w of agu.rows) {
+    if (w.q_status === 'success') {
+      await pool.query(`UPDATE whatsapp_pedidos SET status='CONCLUIDO' WHERE id=$1`, [w.id]);
+      continue;
+    }
+    let devolvido = false;
+    try { await mpRefundPayment(w.gateway_id); devolvido = true; } catch (e) { console.error(`[whatsapp] estorno do pedido ${w.id}:`, e.message); }
+    if (w.transaction_id) {
+      await pool.query('UPDATE queries SET transaction_id=NULL WHERE id=$1', [w.query_id]);
+      await pool.query('DELETE FROM transactions WHERE id=$1', [w.transaction_id]);
+    }
+    await pool.query(`UPDATE whatsapp_pedidos SET status='ERRO', refund_status=$2, erro='Não saiu no fornecedor.' WHERE id=$1`,
+      [w.id, devolvido ? 'DEVOLVIDO' : 'FALHOU']);
+    await sendWhatsApp(w.phone, devolvido
+      ? `O pedido WhatsApp #${w.id} (placa ${w.params?.placa || ''}) não saiu. O PIX de ${fmtMoneyBRL(w.valor)} foi devolvido automaticamente.`
+      : `O pedido WhatsApp #${w.id} (placa ${w.params?.placa || ''}) não saiu e não consegui devolver o PIX automaticamente — fale com o suporte.`).catch(() => {});
+  }
 }
 
 const placaBot = t => String(t || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -17078,7 +17252,7 @@ async function processarMensagemBot(phone, texto) {
   if (sessao.etapa === 'placa') {
     const placa = placaBot(texto);
     if (!placaBotOk(placa)) return sendWhatsApp(phone, 'Placa inválida. Informe no formato ABC1D23.');
-    return pedirConfirmacaoBot(phone, chave, user, d.serviceId, { placa });
+    return gerarPixBot(phone, chave, user, d.serviceId, { placa });
   }
 
   if (sessao.etapa === 'cancel') {
@@ -17095,23 +17269,9 @@ async function processarMensagemBot(phone, texto) {
       await salvarSessaoBot(chave, user.id, 'cancel', { passo: prox, params });
       return sendWhatsApp(phone, BOT_WHATS_CANCEL_PASSOS[prox].pergunta);
     }
-    return pedirConfirmacaoBot(phone, chave, user, 'dcr-cancelamento-atpve', params);
+    return gerarPixBot(phone, chave, user, 'dcr-cancelamento-atpve', params);
   }
 
-  if (sessao.etapa === 'confirmar') {
-    if (texto === '0') {
-      await encerrarSessaoBot(chave);
-      return sendWhatsApp(phone, 'Cancelado, nada foi cobrado. Para outra consulta, digite *@consultar*.');
-    }
-    if (texto !== '1') return sendWhatsApp(phone, 'Responda *1* para confirmar ou *0* para cancelar.');
-    // Encerra antes de rodar: um "1" repetido não dispara a consulta duas vezes
-    // (e a trava de consulta repetida segura o resto).
-    const apagou = await pool.query('DELETE FROM whatsapp_bot_sessoes WHERE chave=$1 AND etapa=$2 RETURNING 1', [chave, 'confirmar']);
-    if (!apagou.rows.length) return;
-    // O serviço pode ter saído da página do parceiro no meio da conversa.
-    if (!servicoBotWhats(d.serviceId, liberadas)) return sendWhatsApp(phone, `${CONSULTA_FORA_DO_PARCEIRO_MSG} Digite *@consultar* para ver o menu.`);
-    return executarConsultaBot(phone, chave, user, d.serviceId, d.params || {});
-  }
   await encerrarSessaoBot(chave);
 }
 
