@@ -1082,6 +1082,12 @@ async function marcaDoUsuarioCache(userId) {
   return marca;
 }
 const digitosTelefone = t => { const d = String(t || '').replace(/\D/g, ''); return d.length >= 12 && d.startsWith('55') ? d.slice(2) : d; };
+// DDD + últimos 8 dígitos: o mesmo celular com e sem o 9 da frente (o WhatsApp
+// de número antigo chega sem ele) vira a mesma chave. null se não for telefone.
+const chaveTelefone = t => { const d = digitosTelefone(t); return d.length >= 10 ? d.slice(0, 2) + d.slice(-8) : null; };
+// Consulta pelo WhatsApp (@consultar): conta os PDFs que a própria consulta já
+// mandou para quem pediu, para o robô não mandar o mesmo documento duas vezes.
+const contextoBotWhats = new AsyncLocalStorage();
 const cacheMarcaTelefone = new Map();
 // Só troca quando TODAS as contas com esse telefone são do mesmo parceiro
 // (dele ou de clientes dele); telefone do dono e dos avisos fica sempre MC.
@@ -1181,6 +1187,8 @@ async function sendWhatsAppPdf(phone, pdfBuffer, fileName, caption, opcoes = {})
     );
     const d = await r.json().catch(() => ({}));
     if (!r.ok) { console.error(`Z-API PDF erro [${formatted}]:`, JSON.stringify(d)); return false; }
+    const bot = contextoBotWhats.getStore();
+    if (bot && chaveTelefone(phone) === bot.chave) bot.pdfs++;
     console.log(`✅ WhatsApp PDF enviado para ${formatted}`);
     return true;
   } catch (err) {
@@ -2330,6 +2338,13 @@ async function initDB() {
     );
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_bot_sessoes (
+      chave         VARCHAR(20) PRIMARY KEY,
+      user_id       INTEGER NOT NULL,
+      etapa         VARCHAR(40) NOT NULL,
+      dados         JSONB NOT NULL DEFAULT '{}',
+      atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
     CREATE TABLE IF NOT EXISTS whatsapp_inbox (
       id           SERIAL PRIMARY KEY,
       phone        VARCHAR(30),
@@ -16029,6 +16044,8 @@ app.get('/api/cron/pix-reconcile', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
+    // Consultas pelo WhatsApp (@consultar): liga o webhook de mensagens recebidas na Z-API.
+    await garantirWebhookRecebidasZapi().catch(e => console.error('[zapi] webhook recebidas:', e.message));
     const result = await runPixReconcile();
     res.json({ success: true, ...result });
   } catch (err) {
@@ -16797,37 +16814,341 @@ app.post('/api/admin/vistocar-webhook', requireAuth, requireSuperAdmin, async (r
   }
 });
 
-// ── POST /api/webhooks/zapi ───────────────────────────────────────────────────
-app.post('/api/webhooks/zapi', async (req, res) => {
-  res.sendStatus(200);
-  const event = req.body;
-  if (!event) return;
+// ── Consultas pelo WhatsApp (@consultar) ─────────────────────────────────────
+// Pedido do dono (08/11/2026): parceiros e clientes de parceiro mandam
+// "@consultar" para o WhatsApp da plataforma (a instância Z-API de sempre) e
+// recebem um menu numerado; o PDF volta na mesma conversa. Usuário comum da
+// plataforma não tem acesso: a mensagem dele não abre nada (o número continua
+// sendo o do suporte). A pessoa é achada pelo telefone do cadastro
+// (chaveTelefone: DDD + 8 últimos dígitos, com ou sem o 9).
+// A consulta roda pelo MESMO processCatalogQuery do painel — validação, preço do
+// parceiro, trava de repetida, cobrança só com resultado e o filtro do cliente
+// de parceiro (só o que está na página dele) valem iguais. Menu numerado e não
+// lista/botão do WhatsApp porque esses o WhatsApp restringe e somem em
+// alguns aparelhos. Toda consulta pede confirmação ("1") antes de cobrar.
+const BOT_WHATS_GATILHO = /^@consultar\b/i;
+const BOT_WHATS_SESSAO_MIN = 30;
+// CRLV-e de emissão na hora que pedem só a placa, por UF, em ordem de
+// preferência (fica o primeiro que não estiver suspenso e — para cliente de
+// parceiro — que estiver na página do parceiro). UF fora daqui: "Não cobrimos
+// essa UF" (pede mais que a placa, ou só sai agendado).
+const BOT_WHATS_CRLV_UF = {
+  AC: ['dcr-crlv-ac'], AL: ['dcr-crlv-ag-al'], BA: ['consultar-crlv-ba'],
+  CE: ['crlv-ce-instantaneo', 'dcr-crlv-ag-ce'], GO: ['dcr-crlv-go'], MS: ['dcr-crlv-ms'],
+  MT: ['dcr-crlv-mt'], PE: ['crlv-pe-instantaneo'], PI: ['dcr-crlv-pi'], PR: ['dcr-crlv-ag-pr'],
+  RJ: ['consultar-crlv-rj'], RO: ['dcr-crlv-ro'], RS: ['dc-crlve-rs-v2'], SE: ['dcr-crlv-se'],
+  SP: ['crlv-sp-v2', 'consultar-crlv-sp', 'dd-crlv-sp'],
+};
+const BOT_WHATS_MENU = [
+  { id: 'crlv', rotulo: '📄 CRLV-e (emissão na hora — informe UF e placa)' },
+  { id: 'base-nacional', rotulo: '🗺️ Base Nacional' },
+  { id: 'comunicado-venda-placa', rotulo: '📝 Consulta do Comunicação de Venda' },
+  { id: 'crlv-rj-reemissao-2', rotulo: '🔑 📄 CRLV 2 Rio Reemissão' },
+  { id: 'dcr-cancelamento-atpve', rotulo: '🚫 Cancelamento de ATPV-e (RJ)' },
+  { id: 'dcr-reemissao-atpve', rotulo: '📝 Reemissão ATPV-e (PDF)' },
+];
+// Passos do cancelamento de ATPV-e (os mesmos campos do formulário do painel).
+const BOT_WHATS_CANCEL_PASSOS = [
+  { campo: 'placa', pergunta: 'Informe a *placa* do veículo (ex.: ABC1D23):' },
+  { campo: 'renavam', pergunta: 'Informe o *renavam* do veículo:' },
+  { campo: 'numero_atpve', pergunta: 'Informe o *número do ATPV-e* a cancelar:' },
+  { campo: 'vendedor_documento', pergunta: 'Informe o *CPF/CNPJ do vendedor* (o proprietário que consta no ATPV-e):' },
+  { campo: 'numero_duda', pergunta: 'Informe o *número da DUDA* (obrigatório no RJ):' },
+];
 
-  const type = event.type || '';
+// Token do webhook de mensagens recebidas, derivado do JWT_SECRET: a Z-API não
+// assina o webhook, e sem isso qualquer um poderia mandar um "@consultar" com
+// o telefone de um parceiro e gastar o saldo dele.
+const ZAPI_RECEBIDAS_TOKEN = crypto.createHmac('sha256', JWT_SECRET || 'zapi').update('zapi-recebidas').digest('hex').slice(0, 32);
+const ZAPI_RECEBIDAS_URL = `${WEBHOOK_BASE_URL || 'https://www.despachantesconsultas.com.br'}/api/webhooks/zapi?token=${ZAPI_RECEBIDAS_TOKEN}`;
 
-  try {
-    if (type === 'ReceivedCallback') {
-      const phone      = event.phone || '';
-      const senderName = event.senderName || '';
-      const messageId  = event.messageId || '';
-      const msgType    = event.image ? 'image' : event.audio ? 'audio' : event.video ? 'video' : event.document ? 'document' : 'text';
-      const message    = event.text?.message
-        || event.image?.caption
-        || event.audio?.caption
-        || event.document?.caption
-        || `[${msgType}]`;
+// Na Vercel o que roda depois da resposta morre, a não ser que vá pelo
+// waitUntil do contexto da requisição (é o que @vercel/functions faz). Fora da
+// Vercel a promessa só segue.
+function depoisDaResposta(promessa) {
+  const p = Promise.resolve(promessa).catch(e => console.error('[depois da resposta]', e.message));
+  try { globalThis[Symbol.for('@vercel/request-context')]?.get?.()?.waitUntil?.(p); } catch { /* fora da Vercel */ }
+  return p;
+}
 
-      await pool.query(
-        `INSERT INTO whatsapp_inbox (phone, sender_name, message, message_type, message_id, raw)
-         VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (message_id) DO NOTHING`,
-        [phone, senderName, message, msgType, messageId, JSON.stringify(event)]
-      );
-      console.log(`📱 WhatsApp recebido de ${phone} (${senderName}): ${message}`);
+// Liga o webhook de mensagens recebidas na instância (o campo estava vazio em
+// 08/11/2026 — só o de entrega apontava para cá). Roda no cron do PIX, uma vez
+// por instância do servidor, e só mexe se estiver diferente.
+let zapiRecebidasConferido = false;
+async function garantirWebhookRecebidasZapi() {
+  if (zapiRecebidasConferido || !ZAPI_INSTANCE_ID || !ZAPI_TOKEN) return;
+  const base = `https://api.z-api.io/instances/${ZAPI_INSTANCE_ID}/token/${ZAPI_TOKEN}`;
+  const headers = { 'Content-Type': 'application/json', ...(ZAPI_CLIENT_TOKEN ? { 'Client-Token': ZAPI_CLIENT_TOKEN } : {}) };
+  const me = await fetch(`${base}/me`, { headers }).then(r => r.json()).catch(() => null);
+  if (!me) return;
+  if (me.receivedCallbackUrl !== ZAPI_RECEBIDAS_URL) {
+    const r = await fetch(`${base}/update-webhook-received`, { method: 'PUT', headers, body: JSON.stringify({ value: ZAPI_RECEBIDAS_URL }) });
+    if (!r.ok) { console.error('[zapi] não consegui ligar o webhook de recebidas:', r.status, await r.text().catch(() => '')); return; }
+    console.log('[zapi] webhook de mensagens recebidas ligado');
+  }
+  zapiRecebidasConferido = true;
+}
+
+// Conta que pode usar o @consultar a partir do telefone de quem escreveu:
+// parceiro ativo ou cliente de parceiro ativo. { user } | { erro } | null.
+async function contaBotWhats(chave) {
+  const r = await pool.query(
+    `SELECT u.id, u.name, u.role, u.phone, u.credits, u.pos_pago FROM users u
+       LEFT JOIN users p ON p.id = u.revendedor_id AND p.role = 'reseller' AND p.active = true
+      WHERE u.active = true AND right(regexp_replace(COALESCE(u.phone,''),'[^0-9]','','g'), 8) = $1
+        AND (u.role = 'reseller' OR p.id IS NOT NULL)`, [chave.slice(-8)]
+  );
+  const contas = r.rows.filter(u => chaveTelefone(u.phone) === chave);
+  if (!contas.length) return null;
+  const parceiro = contas.find(u => u.role === 'reseller');
+  if (parceiro) return { user: parceiro };
+  if (contas.length > 1) return { erro: 'Seu número está cadastrado em mais de uma conta. Fale com o suporte para deixar um WhatsApp por conta.' };
+  return { user: contas[0] };
+}
+
+// Serviço do catálogo se esta conta pode usá-lo agora (não suspenso e, para
+// cliente de parceiro, na página do parceiro).
+function servicoBotWhats(id, liberadas) {
+  const s = SERVICES.find(x => x.id === id);
+  if (!s || s.unavailable || (liberadas && !liberadas.has(id))) return null;
+  return s;
+}
+
+async function salvarSessaoBot(chave, userId, etapa, dados) {
+  await pool.query(
+    `INSERT INTO whatsapp_bot_sessoes (chave, user_id, etapa, dados, atualizado_em) VALUES ($1,$2,$3,$4,NOW())
+     ON CONFLICT (chave) DO UPDATE SET user_id=$2, etapa=$3, dados=$4, atualizado_em=NOW()`,
+    [chave, userId, etapa, JSON.stringify(dados || {})]
+  );
+}
+const encerrarSessaoBot = chave => pool.query('DELETE FROM whatsapp_bot_sessoes WHERE chave=$1', [chave]);
+
+async function menuBotWhats(user, liberadas) {
+  const opcoes = [];
+  for (const m of BOT_WHATS_MENU) {
+    if (m.id === 'crlv') {
+      const algum = Object.values(BOT_WHATS_CRLV_UF).some(ids => ids.some(id => servicoBotWhats(id, liberadas)?.inputType === 'placa'));
+      if (algum) opcoes.push({ ...m, texto: m.rotulo });
+      continue;
     }
+    const s = servicoBotWhats(m.id, liberadas);
+    if (s) opcoes.push({ ...m, texto: `${m.rotulo} — ${fmtMoneyBRL(await getUserServicePrice(user.id, s))}` });
+  }
+  return opcoes;
+}
+
+async function enviarMenuBot(phone, chave, user, liberadas) {
+  const opcoes = await menuBotWhats(user, liberadas);
+  if (!opcoes.length) {
+    await encerrarSessaoBot(chave);
+    return sendWhatsApp(phone, 'Ainda não há consultas liberadas para a sua conta pelo WhatsApp.');
+  }
+  await salvarSessaoBot(chave, user.id, 'menu', { opcoes: opcoes.map(o => o.id) });
+  const saldo = user.pos_pago ? '' : `\n💰 Saldo: ${fmtMoneyBRL(user.credits)}\n`;
+  return sendWhatsApp(phone, [
+    `*Consultas pelo WhatsApp — MC Despachadoria Consultas*`,
+    `Olá, ${String(user.name || '').split(' ')[0] || 'tudo bem'}!${saldo}`,
+    ...opcoes.map((o, i) => `*${i + 1}* - ${o.texto}`),
+    ``,
+    `Responda com o *número* da consulta. Para sair, digite *sair*.`,
+  ].join('\n'));
+}
+
+async function pedirConfirmacaoBot(phone, chave, user, serviceId, params) {
+  const s = SERVICES.find(x => x.id === serviceId);
+  const preco = await getUserServicePrice(user.id, s);
+  await salvarSessaoBot(chave, user.id, 'confirmar', { serviceId, params });
+  const irreversivel = serviceId === 'dcr-cancelamento-atpve' ? '\n⚠️ O cancelamento do ATPV-e *não pode ser desfeito*.' : '';
+  return sendWhatsApp(phone,
+    `Confirma *${s.name}* da placa *${params.placa}* por *${fmtMoneyBRL(preco)}*?${irreversivel}\n\n` +
+    `*1* - Confirmar\n*0* - Cancelar\n\nSó é cobrado se o resultado sair.`);
+}
+
+// Roda a consulta pelo fluxo do painel com uma resposta capturada (mesmo
+// desenho do reenvio do admin) e devolve o resultado na conversa.
+async function executarConsultaBot(phone, chave, user, serviceId, params) {
+  const s = SERVICES.find(x => x.id === serviceId);
+  await sendWhatsApp(phone, `⏳ Consultando *${s.name}* da placa *${params.placa}*... isso pode levar alguns minutos.`);
+  const saida = { status: 200, json: null, pdf: null, headers: {} };
+  const fake = {
+    headersSent: false,
+    status(c) { saida.status = c; return this; },
+    json(b) { saida.json = b; this.headersSent = true; return this; },
+    setHeader(k, v) { saida.headers[String(k).toLowerCase()] = v; return this; },
+    set(k, v) {
+      if (k && typeof k === 'object') Object.entries(k).forEach(([a, b]) => this.setHeader(a, b));
+      else this.setHeader(k, v);
+      return this;
+    },
+    header(k, v) { return this.set(k, v); },
+    type() { return this; },
+    attachment() { return this; },
+    sendStatus(c) { saida.status = c; this.headersSent = true; return this; },
+    send(b) { if (Buffer.isBuffer(b)) saida.pdf = b; else saida.json = b; this.headersSent = true; return this; },
+    end(b) { if (Buffer.isBuffer(b)) saida.pdf = b; this.headersSent = true; return this; },
+  };
+  const bot = { chave, pdfs: 0 };
+  const marca = await marcaDoUsuarioCache(user.id).catch(() => null);
+  await contextoBotWhats.run(bot, () =>
+    contextoMarca.run({ marca }, () => processCatalogQuery(user.id, serviceId, params, fake)));
+
+  if (saida.status >= 400) {
+    const msg = (saida.json && typeof saida.json === 'object' ? saida.json.error : null) || 'A consulta não saiu.';
+    return sendWhatsApp(phone, `❌ *${s.name}* — ${params.placa}\n\n${msg}\n\nPara tentar de novo, digite *@consultar*.`);
+  }
+  if (saida.pdf) {
+    if (!bot.pdfs) {
+      const cd = String(saida.headers['content-disposition'] || '');
+      const nome = (cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)/i)?.[1]) || `mcdespachadoria-${serviceId}-${params.placa}.pdf`;
+      let nomeArq;
+      try { nomeArq = decodeURIComponent(nome); } catch { nomeArq = nome; }
+      await sendWhatsAppPdf(phone, saida.pdf, nomeArq, `✅ *${s.name}*\n🔎 ${params.placa}`);
+    }
+    return sendWhatsApp(phone, `✅ Pronto! O documento também fica no Histórico do painel.\nPara outra consulta, digite *@consultar*.`);
+  }
+  const j = saida.json && typeof saida.json === 'object' ? saida.json : {};
+  if (j.pending) {
+    return sendWhatsApp(phone, `⏳ ${j.result?.mensagem || 'Pedido registrado. O resultado chega aqui no WhatsApp e no Histórico quando sair — só é cobrado se sair.'}`);
+  }
+  if (j.html_token) {
+    return sendWhatsApp(phone, `✅ *${s.name}* — ${params.placa}\n\nResultado: ${WEBHOOK_BASE_URL || 'https://www.despachantesconsultas.com.br'}/api/html/${j.html_token}\n\nPara outra consulta, digite *@consultar*.`);
+  }
+  return sendWhatsApp(phone, `✅ *${s.name}* concluída. Veja o resultado no Histórico do painel.\nPara outra consulta, digite *@consultar*.`);
+}
+
+const placaBot = t => String(t || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+const placaBotOk = p => /^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(p);
+
+async function processarMensagemBot(phone, texto) {
+  const chave = chaveTelefone(phone);
+  if (!chave) return;
+  texto = String(texto || '').trim();
+  await ensureDbReady();
+  const gatilho = BOT_WHATS_GATILHO.test(texto);
+  const sr = await pool.query(
+    `SELECT * FROM whatsapp_bot_sessoes WHERE chave=$1 AND atualizado_em > NOW() - ($2 || ' minutes')::interval`,
+    [chave, String(BOT_WHATS_SESSAO_MIN)]
+  );
+  const sessao = sr.rows[0];
+  // Fora de uma conversa do robô, só o @consultar abre — o resto é conversa
+  // normal com o suporte e o robô fica calado.
+  if (!gatilho && !sessao) return;
+
+  const conta = await contaBotWhats(chave);
+  if (!conta) { if (sessao) await encerrarSessaoBot(chave); return; }   // usuário comum: nada abre
+  if (conta.erro) return sendWhatsApp(phone, conta.erro);
+  const user = conta.user;
+  const liberadas = await consultasLiberadasClienteParceiro(user.id);
+
+  if (gatilho) return enviarMenuBot(phone, chave, user, liberadas);
+  if (/^(sair|cancelar|parar)$/i.test(texto)) {
+    await encerrarSessaoBot(chave);
+    return sendWhatsApp(phone, 'Consulta encerrada. Quando precisar, digite *@consultar*.');
+  }
+  const d = sessao.dados || {};
+
+  if (sessao.etapa === 'menu') {
+    const n = parseInt(texto, 10);
+    const id = (d.opcoes || [])[n - 1];
+    if (!id || String(n) !== texto) return sendWhatsApp(phone, 'Não entendi. Responda só com o *número* da consulta, ou *sair*.');
+    if (id === 'crlv') {
+      await salvarSessaoBot(chave, user.id, 'crlv_uf', {});
+      return sendWhatsApp(phone, 'Informe a *UF* do veículo (ex.: RJ, SP, BA):');
+    }
+    if (id === 'dcr-cancelamento-atpve') {
+      await salvarSessaoBot(chave, user.id, 'cancel', { passo: 0, params: { uf: 'RJ', confirmar: true } });
+      return sendWhatsApp(phone, `*Cancelamento de ATPV-e (só RJ)*\n\n${BOT_WHATS_CANCEL_PASSOS[0].pergunta}`);
+    }
+    await salvarSessaoBot(chave, user.id, 'placa', { serviceId: id });
+    return sendWhatsApp(phone, 'Informe a *placa* do veículo (ex.: ABC1D23):');
+  }
+
+  if (sessao.etapa === 'crlv_uf') {
+    const uf = texto.toUpperCase().replace(/[^A-Z]/g, '');
+    if (uf.length !== 2) return sendWhatsApp(phone, 'Informe só a sigla da UF, com 2 letras (ex.: RJ).');
+    const s = (BOT_WHATS_CRLV_UF[uf] || []).map(id => servicoBotWhats(id, liberadas)).find(x => x?.inputType === 'placa');
+    if (!s) {
+      await encerrarSessaoBot(chave);
+      return sendWhatsApp(phone, `Não cobrimos essa UF (${uf}).\n\nPara voltar ao menu, digite *@consultar*.`);
+    }
+    await salvarSessaoBot(chave, user.id, 'placa', { serviceId: s.id });
+    return sendWhatsApp(phone, `*${s.name}* — ${fmtMoneyBRL(await getUserServicePrice(user.id, s))}\n\nInforme a *placa* do veículo (ex.: ABC1D23):`);
+  }
+
+  if (sessao.etapa === 'placa') {
+    const placa = placaBot(texto);
+    if (!placaBotOk(placa)) return sendWhatsApp(phone, 'Placa inválida. Informe no formato ABC1D23.');
+    return pedirConfirmacaoBot(phone, chave, user, d.serviceId, { placa });
+  }
+
+  if (sessao.etapa === 'cancel') {
+    const passo = BOT_WHATS_CANCEL_PASSOS[d.passo];
+    const valor = passo.campo === 'placa' ? placaBot(texto) : texto.replace(/\D/g, '');
+    if (passo.campo === 'placa' && !placaBotOk(valor)) return sendWhatsApp(phone, 'Placa inválida. Informe no formato ABC1D23.');
+    if (passo.campo === 'renavam' && (valor.length < 9 || valor.length > 11)) return sendWhatsApp(phone, 'Renavam inválido (9 a 11 dígitos).');
+    if (passo.campo === 'numero_atpve' && valor.length < 6) return sendWhatsApp(phone, 'Número do ATPV-e inválido.');
+    if (passo.campo === 'vendedor_documento' && (![11, 14].includes(valor.length) || !isValidDoc(valor))) return sendWhatsApp(phone, 'CPF/CNPJ inválido. Confira e envie de novo.');
+    if (passo.campo === 'numero_duda' && !valor) return sendWhatsApp(phone, 'Informe o número da DUDA (só números).');
+    const params = { ...(d.params || {}), [passo.campo]: valor };
+    const prox = d.passo + 1;
+    if (prox < BOT_WHATS_CANCEL_PASSOS.length) {
+      await salvarSessaoBot(chave, user.id, 'cancel', { passo: prox, params });
+      return sendWhatsApp(phone, BOT_WHATS_CANCEL_PASSOS[prox].pergunta);
+    }
+    return pedirConfirmacaoBot(phone, chave, user, 'dcr-cancelamento-atpve', params);
+  }
+
+  if (sessao.etapa === 'confirmar') {
+    if (texto === '0') {
+      await encerrarSessaoBot(chave);
+      return sendWhatsApp(phone, 'Cancelado, nada foi cobrado. Para outra consulta, digite *@consultar*.');
+    }
+    if (texto !== '1') return sendWhatsApp(phone, 'Responda *1* para confirmar ou *0* para cancelar.');
+    // Encerra antes de rodar: um "1" repetido não dispara a consulta duas vezes
+    // (e a trava de consulta repetida segura o resto).
+    const apagou = await pool.query('DELETE FROM whatsapp_bot_sessoes WHERE chave=$1 AND etapa=$2 RETURNING 1', [chave, 'confirmar']);
+    if (!apagou.rows.length) return;
+    // O serviço pode ter saído da página do parceiro no meio da conversa.
+    if (!servicoBotWhats(d.serviceId, liberadas)) return sendWhatsApp(phone, `${CONSULTA_FORA_DO_PARCEIRO_MSG} Digite *@consultar* para ver o menu.`);
+    return executarConsultaBot(phone, chave, user, d.serviceId, d.params || {});
+  }
+  await encerrarSessaoBot(chave);
+}
+
+// ── POST /api/webhooks/zapi ───────────────────────────────────────────────────
+// Recebe também os avisos de entrega (deliveryCallbackUrl, sem token). Só a
+// mensagem recebida com o token certo (ZAPI_RECEBIDAS_URL) chega ao robô.
+app.post('/api/webhooks/zapi', async (req, res) => {
+  const event = req.body;
+  if (!event || event.type !== 'ReceivedCallback') return res.sendStatus(200);
+  try {
+    const phone      = event.phone || '';
+    const senderName = event.senderName || '';
+    const messageId  = event.messageId || '';
+    const msgType    = event.image ? 'image' : event.audio ? 'audio' : event.video ? 'video' : event.document ? 'document' : 'text';
+    const message    = event.text?.message
+      || event.image?.caption
+      || event.audio?.caption
+      || event.document?.caption
+      || `[${msgType}]`;
+
+    await ensureDbReady();
+    const ins = await pool.query(
+      `INSERT INTO whatsapp_inbox (phone, sender_name, message, message_type, message_id, raw)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (message_id) DO NOTHING RETURNING id`,
+      [phone, senderName, message, msgType, messageId, JSON.stringify(event)]
+    );
+    // Reenvio da mesma mensagem pela Z-API não roda a consulta de novo.
+    const nova = ins.rows.length > 0 || !messageId;
+    const autentica = req.query.token === ZAPI_RECEBIDAS_TOKEN
+      && (!event.instanceId || event.instanceId === ZAPI_INSTANCE_ID);
+    if (nova && autentica && msgType === 'text' && !event.fromMe && !event.isGroup && !event.isNewsletter && !event.broadcast)
+      depoisDaResposta(processarMensagemBot(phone, event.text?.message || ''));
   } catch (err) {
     console.error('Webhook Z-API erro:', err.message);
   }
+  res.sendStatus(200);
 });
 
 // ── GET /api/admin/whatsapp-inbox ─────────────────────────────────────────────
