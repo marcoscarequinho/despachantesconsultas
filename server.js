@@ -4504,8 +4504,10 @@ app.get('/api/services', requireAuth, async (req, res) => {
         WHERE u.id=$1`, [req.user.id]
     );
     const tab = pr.rows.length ? await tabelaParceiro(pr.rows[0].revendedor_id) : null;
+    // Cliente de parceiro só vê o que o parceiro remarcou (consultasLiberadasClienteParceiro).
+    const liberadas = await consultasLiberadasClienteParceiro(req.user.id);
     res.json({
-      services: SERVICES.map(s => ({
+      services: SERVICES.filter(s => !liberadas || liberadas.has(s.id)).map(s => ({
         ...s,
         // Serviço de grupo gratuito ignora o preço fixo por usuário (catalogPrice
         // devolve 0) — é a mesma regra aplicada na cobrança em getUserServicePrice.
@@ -4542,6 +4544,8 @@ app.get('/api/services/public', (req, res) => {
 
 // ── GET /api/services-v2 (catálogo Datacube — aba "Opção 2 Nova Consulta") ────
 app.get('/api/services-v2', requireAuth, async (req, res) => {
+  // Cliente de parceiro não vê a Opção 2 (o parceiro não tem como remarcar esses preços).
+  if (await consultasLiberadasClienteParceiro(req.user.id)) return res.json({ services: [] });
   const admin = await isSuperAdmin(req.user.id);
   res.json({
     services: SERVICES_V2
@@ -4554,7 +4558,8 @@ app.get('/api/services-v2', requireAuth, async (req, res) => {
 });
 
 // ── GET /api/services-v3 (catálogo Infosimples — aba "Infosimples Nova Consulta") ──
-app.get('/api/services-v3', requireAuth, (req, res) => {
+app.get('/api/services-v3', requireAuth, async (req, res) => {
+  if (await consultasLiberadasClienteParceiro(req.user.id)) return res.json({ services: [] });
   res.json({
     services: SERVICES_V3.map(s => ({
       ...s,
@@ -9546,6 +9551,24 @@ async function precoParceiroDoCliente(userId, service) {
   return { parceiroId, custo, venda: Math.max(parseFloat(r.rows[0].preco), custo) };
 }
 
+// Regra do dono (08/11/2026): o cliente de parceiro só vê e só consulta o que
+// o parceiro pôs na página dele com preço próprio — o resto do catálogo some
+// para ele (inclusive Opção 2 e Infosimples, que o parceiro não tem como
+// remarcar). Devolve null para quem não é cliente de parceiro ativo (sem
+// restrição) ou o Set dos ids liberados. O próprio parceiro não entra aqui.
+async function consultasLiberadasClienteParceiro(userId) {
+  const r = await pool.query(
+    `SELECT u.revendedor_id FROM users u
+       JOIN users ru ON ru.id = u.revendedor_id AND ru.role = 'reseller' AND ru.active = true
+      WHERE u.id = $1 AND u.role <> 'reseller'`, [userId]
+  );
+  if (!r.rows.length) return null;
+  const lista = await pool.query('SELECT service_id FROM parceiro_consultas WHERE parceiro_id=$1', [r.rows[0].revendedor_id]);
+  return new Set(lista.rows.map(x => x.service_id)
+    .filter(id => servicoRevendavel(SERVICES.find(s => s.id === id))));
+}
+const CONSULTA_FORA_DO_PARCEIRO_MSG = 'Esta consulta não está disponível na sua conta.';
+
 // Tabela de preços de um parceiro, de uma vez (catálogo do cliente, página
 // pública, painel do parceiro): { custos: {serviceId: custo}, precos: {serviceId: preco} }.
 async function tabelaParceiro(parceiroId) {
@@ -13485,8 +13508,16 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
 }
 
 // ── POST /api/query ────────────────────────────────────────────────────────
-app.post('/api/query', requireAuth, (req, res) =>
-  processCatalogQuery(req.user.id, req.body.serviceId, req.body.params, res));
+app.post('/api/query', requireAuth, async (req, res) => {
+  try {
+    const liberadas = await consultasLiberadasClienteParceiro(req.user.id);
+    if (liberadas && !liberadas.has(req.body?.serviceId))
+      return res.status(403).json({ error: CONSULTA_FORA_DO_PARCEIRO_MSG });
+  } catch (err) {
+    return res.status(500).json({ error: 'Erro interno.' });
+  }
+  return processCatalogQuery(req.user.id, req.body.serviceId, req.body.params, res);
+});
 
 // Grupos/serviços do catálogo "Nova Consulta" fora do alcance da API de chave
 // (/api/v1): os serviços "manuais" (upload de PDF pelo super admin) não
@@ -13613,6 +13644,8 @@ function findAndStripBase64Pdf(obj) {
 // toca em SERVICES, MANUAL_SERVICE_IDS ou nas integrações portal/autocrlv.
 app.post('/api/query-v2', requireAuth, async (req, res) => {
   const { serviceId, params } = req.body;
+  if (await consultasLiberadasClienteParceiro(req.user.id).catch(() => null))
+    return res.status(403).json({ error: CONSULTA_FORA_DO_PARCEIRO_MSG });
   if (!serviceId) return res.status(400).json({ error: 'Serviço não informado.' });
 
   const service = SERVICES_V2.find(s => s.id === serviceId);
@@ -14049,6 +14082,8 @@ app.post('/api/query-v2', requireAuth, async (req, res) => {
 // Infosimples já declara nome/obrigatoriedade de cada parâmetro no spec.
 app.post('/api/query-v3', requireAuth, async (req, res) => {
   const { serviceId, params } = req.body;
+  if (await consultasLiberadasClienteParceiro(req.user.id).catch(() => null))
+    return res.status(403).json({ error: CONSULTA_FORA_DO_PARCEIRO_MSG });
   if (!serviceId) return res.status(400).json({ error: 'Serviço não informado.' });
 
   const service = SERVICES_V3.find(s => s.id === serviceId);

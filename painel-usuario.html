@@ -1527,6 +1527,24 @@ window.fetch = async (...args) => {
   return res;
 };
 
+// Cliente de parceiro só recebe do /api/services as consultas que o parceiro
+// pôs na página com preço dele (regra do dono, 08/11/2026) — e a Opção 2 e a
+// Infosimples vêm vazias. Aba de consulta sem nenhuma consulta some do menu,
+// em vez de abrir uma tela em branco. Para os outros clientes nenhuma fica vazia.
+function esconderAbasSemConsulta() {
+  const vazias = {
+    query:        !allServices.some(s => s.group !== 'Para os Despachantes' && s.group !== GRUPO_NOVAS),
+    despachantes: !allServices.some(s => s.group === 'Para os Despachantes'),
+    extras:       !EXTRAS_SERVICE_IDS.some(id => allServices.some(s => s.id === id)),
+    novas:        !allServices.some(s => s.group === GRUPO_NOVAS || s.id === 'atpve-vistocar-rj'),
+    query2:       !allServicesV2.length,
+    query3:       !allServicesV3.length,
+  };
+  Object.entries(vazias).forEach(([sec, vazia]) => {
+    if (vazia) document.querySelector(`.nav-item[data-section="${sec}"]`)?.classList.add('hidden');
+  });
+}
+
 // ── Inicialização ──────────────────────────────────────────────────────────────
 async function init() {
   try {
@@ -1576,6 +1594,7 @@ async function init() {
     buildNovasList();
     carregarParceiros();
     renderServiceListV2();
+    esconderAbasSemConsulta();
     await Promise.all([loadStats(), loadQueries(), loadAssinaturaStatus()]);
     carregarMensagens();
     setInterval(carregarMensagens, 60000);
