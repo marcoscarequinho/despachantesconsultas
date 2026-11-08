@@ -16894,7 +16894,7 @@ const BOT_WHATS_MENU = [
   { id: 'crlv-rj-reemissao-2', rotulo: '🔑 📄 CRLV 2 Rio Reemissão' },
   { id: 'dcr-cancelamento-atpve', rotulo: '🚫 Cancelamento de ATPV-e (RJ)' },
   { id: 'dcr-reemissao-atpve', rotulo: '📝 Reemissão ATPV-e (PDF)' },
-  { id: 'dcr-consulta-veicular-completa', rotulo: '🔎 Veicular Completa' },
+  { id: 'dcr-pacote-completa-top', rotulo: '🚘 Pacote Veicular Completa TOP' },
 ];
 // Passos do cancelamento de ATPV-e (os mesmos campos do formulário do painel).
 const BOT_WHATS_CANCEL_PASSOS = [
