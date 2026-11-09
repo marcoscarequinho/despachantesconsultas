@@ -2983,7 +2983,7 @@ const WHATS_CONSULTAS = [
   { id: 'crlv-rj-reemissao-2',      icon: '🔑', nome: 'CRLV 2 Rio Reemissão' },
   { id: 'dcr-reemissao-atpve',      icon: '📝', nome: 'Reemissão ATPV-e (PDF)' },
   { id: 'dcr-pacote-completa-top',  icon: '🚘', nome: 'Pacote Veicular Completa TOP' },
-  { id: 'consulta-debitos-portal',  icon: '💳', nome: 'Consulta de Débitos' },
+  { id: 'consulta-debitos-portal',  icon: '💳', nome: 'Consulta de Débitos', gratis: true },
 ];
 let whatsMinhas = null;   // parceiro: { serviceId: {na_pagina, venda} } de /api/reseller/consultas
 
@@ -3033,7 +3033,8 @@ function renderWhatsappDestaque() {
       <span class="text-lg leading-none">${c.icon}</span>
       <div class="min-w-0 flex-1">
         <div class="text-sm font-semibold text-gray-800">${c.nome}</div>
-        ${p != null ? `<div class="text-[11px] text-gray-500">${parceiro && naPagina(c.id) ? 'Seu preço' : 'Preço do site'}: ${fmtPrice(p)}</div>` : ''}
+        ${c.gratis ? `<div class="text-[11px] font-semibold text-green-600">Grátis pelo WhatsApp</div>`
+          : p != null ? `<div class="text-[11px] text-gray-500">${parceiro && naPagina(c.id) ? 'Seu preço' : 'Preço do site'}: ${fmtPrice(p)}</div>` : ''}
       </div>
       ${selo(naPagina(c.id))}
     </li>`;

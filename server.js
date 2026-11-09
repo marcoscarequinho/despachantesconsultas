@@ -9017,7 +9017,7 @@ async function resumoPosPago(userId) {
 async function bloqueioPagamentoConsulta(userId, user, price) {
   // Consulta pelo WhatsApp já paga por PIX (ver processarPagamentoWhats): não
   // depende de saldo nem de fatura.
-  if (contextoBotWhats.getStore()?.pagoPix) return null;
+  if (contextoBotWhats.getStore()?.pagoPix || contextoBotWhats.getStore()?.gratis) return null;
   if (!user.pos_pago) {
     if (parseFloat(user.credits) < price) {
       return { status: 400, body: {
@@ -9547,6 +9547,9 @@ async function getUserServicePrice(userId, service) {
   // Grupo gratuito (ver FREE_SERVICE_GROUPS) nunca cobra — nem por preço fixo
   // cadastrado antes de o grupo virar cortesia.
   if (isFreeService(service)) return 0;
+  // Grátis só pelo @consultar do WhatsApp (dono, 09/11/2026); no painel segue
+  // o preço normal.
+  if (contextoBotWhats.getStore() && BOT_WHATS_GRATIS.has(service.id)) return 0;
   const r = await pool.query(
     'SELECT price FROM user_service_prices WHERE user_id=$1 AND service_id=$2',
     [userId, service.id]
@@ -13352,7 +13355,7 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
     await debitarConsulta(userId, price);
     const txRow = await pool.query(
       `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
-      [userId, price, `Consulta: ${service.name}`]
+      [userId, price, `Consulta: ${service.name}${contextoBotWhats.getStore()?.gratis ? ' (grátis pelo WhatsApp)' : ''}`]
     );
     // Guarda o corpo JSON retornado (quando não é PDF/HTML) para o histórico poder
     // reexibir o mesmo resultado depois, sem precisar refazer (e recobrar) a consulta.
@@ -16903,6 +16906,11 @@ const BOT_WHATS_MENU = [
   { id: 'dcr-pacote-completa-top', rotulo: '🚘 Pacote Veicular Completa TOP' },
   { id: 'consulta-debitos-portal', rotulo: '💳 Consulta de Débitos' },
 ];
+// Grátis no @consultar, sem PIX (dono, 09/11/2026: a Consulta de Débitos sai
+// por R$ 0,00 no WhatsApp; no painel continua com o preço de sempre). Preço 0
+// não debita, não gera ganho de parceiro (registrarLucrosParceiros pede
+// amount > 0) e não passa pelo porteiro de saldo/fatura.
+const BOT_WHATS_GRATIS = new Set(['consulta-debitos-portal']);
 // Só consultas que pedem só a placa entram aqui (dono, 08/11/2026: o
 // Cancelamento de ATPV-e saiu por pedir renavam, nº do ATPV-e, CPF e DUDA).
 
@@ -16982,7 +16990,7 @@ async function menuBotWhats(user, liberadas) {
       continue;
     }
     const s = servicoBotWhats(m.id, liberadas);
-    if (s) opcoes.push({ ...m, texto: `${m.rotulo} — ${fmtMoneyBRL(await getUserServicePrice(user.id, s))}` });
+    if (s) opcoes.push({ ...m, texto: `${m.rotulo} — ${BOT_WHATS_GRATIS.has(s.id) ? '*GRÁTIS*' : fmtMoneyBRL(await getUserServicePrice(user.id, s))}` });
   }
   return opcoes;
 }
@@ -16996,7 +17004,7 @@ async function enviarMenuBot(phone, chave, user, liberadas) {
   await salvarSessaoBot(chave, user.id, 'menu', { opcoes: opcoes.map(o => o.id) });
   return sendWhatsApp(phone, [
     `*Consultas pelo WhatsApp — MC Despachadoria Consultas*`,
-    `Olá, ${String(user.name || '').split(' ')[0] || 'tudo bem'}! Cada consulta é paga na hora por PIX.`,
+    `Olá, ${String(user.name || '').split(' ')[0] || 'tudo bem'}! Cada consulta é paga na hora por PIX (as grátis saem direto).`,
     ``,
     ...opcoes.map((o, i) => `*${i + 1}* - ${o.texto}`),
     ``,
@@ -17043,9 +17051,9 @@ async function gerarPixBot(phone, chave, user, serviceId, params) {
 // Roda a consulta pelo fluxo do painel com uma resposta capturada (mesmo
 // desenho do reenvio do admin) e devolve o resultado na conversa.
 // { tipo: 'ok' | 'erro' | 'pendente', erro? }
-async function executarConsultaBot(phone, chave, user, serviceId, params, pagoPix = false) {
+async function executarConsultaBot(phone, chave, user, serviceId, params, pagoPix = false, gratis = false) {
   const s = SERVICES.find(x => x.id === serviceId);
-  await sendWhatsApp(phone, `⏳ Pagamento recebido! Consultando *${s.name}* da placa *${params.placa}*... isso pode levar alguns minutos.`);
+  await sendWhatsApp(phone, `⏳ ${gratis ? '' : 'Pagamento recebido! '}Consultando *${s.name}* da placa *${params.placa}*... isso pode levar alguns minutos.`);
   const saida = { status: 200, json: null, pdf: null, headers: {} };
   const fake = {
     headersSent: false,
@@ -17064,7 +17072,7 @@ async function executarConsultaBot(phone, chave, user, serviceId, params, pagoPi
     send(b) { if (Buffer.isBuffer(b)) saida.pdf = b; else saida.json = b; this.headersSent = true; return this; },
     end(b) { if (Buffer.isBuffer(b)) saida.pdf = b; this.headersSent = true; return this; },
   };
-  const bot = { chave, pdfs: 0, pagoPix };
+  const bot = { chave, pdfs: 0, pagoPix, gratis };
   const marca = await marcaDoUsuarioCache(user.id).catch(() => null);
   await contextoBotWhats.run(bot, () =>
     contextoMarca.run({ marca }, () => processCatalogQuery(user.id, serviceId, params, fake)));
@@ -17248,6 +17256,12 @@ async function processarMensagemBot(phone, texto) {
   if (sessao.etapa === 'placa') {
     const placa = placaBot(texto);
     if (!placaBotOk(placa)) return sendWhatsApp(phone, 'Placa inválida. Informe no formato ABC1D23.');
+    if (BOT_WHATS_GRATIS.has(d.serviceId)) {
+      await encerrarSessaoBot(chave);
+      const r = await executarConsultaBot(phone, chave, user, d.serviceId, { placa }, false, true);
+      if (r.tipo === 'erro') await sendWhatsApp(phone, `❌ ${r.erro}\n\nPara tentar de novo, digite *@consultar*.`);
+      return;
+    }
     return gerarPixBot(phone, chave, user, d.serviceId, { placa });
   }
 
