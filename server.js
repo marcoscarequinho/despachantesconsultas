@@ -16901,6 +16901,7 @@ const BOT_WHATS_MENU = [
   { id: 'crlv-rj-reemissao-2', rotulo: '🔑 📄 CRLV 2 Rio Reemissão' },
   { id: 'dcr-reemissao-atpve', rotulo: '📝 Reemissão ATPV-e (PDF)' },
   { id: 'dcr-pacote-completa-top', rotulo: '🚘 Pacote Veicular Completa TOP' },
+  { id: 'consulta-debitos-portal', rotulo: '💳 Consulta de Débitos' },
 ];
 // Só consultas que pedem só a placa entram aqui (dono, 08/11/2026: o
 // Cancelamento de ATPV-e saiu por pedir renavam, nº do ATPV-e, CPF e DUDA).
