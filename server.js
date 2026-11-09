@@ -1790,7 +1790,10 @@ const SERVICES = [
   // O RJ voltou em 01/11/2026 (pedido do dono) a R$ 55,00, como "opção 2" da
   // emissão nova: card próprio na página "ATPVe's e Consultas Novas", logo
   // abaixo da Emissão de ATPV-e (buildNovasList). O MG segue suspenso.
-  { id:'atpve-vistocar-rj', name:'Intenção de Venda / ATPV-e RJ', group:'Intenção de Venda (ATPVE)', basePrice:55.00, noMarkup:true, inputType:'atpve_vistocar', icon:'📝', uf:'rj' },
+  // Em 09/11/2026 o RJ saiu de novo (dono: a Vistocar voltou, menos o ATPVe
+  // Rio) — suspenso como o MG, e o card de opção 2 foi retirado.
+  { id:'atpve-vistocar-rj', name:'Intenção de Venda / ATPV-e RJ', group:'Intenção de Venda (ATPVE)', basePrice:55.00, noMarkup:true, inputType:'atpve_vistocar', icon:'📝', uf:'rj', unavailable:true,
+    slowNote:'A emissão por este caminho está suspensa. Use a nova Emissão de ATPV-e (Intenção de Venda), na página "ATPVe’s e Consultas Novas".' },
   { id:'atpve-vistocar-mg', name:'Intenção de Venda / ATPV-e MG', group:'Intenção de Venda (ATPVE)', basePrice:70.00, noMarkup:true, inputType:'atpve_vistocar', icon:'📝', uf:'mg', unavailable:true,
     slowNote:'A emissão por este caminho está suspensa temporariamente. Use a nova Emissão de ATPV-e (Intenção de Venda), na página "ATPVe’s e Consultas Novas".' },
 ];
@@ -1800,7 +1803,8 @@ const SERVICES = [
 // aviso — o painel mostra o selo "Em manutenção" e o alerta no formulário com o
 // botão desligado, e processCatalogQuery recusa o pedido (inclusive pela API de
 // chave). Pedidos antigos seguem pelo cron/webhook. Para religar: VISTOCAR_FORA = false.
-const VISTOCAR_FORA = true;
+// Religada em 09/11/2026 (dono), menos o ATPV-e RJ/MG, que seguem suspensos no SERVICES.
+const VISTOCAR_FORA = false;
 const VISTOCAR_FORA_MSG = 'ESSA CONSULTA ESTÁ TEMPORARIAMENTE FORA, ESTAMOS REFORMULANDO NOSSO CONTRATO COM O FORNECEDOR, TENTE OUTRA CONSULTA SIMILAR NA PLATAFORMA';
 if (VISTOCAR_FORA) {
   // Os do VISTOCAR_ENDPOINTS + o Código de Segurança da assinatura, que usa a

@@ -3333,7 +3333,7 @@ function openCatalogService(id) {
   const svc = allServices.find(s => s.id === id);
   if (!svc) { toast('Este serviço não está mais disponível.', 'error'); return; }
   // Suspenso: só o pop-up, sem sair da Visão Geral (ver selectService).
-  if (svc.unavailable && svc.slowNote && svc.id !== 'atpve-vistocar-mg') { toast(svc.slowNote, 'aviso'); return; }
+  if (svc.unavailable && svc.slowNote && !ehAtpveVistocar({ service_id: svc.id })) { toast(svc.slowNote, 'aviso'); return; }
   quickSelect(id);
 }
 
@@ -3945,29 +3945,6 @@ const GRUPO_NOVAS = "ATPVe's e Consultas Novas";
 // Ordem dos blocos da página; subgrupo novo vindo do servidor entra no fim.
 const NOVAS_SUBGRUPOS = ['Emissão de ATPV-e', 'Cancelamentos', 'Documentos do veículo', 'CRLV-e', 'Pacotes veiculares', 'Bases veiculares', 'Crédito'];
 
-// ATPV-e RJ da Vistocar (voltou em 01/11/2026, pedido do dono): é de outro
-// grupo, mas aparece aqui como "opção 2", logo abaixo da Emissão de ATPV-e.
-function novasAtpveOpcao2Card() {
-  // Fica visível mesmo suspenso: abre o formulário com o aviso do servidor.
-  const s = allServices.find(x => x.id === 'atpve-vistocar-rj');
-  if (!s) return '';
-  return `
-    <button type="button" onclick="selectService(${JSON.stringify(s).replace(/"/g,"&quot;")})"
-      class="w-full text-left bg-gradient-to-r from-amber-50 to-white border-2 border-amber-300 rounded-xl p-4 sm:p-5 hover:border-amber-500 transition-all">
-      <div class="flex items-center gap-4">
-        <div class="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center text-2xl flex-shrink-0">${s.icon}</div>
-        <div class="flex-1 min-w-0">
-          <div class="flex items-center gap-2 flex-wrap">
-            <span class="font-bold text-gray-800">${escapeHtml(s.name)}</span>
-            <span class="svc-badge bg-orange-100 text-orange-700">⭐ Destaque</span>
-          </div>
-          <p class="text-xs text-gray-600 mt-1 leading-snug">ATPVe Rio opção 2 se não sair a primeira</p>
-        </div>
-        <div class="price-tag text-sm flex-shrink-0">${fmtPrice(s.price)}</div>
-      </div>
-    </button>`;
-}
-
 function buildNovasList() {
   const wrap = document.getElementById('novas-service-list');
   if (!wrap) return;
@@ -3997,7 +3974,7 @@ function buildNovasList() {
             <span class="price-tag text-sm">${fmtPrice(p)}</span>
           </button>`).join('')}
       </div>
-    </div>`).join('') + novasAtpveOpcao2Card() : `
+    </div>`).join('') : `
     <div class="card">
       <h3 class="font-semibold text-gray-800 mb-3">${escapeHtml(sub)}</h3>
       <div class="grid sm:grid-cols-2 gap-2">
@@ -4082,8 +4059,8 @@ function selectService(svc) {
   // dele (dono, 08/11/2026). O card aparece, mas o formulário não abre.
   if (svc.naoLiberada) { toast(consultaNaoLiberadaMsg, 'aviso'); return; }
   // ATPV-e da Vistocar suspenso (22/10/2026): vai para a emissão nova, com a UF dele.
-  // O RJ voltou em 01/11/2026 como opção 2 (card na página Consultas Novas).
-  if (svc.id === 'atpve-vistocar-mg' && allServices.some(s => s.id === 'dcr-atpve')) {
+  // O RJ voltou em 01/11/2026 como opção 2 e saiu de novo em 09/11/2026.
+  if (ehAtpveVistocar({ service_id: svc.id }) && svc.unavailable && allServices.some(s => s.id === 'dcr-atpve')) {
     const uf = svc.uf ? svc.uf.toUpperCase() : '';
     toast('A emissão de ATPV-e agora é por aqui.');
     showSection('novas');
