@@ -586,6 +586,14 @@ const VISTOCAR_ENDPOINTS = {
   // não realizada." com paid:false). Antes a 1ª tentativa era a Consultas Fácil
   // (placa + renavam + CPF) e esta rota era a reserva.
   'crlv-rio-reemissao-v2': 'crlv-rj',
+  // Número do CRV Digital v2 (09/11/2026, dono, R$ 13,00): a rota security-code-crv
+  // (a do NÚMERO do CRV) voltou, agora com placa + renavam — só com a placa ela
+  // responde 400 "Dados inválidos para o fornecedor" (paid:false) para qualquer
+  // placa; com renavam errado, "Consulta não concluída pela integração do
+  // fornecedor". É assíncrona: devolve movementId e o resultado vem pelo webhook
+  // (VISTOCAR_ASYNC_SVCS), cobrado só na entrega. A resposta traz também um campo
+  // numeroCrv: sem PDF, o relatório é montado com ele (pdfNumeroCrvVistocar).
+  'numero-crv-digital-vistocar': 'security-code-crv',
 };
 
 // ── Nome dos arquivos que vêm da Vistocar ────────────────────────────────────
@@ -601,6 +609,7 @@ const VISTOCAR_ARQUIVO_NOMES = {
   // Hoje vem da despbrasil, mas mantém o nome que o cliente já conhece.
   'numero-crv-digital':              'numero-crv',
   'vistocar-debitos-cod-barra':      'debitos',
+  'numero-crv-digital-vistocar':     'numero-crv',
   'atpve-vistocar-rj':               'atpve-rj',
   'atpve-vistocar-mg':               'atpve-mg',
   // É da despbrasil, mas o nome segue o padrão para o cliente.
@@ -636,7 +645,7 @@ const VISTOCAR_ATPVE_SVCS = new Set(['atpve-vistocar-rj', 'atpve-vistocar-mg']);
 // e a entrega continuam de pé também para os pedidos antigos do CE em
 // vistocar_pending, e habilitar outra UF continua sendo: rota em
 // VISTOCAR_ENDPOINTS + serviço em SERVICES + id aqui.
-const VISTOCAR_ASYNC_SVCS = new Set([...VISTOCAR_ATPVE_SVCS]);
+const VISTOCAR_ASYNC_SVCS = new Set([...VISTOCAR_ATPVE_SVCS, 'numero-crv-digital-vistocar']);
 
 // Cache do token JWT da Vistocar em memória do processo — o login devolve um token
 // válido por 40 min (doc da Vistocar), então evitamos logar a cada consulta. Renova
@@ -1640,6 +1649,8 @@ const SERVICES = [
   // R$ 14,00 FIXO (noMarkup), segurado por decisão do dono — não é o custo
   // mais markup. Custo real na despbrasil: R$ 7,50.
   { id:'numero-crv-digital', name:'Número do CRV Digital', group:'CRV', basePrice:14.00, noMarkup:true, inputType:'placa_renavam', icon:'🔢' },
+  // Vistocar (security-code-crv), assíncrono — ver VISTOCAR_ENDPOINTS.
+  { id:'numero-crv-digital-vistocar', name:'Número do CRV Digital v2', group:'CRV', basePrice:13.00, noMarkup:true, inputType:'placa_renavam', icon:'🔢' },
   // ── Análise de Crédito ──
   { id:'consultar-spc', name:'Consulta SPC/Crédito', group:'Análise de Crédito', basePrice:15.00, inputType:'cpfcnpj', icon:'📊' },
   // ── Óbito ──
@@ -6474,6 +6485,16 @@ function buildNumeroCrvDigitalPdfBuffer(service, dados, params) {
       reject(e);
     }
   });
+}
+
+// Número do CRV Digital v2 (Vistocar): quando a resposta traz só o numeroCrv,
+// sem PDF, o relatório é o mesmo do Número do CRV Digital, com o número só.
+// "Solicitação de Número CRV…" (texto que a rota já devolveu no lugar do
+// número) não conta como número.
+const numeroCrvValido = v => /^\d{6,14}$/.test(String(v ?? '').replace(/\D/g, '')) && !/[a-z]{3}/i.test(String(v));
+function pdfNumeroCrvVistocar(service, numero, params) {
+  return buildNumeroCrvDigitalPdfBuffer(service,
+    { secoes: { crlv: [['NUMERO CRV', String(numero).trim()]], veiculo: [], proprietario: [] } }, params);
 }
 
 // ── Valida CRV — relatório no padrão do site ─────────────────────────────────
@@ -12432,6 +12453,11 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
         const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
         if (placa.length !== 7) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
         body = { plate: placa };
+        if (serviceId === 'numero-crv-digital-vistocar') {
+          const ren = String(params?.renavam || '').replace(/\D/g, '');
+          if (ren.length < 9 || ren.length > 11) return res.status(400).json({ error: 'Renavam inválido. Informe os 11 dígitos do Renavam.' });
+          body.renavam = ren.padStart(11, '0');
+        }
       }
     }
     // Débitos por Estado / Dívida Ativa — API Datacube (form-urlencoded, retorna JSON que vira PDF)
@@ -13183,8 +13209,17 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
         const ok = parsed?.status === 200 && parsed?.response?.success === true;
         if (!ok) {
           const orgao = service.uf ? `Detran-${service.uf.toUpperCase()}` : 'órgão';
-          const errMsg = parsed?.message || parsed?.response?.msg || parsed?.response?.error
+          let errMsg = parsed?.message || parsed?.response?.msg || parsed?.response?.error
             || `Não foi possível registrar a consulta no ${orgao}.`;
+          // Número do CRV: o "message" é sempre "Consulta não realizada."; o que
+          // diz o motivo é o response.msg. Placa + renavam que não batem voltam
+          // "Dados inválidos…"/"não concluída pela integração…".
+          if (serviceId === 'numero-crv-digital-vistocar') {
+            const m = String(parsed?.response?.msg || '');
+            errMsg = /dados inv|n[aã]o conclu/i.test(m)
+              ? 'Não foi possível consultar o número do CRV com essa placa e Renavam. Confira os dois e tente de novo — nada foi cobrado.'
+              : (m || 'A consulta do número do CRV não está respondendo agora. Nada foi cobrado — tente de novo em alguns minutos.');
+          }
           console.error(`[${serviceId}] resposta inesperada da Vistocar: ${JSON.stringify(parsed)}`);
           return res.status(422).json({ error: errMsg });
         }
@@ -13195,6 +13230,9 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
         let bufPronto = jaPronto
           ? Buffer.from(String(jaPronto).replace(/^data:[^,]+,/, '').replace(/\s/g, ''), 'base64')
           : null;
+        if (!bufPronto && serviceId === 'numero-crv-digital-vistocar' && numeroCrvValido(parsed?.response?.numeroCrv)) {
+          bufPronto = await pdfNumeroCrvVistocar(service, parsed.response.numeroCrv, params);
+        }
         // Mesma conferência da entrega posterior (conferirPdfAtpve): PDF pronto de
         // OUTRA venda não é cobrado na hora. O pedido segue como pendente, e quem
         // decide e avisa o admin é entregarResultadoVistocar na próxima busca.
@@ -16316,6 +16354,11 @@ async function buscarDocumentoVistocar(pend, opcoes = {}) {
   const data = await r.json().catch(() => null);
   // CRLV usa response.pdfBase64; ATPV-e usa response.arquivoPdfBase64 (doc, seção 8).
   const b64 = data?.response?.pdfBase64 || data?.response?.arquivoPdfBase64;
+  if (!b64 && pend.service_id === 'numero-crv-digital-vistocar' && numeroCrvValido(data?.response?.numeroCrv)) {
+    const svc = SERVICES.find(s => s.id === pend.service_id);
+    const buf = await pdfNumeroCrvVistocar(svc, data.response.numeroCrv, { placa: pend.placa });
+    return { b64: buf.toString('base64') };
+  }
   if (!b64) return { motivo: 'resposta sem PDF' };
   return { b64 };
 }
