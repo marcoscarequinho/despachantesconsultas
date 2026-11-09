@@ -9575,6 +9575,9 @@ async function getUserServicePrice(userId, service) {
   // Grátis só pelo @consultar do WhatsApp (dono, 09/11/2026); no painel segue
   // o preço normal.
   if (contextoBotWhats.getStore() && BOT_WHATS_GRATIS.has(service.id)) return 0;
+  // Preço único do @consultar para os Débitos por Estado (BOT_DEBITOS_PRECO).
+  const botCtx = contextoBotWhats.getStore();
+  if (botCtx?.precoFixo != null && botCtx.precoFixoServico === service.id) return botCtx.precoFixo;
   const r = await pool.query(
     'SELECT price FROM user_service_prices WHERE user_id=$1 AND service_id=$2',
     [userId, service.id]
@@ -16952,7 +16955,24 @@ const BOT_WHATS_MENU = [
   { id: 'dcr-reemissao-atpve', rotulo: '📝 Reemissão ATPV-e (PDF)' },
   { id: 'dcr-pacote-completa-top', rotulo: '🚘 Pacote Veicular Completa TOP' },
   { id: 'consulta-debitos-portal', rotulo: '💳 Consulta de Débitos' },
+  { id: 'debitos-estado-whats', rotulo: '🏛️ Débitos por Estado (só a placa)' },
 ];
+// Débitos por Estado só com a placa (dono, 09/11/2026): no painel cada UF pede
+// placa + renavam (+ CPF/CNPJ em algumas, chassi na SC antiga); no WhatsApp a
+// Proprietário Atual (v2) do portal acha a UF, o renavam, o documento e o
+// chassi, e a consulta roda no dc-debito da UF com esses dados. Preço único de
+// R$ 15,00 no WhatsApp, qualquer UF (cobre a Proprietário Atual e o débito);
+// no painel nada muda. O pedido grava este id; o serviço de verdade só é
+// conhecido depois do pagamento.
+const BOT_DEBITOS_ID = 'debitos-estado-whats';
+const BOT_DEBITOS_NOME = 'Débitos por Estado';
+const BOT_DEBITOS_PRECO = 15.00;
+const servicosDebitoUf = uf => {
+  const u = String(uf || '').toLowerCase();
+  return u === 'sc' ? ['dc-debito-sc-v2', 'dc-debito-sc'] : [`dc-debito-${u}`];
+};
+const debitosBotDisponivel = liberadas => SERVICES.some(s => s.id.startsWith('dc-debito-') && servicoBotWhats(s.id, liberadas));
+const nomeServicoBot = id => id === BOT_DEBITOS_ID ? BOT_DEBITOS_NOME : (SERVICES.find(x => x.id === id)?.name || 'Consulta');
 // Grátis no @consultar, sem PIX (dono, 09/11/2026: a Consulta de Débitos sai
 // por R$ 0,00 no WhatsApp; no painel continua com o preço de sempre). Preço 0
 // não debita, não gera ganho de parceiro (registrarLucrosParceiros pede
@@ -17036,6 +17056,10 @@ async function menuBotWhats(user, liberadas) {
       if (algum) opcoes.push({ ...m, texto: m.rotulo });
       continue;
     }
+    if (m.id === BOT_DEBITOS_ID) {
+      if (debitosBotDisponivel(liberadas)) opcoes.push({ ...m, texto: `${m.rotulo} — ${fmtMoneyBRL(BOT_DEBITOS_PRECO)}` });
+      continue;
+    }
     const s = servicoBotWhats(m.id, liberadas);
     if (s) opcoes.push({ ...m, texto: `${m.rotulo} — ${BOT_WHATS_GRATIS.has(s.id) ? '*GRÁTIS*' : fmtMoneyBRL(await getUserServicePrice(user.id, s))}` });
   }
@@ -17064,8 +17088,8 @@ async function enviarMenuBot(phone, chave, user, liberadas) {
 // (processarPagamentoWhats). O notification_url garante o aviso do Mercado
 // Pago mesmo sem webhook cadastrado no app; o cron pix-reconcile é a reserva.
 async function gerarPixBot(phone, chave, user, serviceId, params) {
-  const s = SERVICES.find(x => x.id === serviceId);
-  const valor = await getUserServicePrice(user.id, s);
+  const s = serviceId === BOT_DEBITOS_ID ? { name: BOT_DEBITOS_NOME } : SERVICES.find(x => x.id === serviceId);
+  const valor = serviceId === BOT_DEBITOS_ID ? BOT_DEBITOS_PRECO : await getUserServicePrice(user.id, s);
   await encerrarSessaoBot(chave);
   if (!(valor > 0)) return sendWhatsApp(phone, 'Esta consulta não está disponível pelo WhatsApp. Digite *@consultar* para ver o menu.');
   let payment;
@@ -17095,12 +17119,78 @@ async function gerarPixBot(phone, chave, user, serviceId, params) {
   return sendWhatsApp(phone, tx.qr_code);
 }
 
+// Dados que o dc-debito da UF pede, a partir só da placa: Proprietário Atual
+// (v2) do portal (pedido do dono) e, se ela falhar ou vier sem renavam, a
+// Proprietário Atual da Datacube, que traz UF, renavam, chassi e CPF/CNPJ em
+// ~3 s (o portal passou de 2 min sem responder no dia da entrada, 09/11/2026).
+// { serviceId, params } | { erro }. Nada aqui é logado com documento inteiro.
+async function dadosDebitoPorPlaca(placa) {
+  const so = v => String(v ?? '').trim();
+  try {
+    const f = await fetchProprietarioAtualV2Fields(placa);
+    const k = re => Object.keys(f).find(x => re.test(x));
+    const d = {
+      uf: so(f[k(/^ufjurisdicao$/)] || f[k(/^uf$/)]).toUpperCase(),
+      renavam: so(f[k(/renavam/)]).replace(/\D/g, ''),
+      documento: so(f[k(/cpf|cnpj|documento/)]).replace(/\D/g, ''),
+      chassi: so(f[k(/chassi/)]).toUpperCase().replace(/\s/g, ''),
+    };
+    if (/^[A-Z]{2}$/.test(d.uf) && d.renavam.length >= 9) return d;
+    console.error(`[@consultar débitos] Proprietário Atual (v2) sem UF/renavam (placa ${placa}), campos: ${Object.keys(f).join(',')}`);
+  } catch (e) {
+    console.error(`[@consultar débitos] Proprietário Atual (v2) falhou (placa ${placa}):`, e.message);
+  }
+  const r = await fetch(`${DATACUBE_API_URL}/veiculos/proprietario-atual`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ auth_token: DATACUBE_TOKEN, placa }).toString(),
+    signal: AbortSignal.timeout(30000),
+  });
+  const j = await r.json().catch(() => null);
+  const x = j?.status ? j.result || {} : {};
+  return {
+    uf: so(x.uf).toUpperCase(),
+    renavam: so(x.renavam).replace(/\D/g, ''),
+    documento: so(x.proprietario_documento).replace(/\D/g, ''),
+    chassi: so(x.chassi).toUpperCase().replace(/\s/g, ''),
+  };
+}
+
+async function resolverDebitosBot(user, placa) {
+  let d;
+  try { d = await dadosDebitoPorPlaca(placa); }
+  catch (e) {
+    console.error(`[@consultar débitos] Datacube falhou (placa ${placa}):`, e.message);
+    return { erro: 'Não consegui buscar os dados do veículo agora. Tente de novo em alguns minutos.' };
+  }
+  if (!/^[A-Z]{2}$/.test(d.uf) || d.renavam.length < 9)
+    return { erro: 'Não encontrei o renavam e a UF dessa placa. Confira a placa e tente de novo.' };
+  const liberadas = await consultasLiberadasClienteParceiro(user.id);
+  const temDoc = d.documento.length === 11 || d.documento.length === 14;
+  const s = servicosDebitoUf(d.uf).map(id => servicoBotWhats(id, liberadas)).find(x => x &&
+    (x.inputType !== 'debito_doc' || temDoc) && (x.inputType !== 'debito_chassi' || d.chassi.length === 17));
+  if (!s) return { erro: `Ainda não fazemos a consulta de débitos de veículos de ${d.uf} pelo WhatsApp.` };
+  const params = { placa, renavam: d.renavam };
+  if (s.inputType === 'debito_doc') params.documento = d.documento;
+  if (s.inputType === 'debito_chassi') params.chassi = d.chassi;
+  return { serviceId: s.id, params };
+}
+
 // Roda a consulta pelo fluxo do painel com uma resposta capturada (mesmo
 // desenho do reenvio do admin) e devolve o resultado na conversa.
 // { tipo: 'ok' | 'erro' | 'pendente', erro? }
 async function executarConsultaBot(phone, chave, user, serviceId, params, pagoPix = false, gratis = false) {
+  let precoFixo = null;
+  if (serviceId === BOT_DEBITOS_ID) {
+    await sendWhatsApp(phone, `⏳ ${gratis ? '' : 'Pagamento recebido! '}Buscando os dados da placa *${params.placa}* para a consulta de débitos...`);
+    const r = await resolverDebitosBot(user, params.placa);
+    if (r.erro) return { tipo: 'erro', erro: r.erro };
+    serviceId = r.serviceId;
+    params = r.params;
+    precoFixo = BOT_DEBITOS_PRECO;
+  }
   const s = SERVICES.find(x => x.id === serviceId);
-  await sendWhatsApp(phone, `⏳ ${gratis ? '' : 'Pagamento recebido! '}Consultando *${s.name}* da placa *${params.placa}*... isso pode levar alguns minutos.`);
+  await sendWhatsApp(phone, `⏳ ${gratis || precoFixo ? '' : 'Pagamento recebido! '}Consultando *${s.name}* da placa *${params.placa}*... isso pode levar alguns minutos.`);
   const saida = { status: 200, json: null, pdf: null, headers: {} };
   const fake = {
     headersSent: false,
@@ -17119,14 +17209,14 @@ async function executarConsultaBot(phone, chave, user, serviceId, params, pagoPi
     send(b) { if (Buffer.isBuffer(b)) saida.pdf = b; else saida.json = b; this.headersSent = true; return this; },
     end(b) { if (Buffer.isBuffer(b)) saida.pdf = b; this.headersSent = true; return this; },
   };
-  const bot = { chave, pdfs: 0, pagoPix, gratis };
+  const bot = { chave, pdfs: 0, pagoPix, gratis, precoFixo, precoFixoServico: precoFixo != null ? serviceId : null };
   const marca = await marcaDoUsuarioCache(user.id).catch(() => null);
   await contextoBotWhats.run(bot, () =>
     contextoMarca.run({ marca }, () => processCatalogQuery(user.id, serviceId, params, fake)));
 
   if (saida.status >= 400 || bot.estornou) {
     const msg = (saida.json && typeof saida.json === 'object' ? saida.json.error : null) || 'A consulta não saiu.';
-    return { tipo: 'erro', erro: msg };
+    return { tipo: 'erro', erro: msg, serviceId };
   }
   if (saida.pdf) {
     if (!bot.pdfs) {
@@ -17137,19 +17227,19 @@ async function executarConsultaBot(phone, chave, user, serviceId, params, pagoPi
       await sendWhatsAppPdf(phone, saida.pdf, nomeArq, `✅ *${s.name}*\n🔎 ${params.placa}`);
     }
     await sendWhatsApp(phone, `✅ Pronto! O documento também fica no Histórico do painel.\nPara outra consulta, digite *@consultar*.`);
-    return { tipo: 'ok' };
+    return { tipo: 'ok', serviceId };
   }
   const j = saida.json && typeof saida.json === 'object' ? saida.json : {};
   if (j.pending) {
     await sendWhatsApp(phone, `⏳ ${j.result?.mensagem || 'Pedido registrado. O resultado chega aqui no WhatsApp quando sair.'}`);
-    return { tipo: 'pendente', queryId: j.queryId || null };
+    return { tipo: 'pendente', queryId: j.queryId || null, serviceId };
   }
   if (j.html_token) {
     await sendWhatsApp(phone, `✅ *${s.name}* — ${params.placa}\n\nResultado: ${WEBHOOK_BASE_URL || 'https://www.despachantesconsultas.com.br'}/api/html/${j.html_token}\n\nPara outra consulta, digite *@consultar*.`);
-    return { tipo: 'ok' };
+    return { tipo: 'ok', serviceId };
   }
   await sendWhatsApp(phone, `✅ *${s.name}* concluída. Veja o resultado no Histórico do painel.\nPara outra consulta, digite *@consultar*.`);
-  return { tipo: 'ok' };
+  return { tipo: 'ok', serviceId };
 }
 
 // Pagamento de um pedido do WhatsApp: confere no Mercado Pago e, aprovado, roda
@@ -17184,8 +17274,8 @@ async function processarPagamentoWhats(gatewayId) {
   }
   const q = (await pool.query(
     `SELECT id, transaction_id FROM queries WHERE user_id=$1 AND service_id=$2 AND created_at >= $3 ORDER BY id DESC LIMIT 1`,
-    [ped.user_id, ped.service_id, inicio])).rows[0];
-  const s = SERVICES.find(x => x.id === ped.service_id);
+    [ped.user_id, res.serviceId || ped.service_id, inicio])).rows[0];
+  const s = { name: nomeServicoBot(res.serviceId || ped.service_id) };
 
   if (res.tipo === 'erro') {
     let devolvido = false;
