@@ -155,6 +155,12 @@ const ADMIN_PHONE        = process.env.ADMIN_PHONE        || '';
 // corpo a resposta é o PDF em bytes, e erro é sempre JSON 400/500 ({ error }).
 const CONSULTASFACIL_BASE_URL = 'https://www.consultasfacil.net';
 const CONSULTASFACIL_KEY      = process.env.CONSULTASFACIL_KEY || '';
+// Custo de cada consulta do Número ATPVe na Consultas Fácil (R$ 5,00, informado
+// pelo dono em 10/11/2026). A API não tem rota de saldo nem de preço e a
+// resposta é só o PDF, então o valor é fixo aqui. De 04 a 10/11/2026 ele era um
+// campo do admin que nunca foi preenchido (ficou R$ 0,00) e por isso nenhuma
+// consulta descontava do saldo estimado. Mudou o preço deles: mude aqui.
+const CONSULTASFACIL_CUSTO_CONSULTA = 5.00;
 // Numero ATPVe Brasil avulso (22/10/2026, R$ 19,99): o mesmo POST
 // /consultar-Numero-ATPVE { placa } que a Reemissão da ATPVe com Comunicação de
 // Venda usa por dentro, mas aqui o cliente recebe o PDF como veio — é a
@@ -2305,7 +2311,8 @@ async function initDB() {
   // Consultas Fácil: também sem rota de saldo (04/11/2026: /saldo,
   // /consultar-saldo, /api/saldo, /creditos, /me… dão o 404 do Express), então
   // o saldo é ESTIMADO como o da DirectData — saldo informado pelo admin menos
-  // custo_consulta × respostas com PDF desde então. O que ela diz de verdade é
+  // CONSULTASFACIL_CUSTO_CONSULTA × respostas com PDF desde então (a coluna
+  // custo_consulta ficou sem uso em 10/11/2026). O que ela diz de verdade é
   // "Saldo insuficiente para realizar a consulta." (400): isso marca
   // sem_saldo_em e avisa o admin uma vez (ver registrarConsultaFacil).
   await pool.query(`
@@ -10566,7 +10573,7 @@ async function saldoConsultaFacil() {
     `SELECT COALESCE(SUM(custo),0)::float AS gasto, COUNT(*) FILTER (WHERE pdf)::int AS n
        FROM consultasfacil_consumo WHERE created_at >= $1`, [s.base_em]);
   return {
-    saldoBase: Number(s.saldo_base), baseEm: s.base_em, custoConsulta: Number(s.custo_consulta),
+    saldoBase: Number(s.saldo_base), baseEm: s.base_em, custoConsulta: CONSULTASFACIL_CUSTO_CONSULTA,
     gastoDesdeBase: c.gasto, consultasDesdeBase: c.n,
     saldoEstimado: Math.round((Number(s.saldo_base) - c.gasto) * 100) / 100,
     alertaAbaixo: Number(s.alerta_abaixo), alertaEnviadoEm: s.alerta_enviado_em,
@@ -10583,8 +10590,7 @@ async function registrarConsultaFacil(resp, placa, origem) {
     const buf = Buffer.from(await resp.clone().arrayBuffer());
     const pdf = resp.ok && buf.slice(0, 4).toString('latin1') === '%PDF';
     const texto = pdf ? 'PDF' : buf.toString('utf8').replace(/\s+/g, ' ').slice(0, 200);
-    const s0 = await saldoConsultaFacil();
-    const custo = pdf ? s0.custoConsulta : 0;
+    const custo = pdf ? CONSULTASFACIL_CUSTO_CONSULTA : 0;
     await pool.query(
       `INSERT INTO consultasfacil_consumo (origem, placa, http_status, pdf, custo, resposta) VALUES ($1,$2,$3,$4,$5,$6)`,
       [String(origem || '').slice(0, 80), String(placa || '').toUpperCase().slice(0, 10), resp.status, pdf, custo, texto]);
@@ -19106,27 +19112,24 @@ app.get('/api/admin/consultasfacil', requireAuth, requireSuperAdmin, async (req,
   }
 });
 
-// Admin informa o saldo do painel da Consultas Fácil, o custo de cada consulta
-// e/ou o valor do alerta. Informar saldo rearma os dois avisos.
+// Admin informa o saldo do painel da Consultas Fácil e/ou o valor do alerta.
+// Informar saldo rearma os dois avisos; mudar o alerta rearma o de saldo baixo
+// (senão o limite novo nunca avisaria depois de um aviso já enviado).
 app.post('/api/admin/consultasfacil/saldo', requireAuth, requireSuperAdmin, async (req, res) => {
   const num = v => (v === undefined || v === null || v === '') ? null : Number(String(v).replace(',', '.'));
-  const saldo = num(req.body?.saldo), alerta = num(req.body?.alertaAbaixo), custo = num(req.body?.custoConsulta);
+  const saldo = num(req.body?.saldo), alerta = num(req.body?.alertaAbaixo);
   if (saldo !== null && (!Number.isFinite(saldo) || saldo < 0 || saldo > 1e7))
     return res.status(400).json({ error: 'Saldo inválido.' });
   if (alerta !== null && (!Number.isFinite(alerta) || alerta < 0 || alerta > 1e6))
     return res.status(400).json({ error: 'Valor do alerta inválido.' });
-  if (custo !== null && (!Number.isFinite(custo) || custo < 0 || custo > 1000))
-    return res.status(400).json({ error: 'Custo por consulta inválido.' });
-  if (saldo === null && alerta === null && custo === null)
-    return res.status(400).json({ error: 'Informe o saldo, o custo por consulta ou o valor do alerta.' });
+  if (saldo === null && alerta === null)
+    return res.status(400).json({ error: 'Informe o saldo ou o valor do alerta.' });
   try {
     await pool.query(`INSERT INTO consultasfacil_saldo (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
     if (saldo !== null)
       await pool.query(`UPDATE consultasfacil_saldo SET saldo_base = $1, base_em = NOW(), alerta_enviado_em = NULL, sem_saldo_em = NULL WHERE id = 1`, [saldo]);
-    if (custo !== null)
-      await pool.query(`UPDATE consultasfacil_saldo SET custo_consulta = $1 WHERE id = 1`, [custo]);
     if (alerta !== null)
-      await pool.query(`UPDATE consultasfacil_saldo SET alerta_abaixo = $1 WHERE id = 1`, [alerta]);
+      await pool.query(`UPDATE consultasfacil_saldo SET alerta_enviado_em = CASE WHEN alerta_abaixo = $1 THEN alerta_enviado_em END, alerta_abaixo = $1 WHERE id = 1`, [alerta]);
     res.json({ ok: true, saldo: await saldoConsultaFacil() });
   } catch (e) {
     console.error('[admin/consultasfacil/saldo] erro:', e.message);

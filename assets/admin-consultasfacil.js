@@ -1,6 +1,6 @@
 // Admin → Saldo Consultas Fácil (04/11/2026). A Consultas Fácil não tem rota
 // de saldo, então o valor é ESTIMADO como o da DirectData: o saldo que o admin
-// informa menos o custo por consulta × respostas com PDF desde então. O único
+// informa menos R$ 5,00 (fixo no servidor, CONSULTASFACIL_CUSTO_CONSULTA) × respostas com PDF desde então. O único
 // dado de verdade que ela dá é o "Saldo insuficiente" — esse vira o aviso
 // vermelho no topo. A regra mora no server.js (saldoConsultaFacil /
 // registrarConsultaFacil); aqui é só a tela. Usa fmt, fmtDate e toast do admin.html.
@@ -43,7 +43,7 @@
           <div id="cf-mes-n" class="text-xs text-gray-400 mt-0.5"></div>
         </div>
         <div class="stat-card border-l-red-500">
-          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Custo / alerta</div>
+          <div class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Custo por consulta</div>
           <div id="cf-custo" class="text-2xl font-bold text-gray-800">—</div>
           <div id="cf-alerta" class="text-xs text-gray-400 mt-0.5"></div>
         </div>
@@ -54,10 +54,6 @@
           <div>
             <label class="block text-xs font-semibold text-gray-600 mb-1">Saldo atual no painel deles (R$)</label>
             <input id="cf-input-saldo" type="text" inputmode="decimal" class="input-field w-44" placeholder="ex.: 300,00">
-          </div>
-          <div>
-            <label class="block text-xs font-semibold text-gray-600 mb-1">Custo de cada consulta (R$)</label>
-            <input id="cf-input-custo" type="text" inputmode="decimal" class="input-field w-44" placeholder="ex.: 15,00">
           </div>
           <div>
             <label class="block text-xs font-semibold text-gray-600 mb-1">Avisar abaixo de (R$)</label>
@@ -112,14 +108,15 @@
       document.getElementById('cf-mes-n').textContent = `${d.mesConsultas} consulta(s) com PDF`;
       document.getElementById('cf-custo').textContent = fmt(s.custoConsulta);
       document.getElementById('cf-alerta').textContent =
-        `por consulta · alerta abaixo de ${fmt(s.alertaAbaixo)}${s.alertaEnviadoEm ? ` (aviso enviado em ${fmtDate(s.alertaEnviadoEm)})` : ''}`;
-      document.getElementById('cf-input-custo').placeholder = brl(s.custoConsulta || 0);
-      document.getElementById('cf-input-alerta').placeholder = brl(s.alertaAbaixo);
+        `fixo · alerta abaixo de ${fmt(s.alertaAbaixo)}${s.alertaEnviadoEm ? ` (aviso enviado em ${fmtDate(s.alertaEnviadoEm)})` : ''}`;
+      // O alerta salvo fica escrito no campo (antes ele esvaziava depois de
+      // salvar e parecia que não tinha gravado). Não mexe se o admin está digitando.
+      const inAlerta = document.getElementById('cf-input-alerta');
+      if (document.activeElement !== inAlerta) inAlerta.value = brl(s.alertaAbaixo);
 
       const avisos = [];
       if (s.semSaldoEm) avisos.push(['red', `A Consultas Fácil respondeu "Saldo insuficiente" em ${fmtDate(s.semSaldoEm)}. Enquanto não recarregar, a Reemissão da ATPVe e o Numero ATPVe Brasil vão só pela despbrasil. Recarregue e informe o saldo novo aqui.`]);
       if (!d.chaveConfigurada) avisos.push(['amber', 'CONSULTASFACIL_KEY não está configurada no servidor — as consultas vão falhar.']);
-      if (!s.custoConsulta) avisos.push(['amber', 'Custo por consulta ainda não informado: o saldo estimado não desconta nada. Informe o valor que a Consultas Fácil cobra por consulta.']);
       if (baixo && !s.semSaldoEm) avisos.push(['amber', `Saldo estimado abaixo de ${fmt(s.alertaAbaixo)}. Recarregue e informe o saldo novo aqui.`]);
       const cor = { red: 'bg-red-50 border-red-200 text-red-800', amber: 'bg-amber-50 border-amber-200 text-amber-800' };
       document.getElementById('cf-avisos').innerHTML = avisos.map(([c, a]) =>
@@ -142,18 +139,19 @@
 
   async function salvar() {
     const v = id => document.getElementById(id).value.trim();
-    const num = x => x ? x.replace(/\./g, '').replace(',', '.') : undefined;
-    const saldo = v('cf-input-saldo'), custoConsulta = v('cf-input-custo'), alertaAbaixo = v('cf-input-alerta');
-    if (!saldo && !custoConsulta && !alertaAbaixo) { toast('Informe o saldo, o custo por consulta ou o valor do alerta.', 'error'); return; }
+    // "1.250,00" e "30,00" (ponto de milhar só quando há vírgula) e também "30.00".
+    const num = x => x ? (x.includes(',') ? x.replace(/\./g, '').replace(',', '.') : x) : undefined;
+    const saldo = v('cf-input-saldo'), alertaAbaixo = v('cf-input-alerta');
+    if (!saldo && !alertaAbaixo) { toast('Informe o saldo ou o valor do alerta.', 'error'); return; }
     try {
       const r = await fetch('/api/admin/consultasfacil/saldo', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ saldo: num(saldo), custoConsulta: num(custoConsulta), alertaAbaixo: num(alertaAbaixo) }),
+        body: JSON.stringify({ saldo: num(saldo), alertaAbaixo: num(alertaAbaixo) }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { toast(d.error || 'Erro ao salvar.', 'error'); return; }
-      ['cf-input-saldo', 'cf-input-custo', 'cf-input-alerta'].forEach(id => { document.getElementById(id).value = ''; });
-      toast('Saldo da Consultas Fácil atualizado.');
+      document.getElementById('cf-input-saldo').value = '';
+      toast(saldo ? 'Saldo da Consultas Fácil atualizado.' : 'Valor do alerta salvo.');
       window.loadConsultasFacil();
     } catch { toast('Erro de conexão.', 'error'); }
   }
