@@ -9641,7 +9641,14 @@ async function precoParceiroDoCliente(userId, service) {
 // para ele (inclusive Opção 2 e Infosimples, que o parceiro não tem como
 // remarcar). Devolve null para quem não é cliente de parceiro ativo (sem
 // restrição) ou o Set dos ids liberados. O próprio parceiro não entra aqui.
+// DESLIGADA em 10/11/2026 (dono): os parceiros não adicionavam as consultas e
+// os clientes deles ficavam travados e procuravam a MC. Voltou a ser como
+// antes — o cliente de parceiro vê e consulta o catálogo inteiro; o que está
+// na página do parceiro sai pelo preço dele, o resto pelo preço da plataforma
+// (getUserServicePrice / precoParceiroDoCliente). Para religar, true aqui.
+const BLOQUEIO_CLIENTE_PARCEIRO = false;
 async function consultasLiberadasClienteParceiro(userId) {
+  if (!BLOQUEIO_CLIENTE_PARCEIRO) return null;
   const r = await pool.query(
     `SELECT u.revendedor_id FROM users u
        JOIN users ru ON ru.id = u.revendedor_id AND ru.role = 'reseller' AND ru.active = true
