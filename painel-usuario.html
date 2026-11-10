@@ -376,8 +376,10 @@
         <div id="catalog-parceiros-destaque" class="hidden mb-4"></div>
         <!-- Consultas pelo WhatsApp (@consultar), entre os Parceiros e as
              Consultas Novas (pedido do dono, 08/11/2026). Para parceiro e
-             cliente da MC; escondido para cliente de parceiro (fala do preço
-             do parceiro e da MC). renderWhatsappDestaque(). -->
+             cliente da MC — desde 10/11/2026 o cliente da MC também consulta
+             por lá, e o card dele é outro texto; escondido para cliente de
+             parceiro (fala do preço do parceiro e da MC).
+             renderWhatsappDestaque(). -->
         <div id="catalog-whatsapp-destaque" class="hidden mb-4"></div>
         <div id="catalog-novas-destaque" class="hidden mb-4"></div>
         <!-- Contrato Social LTDA com IA em faixa própria, a primeira de todas,
@@ -2969,6 +2971,9 @@ function renderParceirosDestaque() {
 // Espelha o menu do robô no servidor (BOT_WHATS_MENU / BOT_WHATS_CRLV_UF): se
 // mudar lá, muda aqui. Para o parceiro, cada linha diz se a consulta já está na
 // página dele (só o que está na página aparece no WhatsApp do cliente dele).
+// Desde 10/11/2026 todo usuário consulta pelo WhatsApp (dono: "todos os
+// usuários sem exceção"): o usuário comum vê o card como convite para usar, com
+// o preço do site; o parceiro segue vendo a versão dele.
 const WHATS_NUMERO = '5522999951574';
 const WHATS_CRLV_UF = {
   AC: ['dcr-crlv-ac'], AL: ['dcr-crlv-ag-al'], BA: ['consultar-crlv-ba'],
@@ -2982,8 +2987,11 @@ const WHATS_CONSULTAS = [
   { id: 'comunicado-venda-placa',   icon: '📝', nome: 'Consulta do Comunicação de Venda' },
   { id: 'crlv-rj-reemissao-2',      icon: '🔑', nome: 'CRLV 2 Rio Reemissão' },
   { id: 'dcr-reemissao-atpve',      icon: '📝', nome: 'Reemissão ATPV-e (PDF)' },
+  { id: 'consultar-Numero-ATPVE',   icon: '🔢', nome: 'Reemissão da ATPVe Com Comunicação de Venda' },
   { id: 'dcr-pacote-completa-top',  icon: '🚘', nome: 'Pacote Veicular Completa TOP' },
   { id: 'consulta-debitos-portal',  icon: '💳', nome: 'Consulta de Débitos', gratis: true },
+  // Preço único do WhatsApp (BOT_DEBITOS_PRECO), não é serviço do catálogo.
+  { id: 'debitos-estado-whats',     icon: '🏛️', nome: 'Débitos por Estado (só a placa, qualquer UF)', fixo: 15 },
 ];
 let whatsMinhas = null;   // parceiro: { serviceId: {na_pagina, venda} } de /api/reseller/consultas
 
@@ -3019,7 +3027,7 @@ function renderWhatsappDestaque() {
     <li class="flex items-start gap-2 bg-white rounded-lg border border-gray-100 px-3 py-2">
       <span class="text-lg leading-none">📄</span>
       <div class="min-w-0 flex-1">
-        <div class="text-sm font-semibold text-gray-800">CRLV-e na hora — o cliente informa a UF e a placa</div>
+        <div class="text-sm font-semibold text-gray-800">CRLV-e na hora — ${parceiro ? 'o cliente informa' : 'você informa'} a UF e a placa</div>
         <div class="text-[11px] text-gray-500">${Object.keys(WHATS_CRLV_UF).join(' · ')}. Estado que pede mais que a placa responde "Não cobrimos essa UF".</div>
         ${parceiro && whatsMinhas ? `<div class="text-[11px] mt-0.5 ${ufsLiberadas.length ? 'text-emerald-700' : 'text-red-700'}">${ufsLiberadas.length
           ? `No seu WhatsApp: ${ufsLiberadas.join(', ')} (${ufsLiberadas.length} de ${Object.keys(WHATS_CRLV_UF).length})`
@@ -3027,16 +3035,17 @@ function renderWhatsappDestaque() {
       </div>
     </li>`;
   const linhas = WHATS_CONSULTAS.map(c => {
-    const p = precoDe(c.id);
+    const p = c.fixo ?? precoDe(c.id);
     return `
     <li class="flex items-center gap-2 bg-white rounded-lg border border-gray-100 px-3 py-2">
       <span class="text-lg leading-none">${c.icon}</span>
       <div class="min-w-0 flex-1">
         <div class="text-sm font-semibold text-gray-800">${c.nome}</div>
         ${c.gratis ? `<div class="text-[11px] font-semibold text-green-600">Grátis pelo WhatsApp</div>`
+          : c.fixo ? `<div class="text-[11px] text-gray-500">Preço no WhatsApp: ${fmtPrice(p)}</div>`
           : p != null ? `<div class="text-[11px] text-gray-500">${parceiro && naPagina(c.id) ? 'Seu preço' : 'Preço do site'}: ${fmtPrice(p)}</div>` : ''}
       </div>
-      ${selo(naPagina(c.id))}
+      ${c.fixo ? '' : selo(naPagina(c.id))}
     </li>`;
   }).join('');
 
@@ -3074,8 +3083,8 @@ function renderWhatsappDestaque() {
       <summary class="cursor-pointer select-none bg-gradient-to-r from-red-600 via-red-500 to-orange-500 text-white px-4 py-3 rounded-t-lg flex items-center gap-3">
         <span class="text-2xl animate-pulse flex-shrink-0">🛑</span>
         <span class="min-w-0 flex-1">
-          <span class="block font-extrabold tracking-wide text-sm sm:text-base">ATENÇÃO, MUITA ATENÇÃO PARCEIROS — UMA NOVA! CLIQUE E LEIA</span>
-          <span class="block text-xs text-red-50">Seu cliente agora consulta pelo WhatsApp: sem formulário, sem site, sem senha.</span>
+          <span class="block font-extrabold tracking-wide text-sm sm:text-base">${parceiro ? 'ATENÇÃO, MUITA ATENÇÃO PARCEIROS — UMA NOVA! CLIQUE E LEIA' : 'NOVIDADE — AGORA VOCÊ CONSULTA PELO WHATSAPP! CLIQUE E LEIA'}</span>
+          <span class="block text-xs text-red-50">${parceiro ? 'Seu cliente agora consulta pelo WhatsApp: sem formulário, sem site, sem senha.' : 'Mande @consultar, escolha a consulta, informe a placa, pague o PIX e receba o PDF na conversa.'}</span>
         </span>
         <span class="wz-abrir bg-white text-red-600 text-xs font-bold px-3 py-1.5 rounded-lg flex-shrink-0">Abrir ▾</span>
         <span class="wz-fechar bg-white text-red-600 text-xs font-bold px-3 py-1.5 rounded-lg flex-shrink-0">Fechar ▴</span>
@@ -3086,14 +3095,18 @@ function renderWhatsappDestaque() {
           <div class="lg:col-span-3 space-y-4">
             <div>
               <div class="text-lg font-extrabold text-gray-800 leading-tight">📲 A consulta que cabe numa conversa de WhatsApp</div>
-              <p class="text-sm text-gray-700 mt-1">
+              ${parceiro ? `<p class="text-sm text-gray-700 mt-1">
                 Isto <b>não é para despachante</b>. É para o <b>SEU cliente</b>: o dono do carro, o vendedor da loja, a pessoa que
                 manda áudio de cinco minutos sem pensar duas vezes, mas trava na hora de achar o campo "Renavam" num formulário.
                 Para ele, consultar vira conversa: <b>manda @consultar, escolhe um número, manda a placa, paga o PIX e recebe o PDF</b>.
-              </p>
+              </p>` : `<p class="text-sm text-gray-700 mt-1">
+                Está na rua, sem o computador? Agora <b>todo usuário da plataforma</b> consulta pelo WhatsApp:
+                <b>mande @consultar, escolha um número, mande a placa, pague o PIX e receba o PDF</b> na mesma conversa.
+                Sem formulário e sem precisar entrar no painel.
+              </p>`}
             </div>
 
-            <div class="bg-amber-50 border-l-4 border-amber-500 rounded-r-lg p-3">
+            <div class="bg-amber-50 border-l-4 border-amber-500 rounded-r-lg p-3 ${parceiro ? '' : 'hidden'}">
               <div class="font-bold text-amber-900 text-sm">⚠️ Sem preço marcado, não aparece</div>
               <p class="text-xs text-amber-900 mt-0.5">
                 O menu do WhatsApp do seu cliente mostra <b>só as consultas que você marcou e precificou</b> em
@@ -3102,18 +3115,21 @@ function renderWhatsappDestaque() {
             </div>
 
             <div>
-              <div class="font-bold text-gray-800 text-sm mb-2">🧾 Consultas que entram no WhatsApp</div>
+              <div class="font-bold text-gray-800 text-sm mb-2">🧾 ${parceiro ? 'Consultas que entram no WhatsApp' : 'O que dá para consultar pelo WhatsApp'}</div>
               <ul class="space-y-1.5">${linhaCrlv}${linhas}</ul>
             </div>
 
             <div class="grid sm:grid-cols-2 gap-3">
-              <div class="bg-white border border-gray-200 rounded-lg p-3">
+              ${parceiro ? `<div class="bg-white border border-gray-200 rounded-lg p-3">
                 <div class="font-bold text-gray-800 text-sm">👤 Crie a conta por ele</div>
                 <p class="text-xs text-gray-600 mt-0.5">Em <b>Meus Clientes</b> você cadastra o cliente com o <b>WhatsApp dele</b>. É por esse número que o robô o reconhece; ele nem precisa saber que existe senha.</p>
-              </div>
+              </div>` : `<div class="bg-white border border-gray-200 rounded-lg p-3">
+                <div class="font-bold text-gray-800 text-sm">📱 Do WhatsApp do seu cadastro</div>
+                <p class="text-xs text-gray-600 mt-0.5">O robô reconhece você pelo <b>número que está no seu Perfil</b>. Se ele não responder com o menu, confira o WhatsApp do cadastro. O PDF também fica no <b>Histórico</b> do painel.</p>
+              </div>`}
               <div class="bg-white border border-gray-200 rounded-lg p-3">
                 <div class="font-bold text-gray-800 text-sm">💳 Pago na hora, no PIX</div>
-                <p class="text-xs text-gray-600 mt-0.5">Cada consulta gera seu QR Code e copia e cola. <b>Não usa saldo.</b> Se não sair, o PIX volta sozinho. Seu ganho (preço − custo) entra como nas consultas do site.</p>
+                <p class="text-xs text-gray-600 mt-0.5">Cada consulta gera seu QR Code e copia e cola. <b>Não usa saldo.</b> Se não sair, o PIX volta sozinho.${parceiro ? ' Seu ganho (preço − custo) entra como nas consultas do site.' : ''}</p>
               </div>
             </div>
 
@@ -3123,10 +3139,10 @@ function renderWhatsappDestaque() {
                 <a href="/painel/revendedor#clients" class="bg-white border border-red-300 text-red-700 hover:bg-red-50 text-sm font-semibold px-4 py-2 rounded-lg">👤 Cadastrar meus clientes</a>
                 <a href="https://wa.me/${WHATS_NUMERO}?text=%40consultar" target="_blank" rel="noopener" class="bg-[#25D366] hover:bg-[#1ebe5b] text-white text-sm font-semibold px-4 py-2 rounded-lg">💬 Testar agora (@consultar)</a>`
               : `
-                <button type="button" onclick="abrirSejaRevendedor()" class="bg-red-600 hover:bg-red-700 text-white text-sm font-bold px-4 py-2 rounded-lg">🤝 Quero ser parceiro e oferecer isso</button>
-                <span class="text-xs text-gray-500 self-center">Disponível só para parceiros e os clientes deles.</span>`}
+                <a href="https://wa.me/${WHATS_NUMERO}?text=%40consultar" target="_blank" rel="noopener" class="bg-[#25D366] hover:bg-[#1ebe5b] text-white text-sm font-bold px-4 py-2 rounded-lg">💬 Consultar agora (@consultar)</a>
+                <button type="button" onclick="abrirSejaRevendedor()" class="bg-white border border-red-300 text-red-700 hover:bg-red-50 text-sm font-semibold px-4 py-2 rounded-lg">🤝 Quero ser parceiro e oferecer isso aos meus clientes</button>`}
             </div>
-            <p class="text-[11px] text-gray-500">O número é o <b>(22) 99995-1574</b>. Você, parceiro, também consulta por lá: mande <b>@consultar</b> do WhatsApp do seu cadastro.</p>
+            <p class="text-[11px] text-gray-500">O número é o <b>(22) 99995-1574</b>. ${parceiro ? 'Você, parceiro, também consulta por lá: mande' : 'Mande'} <b>@consultar</b> do WhatsApp do seu cadastro.</p>
           </div>
 
           <div class="lg:col-span-2">
@@ -3137,7 +3153,7 @@ function renderWhatsappDestaque() {
               </div>
               <div class="bg-[#efeae2] p-2 space-y-1.5" style="min-height:360px">${conversa}</div>
             </div>
-            <p class="text-center text-[11px] text-gray-500 mt-2">É isso que o seu cliente vê. Nada mais.</p>
+            <p class="text-center text-[11px] text-gray-500 mt-2">${parceiro ? 'É isso que o seu cliente vê. Nada mais.' : 'É assim a conversa. Nada mais.'}</p>
           </div>
         </div>
       </div>

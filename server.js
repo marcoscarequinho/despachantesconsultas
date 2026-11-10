@@ -16929,11 +16929,13 @@ app.post('/api/admin/vistocar-webhook', requireAuth, requireSuperAdmin, async (r
 });
 
 // ── Consultas pelo WhatsApp (@consultar) ─────────────────────────────────────
-// Pedido do dono (08/11/2026): parceiros e clientes de parceiro mandam
-// "@consultar" para o WhatsApp da plataforma (a instância Z-API de sempre) e
-// recebem um menu numerado; o PDF volta na mesma conversa. Usuário comum da
-// plataforma não tem acesso: a mensagem dele não abre nada (o número continua
-// sendo o do suporte). A pessoa é achada pelo telefone do cadastro
+// Pedido do dono (08/11/2026): o usuário manda "@consultar" para o WhatsApp da
+// plataforma (a instância Z-API de sempre) e recebe um menu numerado; o PDF
+// volta na mesma conversa. Nasceu só para parceiros e clientes de parceiro;
+// desde 10/11/2026 vale para TODA conta ativa (dono: "todos os usuários sem
+// exceção") — o usuário comum paga o preço da plataforma. Fora de uma conversa
+// do robô ele segue calado (o número continua sendo o do suporte). A pessoa é
+// achada pelo telefone do cadastro
 // (chaveTelefone: DDD + 8 últimos dígitos, com ou sem o 9).
 // A consulta roda pelo MESMO processCatalogQuery do painel — validação, preço do
 // parceiro, trava de repetida, cobrança só com resultado e o filtro do cliente
@@ -17030,14 +17032,14 @@ async function garantirWebhookRecebidasZapi() {
   zapiRecebidasConferido = true;
 }
 
-// Conta que pode usar o @consultar a partir do telefone de quem escreveu:
-// parceiro ativo ou cliente de parceiro ativo. { user } | { erro } | null.
+// Conta que usa o @consultar a partir do telefone de quem escreveu: qualquer
+// conta ativa da plataforma (dono, 10/11/2026: "todos os usuários sem exceção";
+// de 08 a 10/11/2026 era só parceiro e cliente de parceiro).
+// { user } | { erro } | null (número sem cadastro).
 async function contaBotWhats(chave) {
   const r = await pool.query(
     `SELECT u.id, u.name, u.email, u.role, u.phone FROM users u
-       LEFT JOIN users p ON p.id = u.revendedor_id AND p.role = 'reseller' AND p.active = true
-      WHERE u.active = true AND right(regexp_replace(COALESCE(u.phone,''),'[^0-9]','','g'), 8) = $1
-        AND (u.role = 'reseller' OR p.id IS NOT NULL)`, [chave.slice(-8)]
+      WHERE u.active = true AND right(regexp_replace(COALESCE(u.phone,''),'[^0-9]','','g'), 8) = $1`, [chave.slice(-8)]
   );
   const contas = r.rows.filter(u => chaveTelefone(u.phone) === chave);
   if (!contas.length) return null;
@@ -17370,7 +17372,14 @@ async function processarMensagemBot(phone, texto) {
   if (!gatilho && !sessao) return;
 
   const conta = await contaBotWhats(chave);
-  if (!conta) { if (sessao) await encerrarSessaoBot(chave); return; }   // usuário comum: nada abre
+  if (!conta) {
+    // Número sem cadastro: o @consultar explica o motivo em vez de ficar mudo
+    // (o caso comum é o WhatsApp errado ou em branco no Perfil).
+    if (sessao) await encerrarSessaoBot(chave);
+    if (gatilho) await sendWhatsApp(phone, 'Não encontrei uma conta com este número de WhatsApp.\n\n' +
+      `Se você já tem cadastro, entre no painel e confira o WhatsApp em *Perfil*. Se ainda não tem, cadastre-se em ${WEBHOOK_BASE_URL || 'https://www.despachantesconsultas.com.br'}/cadastrar e depois mande *@consultar* de novo.`);
+    return;
+  }
   if (conta.erro) return sendWhatsApp(phone, conta.erro);
   const user = conta.user;
   const liberadas = await consultasLiberadasClienteParceiro(user.id);
