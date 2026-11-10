@@ -16959,6 +16959,9 @@ const BOT_WHATS_MENU = [
   { id: 'comunicado-venda-placa', rotulo: '📝 Consulta do Comunicação de Venda' },
   { id: 'crlv-rj-reemissao-2', rotulo: '🔑 📄 CRLV 2 Rio Reemissão' },
   { id: 'dcr-reemissao-atpve', rotulo: '📝 Reemissão ATPV-e (PDF)' },
+  // Dono, 10/11/2026. Só a placa; com os dois fornecedores fora a recusa leva
+  // ~5 min (60 s da Consultas Fácil + ~230 s da despbrasil) e o PIX é devolvido.
+  { id: 'consultar-Numero-ATPVE', rotulo: '🔢 Reemissão da ATPVe Com Comunicação de Venda' },
   { id: 'dcr-pacote-completa-top', rotulo: '🚘 Pacote Veicular Completa TOP' },
   { id: 'consulta-debitos-portal', rotulo: '💳 Consulta de Débitos' },
   { id: 'debitos-estado-whats', rotulo: '🏛️ Débitos por Estado (só a placa)' },
@@ -17381,7 +17384,11 @@ async function processarMensagemBot(phone, texto) {
       return sendWhatsApp(phone, 'Informe a *UF* do veículo (ex.: RJ, SP, BA):');
     }
     await salvarSessaoBot(chave, user.id, 'placa', { serviceId: id });
-    return sendWhatsApp(phone, 'Informe a *placa* do veículo (ex.: ABC1D23):');
+    // Aviso que no painel é termo de aceite (noteStyle 'danger', ex.: o QR Code
+    // da Reemissão da ATPVe não faz leitura) vai antes do pedido da placa.
+    const termo = SERVICES.find(x => x.id === id);
+    const aviso = termo?.noteStyle === 'danger' && termo.slowNote ? `⚠️ ${termo.slowNote}\n\n` : '';
+    return sendWhatsApp(phone, `${aviso}Informe a *placa* do veículo (ex.: ABC1D23):`);
   }
 
   if (sessao.etapa === 'crlv_uf') {
