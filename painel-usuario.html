@@ -8765,43 +8765,93 @@ init();
 </style>
 
 
-<!-- ── POPUP NOVIDADE: REEMISSÃO CRLV RJ ───────────────────────────────────── -->
-<div id="popup-crlv-reemissao" class="fixed inset-0 z-[9999]" style="background:rgba(0,0,0,.6);backdrop-filter:blur(4px);">
-  <div class="w-full h-full overflow-y-auto flex items-start justify-center p-4" style="-webkit-overflow-scrolling:touch;overscroll-behavior:contain;">
-  <div class="relative w-full max-w-md rounded-2xl overflow-hidden shadow-2xl my-8" style="animation:popInCrlvReemissao .4s cubic-bezier(.175,.885,.32,1.275) both;">
-    <div class="absolute inset-0" style="background:linear-gradient(135deg,#0f172a 0%,#1e3a5f 50%,#0f4c75 100%);"></div>
-    <div class="absolute top-0 left-0 w-full h-1.5" style="background:linear-gradient(90deg,#f97316,#facc15,#22d3ee,#a855f7,#f97316);"></div>
-    <div class="relative p-6 text-center space-y-4">
-      <div class="flex justify-center">
-        <div class="w-20 h-20 rounded-full flex items-center justify-center text-4xl shadow-lg"
-             style="background:linear-gradient(135deg,#f97316,#facc15);animation:pulseCrlvReemissao 2s infinite;">🆕</div>
+<!-- ── POPUP NOVIDADE: CONSULTAS PELO WHATSAPP (@consultar) ────────────────── -->
+<!-- Trocou o da Reemissão do CRLV RJ em 10/11/2026 (pedido do dono), quando o
+     @consultar passou a valer para todos os usuários. Aparece a cada entrada no
+     painel, para todo mundo — por isso não cita preço (o do cliente de parceiro
+     é outro) nem o nome da plataforma. A lista espelha o BOT_WHATS_MENU do
+     servidor: se mudar lá, muda aqui. -->
+<div id="popup-novidade-whats" class="fixed inset-0 z-[9999]" style="background:rgba(2,12,10,.72);backdrop-filter:blur(5px);">
+  <div class="w-full h-full overflow-y-auto flex items-start justify-center p-3 sm:p-4" style="-webkit-overflow-scrolling:touch;overscroll-behavior:contain;">
+  <div class="pw-card relative w-full max-w-lg md:max-w-3xl rounded-3xl overflow-hidden shadow-2xl my-4 sm:my-6">
+    <div class="pw-fundo absolute inset-0"></div>
+    <div class="pw-brilho absolute -top-24 -right-20 w-64 h-64 rounded-full"></div>
+    <div class="pw-brilho pw-brilho-2 absolute -bottom-24 -left-20 w-64 h-64 rounded-full"></div>
+    <div class="pw-fita absolute top-0 left-0 w-full h-1.5"></div>
+    <button onclick="fecharPopupNovidade()" aria-label="Fechar"
+      class="absolute top-3 right-3 z-10 w-8 h-8 rounded-full text-white/70 hover:text-white hover:bg-white/10 text-lg leading-none">✕</button>
+
+    <div class="relative p-5 sm:p-6 space-y-4">
+      <div class="text-center">
+        <div class="flex justify-center mb-3">
+          <div class="pw-icone w-16 h-16 rounded-full flex items-center justify-center text-3xl">💬</div>
+        </div>
+        <div class="text-[11px] font-bold tracking-widest uppercase" style="color:#fde047;">✨ Novidade na plataforma</div>
+        <h2 class="text-2xl sm:text-3xl font-black text-white leading-tight mt-1">Consulte pelo <span class="pw-degrade">WhatsApp</span></h2>
+        <div class="text-sm font-semibold mt-1" style="color:#a7f3d0;">A consulta que cabe numa conversa: sem formulário, sem abrir o painel.</div>
+        <div class="pw-todos inline-flex items-center gap-1.5 mt-3 px-3.5 py-1.5 rounded-full text-xs sm:text-sm font-extrabold">
+          🎉 Para TODOS os usuários da plataforma
+        </div>
       </div>
+
+      <!-- Em tela larga a conversa fica ao lado do resto, para o botão caber
+           sem rolar; no celular vira uma coluna só. -->
+      <div class="grid md:grid-cols-2 gap-4 items-start">
+      <!-- Conversa de exemplo: as bolhas entram uma a uma. -->
+      <div class="rounded-2xl overflow-hidden" style="border:1px solid rgba(255,255,255,.14);">
+        <div class="px-3 py-2 flex items-center gap-2" style="background:#075e54;">
+          <span class="w-7 h-7 rounded-full flex items-center justify-center text-sm" style="background:rgba(255,255,255,.2);">🚗</span>
+          <div class="leading-tight"><div class="text-xs font-bold text-white">Consultas · (22) 99995-1574</div><div class="text-[10px]" style="color:#bbf7d0;">online</div></div>
+        </div>
+        <div class="pw-conversa p-2.5 space-y-1.5" style="background:#e9e2d6;">
+          <div class="pw-msg flex justify-end" style="animation-delay:.7s"><div class="pw-eu">@consultar</div></div>
+          <div class="pw-msg flex justify-start" style="animation-delay:1.5s"><div class="pw-bot"><b>Consultas pelo WhatsApp</b><br>1 - 📄 CRLV-e (UF e placa)<br>2 - 🗺️ Base Nacional<br>3 - 📝 Comunicação de Venda …</div></div>
+          <div class="pw-msg flex justify-end" style="animation-delay:2.4s"><div class="pw-eu">2</div></div>
+          <div class="pw-msg flex justify-start" style="animation-delay:3.0s"><div class="pw-bot">Informe a <b>placa</b>:</div></div>
+          <div class="pw-msg flex justify-end" style="animation-delay:3.7s"><div class="pw-eu">ABC1D23</div></div>
+          <div class="pw-msg flex justify-start" style="animation-delay:4.4s"><div class="pw-bot">🔳 <b>PIX</b> da consulta — QR Code e copia e cola</div></div>
+          <div class="pw-msg flex justify-start" style="animation-delay:5.3s"><div class="pw-bot">📎 <b>base-nacional-ABC1D23.pdf</b><br>✅ Pronto!</div></div>
+        </div>
+      </div>
+
+      <div class="space-y-3">
+      <div class="grid grid-cols-4 gap-2 text-center">
+        <div class="pw-passo"><div class="pw-num">1</div><div class="pw-rot">Mande<br><b>@consultar</b></div></div>
+        <div class="pw-passo" style="animation-delay:.15s"><div class="pw-num">2</div><div class="pw-rot">Escolha o<br><b>número</b></div></div>
+        <div class="pw-passo" style="animation-delay:.3s"><div class="pw-num">3</div><div class="pw-rot">Informe a<br><b>placa</b></div></div>
+        <div class="pw-passo" style="animation-delay:.45s"><div class="pw-num">4</div><div class="pw-rot">Pague o PIX,<br><b>receba o PDF</b></div></div>
+      </div>
+
       <div>
-        <div class="text-xs font-bold tracking-widest uppercase mb-1" style="color:#facc15;">✨ Novidade na Plataforma</div>
-        <h2 class="text-2xl font-black text-white leading-tight">Reemissão do<br>CRLV RJ</h2>
-        <div class="text-sm font-semibold mt-1" style="color:#7dd3fc;">Integração via API, com saída em segundos</div>
+        <div class="text-[11px] font-bold uppercase tracking-wider mb-1.5" style="color:#fde047;">🧾 O que dá para consultar</div>
+        <div class="flex flex-wrap gap-1.5">
+          <span class="pw-chip">📄 CRLV-e na hora (UF e placa)</span>
+          <span class="pw-chip">🗺️ Base Nacional</span>
+          <span class="pw-chip">📝 Comunicação de Venda</span>
+          <span class="pw-chip">🔑 CRLV 2 Rio Reemissão</span>
+          <span class="pw-chip">📝 Reemissão ATPV-e (PDF)</span>
+          <span class="pw-chip">🔢 ATPVe com Comunicação de Venda</span>
+          <span class="pw-chip">🚘 Pacote Veicular Completa TOP</span>
+          <span class="pw-chip">🏛️ Débitos por Estado (só a placa)</span>
+          <span class="pw-chip pw-chip-gratis">💳 Consulta de Débitos — GRÁTIS</span>
+        </div>
       </div>
-      <div class="rounded-xl py-3 px-4" style="background:rgba(249,115,22,.15);border:1px solid rgba(249,115,22,.4);">
-        <div class="text-4xl font-black" style="color:#fb923c;">R$ 55,00</div>
-        <div class="text-sm font-semibold mt-0.5" style="color:#fed7aa;">por consulta — CRLV-e Rio de Janeiro</div>
+
+      <div class="text-xs rounded-xl py-2.5 px-3 space-y-1" style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);color:#d1fae5;">
+        <div>💳 <b class="text-white">Pago na hora, no PIX.</b> Não usa saldo. Se a consulta não sair, o PIX volta sozinho.</div>
+        <div>📱 Mande do <b class="text-white">WhatsApp do seu cadastro</b> (confira em Perfil): é por ele que o robô reconhece você.</div>
       </div>
-      <div class="text-sm leading-relaxed text-left" style="color:#bfdbfe;">
-        <div class="flex gap-2 mb-2"><span>⚡</span><span><strong class="text-white">Saída em segundos</strong> — agilidade que seu negócio precisa.</span></div>
-        <div class="flex gap-2 mb-2"><span>🔄</span><span><strong class="text-white">Funcionamento 24h</strong> — disponível todos os dias, a qualquer hora.</span></div>
-        <div class="flex gap-2"><span>🔗</span><span><strong class="text-white">Integração via API</strong> — processo automatizado, seguro e confiável.</span></div>
       </div>
-      <div class="text-xs rounded-lg py-2 px-3 text-left" style="background:rgba(250,204,21,.1);border:1px solid rgba(250,204,21,.3);color:#fde68a;">
-        ⚠️ Não sai se o veículo tiver intenção de venda e/ou comunicação de venda.
       </div>
-      <div class="flex gap-3 pt-1">
-        <button onclick="fecharPopupCrlvReemissao()"
-          class="flex-1 py-3 rounded-xl font-bold text-sm transition-all hover:scale-105 active:scale-95"
-          style="background:linear-gradient(135deg,#f97316,#ea580c);color:white;box-shadow:0 4px 15px rgba(249,115,22,.4);">
-          📄 Entendi
-        </button>
-        <button onclick="fecharPopupCrlvReemissao()"
-          class="px-4 py-3 rounded-xl font-semibold text-sm transition-all hover:scale-105"
-          style="background:rgba(255,255,255,.1);color:#94a3b8;border:1px solid rgba(255,255,255,.15);">
+
+      <div class="flex gap-3">
+        <a href="https://wa.me/5522999951574?text=%40consultar" target="_blank" rel="noopener" onclick="fecharPopupNovidade()"
+          class="pw-cta flex-1 py-3 rounded-xl font-extrabold text-sm text-center text-white transition-transform hover:scale-105 active:scale-95">
+          💬 Consultar agora pelo WhatsApp
+        </a>
+        <button onclick="fecharPopupNovidade()"
+          class="px-4 py-3 rounded-xl font-semibold text-sm transition-transform hover:scale-105"
+          style="background:rgba(255,255,255,.1);color:#cbd5e1;border:1px solid rgba(255,255,255,.18);">
           Fechar
         </button>
       </div>
@@ -8811,13 +8861,37 @@ init();
 </div>
 
 <style>
-@keyframes popInCrlvReemissao {
-  from { opacity:0; transform:scale(.7) translateY(30px); }
-  to   { opacity:1; transform:scale(1) translateY(0); }
-}
-@keyframes pulseCrlvReemissao {
-  0%,100% { box-shadow:0 0 0 0 rgba(249,115,22,.4); }
-  50%      { box-shadow:0 0 0 12px rgba(249,115,22,0); }
+#popup-novidade-whats .pw-card { animation: pwEntra .5s cubic-bezier(.175,.885,.32,1.275) both; }
+#popup-novidade-whats .pw-fundo { background: linear-gradient(135deg,#022c22,#065f46,#0e7490,#4c1d95,#065f46); background-size: 300% 300%; animation: pwFundo 12s ease infinite; }
+#popup-novidade-whats .pw-brilho { background: radial-gradient(circle, rgba(37,211,102,.45), transparent 65%); animation: pwFlutua 7s ease-in-out infinite; pointer-events: none; }
+#popup-novidade-whats .pw-brilho-2 { background: radial-gradient(circle, rgba(250,204,21,.28), transparent 65%); animation-delay: -3.5s; }
+#popup-novidade-whats .pw-fita { background: linear-gradient(90deg,#25d366,#fde047,#22d3ee,#a855f7,#f97316,#25d366); background-size: 200% 100%; animation: pwFita 3s linear infinite; }
+#popup-novidade-whats .pw-icone { background: linear-gradient(135deg,#25d366,#128c7e); animation: pwPulso 1.8s ease-out infinite, pwBalanca 2.4s ease-in-out infinite; }
+#popup-novidade-whats .pw-degrade { background: linear-gradient(90deg,#4ade80,#fde047,#4ade80); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: pwFita 3s linear infinite; }
+#popup-novidade-whats .pw-todos { color: #052e16; background: linear-gradient(90deg,#fde047,#facc15,#fde047); background-size: 200% 100%; box-shadow: 0 4px 18px rgba(250,204,21,.45); animation: pwFita 2.5s linear infinite, pwBate 1.6s ease-in-out infinite; }
+#popup-novidade-whats .pw-msg { opacity: 0; animation: pwMsg .4s ease-out forwards; }
+#popup-novidade-whats .pw-eu, #popup-novidade-whats .pw-bot { font-size: 12px; line-height: 1.35; color: #1f2937; border-radius: 10px; padding: 5px 10px; max-width: 85%; box-shadow: 0 1px 1px rgba(0,0,0,.12); text-align: left; }
+#popup-novidade-whats .pw-eu { background: #d9fdd3; }
+#popup-novidade-whats .pw-bot { background: #fff; }
+#popup-novidade-whats .pw-passo { opacity: 0; animation: pwMsg .45s ease-out forwards; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.16); border-radius: 12px; padding: 8px 4px; }
+#popup-novidade-whats .pw-num { width: 24px; height: 24px; margin: 0 auto 4px; border-radius: 999px; background: #25d366; color: #052e16; font-weight: 900; font-size: 13px; line-height: 24px; }
+#popup-novidade-whats .pw-rot { font-size: 11px; line-height: 1.25; color: #d1fae5; }
+#popup-novidade-whats .pw-rot b { color: #fff; }
+#popup-novidade-whats .pw-chip { font-size: 11px; font-weight: 600; color: #ecfdf5; background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.2); border-radius: 999px; padding: 3px 9px; }
+#popup-novidade-whats .pw-chip-gratis { color: #052e16; background: #4ade80; border-color: #4ade80; font-weight: 800; }
+#popup-novidade-whats .pw-cta { background: linear-gradient(135deg,#25d366,#128c7e); box-shadow: 0 6px 20px rgba(37,211,102,.5); animation: pwPulso 1.8s ease-out infinite; }
+@keyframes pwEntra { from { opacity: 0; transform: scale(.75) translateY(30px); } to { opacity: 1; transform: none; } }
+@keyframes pwFundo { 0%,100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+@keyframes pwFita { from { background-position: 0% 0; } to { background-position: 200% 0; } }
+@keyframes pwFlutua { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(-18px,22px) scale(1.15); } }
+@keyframes pwPulso { 0% { box-shadow: 0 0 0 0 rgba(37,211,102,.6); } 100% { box-shadow: 0 0 0 16px rgba(37,211,102,0); } }
+@keyframes pwBalanca { 0%,100% { transform: rotate(0); } 20% { transform: rotate(-10deg); } 40% { transform: rotate(8deg); } 60% { transform: rotate(-4deg); } 80% { transform: rotate(0); } }
+@keyframes pwBate { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+@keyframes pwMsg { from { opacity: 0; transform: translateY(8px) scale(.96); } to { opacity: 1; transform: none; } }
+/* Quem pediu menos movimento recebe o popup inteiro, só que parado. */
+@media (prefers-reduced-motion: reduce) {
+  #popup-novidade-whats *, #popup-novidade-whats .pw-card { animation: none !important; }
+  #popup-novidade-whats .pw-msg, #popup-novidade-whats .pw-passo { opacity: 1; }
 }
 </style>
 
@@ -8843,8 +8917,8 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') fecharAtpveInstrucoes();
 });
 
-function fecharPopupCrlvReemissao() {
-  const el = document.getElementById('popup-crlv-reemissao');
+function fecharPopupNovidade() {
+  const el = document.getElementById('popup-novidade-whats');
   if (!el) return;
   el.style.transition = 'opacity .3s,transform .3s';
   el.style.opacity = '0';
