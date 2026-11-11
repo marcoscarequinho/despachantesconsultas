@@ -16962,6 +16962,33 @@ const BOT_WHATS_CRLV_UF = {
   RJ: ['consultar-crlv-rj'], RO: ['dcr-crlv-ro'], RS: ['dc-crlve-rs-v2'], SE: ['dcr-crlv-se'],
   SP: ['crlv-sp-v2', 'consultar-crlv-sp', 'dd-crlv-sp'],
 };
+// CRLV-e que sai na hora mas pede mais que a placa (dono, 10/11/2026): a UF
+// que não tem opção só com a placa acima cai aqui. O cliente informa só a
+// placa; depois do PIX a Proprietário Atual (v2) do portal acha o renavam e o
+// CPF/CNPJ (dadosVeiculoPorPlaca) e a consulta roda como no painel. O preço é o
+// da consulta + BOT_CRLV_ACRESCIMO, o valor da Proprietário Atual (v2) no
+// catálogo (R$ 7,50 + 40%). Primeiro a opção que pede só o renavam; a do
+// portal (renavam + CPF/CNPJ) é a reserva.
+const BOT_WHATS_CRLV_UF_DADOS = {
+  AC: ['consultar-crlv-ac'], AP: ['dcr-crlv-ap', 'consultar-crlv-ap'], ES: ['dcr-crlv-ag-es'],
+  GO: ['consultar-crlv-go'], MA: ['dcr-crlv-ma', 'consultar-crlv-ma'], MG: ['dcr-crlv-mg', 'consultar-crlv-mg'],
+  MS: ['consultar-crlv-ms'], MT: ['consultar-crlv-mt'], PA: ['dcr-crlv-pa'], PI: ['consultar-crlv-pi'],
+  PR: ['consultar-crlv-pr'], RO: ['consultar-crlv-ro'], SE: ['consultar-crlv-se'],
+  TO: ['dcr-crlv-to', 'consultar-crlv-to'],
+};
+const BOT_CRLV_ACRESCIMO = 10.50;
+const BOT_CRLV_ACRESCIMO_NOME = 'Proprietário Atual (v2)';
+// { s, dados } do CRLV-e da UF para esta conta: só placa primeiro; senão o que
+// pede dados a mais (dados: true → soma o acréscimo e busca renavam/documento).
+function crlvBotDaUf(uf, liberadas) {
+  const so = (BOT_WHATS_CRLV_UF[uf] || []).map(id => servicoBotWhats(id, liberadas)).find(x => x?.inputType === 'placa');
+  if (so) return { s: so, dados: false };
+  const mais = (BOT_WHATS_CRLV_UF_DADOS[uf] || []).map(id => servicoBotWhats(id, liberadas)).find(x => x && x.inputType !== 'placa');
+  return mais ? { s: mais, dados: true } : null;
+}
+// UFs em que esta conta consegue o CRLV-e pelo WhatsApp, em ordem alfabética.
+const ufsCrlvBot = liberadas => [...new Set([...Object.keys(BOT_WHATS_CRLV_UF), ...Object.keys(BOT_WHATS_CRLV_UF_DADOS)])]
+  .filter(uf => crlvBotDaUf(uf, liberadas)).sort();
 const BOT_WHATS_MENU = [
   { id: 'crlv', rotulo: '📄 CRLV-e (emissão na hora — informe UF e placa)' },
   { id: 'base-nacional', rotulo: '🗺️ Base Nacional' },
@@ -17070,7 +17097,7 @@ async function menuBotWhats(user, liberadas) {
   const opcoes = [];
   for (const m of BOT_WHATS_MENU) {
     if (m.id === 'crlv') {
-      const algum = Object.values(BOT_WHATS_CRLV_UF).some(ids => ids.some(id => servicoBotWhats(id, liberadas)?.inputType === 'placa'));
+      const algum = [...Object.keys(BOT_WHATS_CRLV_UF), ...Object.keys(BOT_WHATS_CRLV_UF_DADOS)].some(uf => crlvBotDaUf(uf, liberadas));
       if (algum) opcoes.push({ ...m, texto: m.rotulo });
       continue;
     }
@@ -17107,7 +17134,11 @@ async function enviarMenuBot(phone, chave, user, liberadas) {
 // Pago mesmo sem webhook cadastrado no app; o cron pix-reconcile é a reserva.
 async function gerarPixBot(phone, chave, user, serviceId, params) {
   const s = serviceId === BOT_DEBITOS_ID ? { name: BOT_DEBITOS_NOME } : SERVICES.find(x => x.id === serviceId);
-  const valor = serviceId === BOT_DEBITOS_ID ? BOT_DEBITOS_PRECO : await getUserServicePrice(user.id, s);
+  // completarDados (UF): CRLV-e que pede renavam/documento — soma o valor da
+  // Proprietário Atual (v2), que é quem acha esses dados depois do pagamento.
+  const acrescimo = params.completarDados ? BOT_CRLV_ACRESCIMO : 0;
+  const base = serviceId === BOT_DEBITOS_ID ? BOT_DEBITOS_PRECO : await getUserServicePrice(user.id, s);
+  const valor = base > 0 ? Math.round((base + acrescimo) * 100) / 100 : base;
   await encerrarSessaoBot(chave);
   if (!(valor > 0)) return sendWhatsApp(phone, 'Esta consulta não está disponível pelo WhatsApp. Digite *@consultar* para ver o menu.');
   let payment;
@@ -17130,19 +17161,20 @@ async function gerarPixBot(phone, chave, user, serviceId, params) {
     `INSERT INTO whatsapp_pedidos (user_id, phone, service_id, params, valor, gateway_id) VALUES ($1,$2,$3,$4,$5,$6)`,
     [user.id, phone, serviceId, JSON.stringify(params), valor, String(payment.id)]
   );
-  const legenda = `💳 *${s.name}*\n🔎 Placa ${params.placa}\n💰 *${fmtMoneyBRL(valor)}*\n\n` +
+  const legenda = `💳 *${s.name}*\n🔎 Placa ${params.placa}\n💰 *${fmtMoneyBRL(valor)}*${acrescimo ? ` (${fmtMoneyBRL(base)} + ${fmtMoneyBRL(acrescimo)} da ${BOT_CRLV_ACRESCIMO_NOME})` : ''}\n\n` +
     `Pague com o QR Code ou com o *PIX copia e cola* da próxima mensagem. Assim que o pagamento cair, a consulta roda e o PDF chega aqui. Se não sair, o PIX é devolvido.`;
   if (tx.qr_code_base64) await sendWhatsAppImage(phone, tx.qr_code_base64, legenda);
   else await sendWhatsApp(phone, legenda);
   return sendWhatsApp(phone, tx.qr_code);
 }
 
-// Dados que o dc-debito da UF pede, a partir só da placa: Proprietário Atual
+// Dados que o dc-debito da UF (e o CRLV-e que pede mais que a placa) usa, a
+// partir só da placa: Proprietário Atual
 // (v2) do portal (pedido do dono) e, se ela falhar ou vier sem renavam, a
 // Proprietário Atual da Datacube, que traz UF, renavam, chassi e CPF/CNPJ em
 // ~3 s (o portal passou de 2 min sem responder no dia da entrada, 09/11/2026).
 // { serviceId, params } | { erro }. Nada aqui é logado com documento inteiro.
-async function dadosDebitoPorPlaca(placa) {
+async function dadosVeiculoPorPlaca(placa) {
   const so = v => String(v ?? '').trim();
   try {
     const f = await fetchProprietarioAtualV2Fields(placa);
@@ -17154,9 +17186,9 @@ async function dadosDebitoPorPlaca(placa) {
       chassi: so(f[k(/chassi/)]).toUpperCase().replace(/\s/g, ''),
     };
     if (/^[A-Z]{2}$/.test(d.uf) && d.renavam.length >= 9) return d;
-    console.error(`[@consultar débitos] Proprietário Atual (v2) sem UF/renavam (placa ${placa}), campos: ${Object.keys(f).join(',')}`);
+    console.error(`[@consultar dados] Proprietário Atual (v2) sem UF/renavam (placa ${placa}), campos: ${Object.keys(f).join(',')}`);
   } catch (e) {
-    console.error(`[@consultar débitos] Proprietário Atual (v2) falhou (placa ${placa}):`, e.message);
+    console.error(`[@consultar dados] Proprietário Atual (v2) falhou (placa ${placa}):`, e.message);
   }
   const r = await fetch(`${DATACUBE_API_URL}/veiculos/proprietario-atual`, {
     method: 'POST',
@@ -17176,7 +17208,7 @@ async function dadosDebitoPorPlaca(placa) {
 
 async function resolverDebitosBot(user, placa) {
   let d;
-  try { d = await dadosDebitoPorPlaca(placa); }
+  try { d = await dadosVeiculoPorPlaca(placa); }
   catch (e) {
     console.error(`[@consultar débitos] Datacube falhou (placa ${placa}):`, e.message);
     return { erro: 'Não consegui buscar os dados do veículo agora. Tente de novo em alguns minutos.' };
@@ -17194,6 +17226,28 @@ async function resolverDebitosBot(user, placa) {
   return { serviceId: s.id, params };
 }
 
+// CRLV-e que pede renavam (e CPF/CNPJ): monta os params do painel com o que a
+// Proprietário Atual (v2) achou. A UF do veículo tem de ser a que o cliente
+// escolheu — o preço e a rota são dela. { params } | { erro }
+async function resolverCrlvBot(s, placa, uf) {
+  let d;
+  try { d = await dadosVeiculoPorPlaca(placa); }
+  catch (e) {
+    console.error(`[@consultar crlv] dados da placa falharam (placa ${placa}):`, e.message);
+    return { erro: 'Não consegui buscar os dados do veículo agora. Tente de novo em alguns minutos.' };
+  }
+  if (d.renavam.length < 9) return { erro: 'Não encontrei o renavam dessa placa. Confira a placa e tente de novo.' };
+  if (/^[A-Z]{2}$/.test(d.uf) && d.uf !== uf)
+    return { erro: `Essa placa está registrada em ${d.uf}, não em ${uf}. Digite *@consultar* e escolha a UF ${d.uf}.` };
+  const params = { placa, renavam: d.renavam.padStart(11, '0') };
+  if (s.inputType === 'placa_renavam_cpf') {
+    if (d.documento.length !== 11 && d.documento.length !== 14)
+      return { erro: 'Não encontrei o CPF/CNPJ do proprietário dessa placa, que essa UF exige para emitir o CRLV-e.' };
+    params.cpf = d.documento;
+  }
+  return { params };
+}
+
 // Roda a consulta pelo fluxo do painel com uma resposta capturada (mesmo
 // desenho do reenvio do admin) e devolve o resultado na conversa.
 // { tipo: 'ok' | 'erro' | 'pendente', erro? }
@@ -17208,7 +17262,15 @@ async function executarConsultaBot(phone, chave, user, serviceId, params, pagoPi
     precoFixo = BOT_DEBITOS_PRECO;
   }
   const s = SERVICES.find(x => x.id === serviceId);
-  await sendWhatsApp(phone, `⏳ ${gratis || precoFixo ? '' : 'Pagamento recebido! '}Consultando *${s.name}* da placa *${params.placa}*... isso pode levar alguns minutos.`);
+  let avisado = gratis || !!precoFixo;
+  if (params.completarDados) {
+    await sendWhatsApp(phone, `⏳ Pagamento recebido! Buscando o renavam da placa *${params.placa}* para emitir o *${s.name}*...`);
+    const r = await resolverCrlvBot(s, params.placa, String(params.completarDados).toUpperCase());
+    if (r.erro) return { tipo: 'erro', erro: r.erro };
+    params = r.params;
+    avisado = true;
+  }
+  await sendWhatsApp(phone, `⏳ ${avisado ? '' : 'Pagamento recebido! '}Consultando *${s.name}* da placa *${params.placa}*... isso pode levar alguns minutos.`);
   const saida = { status: 200, json: null, pdf: null, headers: {} };
   const fake = {
     headersSent: false,
@@ -17320,6 +17382,11 @@ async function processarPagamentoWhats(gatewayId) {
     await pool.query(`UPDATE whatsapp_pedidos SET status='AGUARDANDO', query_id=$2 WHERE id=$1`, [ped.id, q.id]);
     return;
   }
+  // O acréscimo da Proprietário Atual (v2) fica em linha própria no extrato: a
+  // consulta grava o preço dela (é sobre ele que sai o ganho do parceiro).
+  if (ped.params?.completarDados && q?.transaction_id)
+    await pool.query(`INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3)`,
+      [ped.user_id, BOT_CRLV_ACRESCIMO, `Consulta: ${BOT_CRLV_ACRESCIMO_NOME} — dados da placa ${ped.params.placa} para o CRLV-e (pago por PIX no WhatsApp)`]);
   await pool.query(`UPDATE whatsapp_pedidos SET status='CONCLUIDO', query_id=$2 WHERE id=$1`, [ped.id, q?.id || null]);
 }
 
@@ -17397,7 +17464,8 @@ async function processarMensagemBot(phone, texto) {
     if (!id || String(n) !== texto) return sendWhatsApp(phone, 'Não entendi. Responda só com o *número* da consulta, ou *sair*.');
     if (id === 'crlv') {
       await salvarSessaoBot(chave, user.id, 'crlv_uf', {});
-      return sendWhatsApp(phone, 'Informe a *UF* do veículo (ex.: RJ, SP, BA):');
+      // Dono, 10/11/2026: a pergunta já diz quais CRLV-e saem, só com a sigla.
+      return sendWhatsApp(phone, `Emitimos o CRLV-e destas UFs:\n*${ufsCrlvBot(liberadas).join(', ')}*\n\nInforme a *UF* do veículo (ex.: RJ):`);
     }
     await salvarSessaoBot(chave, user.id, 'placa', { serviceId: id });
     // Aviso que no painel é termo de aceite (noteStyle 'danger', ex.: o QR Code
@@ -17410,13 +17478,17 @@ async function processarMensagemBot(phone, texto) {
   if (sessao.etapa === 'crlv_uf') {
     const uf = texto.toUpperCase().replace(/[^A-Z]/g, '');
     if (uf.length !== 2) return sendWhatsApp(phone, 'Informe só a sigla da UF, com 2 letras (ex.: RJ).');
-    const s = (BOT_WHATS_CRLV_UF[uf] || []).map(id => servicoBotWhats(id, liberadas)).find(x => x?.inputType === 'placa');
+    const op = crlvBotDaUf(uf, liberadas);
+    const s = op?.s;
     if (!s) {
       await encerrarSessaoBot(chave);
-      return sendWhatsApp(phone, `Não cobrimos essa UF (${uf}).\n\nPara voltar ao menu, digite *@consultar*.`);
+      return sendWhatsApp(phone, `Não cobrimos essa UF (${uf}).\n\nEmitimos o CRLV-e destas UFs: *${ufsCrlvBot(liberadas).join(', ')}*.\n\nPara voltar ao menu, digite *@consultar*.`);
     }
-    await salvarSessaoBot(chave, user.id, 'placa', { serviceId: s.id });
-    return sendWhatsApp(phone, `*${s.name}* — ${fmtMoneyBRL(await getUserServicePrice(user.id, s))}\n\nInforme a *placa* do veículo (ex.: ABC1D23):`);
+    const preco = await getUserServicePrice(user.id, s);
+    await salvarSessaoBot(chave, user.id, 'placa', { serviceId: s.id, ...(op.dados ? { completarDados: uf } : {}) });
+    if (op.dados) return sendWhatsApp(phone, `*${s.name}* — ${fmtMoneyBRL(preco + BOT_CRLV_ACRESCIMO)}\n` +
+      `(${fmtMoneyBRL(preco)} do CRLV-e + ${fmtMoneyBRL(BOT_CRLV_ACRESCIMO)} da ${BOT_CRLV_ACRESCIMO_NOME}, que busca o renavam e os dados que essa UF exige — você informa só a placa)\n\nInforme a *placa* do veículo (ex.: ABC1D23):`);
+    return sendWhatsApp(phone, `*${s.name}* — ${fmtMoneyBRL(preco)}\n\nInforme a *placa* do veículo (ex.: ABC1D23):`);
   }
 
   if (sessao.etapa === 'placa') {
@@ -17428,7 +17500,7 @@ async function processarMensagemBot(phone, texto) {
       if (r.tipo === 'erro') await sendWhatsApp(phone, `❌ ${r.erro}\n\nPara tentar de novo, digite *@consultar*.`);
       return;
     }
-    return gerarPixBot(phone, chave, user, d.serviceId, { placa });
+    return gerarPixBot(phone, chave, user, d.serviceId, { placa, ...(d.completarDados ? { completarDados: d.completarDados } : {}) });
   }
 
   await encerrarSessaoBot(chave);
