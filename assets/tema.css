@@ -132,6 +132,52 @@ html.dark .to-gray-100  { --tw-gradient-to: var(--t-surface-2) var(--tw-gradient
 html.dark .from-gray-50,
 html.dark .from-gray-100{ --tw-gradient-from: var(--t-surface-2) var(--tw-gradient-from-position); }
 
+/* Gradientes que COMEÇAM num tom claro (from-<cor>-50): as faixas da Visão Geral
+ * são `from-rose-50 to-white` e afins. Só o fim era remapeado, então no escuro a
+ * faixa ia de um pastel claro até o card escuro — e o título, que o tema clareia,
+ * sumia em cima do pastel (reclamação de cliente, 11/11/2026). Só o --from é
+ * trocado: o --to continua sendo o do Tailwind ou o do .to-white acima. */
+html.dark .from-red-50,
+html.dark .from-rose-50    { --tw-gradient-from: #3a2230 var(--tw-gradient-from-position); }
+html.dark .from-amber-50   { --tw-gradient-from: #3a3122 var(--tw-gradient-from-position); }
+html.dark .from-orange-50  { --tw-gradient-from: #3b2b24 var(--tw-gradient-from-position); }
+html.dark .from-green-50,
+html.dark .from-emerald-50 { --tw-gradient-from: #1c3a37 var(--tw-gradient-from-position); }
+html.dark .from-blue-50,
+html.dark .from-sky-50     { --tw-gradient-from: #1f3454 var(--tw-gradient-from-position); }
+html.dark .from-indigo-50  { --tw-gradient-from: #272c58 var(--tw-gradient-from-position); }
+html.dark .from-purple-50,
+html.dark .from-violet-50  { --tw-gradient-from: #33285a var(--tw-gradient-from-position); }
+
+/* Cores que as faixas e os selos usam e que faltavam acima (rose, sky, violet,
+ * indigo, teal, cyan, pink, fuchsia): sem isto o selo ficava pastel com texto
+ * escuro num card escuro, ou o painel inteiro ficava claro com texto claro. */
+html.dark .bg-rose-50,   html.dark .bg-pink-50     { background-color: rgba(251,113,133,.13); }
+html.dark .bg-rose-100,  html.dark .bg-rose-200    { background-color: rgba(251,113,133,.22); }
+html.dark .bg-sky-100,   html.dark .bg-sky-200     { background-color: rgba(56,189,248,.2); }
+html.dark .bg-indigo-100                           { background-color: rgba(129,140,248,.22); }
+html.dark .bg-violet-100                           { background-color: rgba(167,139,250,.22); }
+html.dark .bg-fuchsia-50                           { background-color: rgba(232,121,249,.13); }
+html.dark .bg-teal-50,   html.dark .bg-cyan-50     { background-color: rgba(45,212,191,.13); }
+html.dark .bg-teal-100,  html.dark .bg-teal-200    { background-color: rgba(45,212,191,.22); }
+
+html.dark .border-rose-200,   html.dark .border-rose-300,
+html.dark .border-pink-200                              { border-color: rgba(251,113,133,.4); }
+html.dark .border-violet-200, html.dark .border-violet-300,
+html.dark .border-fuchsia-200                           { border-color: rgba(167,139,250,.4); }
+html.dark .border-indigo-300                            { border-color: rgba(129,140,248,.45); }
+html.dark .border-emerald-100                           { border-color: rgba(74,222,128,.3); }
+html.dark .border-teal-200,   html.dark .border-cyan-200{ border-color: rgba(45,212,191,.4); }
+
+html.dark .text-rose-600,   html.dark .text-rose-700,
+html.dark .text-rose-800,   html.dark .text-rose-900    { color: #fda4af; }
+html.dark .text-sky-700                                 { color: #7dd3fc; }
+html.dark .text-indigo-700, html.dark .text-indigo-800  { color: #a5b4fc; }
+html.dark .text-violet-500, html.dark .text-violet-700,
+html.dark .text-violet-900                              { color: #c4b5fd; }
+html.dark .text-emerald-800                             { color: #6ee7a8; }
+html.dark .text-teal-700,   html.dark .text-teal-800    { color: #5eead4; }
+
 /* ── Classes próprias das páginas ─────────────────────────────────────────── */
 html.dark .card,
 html.dark .stat-card,
