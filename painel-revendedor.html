@@ -213,7 +213,19 @@
       <!-- Como funciona: preço próprio, chave PIX e página -->
       <div class="grid lg:grid-cols-2 gap-6">
         <div class="card bg-gradient-to-br from-green-50 to-white border border-green-100">
-          <h2 class="font-semibold text-gray-800 mb-2">💸 Seu ganho</h2>
+          <!-- Atalhos ao lado do título (pedido do dono, 11/11/2026): parceiro
+               não achava a própria página nem onde configurá-la. -->
+          <div class="flex flex-wrap items-stretch 2xl:items-center gap-2 mb-3">
+            <h2 class="font-semibold text-gray-800 w-full 2xl:w-auto 2xl:mr-auto">💸 Seu ganho</h2>
+            <a id="btn-entrar-pagina" href="#" target="_blank" rel="noopener" onclick="return abrirMinhaPagina(event)"
+              class="flex-1 2xl:flex-none inline-flex items-center justify-center text-center gap-1 text-xs font-bold px-3 py-2 rounded-lg bg-blue-700 hover:bg-blue-800 text-white">
+              🚪 Entrar na Página de consultas
+            </a>
+            <button type="button" onclick="abrirTutorial()"
+              class="flex-1 2xl:flex-none inline-flex items-center justify-center text-center gap-1 text-xs font-bold px-3 py-2 rounded-lg bg-orange-500 hover:bg-orange-600 text-white">
+              📘 Tutorial de como configurar sua página
+            </button>
+          </div>
           <p class="text-sm text-gray-600">
             Em <strong>Minhas Consultas e Preços</strong> você escolhe as consultas da sua página e o <strong>preço que o seu cliente paga</strong>
             (nunca abaixo do seu custo). O que passar do custo é <strong>todo seu</strong>, em cada consulta feita pelos seus clientes,
@@ -595,6 +607,87 @@
 <!-- ── TOAST ──────────────────────────────────────────────────────────── -->
 <div id="toast" class="toast hide"></div>
 
+<!-- ── MODAL: TUTORIAL DA PÁGINA DO PARCEIRO ─────────────────────────── -->
+<!-- Pouco texto e um botão por passo, de propósito: quem não lê clica. -->
+<div id="modal-tutorial" class="fixed inset-0 z-50 flex items-center justify-center p-3 hidden"
+  onclick="if(event.target===this||event.target.dataset.fundo) fecharTutorial()">
+  <div class="absolute inset-0 bg-black/60" data-fundo="1"></div>
+  <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[94vh] overflow-y-auto">
+    <div class="sticky top-0 z-10 flex items-center justify-between px-5 py-4 bg-blue-900 text-white rounded-t-2xl">
+      <div>
+        <h3 class="text-lg font-bold">📘 Sua página pronta em 3 passos</h3>
+        <p class="text-xs text-blue-200">Leva uns 5 minutos. Clique no botão de cada passo.</p>
+      </div>
+      <button onclick="fecharTutorial()" class="text-white/80 hover:text-white text-2xl font-bold leading-none" aria-label="Fechar">✕</button>
+    </div>
+
+    <div class="p-5 space-y-4 text-sm text-gray-700">
+
+      <div class="rounded-xl border-2 border-blue-100 bg-blue-50 p-4">
+        <div class="flex items-center gap-3 mb-2">
+          <span class="w-9 h-9 flex-shrink-0 rounded-full bg-blue-700 text-white font-bold flex items-center justify-center">1</span>
+          <h4 class="font-bold text-gray-800 text-base">🌐 Deixe a página com a sua cara</h4>
+        </div>
+        <ul class="space-y-1 ml-1">
+          <li>🖼️ Coloque o <strong>seu logo</strong></li>
+          <li>🏞️ Coloque a <strong>imagem do cabeçalho</strong></li>
+          <li>✏️ Mude o <strong>título</strong> e o texto</li>
+          <li>🎨 Escolha a <strong>cor</strong> da página</li>
+        </ul>
+        <button onclick="tutorialIr('pagina')" class="mt-3 w-full text-sm font-bold px-4 py-2.5 rounded-lg bg-blue-700 hover:bg-blue-800 text-white">Abrir “Minha Página” →</button>
+      </div>
+
+      <div class="rounded-xl border-2 border-green-100 bg-green-50 p-4">
+        <div class="flex items-center gap-3 mb-2">
+          <span class="w-9 h-9 flex-shrink-0 rounded-full bg-green-600 text-white font-bold flex items-center justify-center">2</span>
+          <h4 class="font-bold text-gray-800 text-base">🏷️ Escolha as consultas e o seu preço</h4>
+        </div>
+        <p>De um lado está o <strong>seu custo</strong>. Do outro você digita o <strong>preço que o seu cliente paga</strong>. A diferença é o <strong>seu lucro</strong>, em cada consulta.</p>
+        <div class="mt-3 grid grid-cols-3 gap-2 text-center">
+          <div class="bg-white rounded-lg border border-green-200 py-2">
+            <div class="text-[11px] text-gray-500 uppercase">Seu custo</div>
+            <div class="font-bold text-gray-800">R$ 9,90</div>
+          </div>
+          <div class="bg-white rounded-lg border border-green-200 py-2">
+            <div class="text-[11px] text-gray-500 uppercase">Seu preço</div>
+            <div class="font-bold text-gray-800">R$ 13,00</div>
+          </div>
+          <div class="bg-green-600 rounded-lg py-2 text-white">
+            <div class="text-[11px] uppercase">Seu lucro</div>
+            <div class="font-bold">R$ 3,10</div>
+          </div>
+        </div>
+        <p class="text-xs text-gray-500 mt-2">Exemplo com a Consulta Nacional. Faça o mesmo com as outras consultas — o lucro cai no seu PIX.</p>
+        <button onclick="tutorialIr('catalog')" class="mt-3 w-full text-sm font-bold px-4 py-2.5 rounded-lg bg-green-600 hover:bg-green-700 text-white">Abrir “Consultas e Preços” →</button>
+      </div>
+
+      <div class="rounded-xl border-2 border-purple-100 bg-purple-50 p-4">
+        <div class="flex items-center gap-3 mb-2">
+          <span class="w-9 h-9 flex-shrink-0 rounded-full bg-purple-600 text-white font-bold flex items-center justify-center">3</span>
+          <h4 class="font-bold text-gray-800 text-base">🔗 Domínio próprio <span class="text-xs font-semibold text-purple-700">(opcional)</span></h4>
+        </div>
+        <p>O site fica com o <strong>seu endereço</strong> (ex.: <em>suaempresa.com.br</em>) e <strong>sem nenhum vestígio</strong> de ligação com outra plataforma.</p>
+        <p class="mt-2">💰 <strong>R$ 200,00 por ano</strong> — já inclui o domínio, a hospedagem, a configuração das DNS e a administração do serviço.</p>
+        <p class="mt-2">👀 Veja um parceiro que já tem:
+          <a href="https://vaniadespachante.com.br/" target="_blank" rel="noopener" class="font-bold text-purple-700 underline">vaniadespachante.com.br</a>
+        </p>
+        <button onclick="tutorialIr('dominio')" class="mt-3 w-full text-sm font-bold px-4 py-2.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white">Abrir “Domínio Próprio” →</button>
+      </div>
+
+      <div class="rounded-xl border-2 border-orange-100 bg-orange-50 p-4">
+        <h4 class="font-bold text-gray-800 text-base mb-1">✅ Pronto! Agora divulgue o seu link</h4>
+        <p>Quem se cadastra pela sua página vira <strong>seu cliente</strong> e paga os <strong>seus preços</strong>.</p>
+        <div id="tutorial-link" class="mt-2 font-mono text-xs bg-white border border-orange-200 rounded-lg px-3 py-2 break-all">—</div>
+        <div class="grid grid-cols-2 gap-2 mt-3">
+          <button onclick="copiarLinkTutorial()" class="text-sm font-bold px-3 py-2.5 rounded-lg bg-white border border-orange-300 text-orange-700 hover:bg-orange-100">📋 Copiar link</button>
+          <a href="#" target="_blank" rel="noopener" onclick="return abrirMinhaPagina(event)" class="text-center text-sm font-bold px-3 py-2.5 rounded-lg bg-orange-500 hover:bg-orange-600 text-white">🚪 Ver minha página</a>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
 <!-- ── MODAL: PIX DO DOMÍNIO PRÓPRIO ─────────────────────────────────── -->
 <div id="modal-dominio-pix" class="fixed inset-0 z-50 flex items-center justify-center p-4 hidden">
   <div class="absolute inset-0 bg-black/50"></div>
@@ -880,6 +973,38 @@ async function loadStats() {
     document.getElementById('info-pix-chave').textContent = d.pix_chave || 'Fale com o suporte para cadastrar.';
     renderClientsTable();
   } catch { /* silencioso */ }
+}
+
+// ── Atalho para a página e tutorial (Visão Geral) ──────────────────────────
+// O endereço vem do /api/auth/me (parceiro.url): o domínio próprio ativo ou,
+// sem ele, /r/<slug> — o mesmo que os clientes dele usam.
+function linkMinhaPagina() {
+  const url = currentUser && currentUser.parceiro && currentUser.parceiro.url;
+  return url ? new URL(url, location.origin).href : '';
+}
+function abrirMinhaPagina(ev) {
+  const link = linkMinhaPagina();
+  if (ev) ev.preventDefault();
+  if (!link) { toast('Sua página ainda não tem endereço — fale com o suporte.', 'error'); return false; }
+  window.open(link, '_blank', 'noopener');
+  return false;
+}
+function abrirTutorial() {
+  document.getElementById('tutorial-link').textContent = linkMinhaPagina() || 'Página ainda sem endereço — fale com o suporte.';
+  document.getElementById('modal-tutorial').classList.remove('hidden');
+}
+function fecharTutorial() {
+  document.getElementById('modal-tutorial').classList.add('hidden');
+}
+function tutorialIr(secao) {
+  fecharTutorial();
+  showSection(secao);
+  window.scrollTo(0, 0);
+}
+function copiarLinkTutorial() {
+  const link = linkMinhaPagina();
+  if (!link) return;
+  navigator.clipboard.writeText(link).then(() => toast('Link copiado.'), () => toast('Não deu para copiar.', 'error'));
 }
 
 // ── Minha Página (/r/<slug>) ───────────────────────────────────────────────
