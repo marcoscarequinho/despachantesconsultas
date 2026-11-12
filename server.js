@@ -17114,7 +17114,8 @@ const ufsCrlvBot = liberadas => [...new Set([...Object.keys(BOT_WHATS_CRLV_UF), 
 const BOT_WHATS_MENU = [
   { id: 'crlv', rotulo: '📄 CRLV-e (emissão na hora — informe UF e placa)' },
   { id: 'base-nacional', rotulo: '🗺️ Base Nacional' },
-  { id: 'comunicado-venda-placa', rotulo: '📝 Consulta do Comunicação de Venda' },
+  // A v2 (R$ 8,99) no lugar da de R$ 12,00 — dono, 12/11/2026. A mesma chamada.
+  { id: 'comunicado-venda-placa-v2', rotulo: '📝 Consulta do Comunicação de Venda' },
   { id: 'crlv-rj-reemissao-2', rotulo: '🔑 📄 CRLV 2 Rio Reemissão' },
   { id: 'dcr-reemissao-atpve', rotulo: '📝 Reemissão ATPV-e (PDF)' },
   // Dono, 10/11/2026. Só a placa; com os dois fornecedores fora a recusa leva
@@ -17128,12 +17129,14 @@ const BOT_WHATS_MENU = [
 // placa + renavam (+ CPF/CNPJ em algumas, chassi na SC antiga); no WhatsApp a
 // Proprietário Atual (v2) do portal acha a UF, o renavam, o documento e o
 // chassi, e a consulta roda no dc-debito da UF com esses dados. Preço único de
-// R$ 15,00 no WhatsApp, qualquer UF (cobre a Proprietário Atual e o débito);
+// R$ 19,99 no WhatsApp, qualquer UF (R$ 15,00 até 12/11/2026 — subiu com a
+// checagem da comunicação de venda, ver compradorComunicadoVenda; cobre a
+// Proprietário Atual, o comunicado e o débito);
 // no painel nada muda. O pedido grava este id; o serviço de verdade só é
 // conhecido depois do pagamento.
 const BOT_DEBITOS_ID = 'debitos-estado-whats';
 const BOT_DEBITOS_NOME = 'Débitos por Estado';
-const BOT_DEBITOS_PRECO = 15.00;
+const BOT_DEBITOS_PRECO = 19.99;
 const servicosDebitoUf = uf => {
   const u = String(uf || '').toLowerCase();
   return u === 'sc' ? ['dc-debito-sc-v2', 'dc-debito-sc'] : [`dc-debito-${u}`];
@@ -17328,6 +17331,58 @@ async function dadosVeiculoPorPlaca(placa) {
   };
 }
 
+// CPF/CNPJ do COMPRADOR quando a placa tem comunicação de venda (dono,
+// 12/11/2026): com ela, o débito consultado com o documento do proprietário do
+// cadastro volta incompleto — o documento que vale é o da comunicação.
+// 1ª fonte: comunicado_venda da despbrasil (só placa, R$ 4,50 de custo; a
+// resposta real traz dados.ocorrencias[].documentoComprador e
+// dados.comprador.documento INTEIROS — KGU3A76, 12/11/2026). O dono pediu "a
+// Consulta do Comunicação de Venda e a v2, uma de reserva da outra", mas as
+// duas linhas do catálogo são essa MESMA chamada; a reserva de verdade é a
+// Consulta Comunicado do portal (placa + renavam, 30 s de limite).
+// { consultado, documento } — documento null = sem comunicação (vale o do
+// proprietário); consultado false = as duas fora do ar.
+async function compradorComunicadoVenda(placa, renavam) {
+  const docDe = v => { const s = String(v ?? '').replace(/\D/g, ''); return (s.length === 11 || s.length === 14) && isValidDoc(s) ? s : null; };
+  try {
+    const r = await fetch(DESPBRASIL_BASE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', chaveAcesso: DESPBRASIL_KEY },
+      body: JSON.stringify({ servico: 'comunicado_venda', placa }),
+      signal: AbortSignal.timeout(60000),
+    });
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j?.sucesso) throw new Error(`HTTP ${r.status} — ${JSON.stringify(j?.erro || j?.mensagem || '').slice(0, 200)}`);
+    // Placa em cache volta sem "dados" (só o PDF): sem o JSON não há o
+    // documento do comprador de forma confiável — vai para a reserva.
+    if (!j.dados) throw new Error('resposta do cache, sem dados');
+    const ocs = (Array.isArray(j.dados.ocorrencias) ? j.dados.ocorrencias : []).filter(o => o && !/cancel|inativ|baixad/i.test(String(o.situacao || '')));
+    const oc = ocs.find(o => /^ativ/i.test(String(o.situacao || ''))) || ocs[0];
+    return { consultado: true, documento: oc ? (docDe(oc.documentoComprador) || docDe(j.dados.comprador?.documento)) : null };
+  } catch (e) {
+    console.error(`[@consultar débitos] comunicado de venda da despbrasil falhou (placa ${placa}):`, e.message);
+  }
+  try {
+    const r = await fetch(`${PORTAL_BASE_URL}/consultar-comunicado`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', chaveAcesso: PORTAL_DESP_KEY },
+      body: JSON.stringify({ placa, renavam }),
+      signal: AbortSignal.timeout(PORTAL_PROP_TIMEOUT_MS),
+    });
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (!r.ok) throw new Error(`HTTP ${r.status} — ${buf.toString('utf8').slice(0, 200)}`);
+    // JSON no lugar do PDF é resposta de negócio: consultou e não há comunicação.
+    if (buf.slice(0, 4).toString('latin1') !== '%PDF') return { consultado: true, documento: null };
+    const d = await extractRelatorioPortal(buf);
+    const localizada = /^sim$/i.test(String(d.campos.sucesso || '').trim())
+      && DATA_BR_RE.test(String((d.secoes.venda || d.campos).datadavenda || ''));
+    return { consultado: true, documento: localizada ? docDe(d.secoes.comprador?.documento) : null };
+  } catch (e) {
+    console.error(`[@consultar débitos] Consulta Comunicado do portal (reserva) falhou (placa ${placa}):`, e.message);
+  }
+  return { consultado: false, documento: null };
+}
+
 async function resolverDebitosBot(user, placa) {
   let d;
   try { d = await dadosVeiculoPorPlaca(placa); }
@@ -17338,6 +17393,13 @@ async function resolverDebitosBot(user, placa) {
   if (!/^[A-Z]{2}$/.test(d.uf) || d.renavam.length < 9)
     return { erro: 'Não encontrei o renavam e a UF dessa placa. Confira a placa e tente de novo.' };
   const liberadas = await filtroBotClienteParceiro(user.id);
+  // Só as UFs cujo débito pede CPF/CNPJ precisam da checagem (ela custa).
+  // Com as duas fontes fora do ar segue o documento do proprietário, como antes.
+  if (servicosDebitoUf(d.uf).some(id => servicoBotWhats(id, liberadas)?.inputType === 'debito_doc')) {
+    const cv = await compradorComunicadoVenda(placa, d.renavam);
+    if (cv.documento) d.documento = cv.documento;
+    console.log(`[@consultar débitos] placa ${placa} (${d.uf}): ${!cv.consultado ? 'comunicado de venda indisponível, documento do proprietário' : cv.documento ? 'com comunicação de venda, documento do comprador' : 'sem comunicação de venda, documento do proprietário'}`);
+  }
   const temDoc = d.documento.length === 11 || d.documento.length === 14;
   const s = servicosDebitoUf(d.uf).map(id => servicoBotWhats(id, liberadas)).find(x => x &&
     (x.inputType !== 'debito_doc' || temDoc) && (x.inputType !== 'debito_chassi' || d.chassi.length === 17));
