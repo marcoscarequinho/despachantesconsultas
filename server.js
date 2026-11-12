@@ -2717,6 +2717,17 @@ async function initDB() {
       PRIMARY KEY (parceiro_id, service_id)
     );
   `);
+  // Consultas que o parceiro escondeu dos clientes dele (12/11/2026) — ver
+  // ocultasDoClienteParceiro. Separada de parceiro_consultas porque dá para
+  // esconder uma consulta que ele nem pôs preço.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS parceiro_ocultas (
+      parceiro_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      service_id  VARCHAR(100) NOT NULL,
+      created_at  TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (parceiro_id, service_id)
+    );
+  `);
   // Domínio próprio do parceiro: ele sugere até 5 opções e paga a taxa por PIX
   // (purpose 'DOMINIO'); a configuração (DNS, Vercel) é do dono, em até 48 h.
   // AGUARDANDO_PAGAMENTO → CONFIGURANDO (pago) → ATIVO (admin informou o domínio).
@@ -3502,8 +3513,27 @@ async function consultasDoParceiro(parceiroId) {
     na_pagina: tab.precos[s.id] != null,
     preco: tab.precos[s.id] ?? null,
     venda: tab.vendaDe(s),
+    oculta: tab.ocultas.has(s.id),
   }));
 }
+
+// "Ocultar consulta" (12/11/2026, pedido do dono): o parceiro esconde dos
+// clientes dele uma consulta que não quer oferecer. Vale para qualquer linha
+// da lista, com preço dele ou não; o preço, se houver, fica guardado.
+app.put('/api/reseller/consultas/:serviceId/oculta', requireAuth, requireReseller, async (req, res) => {
+  const svc = acharRevendavel(req.params.serviceId);
+  if (!svc) return res.status(400).json({ error: 'Essa consulta não pode ser ocultada.' });
+  try {
+    if (req.body?.oculta === true)
+      await pool.query('INSERT INTO parceiro_ocultas (parceiro_id, service_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [req.user.id, svc.id]);
+    else
+      await pool.query('DELETE FROM parceiro_ocultas WHERE parceiro_id=$1 AND service_id=$2', [req.user.id, svc.id]);
+    res.json({ success: true, oculta: req.body?.oculta === true });
+  } catch (err) {
+    console.error('Erro ao ocultar consulta do parceiro:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
 
 app.get('/api/reseller/consultas', requireAuth, requireReseller, async (req, res) => {
   try {
@@ -3944,7 +3974,7 @@ const hostDaRequisicao = req => String(req.headers['x-forwarded-host'] || req.he
 async function dadosPaginaParceiro(rv) {
   const v = new Date(rv.pagina_atualizada_em || 0).getTime();
   const tab = await tabelaParceiro(rv.id);
-  const consultas = servicosRevendaveis().filter(s => tab.vendaDe(s) != null)
+  const consultas = servicosRevendaveis().filter(s => tab.vendaDe(s) != null && !tab.ocultas.has(s.id))
     .map(s => ({ name: s.name, group: s.group, icon: s.icon, preco: tab.vendaDe(s) }));
   return {
     nome: rv.name, slug: rv.slug, pagina: rv.pagina || {}, consultas,
@@ -4565,11 +4595,16 @@ app.get('/api/services', requireAuth, async (req, res) => {
     // Emissão de ATPV-e: o preço de cada UF para ESTE usuário (desconto do
     // admin, preço do parceiro dele ou a tabela) — a mesma conta de precoAtpveUf.
     const precosUfDoUsuario = {};
+    // O que o parceiro ocultou some do catálogo do cliente dele (a UF oculta
+    // sai da emissão de ATPV-e; com todas ocultas, sai a emissão).
+    const ocultas = await ocultasDoClienteParceiro(req.user.id);
     servicosAtpveUf().forEach(p => {
+      if (ocultas.has(p.id)) return;
       precosUfDoUsuario[p.ufAtpve] = overrides[p.id] ?? (tab && tab.vendaDe(p)) ?? p.basePrice;
     });
+    const visiveis = SERVICES.filter(s => !ocultas.has(s.id) && !(s.precosUf && !Object.keys(precosUfDoUsuario).length));
     res.json({
-      services: SERVICES.map(s => (liberadas && !liberadas.has(s.id)) ? { ...s, price: null, naoLiberada: true } : s.precosUf ? {
+      services: visiveis.map(s => (liberadas && !liberadas.has(s.id)) ? { ...s, price: null, naoLiberada: true } : s.precosUf ? {
         ...s, precosUf: precosUfDoUsuario, price: Math.min(...Object.values(precosUfDoUsuario)),
       } : {
         ...s,
@@ -9704,19 +9739,49 @@ async function consultasLiberadasClienteParceiro(userId) {
 // parceiro ainda não marcou, e na recusa do /api/query.
 const CONSULTA_FORA_DO_PARCEIRO_MSG = 'Essa consulta ainda não está adicionada para esse usuário. Entre em contato com seu CONSULTOR para adicioná-la.';
 
+// Consultas que o parceiro OCULTOU dos clientes dele (parceiro_ocultas,
+// 12/11/2026): Set dos ids ("dcr-atpve:<UF>" para uma UF da emissão de
+// ATPV-e), vazio para quem não é cliente de parceiro ativo. Diferente do
+// bloqueio acima, vale sempre: o que está aqui não aparece no catálogo, na
+// página pública nem no @consultar, e o /api/query recusa. O próprio parceiro
+// continua vendo tudo; a API de chave (/api/v1) não é filtrada.
+async function ocultasDoClienteParceiro(userId) {
+  const r = await pool.query(
+    `SELECT po.service_id FROM users u
+       JOIN users ru ON ru.id = u.revendedor_id AND ru.role = 'reseller' AND ru.active = true
+       JOIN parceiro_ocultas po ON po.parceiro_id = u.revendedor_id
+      WHERE u.id = $1 AND u.role <> 'reseller'`, [userId]
+  );
+  return new Set(r.rows.map(x => x.service_id));
+}
+const CONSULTA_OCULTA_MSG = 'Essa consulta não está disponível na sua conta. Entre em contato com seu CONSULTOR.';
+// O id que vale para a ocultação: a emissão de ATPV-e é por UF.
+const idParaOcultacao = (serviceId, params) => serviceId === DATACRED_ATPVE_SERVICE_ID
+  ? idAtpveUf(String(params?.uf || '').toUpperCase()) : serviceId;
+// Filtro do @consultar: o bloqueio (se ligado) e as ocultas, no formato que o
+// robô já usa (null = sem restrição, senão algo com .has(id)).
+async function filtroBotClienteParceiro(userId) {
+  const liberadas = await consultasLiberadasClienteParceiro(userId);
+  const ocultas = await ocultasDoClienteParceiro(userId);
+  if (!ocultas.size) return liberadas;
+  return { has: id => (!liberadas || liberadas.has(id)) && !ocultas.has(id) };
+}
+
 // Tabela de preços de um parceiro, de uma vez (catálogo do cliente, página
 // pública, painel do parceiro): { custos: {serviceId: custo}, precos: {serviceId: preco} }.
 async function tabelaParceiro(parceiroId) {
-  const [descontos, lista] = await Promise.all([
+  const [descontos, lista, escondidas] = await Promise.all([
     pool.query('SELECT service_id, price FROM user_service_prices WHERE user_id=$1', [parceiroId]),
     pool.query('SELECT service_id, preco FROM parceiro_consultas WHERE parceiro_id=$1', [parceiroId]),
+    pool.query('SELECT service_id FROM parceiro_ocultas WHERE parceiro_id=$1', [parceiroId]),
   ]);
+  const ocultas = new Set(escondidas.rows.map(r => r.service_id));
   const custos = {}, precos = {};
   descontos.rows.forEach(r => { custos[r.service_id] = parseFloat(r.price); });
   lista.rows.forEach(r => { precos[r.service_id] = parseFloat(r.preco); });
   const custoDe = s => custos[s.id] ?? catalogPrice(s);
   const vendaDe = s => (precos[s.id] != null && servicoRevendavel(s)) ? Math.max(precos[s.id], custoDe(s)) : null;
-  return { custos, precos, custoDe, vendaDe };
+  return { custos, precos, ocultas, custoDe, vendaDe };
 }
 
 // Estorna os créditos de uma consulta que foi cobrada mas nunca entregou o
@@ -13665,6 +13730,10 @@ app.post('/api/query', requireAuth, async (req, res) => {
     const liberadas = await consultasLiberadasClienteParceiro(req.user.id);
     if (liberadas && !liberadas.has(req.body?.serviceId))
       return res.status(403).json({ error: CONSULTA_FORA_DO_PARCEIRO_MSG });
+    // Consulta que o parceiro ocultou dos clientes dele (ocultasDoClienteParceiro).
+    const ocultas = await ocultasDoClienteParceiro(req.user.id);
+    if (ocultas.has(idParaOcultacao(req.body?.serviceId, req.body?.params)))
+      return res.status(403).json({ error: CONSULTA_OCULTA_MSG });
   } catch (err) {
     return res.status(500).json({ error: 'Erro interno.' });
   }
@@ -17262,7 +17331,7 @@ async function resolverDebitosBot(user, placa) {
   }
   if (!/^[A-Z]{2}$/.test(d.uf) || d.renavam.length < 9)
     return { erro: 'Não encontrei o renavam e a UF dessa placa. Confira a placa e tente de novo.' };
-  const liberadas = await consultasLiberadasClienteParceiro(user.id);
+  const liberadas = await filtroBotClienteParceiro(user.id);
   const temDoc = d.documento.length === 11 || d.documento.length === 14;
   const s = servicosDebitoUf(d.uf).map(id => servicoBotWhats(id, liberadas)).find(x => x &&
     (x.inputType !== 'debito_doc' || temDoc) && (x.inputType !== 'debito_chassi' || d.chassi.length === 17));
@@ -17496,7 +17565,7 @@ async function processarMensagemBot(phone, texto) {
   }
   if (conta.erro) return sendWhatsApp(phone, conta.erro);
   const user = conta.user;
-  const liberadas = await consultasLiberadasClienteParceiro(user.id);
+  const liberadas = await filtroBotClienteParceiro(user.id);
 
   if (gatilho) return enviarMenuBot(phone, chave, user, liberadas);
   if (/^(sair|cancelar|parar)$/i.test(texto)) {

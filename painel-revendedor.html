@@ -472,6 +472,7 @@
           Todas as consultas da plataforma, com o <strong>seu custo</strong>. Escolha as que vão para a sua página e digite o
           preço que o seu cliente vai pagar — ele não pode ser menor que o seu custo, e a diferença é o seu ganho em cada consulta.
           Os seus clientes pagam esse preço no painel deles; consulta fora da sua página sai pelo preço normal do site, sem ganho para você.
+          Se não quiser que uma consulta apareça para os seus clientes, use <strong>Ocultar consulta</strong>.
         </p>
       </div>
       <div class="card flex flex-col sm:flex-row gap-3">
@@ -483,6 +484,7 @@
           <option value="todas">Todas</option>
           <option value="pagina">Só as da minha página</option>
           <option value="fora">Só as fora da página</option>
+          <option value="ocultas">Só as ocultas</option>
         </select>
       </div>
       <div id="catalog-list" class="space-y-5">
@@ -1104,7 +1106,7 @@ function renderCatalog() {
   const filtro = document.getElementById('catalog-filtro').value;
   const lista = (allServices || []).filter(s =>
     (!q || q.split(/\s+/).every(p => sem(`${s.name} ${s.group}`).includes(p))) &&
-    (filtro === 'todas' || (filtro === 'pagina') === s.na_pagina));
+    (filtro === 'todas' || (filtro === 'ocultas' ? s.oculta : (filtro === 'pagina') === s.na_pagina)));
   const grupos = {};
   lista.forEach(s => { (grupos[s.group || 'Outras'] = grupos[s.group || 'Outras'] || []).push(s); });
   const el = document.getElementById('catalog-list');
@@ -1115,7 +1117,7 @@ function renderCatalog() {
       <div class="divide-y divide-gray-50">${ss.map(s => `
         <div class="flex flex-col md:flex-row md:items-center gap-2 px-5 py-3 text-sm ${s.na_pagina ? 'bg-green-50/50' : ''}">
           <div class="flex-1 min-w-0">
-            <div class="text-gray-800">${esc(s.icon || '')} ${esc(s.name)} ${s.na_pagina ? '<span class="badge-green ml-1">na página</span>' : ''}</div>
+            <div class="text-gray-800">${esc(s.icon || '')} ${esc(s.name)} ${s.na_pagina ? '<span class="badge-green ml-1">na página</span>' : ''}${s.oculta ? '<span class="ml-1 inline-block text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-200 text-gray-700">🙈 oculta para os clientes</span>' : ''}</div>
             <div class="text-xs text-gray-500">Seu custo: <strong>${fmt(s.custo)}</strong>${s.desconto ? ` <span class="text-green-700">(desconto da MC — site: ${fmt(s.catalogo)})</span>` : ''}
               ${s.na_pagina ? ` · seu ganho: <strong class="text-green-700">${fmt(Math.max(0, s.venda - s.custo))}</strong> por consulta` : ''}</div>
             ${s.na_pagina && s.preco < s.custo ? '<div class="text-xs text-amber-700">Seu custo subiu acima do seu preço: o cliente paga o custo e você não ganha nesta consulta. Atualize o preço.</div>' : ''}
@@ -1126,6 +1128,7 @@ function renderCatalog() {
               class="w-24 px-2 py-1.5 border border-gray-300 rounded-lg text-sm text-right" aria-label="Preço para o seu cliente">
             <button onclick="salvarConsulta('${esc(s.id)}')" class="btn-primary !px-3 !py-1.5 text-xs">${s.na_pagina ? 'Salvar' : '+ Adicionar'}</button>
             ${s.na_pagina ? `<button onclick="removerConsulta('${esc(s.id)}')" class="text-xs text-red-600 hover:underline">Remover</button>` : ''}
+            <button onclick="ocultarConsulta('${esc(s.id)}', ${!s.oculta})" class="text-xs ${s.oculta ? 'text-green-700' : 'text-gray-600'} hover:underline whitespace-nowrap" title="${s.oculta ? 'Voltar a mostrar esta consulta para os seus clientes' : 'Os seus clientes deixam de ver esta consulta'}">${s.oculta ? 'Mostrar consulta' : 'Ocultar consulta'}</button>
           </div>
         </div>`).join('')}
       </div>
@@ -1155,6 +1158,21 @@ async function removerConsulta(id) {
     toast('Consulta removida da sua página.');
     await loadCatalog(true); loadStats();
   } catch { toast('Erro ao remover.', 'error'); }
+}
+
+// Ocultar consulta (12/11/2026): os clientes do parceiro deixam de ver a
+// consulta no painel, na página dele e no WhatsApp. O preço, se houver, fica.
+async function ocultarConsulta(id, oculta) {
+  if (oculta && !confirm('Ocultar esta consulta? Os seus clientes deixam de vê-la e não conseguem mais consultá-la. Você pode voltar a mostrar quando quiser.')) return;
+  try {
+    const r = await fetch(`/api/reseller/consultas/${encodeURIComponent(id)}/oculta`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ oculta }),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Erro ao salvar.', 'error'); return; }
+    toast(oculta ? 'Consulta oculta para os seus clientes.' : 'Consulta voltou a aparecer para os seus clientes.');
+    await loadCatalog(true);
+  } catch { toast('Erro ao salvar.', 'error'); }
 }
 
 // ── Domínio Próprio ────────────────────────────────────────────────────────

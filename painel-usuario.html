@@ -4802,7 +4802,7 @@ function renderFormFields(inputType, svc) {
         <div>
           <label class="label">UF de origem do veículo <span class="text-red-500">*</span></label>
           <select id="f-a2-uf" class="input-field">
-            <option value="">—</option>${['RJ','DF','GO','MG','MS','PR','RS','SP'].map(u => `<option value="${u}">${u}</option>`).join('')}
+            <option value="">—</option>${(selectedSvc?.precosUf ? Object.keys(selectedSvc.precosUf) : ['RJ','DF','GO','MG','MS','PR','RS','SP']).map(u => `<option value="${u}">${u}</option>`).join('')}
           </select>
         </div>
         ${c('placa', 'Placa', 'ABC1D23', true, 'maxlength="8" style="text-transform:uppercase"')}
