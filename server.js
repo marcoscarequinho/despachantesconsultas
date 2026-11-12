@@ -3494,7 +3494,7 @@ app.put('/api/reseller/clients/:id/toggle', requireAuth, requireReseller, async 
 const PRECO_PARCEIRO_MAX = 9999.99;
 async function consultasDoParceiro(parceiroId) {
   const tab = await tabelaParceiro(parceiroId);
-  return SERVICES.filter(servicoRevendavel).map(s => ({
+  return servicosRevendaveis().map(s => ({
     id: s.id, name: s.name, group: s.group, icon: s.icon,
     catalogo: catalogPrice(s),
     custo: tab.custoDe(s),
@@ -3518,9 +3518,9 @@ app.get('/api/reseller/consultas', requireAuth, requireReseller, async (req, res
 // abaixo do custo: o ganho do parceiro é a diferença, e abaixo disso a
 // plataforma pagaria a consulta.
 app.put('/api/reseller/consultas/:serviceId', requireAuth, requireReseller, async (req, res) => {
-  const svc = SERVICES.find(s => s.id === req.params.serviceId);
-  if (!servicoRevendavel(svc)) return res.status(400).json({ error: 'Essa consulta não pode ser revendida.' });
-  const preco = Math.round(parseFloat(String(req.body?.preco ?? '').replace(',', '.')) * 100) / 100;
+  const svc = acharRevendavel(req.params.serviceId);
+  if (!svc) return res.status(400).json({ error: 'Essa consulta não pode ser revendida.' });
+  const preco =Math.round(parseFloat(String(req.body?.preco ?? '').replace(',', '.')) * 100) / 100;
   if (!(preco > 0) || preco > PRECO_PARCEIRO_MAX) return res.status(400).json({ error: 'Preço inválido.' });
   try {
     const custo = await custoParceiro(req.user.id, svc);
@@ -3944,7 +3944,7 @@ const hostDaRequisicao = req => String(req.headers['x-forwarded-host'] || req.he
 async function dadosPaginaParceiro(rv) {
   const v = new Date(rv.pagina_atualizada_em || 0).getTime();
   const tab = await tabelaParceiro(rv.id);
-  const consultas = SERVICES.filter(s => tab.vendaDe(s) != null)
+  const consultas = servicosRevendaveis().filter(s => tab.vendaDe(s) != null)
     .map(s => ({ name: s.name, group: s.group, icon: s.icon, preco: tab.vendaDe(s) }));
   return {
     nome: rv.name, slug: rv.slug, pagina: rv.pagina || {}, consultas,
@@ -4242,8 +4242,8 @@ app.get('/api/admin/revendedores/:id', requireAuth, requireSuperAdmin, async (re
 // parceiro já vendia abaixo do custo novo, o cliente dele passa a pagar o custo
 // (ver precoParceiroDoCliente) — a tela avisa.
 app.put('/api/admin/revendedores/:id/custos/:serviceId', requireAuth, requireSuperAdmin, async (req, res) => {
-  const svc = SERVICES.find(s => s.id === req.params.serviceId);
-  if (!servicoRevendavel(svc)) return res.status(400).json({ error: 'Essa consulta não pode ser revendida.' });
+  const svc = acharRevendavel(req.params.serviceId);
+  if (!svc) return res.status(400).json({ error: 'Essa consulta não pode ser revendida.' });
   try {
     const u = await pool.query(`SELECT id FROM users WHERE id=$1 AND role='reseller'`, [req.params.id]);
     if (!u.rows.length) return res.status(404).json({ error: 'Parceiro não encontrado.' });
@@ -4562,8 +4562,16 @@ app.get('/api/services', requireAuth, async (req, res) => {
     // naoLiberada: o painel mostra o aviso para falar com o consultor, e o
     // /api/query recusa do mesmo jeito.
     const liberadas = await consultasLiberadasClienteParceiro(req.user.id);
+    // Emissão de ATPV-e: o preço de cada UF para ESTE usuário (desconto do
+    // admin, preço do parceiro dele ou a tabela) — a mesma conta de precoAtpveUf.
+    const precosUfDoUsuario = {};
+    servicosAtpveUf().forEach(p => {
+      precosUfDoUsuario[p.ufAtpve] = overrides[p.id] ?? (tab && tab.vendaDe(p)) ?? p.basePrice;
+    });
     res.json({
-      services: SERVICES.map(s => (liberadas && !liberadas.has(s.id)) ? { ...s, price: null, naoLiberada: true } : {
+      services: SERVICES.map(s => (liberadas && !liberadas.has(s.id)) ? { ...s, price: null, naoLiberada: true } : s.precosUf ? {
+        ...s, precosUf: precosUfDoUsuario, price: Math.min(...Object.values(precosUfDoUsuario)),
+      } : {
         ...s,
         // Serviço de grupo gratuito ignora o preço fixo por usuário (catalogPrice
         // devolve 0) — é a mesma regra aplicada na cobrança em getUserServicePrice.
@@ -9609,6 +9617,38 @@ function servicoRevendavel(s) {
     && s.id !== DATACRED_ATPVE_SERVICE_ID && catalogPrice(s) > 0;
 }
 
+// Emissão de ATPV-e na parceria (12/11/2026, pedido do dono): o preço dela é
+// por UF, então não cabia numa linha só e ficava fora da lista do parceiro.
+// Entra como UMA LINHA POR UF, com o id "dcr-atpve:<UF>" em parceiro_consultas
+// (preço do parceiro) e em user_service_prices (desconto do admin). O custo é
+// o preço da UF em DATACRED_ATPVE_PRECOS. Esses ids não existem no SERVICES:
+// quem lista ou procura consulta de parceiro usa servicosRevendaveis /
+// acharRevendavel, e a cobrança da emissão usa precoAtpveUf.
+const idAtpveUf = uf => `${DATACRED_ATPVE_SERVICE_ID}:${uf}`;
+function servicosAtpveUf() {
+  const base = SERVICES.find(s => s.id === DATACRED_ATPVE_SERVICE_ID);
+  if (!base || base.unavailable) return [];
+  return Object.entries(DATACRED_ATPVE_PRECOS).map(([uf, preco]) => ({
+    id: idAtpveUf(uf), name: `${base.name} — ${uf}`, group: base.group, icon: base.icon,
+    basePrice: preco, noMarkup: true, ufAtpve: uf,
+  }));
+}
+// A emissão vem primeiro: é o que o parceiro mais procura na lista.
+const servicosRevendaveis = () => [...servicosAtpveUf(), ...SERVICES.filter(servicoRevendavel)];
+const acharRevendavel = id => servicosRevendaveis().find(s => s.id === id) || null;
+
+// Preço da emissão de ATPV-e para um usuário, numa UF: o desconto que o admin
+// deu a ele (parceiro), senão o preço do parceiro dele, senão a tabela.
+async function precoAtpveUf(userId, uf) {
+  const tabela = DATACRED_ATPVE_PRECOS[uf];
+  const svc = servicosAtpveUf().find(s => s.ufAtpve === uf);
+  if (!svc) return tabela;
+  const r = await pool.query('SELECT price FROM user_service_prices WHERE user_id=$1 AND service_id=$2', [userId, svc.id]);
+  if (r.rows.length) return parseFloat(r.rows[0].price);
+  const pp = await precoParceiroDoCliente(userId, svc);
+  return pp ? pp.venda : tabela;
+}
+
 // Custo do parceiro numa consulta: o preço fixo que o admin deu a ele, senão o
 // do catálogo. É o mesmo número que ele paga quando consulta por conta própria.
 async function custoParceiro(parceiroId, service) {
@@ -9656,8 +9696,9 @@ async function consultasLiberadasClienteParceiro(userId) {
   );
   if (!r.rows.length) return null;
   const lista = await pool.query('SELECT service_id FROM parceiro_consultas WHERE parceiro_id=$1', [r.rows[0].revendedor_id]);
-  return new Set(lista.rows.map(x => x.service_id)
-    .filter(id => servicoRevendavel(SERVICES.find(s => s.id === id))));
+  // Uma UF da emissão de ATPV-e na página libera a emissão (o preço é por UF).
+  return new Set(lista.rows.map(x => x.service_id).filter(id => acharRevendavel(id))
+    .map(id => id.startsWith(`${DATACRED_ATPVE_SERVICE_ID}:`) ? DATACRED_ATPVE_SERVICE_ID : id));
 }
 // Texto do dono (08/11/2026): aparece no painel ao clicar numa consulta que o
 // parceiro ainda não marcou, e na recusa do /api/query.
@@ -10685,7 +10726,7 @@ async function registrarFalhaNova(userId, serviceId, params, motivo) {
   const service = SERVICES.find(s => s.id === serviceId);
   if (!service) return null;
   const uf = String(params?.uf || '').toUpperCase();
-  const amount = serviceId === DATACRED_ATPVE_SERVICE_ID ? (DATACRED_ATPVE_PRECOS[uf] ?? service.basePrice) : await getUserServicePrice(userId, service);
+  const amount = serviceId === DATACRED_ATPVE_SERVICE_ID ? (DATACRED_ATPVE_PRECOS[uf] ? await precoAtpveUf(userId, uf) : service.basePrice) : await getUserServicePrice(userId, service);
   const doc = String(params?.cpf || params?.cnpj || '').replace(/[^0-9A-Za-z]/g, '');
   const log = {
     placa: String(params?.placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '') || undefined,
@@ -11078,7 +11119,8 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
       if (erroVal) return res.status(400).json({ error: erroVal });
       // Preço é o da UF (DATACRED_ATPVE_PRECOS), não o do catálogo: o saldo é
       // conferido de novo com ele, e é ele que vai para a cobrança na entrega.
-      const precoUf = DATACRED_ATPVE_PRECOS[corpo.uf];
+      // Cliente de parceiro paga o preço que o parceiro pôs para a UF (precoAtpveUf).
+      const precoUf = await precoAtpveUf(userId, corpo.uf);
       const bloqueioUf = await bloqueioPagamentoConsulta(user.id, user, precoUf);
       if (bloqueioUf) return res.status(bloqueioUf.status).json(bloqueioUf.body);
       // Sem os anexos (megabytes de base64) e com documentos mascarados.
@@ -15611,11 +15653,16 @@ async function registrarLucrosParceiros(parceiroId = null) {
   const filtro = parceiroId ? 'AND u.revendedor_id = $1' : '';
   const args = parceiroId ? [parceiroId] : [];
   const novas = await pool.query(
-    `SELECT q.id, q.user_id, q.service_id, q.amount, u.revendedor_id
+    // A emissão de ATPV-e está na página por UF ("dcr-atpve:<UF>", ver
+    // servicosAtpveUf); a UF do pedido está em queries.params.
+    `SELECT q.id, q.user_id, pc.service_id, q.amount, u.revendedor_id
        FROM queries q
        JOIN users u ON u.id = q.user_id
        JOIN users ru ON ru.id = u.revendedor_id AND ru.role = 'reseller'
-       JOIN parceiro_consultas pc ON pc.parceiro_id = u.revendedor_id AND pc.service_id = q.service_id
+       JOIN parceiro_consultas pc ON pc.parceiro_id = u.revendedor_id AND pc.service_id =
+            CASE WHEN q.service_id = '${DATACRED_ATPVE_SERVICE_ID}'
+                 THEN q.service_id || ':' || COALESCE(substring(q.params from '"uf":"([A-Z]{2})"'), '')
+                 ELSE q.service_id END
       WHERE q.status = 'success' AND q.transaction_id IS NOT NULL AND q.amount > 0
         AND q.created_at >= pc.created_at ${filtro}
         AND NOT EXISTS (SELECT 1 FROM commissions c WHERE c.query_id = q.id AND c.origem = 'CONSULTA')
@@ -15624,7 +15671,7 @@ async function registrarLucrosParceiros(parceiroId = null) {
   const custos = new Map();
   let registradas = 0;
   for (const q of novas.rows) {
-    const svc = SERVICES.find(s => s.id === q.service_id);
+    const svc = SERVICES.find(s => s.id === q.service_id) || acharRevendavel(q.service_id);
     if (!svc) continue;
     const chave = `${q.revendedor_id}:${svc.id}`;
     if (!custos.has(chave)) custos.set(chave, await custoParceiro(q.revendedor_id, svc));

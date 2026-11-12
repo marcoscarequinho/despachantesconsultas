@@ -51,11 +51,19 @@
       </div>
     </section>
 
-    <main class="max-w-5xl mx-auto px-4 pb-12 grid lg:grid-cols-5 gap-8 w-full">
+    <!-- Ordem pedida pelo dono (12/11/2026): o botão do WhatsApp e o formulário
+         de conta ficam ACIMA da lista de preços — no celular a lista é longa e
+         empurrava os dois para o fim da página. No computador o formulário
+         segue na coluna da direita (ocupa as duas linhas da grade). -->
+    <main class="max-w-5xl mx-auto px-4 pb-12 grid lg:grid-cols-5 lg:grid-rows-[auto_1fr] gap-x-8 gap-y-6 w-full">
       <div class="lg:col-span-3 space-y-6">
         <div class="bg-white rounded-2xl shadow-sm p-6">
           <p id="texto" class="texto-livre text-gray-700 leading-relaxed"></p>
         </div>
+        <a id="whatsapp" class="hidden inline-flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white font-semibold px-5 py-3 rounded-xl" target="_blank" rel="noopener noreferrer">💬 Falar no WhatsApp</a>
+      </div>
+
+      <div class="lg:col-span-3 lg:row-start-2 space-y-6 order-last lg:order-none">
         <div id="consultas-box" class="hidden bg-white rounded-2xl shadow-sm p-6">
           <h2 class="font-bold text-gray-800 mb-3">Consultas e preços</h2>
           <input id="consultas-busca" class="input mb-3" placeholder="Buscar consulta…" oninput="renderConsultas()">
@@ -74,10 +82,9 @@
           </ul>
           <p class="text-xs text-gray-400 mt-3">Pré-pago: você recarrega por PIX ou cartão e paga só o que consultar.</p>
         </div>
-        <a id="whatsapp" class="hidden inline-flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white font-semibold px-5 py-3 rounded-xl" target="_blank" rel="noopener noreferrer">💬 Falar no WhatsApp</a>
       </div>
 
-      <div class="lg:col-span-2">
+      <div class="lg:col-span-2 lg:col-start-4 lg:row-start-1 lg:row-span-2">
         <div id="caixa-conta" class="bg-white rounded-2xl shadow-sm p-6 sticky top-4">
           <!-- Login e cadastro ficam aqui: quem é cliente do parceiro (ou o
                próprio parceiro) entra pela página dele, não pela nossa. -->
