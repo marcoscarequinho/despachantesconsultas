@@ -6596,6 +6596,40 @@ async function extractValidaCrvFromPdf(pdfBuf) {
   return campos;
 }
 
+// Consulta que não saiu, em PDF (dono, 12/11/2026: na consulta grátis do
+// @consultar ele prefere receber o retorno em PDF, e não em texto, também
+// quando a consulta está fora). Uma folha no padrão do site com a placa e o
+// aviso. O próprio portal, quando falha, às vezes manda um PDF assim ("Tempo
+// esgotado aguardando resposta da consulta" — MRA9393), mas nem sempre (no
+// mesmo dia respondeu 400 só com texto); por isso o nosso.
+function buildConsultaForaPdfBuffer(titulo, placa, aviso) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+      pdfReportHeader(doc, String(titulo || 'Consulta').toUpperCase(), now);
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Placa', placa || 'Nada consta'], ['Situação', 'Consulta não realizada']]);
+      doc.moveDown(0.4);
+      pdfBar(doc, 'CONSULTA NÃO REALIZADA', { bg: '#b91c1c', size: 12 });
+      doc.moveDown(0.3);
+      const { left, width } = pdfContentBox(doc);
+      doc.fontSize(11).fillColor('#111827').font('Helvetica').text(aviso || CONSULTA_FORA_MSG, left, doc.y, { width });
+      doc.moveDown(0.3);
+      doc.fontSize(9.5).fillColor('#6b7280').text('Nada foi cobrado. Este documento não informa a situação do veículo — a consulta não chegou a ser feita.', left, doc.y, { width });
+      doc.moveDown(0.8);
+      pdfReportFooter(doc, now);
+      doc.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 function buildValidaCrvPdfBuffer(service, r, params) {
   return new Promise((resolve, reject) => {
     try {
@@ -17697,7 +17731,21 @@ async function processarMensagemBot(phone, texto) {
     if (BOT_WHATS_GRATIS.has(d.serviceId)) {
       await encerrarSessaoBot(chave);
       const r = await executarConsultaBot(phone, chave, user, d.serviceId, { placa }, false, true);
-      if (r.tipo === 'erro') await sendWhatsApp(phone, `❌ ${r.erro}\n\nPara tentar de novo, digite *@consultar*.`);
+      if (r.tipo === 'erro') {
+        // O retorno da consulta grátis é sempre em PDF, inclusive quando ela não
+        // sai (dono, 12/11/2026). Se o PDF não for, vai o texto.
+        const nome = nomeServicoBot(d.serviceId);
+        let foi = false;
+        try {
+          const marca = await marcaDoUsuarioCache(user.id).catch(() => null);
+          const pdf = await contextoMarca.run({ marca }, () => buildConsultaForaPdfBuffer(nome, placa, r.erro));
+          foi = await sendWhatsAppPdf(phone, pdf, `mcdespachadoria-consulta-debitos-${placa}.pdf`,
+            `❌ *${nome}* — placa ${placa}\n${r.erro}\n\nPara tentar de novo, digite *@consultar*.`);
+        } catch (e) {
+          console.error(`[@consultar] PDF de consulta fora falhou (placa ${placa}):`, e.message);
+        }
+        if (!foi) await sendWhatsApp(phone, `❌ ${r.erro}\n\nPara tentar de novo, digite *@consultar*.`);
+      }
       return;
     }
     return gerarPixBot(phone, chave, user, d.serviceId, { placa, ...(d.completarDados ? { completarDados: d.completarDados } : {}) });
