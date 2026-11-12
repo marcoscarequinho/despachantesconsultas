@@ -381,6 +381,10 @@ const DESPBRASIL_SVCS = {
   // O PDF deles não tem marca (KGU3A76). É também a reserva da Consulta
   // Comunicado do portal no ATPVe (fetchComunicadoDataVendaDespbrasil).
   'comunicado-venda-placa': { servico: 'comunicado_venda', arquivo: 'mcdespachadoria-comunicado-venda' },
+  // A MESMA chamada, em outra linha do catálogo a R$ 8,99 (dono, 12/11/2026:
+  // pediu uma consulta nova e, avisado de que já existia a de R$ 12,00,
+  // escolheu manter as duas). Só o id e o preço mudam.
+  'comunicado-venda-placa-v2': { servico: 'comunicado_venda', arquivo: 'mcdespachadoria-comunicado-venda' },
   'consultar-Numero-ATPVE': { servico: 'numero_atpve' },
   // CRLV-e SP v2. Conferido em 01/10/2026 (EFE5600, ~10 s, PDF de 1 página).
   // Mais cedo no mesmo dia a rota devolvia 500 "Erro interno" para toda placa
@@ -1344,6 +1348,8 @@ const SERVICES = [
   { id:'consulta-renavam',       name:'Consulta RENAVAM',                     group:'Consultas Básicas', basePrice:3.00, noMarkup:true, inputType:'placa', icon:'🧾' },
   // API despbrasil.com.br (serviço "comunicado_venda") — ver DESPBRASIL_SVCS.
   { id:'comunicado-venda-placa', name:'Consulta do Comunicação de Venda',     group:'Consultas Básicas', basePrice:12.00, noMarkup:true, inputType:'placa', icon:'📝' },
+  // Mesma chamada da linha acima, a R$ 8,99 (dono, 12/11/2026) — ver DESPBRASIL_SVCS.
+  { id:'comunicado-venda-placa-v2', name:'Consulta do Comunicação de Venda v2', group:'Consultas Básicas', basePrice:8.99, noMarkup:true, inputType:'placa', icon:'📝' },
   // ── Débitos e Documentação ──
   { id:'consulta-debitos-portal',          name:'Consulta de Débitos',          group:'Débitos e Documentação', basePrice:1.0714, inputType:'placa',       icon:'💳' },
   { id:'consultar-licenciamento',         name:'Licenciamento + BIN',          group:'Débitos e Documentação', basePrice:10.00, inputType:'placa',        icon:'📋' },
