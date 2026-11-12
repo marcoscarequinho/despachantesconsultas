@@ -4860,7 +4860,23 @@ function extractApiErrorMsg(data) {
     console.error(`[extractApiErrorMsg] página HTML no lugar do erro${titulo ? `: ${titulo}` : ''}`);
     msg = 'O sistema do fornecedor está fora do ar no momento. Nada foi cobrado — tente novamente em alguns minutos.';
   }
-  return msg || JSON.stringify(data);
+  // Sem campo de erro, o que saía era o JSON inteiro da resposta — na Consulta
+  // de Débitos do portal (MRA9393, 12/11/2026) veio {"sucesso":false,"dados":
+  // {...},"pdf_base64":"JVBERi0…"} e o cliente recebeu isso tudo no WhatsApp.
+  // O texto é o que o dono pediu; a resposta crua (sem o PDF) fica só no log.
+  if (typeof msg === 'string' && msg.trim()) return msg;
+  let cru = '';
+  try { cru = JSON.stringify(data, (k, v) => (typeof v === 'string' && v.length > 200 ? `${v.slice(0, 40)}… (${v.length} caracteres)` : v)).slice(0, 500); } catch {}
+  console.error(`[extractApiErrorMsg] resposta de erro sem mensagem: ${cru}`);
+  return CONSULTA_FORA_MSG;
+}
+const CONSULTA_FORA_MSG = 'Consulta temporariamente fora, tente mais tarde.';
+// Última barreira antes de um erro ir para o cliente pelo WhatsApp: texto que
+// é JSON/HTML cru ou comprido demais para ser mensagem vira o aviso acima.
+function erroParaWhats(msg) {
+  const s = String(msg ?? '').trim();
+  if (!s || s.length > 400 || /^[\[{<]/.test(s) || /"pdf_base64"|JVBERi0/.test(s)) return CONSULTA_FORA_MSG;
+  return s;
 }
 
 // ── Geração de PDF — Débitos por Estado (Datacube retorna JSON, não PDF pronto) ──
@@ -17480,7 +17496,7 @@ async function executarConsultaBot(phone, chave, user, serviceId, params, pagoPi
 
   if (saida.status >= 400 || bot.estornou) {
     const msg = (saida.json && typeof saida.json === 'object' ? saida.json.error : null) || 'A consulta não saiu.';
-    return { tipo: 'erro', erro: msg, serviceId };
+    return { tipo: 'erro', erro: erroParaWhats(msg), serviceId };
   }
   if (saida.pdf) {
     if (!bot.pdfs) {
