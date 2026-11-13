@@ -343,6 +343,25 @@ const CNPJA_API_KEY = process.env.CNPJA_API_KEY || process.env.cnpja || '';
 const CNPJA_OPEN_URL = 'https://open.cnpja.com/office';
 const directDataPreco = custo => Math.round(custo * DIRECTDATA_MARKUP * 100) / 100;
 
+// Placa Fácil Pro (placa-fcil-pro.base44.app) — "Consulta Código Segurança CRV
+// v2 (PDF)", que em 13/11/2026 tomou o lugar da "Consulta 3" da Vistocar
+// (dono). Mesmo desenho de pedido da despbrasil ({ servico, placa } + header
+// chaveAcesso), mas é OUTRA conta: a DESPBRASIL_KEY leva 401 "chave_invalida"
+// e o erro vem como { ok:false, codigo, error }. A doc mostra a resposta como
+// JSON de dados do veículo (sem PDF) — o relatório é montado aqui
+// (buildCodigoSegurancaV2PdfBuffer). Bloco próprio em processCatalogQuery; o
+// id NÃO entra no DESPBRASIL_SVCS (sairia com a chave errada).
+// SUCESSO AINDA NÃO VISTO: em 13/11/2026 a conta respondia 403 "sem_servico"
+// ("Nenhuma consulta está liberada para esta conta").
+const PLACAFACIL_BASE_URL   = 'https://placa-fcil-pro.base44.app/functions/apiConsulta';
+const PLACAFACIL_KEY        = process.env.PLACAFACIL_KEY || '';
+const PLACAFACIL_SERVICE_ID = 'codigo-seguranca-crv-v2';
+// Custo por consulta para o saldo estimado do admin quando a resposta não traz
+// "valor_cobrado" (a despbrasil, que tem o mesmo desenho, traz). null = sem
+// custo conhecido: a consulta é registrada com R$ 0,00 e o admin avisa.
+const PLACAFACIL_CUSTO_CONSULTA = null;
+let placaFacilAvisoEm = 0; // último aviso de chave/conta recusada ao ADMIN_PHONE
+
 // API despbrasil.com.br — auth por header chaveAcesso (fixo); resposta traz a URL
 // do PDF pronto em "arquivo_url" (buscamos o arquivo no processCatalogQuery, ver
 // DESPBRASIL_SVCS). Mapeia serviceId para o "servico" da despbrasil (campo "extra"
@@ -1470,9 +1489,9 @@ const SERVICES = [
     slowNote:'Consulta de proprietário atual pela placa, com retorno em PDF no padrão MC Despachadoria. Incluída na Assinatura Coisas de Despachantes.',
     modeloUrl:'/assets/modelo-consulta-placas.pdf', modeloLabel:'Veja modelo da consulta' },
   // Código de Segurança CRV incluído na assinatura — mesmo desenho do item acima:
-  // usa a MESMA API do "Consulta 3 Código Segurança CRV (PDF)" pago (Vistocar
-  // security-code, ver VISTOCAR_ENDPOINTS), mas como serviço separado, para o
-  // security-code-vistocar-2 seguir intocado no grupo CRV (crédito por consulta,
+  // usa a MESMA API do "Consulta Código Segurança CRV (PDF)" pago (despbrasil
+  // codigo_seguranca v2 desde 13/11/2026; antes, a Vistocar), mas como serviço
+  // separado, para o pago seguir intocado no grupo CRV (crédito por consulta,
   // aba Nova Consulta). Não debita crédito: quem paga é a assinatura, e o custo
   // do período é limitado pela cota própria (ver ASSINATURA_CRV_COTA e o bloco
   // deste serviceId em processCatalogQuery).
@@ -1645,9 +1664,15 @@ const SERVICES = [
   // devolve o cartão da CDT com camada de texto, a R$ 4,00 de custo.
   // R$ 8,50 FIXO (noMarkup) por decisão do dono — não é custo mais markup.
   { id:'codigo-seguranca-crv', name:'Consulta Código Segurança CRV (PDF)', group:'CRV', basePrice:8.50, noMarkup:true, inputType:'placa', icon:'🔐' },
-  // API Vistocar (vistocarconsulta.com.br) — segunda fonte para Código de Segurança
-  // CRV, resposta em JSON com PDF pronto em base64 (ver VISTOCAR_ENDPOINTS).
-  { id:'security-code-vistocar-2', name:'Consulta 3 Código Segurança CRV (PDF)', group:'CRV', basePrice:8.10, noMarkup:true, inputType:'placa', icon:'🔐' },
+  // Placa Fácil Pro (ver PLACAFACIL_BASE_URL), R$ 7,99 fixo (dono, 13/11/2026).
+  // Tomou o lugar do 'security-code-vistocar-2' ("Consulta 3 Código Segurança
+  // CRV (PDF)", Vistocar, R$ 8,10). O da assinatura
+  // (assinatura-codigo-seguranca-crv) foi para a despbrasil no mesmo dia: a
+  // Vistocar não atende mais nenhum Código de Segurança.
+  // FORA DO CATÁLOGO até a primeira consulta de verdade passar (dono, 13/11/2026):
+  // a conta respondia 403 "sem_servico". Para ligar, é só tirar o comentário da
+  // linha abaixo e pôr a PLACAFACIL_KEY na Vercel — bloco, PDF e saldo já estão prontos.
+  // { id:PLACAFACIL_SERVICE_ID, name:'Consulta Código Segurança CRV v2 (PDF)', group:'CRV', basePrice:7.99, noMarkup:true, inputType:'placa', icon:'🔐' },
   // API despbrasil (serviço "verificar_crlv", o MESMO do "Verificar CRLV e
   // Último Licenciamento" do grupo Consultas Básicas — ver DESPBRASIL_SVCS).
   // Id separado de propósito: aquele serviço segue intocado a R$ 3,00, e este
@@ -1830,9 +1855,9 @@ const SERVICES = [
 const VISTOCAR_FORA = false;
 const VISTOCAR_FORA_MSG = 'ESSA CONSULTA ESTÁ TEMPORARIAMENTE FORA, ESTAMOS REFORMULANDO NOSSO CONTRATO COM O FORNECEDOR, TENTE OUTRA CONSULTA SIMILAR NA PLATAFORMA';
 if (VISTOCAR_FORA) {
-  // Os do VISTOCAR_ENDPOINTS + o Código de Segurança da assinatura, que usa a
-  // mesma rota security-code num bloco próprio.
-  const ids = new Set([...Object.keys(VISTOCAR_ENDPOINTS), ASSINATURA_CRV_SERVICE_ID]);
+  // Os do VISTOCAR_ENDPOINTS (o Código de Segurança da assinatura saiu daqui em
+  // 13/11/2026, quando foi para a despbrasil).
+  const ids = new Set(Object.keys(VISTOCAR_ENDPOINTS));
   for (const s of SERVICES) {
     if (ids.has(s.id)) { s.unavailable = true; s.slowNote = VISTOCAR_FORA_MSG; }
   }
@@ -2340,6 +2365,32 @@ async function initDB() {
       saldo_base        NUMERIC(12,2) NOT NULL DEFAULT 0,
       base_em           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       custo_consulta    NUMERIC(10,2) NOT NULL DEFAULT 0,
+      alerta_abaixo     NUMERIC(12,2) NOT NULL DEFAULT 30,
+      alerta_enviado_em TIMESTAMPTZ,
+      sem_saldo_em      TIMESTAMPTZ
+    );
+  `);
+  // Placa Fácil Pro (Código Segurança CRV v2): saldo estimado no mesmo desenho
+  // da Consultas Fácil — saldo informado pelo admin menos o custo das consultas
+  // com sucesso desde então (ver registrarPlacaFacil).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS placafacil_consumo (
+      id          SERIAL PRIMARY KEY,
+      origem      VARCHAR(80),
+      placa       VARCHAR(10),
+      http_status INTEGER,
+      sucesso     BOOLEAN DEFAULT false,
+      custo       NUMERIC(10,2) DEFAULT 0,
+      resposta    VARCHAR(200),
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_placafacil_consumo_data ON placafacil_consumo(created_at);`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS placafacil_saldo (
+      id                INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      saldo_base        NUMERIC(12,2) NOT NULL DEFAULT 0,
+      base_em           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       alerta_abaixo     NUMERIC(12,2) NOT NULL DEFAULT 30,
       alerta_enviado_em TIMESTAMPTZ,
       sem_saldo_em      TIMESTAMPTZ
@@ -10781,6 +10832,114 @@ async function registrarConsultaFacil(resp, placa, origem) {
   } catch (e) { console.error('[consultasfacil] erro ao registrar consumo:', e.message); }
 }
 
+async function saldoPlacaFacil() {
+  await pool.query(`INSERT INTO placafacil_saldo (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+  const { rows: [s] } = await pool.query(`SELECT * FROM placafacil_saldo WHERE id = 1`);
+  const { rows: [c] } = await pool.query(
+    `SELECT COALESCE(SUM(custo),0)::float AS gasto, COUNT(*) FILTER (WHERE sucesso)::int AS n,
+            COUNT(*) FILTER (WHERE sucesso AND custo = 0)::int AS sem_custo
+       FROM placafacil_consumo WHERE created_at >= $1`, [s.base_em]);
+  return {
+    saldoBase: Number(s.saldo_base), baseEm: s.base_em, custoConsulta: PLACAFACIL_CUSTO_CONSULTA,
+    gastoDesdeBase: c.gasto, consultasDesdeBase: c.n, consultasSemCusto: c.sem_custo,
+    saldoEstimado: Math.round((Number(s.saldo_base) - c.gasto) * 100) / 100,
+    alertaAbaixo: Number(s.alerta_abaixo), alertaEnviadoEm: s.alerta_enviado_em,
+    semSaldoEm: s.sem_saldo_em,
+  };
+}
+
+// Registra cada chamada à Placa Fácil Pro. O custo é o "valor_cobrado" da
+// resposta quando ela traz (a despbrasil, do mesmo desenho, traz), senão o
+// PLACAFACIL_CUSTO_CONSULTA. Falta de saldo (402, codigo "sem_saldo" ou texto
+// com "saldo insuficiente") e saldo estimado abaixo do alerta avisam o
+// ADMIN_PHONE uma vez cada; os dois rearmam quando o admin informa saldo novo.
+async function registrarPlacaFacil({ status, json, texto, sucesso, placa, origem }) {
+  try {
+    const cobrado = Number(json?.valor_cobrado ?? json?.valorCobrado);
+    const custo = !sucesso ? 0 : (Number.isFinite(cobrado) && cobrado > 0 ? cobrado : (PLACAFACIL_CUSTO_CONSULTA || 0));
+    const resumo = sucesso ? 'Sucesso'
+      : String(json?.error || json?.erro || json?.mensagem || texto || '').replace(/\s+/g, ' ').slice(0, 200);
+    await pool.query(
+      `INSERT INTO placafacil_consumo (origem, placa, http_status, sucesso, custo, resposta) VALUES ($1,$2,$3,$4,$5,$6)`,
+      [String(origem || '').slice(0, 80), String(placa || '').toUpperCase().slice(0, 10), status, !!sucesso, custo, resumo]);
+    if (!sucesso && (status === 402 || /saldo/i.test(String(json?.codigo || '')) || /saldo insuficiente|sem saldo|cr[ée]ditos? insuficiente/i.test(resumo))) {
+      const marcou = await pool.query(
+        `UPDATE placafacil_saldo SET sem_saldo_em = NOW() WHERE id = 1 AND sem_saldo_em IS NULL RETURNING id`);
+      if (marcou.rowCount && ADMIN_PHONE)
+        await sendWhatsApp(ADMIN_PHONE, `🚨 *Placa Fácil Pro sem saldo*\nA API recusou a consulta por falta de saldo (placa ${String(placa || '').toUpperCase()}): "${resumo.slice(0, 120)}".\n\nEnquanto isso a Consulta Código Segurança CRV v2 não sai. Recarregue no painel deles e informe o saldo novo no admin, em *Saldo Placa Fácil*.`, { marca: false }).catch(() => {});
+      return;
+    }
+    if (!custo) return;
+    const s = await saldoPlacaFacil();
+    if (s.saldoEstimado < s.alertaAbaixo && !s.alertaEnviadoEm) {
+      const marcou = await pool.query(
+        `UPDATE placafacil_saldo SET alerta_enviado_em = NOW() WHERE id = 1 AND alerta_enviado_em IS NULL RETURNING id`);
+      if (marcou.rowCount && ADMIN_PHONE)
+        await sendWhatsApp(ADMIN_PHONE, `⚠️ *Saldo Placa Fácil Pro baixo*\nSaldo estimado: ${fmtMoneyBRL(s.saldoEstimado)} (alerta abaixo de ${fmtMoneyBRL(s.alertaAbaixo)}).\n\nRecarregue no painel deles e informe o saldo novo no admin, em *Saldo Placa Fácil*.`, { marca: false }).catch(() => {});
+    }
+  } catch (e) { console.error('[placafacil] erro ao registrar consumo:', e.message); }
+}
+
+// Código de segurança do CRV dentro da resposta da Placa Fácil Pro: o nome do
+// campo não está na doc (o exemplo dela nem traz o código), então a busca é
+// por chave com "seguran" e valor de 9 a 12 dígitos, em qualquer nível.
+function acharCodigoSegurancaCrv(obj, prof = 0) {
+  if (!obj || typeof obj !== 'object' || prof > 4) return null;
+  for (const [k, v] of Object.entries(obj)) {
+    if (/seguran/i.test(k) && (typeof v === 'string' || typeof v === 'number')) {
+      const d = String(v).replace(/\D/g, '');
+      if (d.length >= 9 && d.length <= 12) return d;
+    }
+  }
+  for (const v of Object.values(obj)) {
+    const achou = acharCodigoSegurancaCrv(v, prof + 1);
+    if (achou) return achou;
+  }
+  return null;
+}
+
+// Relatório da Consulta Código Segurança CRV v2: o código em bloco próprio no
+// topo e, abaixo, os dados do veículo como vieram (pdfRenderDirectData desce
+// os níveis e troca booleano por Sim/Não). Campos "codigoXxx" que têm o par
+// "descricaoXxx" saem — o código interno da tabela não diz nada ao cliente.
+function buildCodigoSegurancaV2PdfBuffer(service, placa, codigo, dados) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+      const pega = (...nomes) => { for (const n of nomes) { const k = Object.keys(dados).find(x => x.toLowerCase() === n.toLowerCase()); if (k && dados[k] !== null && dados[k] !== '') return String(dados[k]); } return ''; };
+      pdfReportHeader(doc, service.name.toUpperCase(), now);
+      pdfBar(doc, 'CÓDIGO DE SEGURANÇA DO CRV');
+      pdfFieldGrid(doc, [
+        ['Código de segurança do CRV', codigo],
+        ['Placa', placa],
+        ['Renavam', pega('codigoRenavam', 'renavam') || 'Nada consta'],
+        ['Marca / Modelo', pega('descricaoMarcaModelo', 'marcaModelo') || 'Nada consta'],
+      ]);
+      const resto = {};
+      for (const [k, v] of Object.entries(dados)) {
+        if (/seguran/i.test(k)) continue;
+        if (/^(placa|codigoRenavam|renavam|descricaoMarcaModelo|marcaModelo|isPesquisado|versao)$/i.test(k)) continue;
+        if (/^codigo/i.test(k) && Object.keys(dados).some(x => x.toLowerCase() === k.toLowerCase().replace(/^codigo/, 'descricao'))) continue;
+        // "descricaoCor" sai como "Cor" (o "Descricao" é do nome do campo deles).
+        resto[k.replace(/^descricao(?=[A-Z])/, '')] = (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) ? v.slice(0, 10).split('-').reverse().join('/') : v;
+      }
+      if (Object.keys(resto).length) {
+        doc.moveDown(0.4);
+        pdfBar(doc, 'DADOS DO VEÍCULO');
+        pdfRenderDirectData(doc, resto, 1);
+      }
+      doc.moveDown(0.4);
+      pdfReportFooter(doc, now);
+      doc.end();
+    } catch (e) { reject(e); }
+  });
+}
+
 // Assinatura no padrão Standard Webhooks/Svix (segredo "whsec_<base64>"):
 // HMAC-SHA256 de "<id>.<timestamp>.<corpo>", base64, no header
 // webhook-signature (ou svix-signature) como "v1,<assinatura>" — pode vir mais
@@ -11099,6 +11258,102 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
 
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="mcdespachadoria-cnpj-${cnpj}.pdf"`);
+      return res.send(pdfBuf);
+    }
+
+    // ── Consulta Código Segurança CRV v2 — Placa Fácil Pro (ver PLACAFACIL_BASE_URL) ──
+    // A resposta é JSON; o cliente recebe o relatório em PDF montado aqui (ou o
+    // PDF deles, se um dia vier um). Só cobra com o código de segurança na mão.
+    if (serviceId === PLACAFACIL_SERVICE_ID) {
+      const placa = String(params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa))
+        return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+
+      let status = 0, texto = '', json = null;
+      try {
+        const r = await fetch(PLACAFACIL_BASE_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', chaveAcesso: PLACAFACIL_KEY },
+          body: JSON.stringify({ servico: 'codigo_seguranca', placa }),
+          signal: AbortSignal.timeout(120000),
+        });
+        status = r.status;
+        texto = await r.text();
+        try { json = JSON.parse(texto); } catch { /* resposta não-JSON tratada abaixo */ }
+      } catch (e) {
+        console.error(`[${serviceId}] falha na chamada:`, e.message);
+        await registrarPlacaFacil({ status: 0, texto: e.message, sucesso: false, placa, origem: service.name });
+        return res.status(502).json({ error: 'O sistema do fornecedor não respondeu. Nada foi cobrado — tente novamente em alguns minutos.' });
+      }
+
+      // Os dados vêm soltos na raiz (doc) ou em "dados" (desenho da despbrasil).
+      const dados = (json?.dados && typeof json.dados === 'object' && !Array.isArray(json.dados)) ? json.dados : json;
+      const recusou = !json || status >= 400 || json.ok === false || json.sucesso === false || typeof json.error === 'string';
+      const codigo = recusou ? null : acharCodigoSegurancaCrv(dados);
+      await registrarPlacaFacil({ status, json, texto, sucesso: !!codigo, placa, origem: service.name });
+      if (!codigo) {
+        console.error(`[${serviceId}] sem código de segurança: HTTP ${status} ${texto.slice(0, 400)}`);
+        // Chave recusada, conta sem serviço liberado ou sem saldo: problema nosso
+        // com o fornecedor — o cliente só precisa saber que está fora.
+        if (!json || [401, 402, 403].includes(status) || status >= 500) {
+          // 402 já avisa em registrarPlacaFacil (sem saldo); aqui, no máximo um aviso por hora.
+          if ([401, 403].includes(status) && ADMIN_PHONE && Date.now() - placaFacilAvisoEm > 3600 * 1000) {
+            placaFacilAvisoEm = Date.now();
+            await sendWhatsApp(ADMIN_PHONE, `🚨 *Placa Fácil Pro recusou a consulta*\nHTTP ${status}: "${String(json?.error || texto).slice(0, 150)}" (placa ${placa}).\n\nA Consulta Código Segurança CRV v2 está fora até resolver com o fornecedor. Nada foi cobrado do cliente.`, { marca: false }).catch(() => {});
+          }
+          return res.status(503).json({ error: `${CONSULTA_FORA_MSG} Nada foi cobrado.` });
+        }
+        const motivo = recusou ? String(json.error || json.erro || json.mensagem || '').trim() : '';
+        const msg = motivo && motivo.length <= 200 && !/[{<]/.test(motivo)
+          ? motivo.replace(/[.!?]*$/, '.')
+          : 'O código de segurança do CRV não foi localizado para essa placa.';
+        return res.status(422).json({ error: `${msg} Nada foi cobrado.` });
+      }
+
+      let pdfBuf = null;
+      const pdfPronto = acharPdfDirectData({ pdf_base64: json.pdf_base64, arquivo_url: json.arquivo_url });
+      if (pdfPronto?.b64) pdfBuf = Buffer.from(pdfPronto.b64, 'base64');
+      else if (typeof json.arquivo_url === 'string' && /^https:\/\//i.test(json.arquivo_url)) {
+        try {
+          const r = await fetch(json.arquivo_url, { signal: AbortSignal.timeout(60000) });
+          const b = Buffer.from(await r.arrayBuffer());
+          if (r.ok && b.slice(0, 4).toString('latin1') === '%PDF') pdfBuf = b;
+        } catch (e) { console.error(`[${serviceId}] não baixou o PDF do retorno:`, e.message); }
+      }
+      if (!pdfBuf) {
+        try {
+          const limpo = { ...dados };
+          for (const k of ['ok', 'sucesso', 'consulta_id', 'status', 'valor_cobrado', 'arquivo_url', 'file_uri', 'pdf_base64', 'dados'])
+            delete limpo[k];
+          pdfBuf = await buildCodigoSegurancaV2PdfBuffer(service, placa, codigo, limpo);
+        } catch (e) {
+          console.error(`[${serviceId}] erro ao gerar PDF:`, e.message);
+          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório. Nada foi cobrado.' });
+        }
+      }
+
+      await debitarConsulta(userId, price);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name} — ${placa}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify({ placa }), price, txRow.rows[0].id]
+      );
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, { placa });
+      const nomeArq = `mcdespachadoria-cod-seguranca-crv-${placa}.pdf`;
+      if (user.phone)
+        await sendWhatsAppPdf(user.phone, pdfBuf, nomeArq, `✅ *${service.name}*\n🚗 ${placa}`).catch(() => {});
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
       return res.send(pdfBuf);
     }
 
@@ -12204,45 +12459,27 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
     }
 
     // ── Código de Segurança CRV incluído na assinatura ──
-    // Mesma API do "Consulta 3 Código Segurança CRV (PDF)" pago (Vistocar
-    // security-code, JSON com o PDF pronto em base64), mas serviço à parte: o
-    // security-code-vistocar-2 segue cobrando crédito na aba Nova Consulta e
-    // este aqui não debita nada — quem paga é a assinatura, com cota própria
-    // (ASSINATURA_CRV_COTA), separada da cota de placas.
+    // Desde 13/11/2026 vem da despbrasil (dono) — o "codigo_seguranca" v2, o
+    // mesmo do "Consulta Código Segurança CRV (PDF)" pago e do ATPVe
+    // (fetchCodigoSegurancaPdfDespbrasil, PDF pronto). Até então era a Vistocar
+    // (apiclient/security-code). Serviço à parte do pago: este não debita nada —
+    // quem paga é a assinatura, com cota própria (ASSINATURA_CRV_COTA), separada
+    // da cota de placas.
     if (serviceId === ASSINATURA_CRV_SERVICE_ID) {
       const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
       if (placa.length !== 7)
         return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
 
-      let parsed;
+      let pdfBuf = null;
       try {
-        const vRes = await fetch(`${VISTOCAR_BASE_URL}/apiclient/${VISTOCAR_ENDPOINTS['security-code-vistocar-2']}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await getVistocarToken()}` },
-          body: JSON.stringify({ plate: placa }),
-        });
-        parsed = await vRes.json().catch(() => null);
-        if (!vRes.ok) {
-          const msg = parsed ? extractApiErrorMsg(parsed) : `Erro HTTP ${vRes.status}.`;
-          console.error(`[${serviceId}] erro na Vistocar: ${msg}`);
-          return res.status(502).json({ error: msg });
-        }
+        pdfBuf = await fetchCodigoSegurancaPdfDespbrasil(placa);
       } catch (e) {
-        console.error(`[${serviceId}] falha ao consultar a Vistocar:`, e.message);
-        return res.status(502).json({ error: 'Erro ao consultar a API. Tente novamente.' });
+        console.error(`[${serviceId}] falha ao consultar a despbrasil:`, e.message);
       }
-
-      // Mesmo envelope conferido no fluxo pago: status/message na raiz e o
-      // resultado em "response" (success + paid + pdfBase64).
-      const ok = parsed?.status === 200 && parsed?.response?.success === true
-        && parsed?.response?.paid === true && parsed?.response?.pdfBase64;
-      if (!ok) {
-        const errMsg = parsed?.message || parsed?.response?.msg
-          || 'Nenhum resultado encontrado para essa consulta. Nada foi descontado da sua cota.';
-        console.error(`[${serviceId}] resposta inesperada da Vistocar: ${JSON.stringify(parsed)}`);
-        return res.status(422).json({ error: errMsg });
-      }
-      const pdfBuf = Buffer.from(parsed.response.pdfBase64, 'base64');
+      // O motivo da recusa fica no log da função; para o cliente basta saber
+      // que não saiu e que a cota segue intacta.
+      if (!pdfBuf || pdfBuf.slice(0, 4).toString('latin1') !== '%PDF')
+        return res.status(502).json({ error: `${CONSULTA_FORA_MSG} Nada foi descontado da sua cota.` });
 
       // Cota só é consumida com o PDF em mãos, e de forma atômica (o WHERE
       // impede duas consultas simultâneas de furarem o teto do período).
@@ -19476,6 +19713,50 @@ app.post('/api/admin/consultasfacil/saldo', requireAuth, requireSuperAdmin, asyn
     res.json({ ok: true, saldo: await saldoConsultaFacil() });
   } catch (e) {
     console.error('[admin/consultasfacil/saldo] erro:', e.message);
+    res.status(500).json({ error: 'Erro ao salvar.' });
+  }
+});
+
+// Admin → Saldo Placa Fácil (Código Segurança CRV v2). Mesmo desenho das duas
+// rotas da Consultas Fácil acima.
+app.get('/api/admin/placafacil', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const saldo = await saldoPlacaFacil();
+    const { rows: [periodo] } = await pool.query(`
+      SELECT COALESCE(SUM(custo) FILTER (WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'),0)::float AS hoje,
+             COUNT(*) FILTER (WHERE sucesso AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo')::int AS hoje_n,
+             COALESCE(SUM(custo) FILTER (WHERE created_at >= date_trunc('month', NOW() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'),0)::float AS mes,
+             COUNT(*) FILTER (WHERE sucesso AND created_at >= date_trunc('month', NOW() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo')::int AS mes_n
+        FROM placafacil_consumo`);
+    const { rows: consumo } = await pool.query(`
+      SELECT id, origem, placa, http_status, sucesso, custo::float AS custo, resposta, created_at
+        FROM placafacil_consumo ORDER BY created_at DESC LIMIT 50`);
+    res.json({ saldo, hoje: periodo.hoje, hojeConsultas: periodo.hoje_n, mes: periodo.mes, mesConsultas: periodo.mes_n,
+      consumo, chaveConfigurada: !!PLACAFACIL_KEY });
+  } catch (e) {
+    console.error('[admin/placafacil] erro:', e.message);
+    res.status(500).json({ error: 'Erro ao carregar o saldo da Placa Fácil.' });
+  }
+});
+
+app.post('/api/admin/placafacil/saldo', requireAuth, requireSuperAdmin, async (req, res) => {
+  const num = v => (v === undefined || v === null || v === '') ? null : Number(String(v).replace(',', '.'));
+  const saldo = num(req.body?.saldo), alerta = num(req.body?.alertaAbaixo);
+  if (saldo !== null && (!Number.isFinite(saldo) || saldo < 0 || saldo > 1e7))
+    return res.status(400).json({ error: 'Saldo inválido.' });
+  if (alerta !== null && (!Number.isFinite(alerta) || alerta < 0 || alerta > 1e6))
+    return res.status(400).json({ error: 'Valor do alerta inválido.' });
+  if (saldo === null && alerta === null)
+    return res.status(400).json({ error: 'Informe o saldo ou o valor do alerta.' });
+  try {
+    await pool.query(`INSERT INTO placafacil_saldo (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+    if (saldo !== null)
+      await pool.query(`UPDATE placafacil_saldo SET saldo_base = $1, base_em = NOW(), alerta_enviado_em = NULL, sem_saldo_em = NULL WHERE id = 1`, [saldo]);
+    if (alerta !== null)
+      await pool.query(`UPDATE placafacil_saldo SET alerta_enviado_em = CASE WHEN alerta_abaixo = $1 THEN alerta_enviado_em END, alerta_abaixo = $1 WHERE id = 1`, [alerta]);
+    res.json({ ok: true, saldo: await saldoPlacaFacil() });
+  } catch (e) {
+    console.error('[admin/placafacil/saldo] erro:', e.message);
     res.status(500).json({ error: 'Erro ao salvar.' });
   }
 });
