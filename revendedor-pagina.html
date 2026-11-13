@@ -204,13 +204,6 @@ function renderConsultas() {
     const nome = document.createElement('span');
     nome.className = 'text-gray-700';
     nome.textContent = `${c.icon || ''} ${c.name}`.trim();
-    // Consulta que só existe no @consultar: o cliente não a acha no painel.
-    if (c.whats) {
-      const selo = document.createElement('span');
-      selo.className = 'ml-2 inline-block text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 whitespace-nowrap';
-      selo.textContent = '📱 pelo WhatsApp';
-      nome.append(selo);
-    }
     const preco = document.createElement('span');
     preco.className = 'font-semibold cor-txt whitespace-nowrap';
     preco.textContent = fmt(c.preco);

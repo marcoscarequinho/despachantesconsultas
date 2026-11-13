@@ -4062,9 +4062,9 @@ const hostDaRequisicao = req => String(req.headers['x-forwarded-host'] || req.he
 async function dadosPaginaParceiro(rv) {
   const v = new Date(rv.pagina_atualizada_em || 0).getTime();
   const tab = await tabelaParceiro(rv.id);
-  // As só do WhatsApp entram com o selo "pelo WhatsApp" (whats) — dono, 13/11/2026.
-  const consultas = servicosRevendaveis().filter(s => tab.vendaDe(s) != null && !tab.ocultas.has(s.id))
-    .map(s => ({ name: s.name, group: s.group, icon: s.icon, preco: tab.vendaDe(s), whats: !!s.soWhats }));
+  // As só do WhatsApp ficam fora da página: ela lista o que se consulta no painel.
+  const consultas = servicosRevendaveis().filter(s => !s.soWhats && tab.vendaDe(s) != null && !tab.ocultas.has(s.id))
+    .map(s => ({ name: s.name, group: s.group, icon: s.icon, preco: tab.vendaDe(s) }));
   return {
     nome: rv.name, slug: rv.slug, pagina: rv.pagina || {}, consultas,
     logo: rv.tem_logo ? `/api/public/revendedor/${rv.slug}/imagem/logo?v=${v}` : null,
