@@ -11289,7 +11289,34 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
       // Os dados vêm soltos na raiz (doc) ou em "dados" (desenho da despbrasil).
       const dados = (json?.dados && typeof json.dados === 'object' && !Array.isArray(json.dados)) ? json.dados : json;
       const recusou = !json || status >= 400 || json.ok === false || json.sucesso === false || typeof json.error === 'string';
-      const codigo = recusou ? null : acharCodigoSegurancaCrv(dados);
+      // Placa já consultada volta do cache deles SEM dados soltos, só o PDF do
+      // cartão (from_cache:true, pdf_base64 + arquivo_url — OCY5C55, 13/11/2026):
+      // o código sai do texto do PDF e o cartão é entregue como veio.
+      let pdfBuf = null;
+      if (!recusou && (json.pdf_base64 || json.arquivo_url)) {
+        const pdfPronto = acharPdfDirectData({ pdf_base64: json.pdf_base64, arquivo_url: json.arquivo_url });
+        if (pdfPronto?.b64) pdfBuf = Buffer.from(pdfPronto.b64, 'base64');
+        else if (typeof json.arquivo_url === 'string' && /^https:\/\//i.test(json.arquivo_url)) {
+          try {
+            const r = await fetch(json.arquivo_url, { signal: AbortSignal.timeout(60000) });
+            const b = Buffer.from(await r.arrayBuffer());
+            if (r.ok && b.slice(0, 4).toString('latin1') === '%PDF') pdfBuf = b;
+          } catch (e) { console.error(`[${serviceId}] não baixou o PDF do retorno:`, e.message); }
+        }
+        if (pdfBuf && pdfBuf.slice(0, 4).toString('latin1') !== '%PDF') pdfBuf = null;
+      }
+      let codigo = recusou ? null : acharCodigoSegurancaCrv(dados);
+      if (!codigo && pdfBuf) {
+        // No cartão, renavam e número de segurança são os dois números de 11
+        // dígitos, nessa ordem; a placa tem que bater para não entregar o cartão de outra.
+        try {
+          const { text } = await pdfParseTolerante(pdfBuf);
+          const t = String(text || '');
+          const nums = t.match(/(?<!\d)\d{11}(?!\d)/g) || [];
+          if (nums.length >= 2 && t.replace(/\s/g, '').toUpperCase().includes(placa)) codigo = nums[1];
+        } catch (e) { console.error(`[${serviceId}] não leu o PDF do retorno:`, e.message); }
+        if (!codigo) pdfBuf = null;
+      }
       await registrarPlacaFacil({ status, json, texto, sucesso: !!codigo, placa, origem: service.name });
       if (!codigo) {
         console.error(`[${serviceId}] sem código de segurança: HTTP ${status} ${texto.slice(0, 400)}`);
@@ -11310,16 +11337,6 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
         return res.status(422).json({ error: `${msg} Nada foi cobrado.` });
       }
 
-      let pdfBuf = null;
-      const pdfPronto = acharPdfDirectData({ pdf_base64: json.pdf_base64, arquivo_url: json.arquivo_url });
-      if (pdfPronto?.b64) pdfBuf = Buffer.from(pdfPronto.b64, 'base64');
-      else if (typeof json.arquivo_url === 'string' && /^https:\/\//i.test(json.arquivo_url)) {
-        try {
-          const r = await fetch(json.arquivo_url, { signal: AbortSignal.timeout(60000) });
-          const b = Buffer.from(await r.arrayBuffer());
-          if (r.ok && b.slice(0, 4).toString('latin1') === '%PDF') pdfBuf = b;
-        } catch (e) { console.error(`[${serviceId}] não baixou o PDF do retorno:`, e.message); }
-      }
       if (!pdfBuf) {
         try {
           const limpo = { ...dados };
