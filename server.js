@@ -1497,7 +1497,7 @@ const SERVICES = [
   // aba Nova Consulta). Não debita crédito: quem paga é a assinatura, e o custo
   // do período é limitado pela cota própria (ver ASSINATURA_CRV_COTA e o bloco
   // deste serviceId em processCatalogQuery).
-  { id:'assinatura-codigo-seguranca-crv', name:'Consulta 3 Código Segurança CRV (PDF)', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'placa', icon:'🔐',
+  { id:'assinatura-codigo-seguranca-crv', name:'Consulta Código Segurança CRV (PDF)', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'placa', icon:'🔐',
     slowNote:`Código de segurança do CRV em PDF. Incluído na Assinatura Coisas de Despachantes, com cota própria de ${ASSINATURA_CRV_COTA} consultas por período.` },
   // Gerar Declaração de Residência DETRAN RJ — fluxo em duas etapas, fora do padrão
   // padrão "chama upstream e cobra" dos demais serviços: primeiro o front busca dados
@@ -1665,7 +1665,8 @@ const SERVICES = [
   // Voltou em 21/09/2026, com a v2 conferida contra a API real (placa DDB2H98):
   // devolve o cartão da CDT com camada de texto, a R$ 4,00 de custo.
   // R$ 8,50 FIXO (noMarkup) por decisão do dono — não é custo mais markup.
-  { id:'codigo-seguranca-crv', name:'Consulta Código Segurança CRV (PDF)', group:'CRV', basePrice:8.50, noMarkup:true, inputType:'placa', icon:'🔐' },
+  // 'codigo-seguranca-crv' (despbrasil, R$ 8,50) saiu do catálogo em 13/11/2026 (dono): fica só a v2,
+  // abaixo. A integração segue em DESPBRASIL_SVCS (o ATPVe com Comunicação de Venda usa) para outros endpoints.
   // Placa Fácil Pro (ver PLACAFACIL_BASE_URL), R$ 7,99 fixo (dono, 13/11/2026).
   // Tomou o lugar do 'security-code-vistocar-2' ("Consulta 3 Código Segurança
   // CRV (PDF)", Vistocar, R$ 8,10). O da assinatura
@@ -10899,6 +10900,95 @@ function acharCodigoSegurancaCrv(obj, prof = 0) {
   return null;
 }
 
+// Consulta do Código de Segurança do CRV na Placa Fácil Pro — o único caminho
+// da v2 do catálogo e do Código de Segurança da assinatura (13/11/2026, dono).
+// Devolve { codigo, pdfBuf } (o cartão da SENATRAN) ou { erro, status } com a
+// mensagem para o cliente e o HTTP a responder; nada aqui cobra.
+async function consultarCodigoSegurancaPlacaFacil(placa, nomeServico) {
+  const nome = nomeServico || 'Código Segurança CRV v2';
+  let status = 0, texto = '', json = null;
+  try {
+    const r = await fetch(PLACAFACIL_BASE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', chaveAcesso: PLACAFACIL_KEY },
+      body: JSON.stringify({ servico: 'codigo_seguranca', placa }),
+      signal: AbortSignal.timeout(120000),
+    });
+    status = r.status;
+    texto = await r.text();
+    try { json = JSON.parse(texto); } catch { /* resposta não-JSON tratada abaixo */ }
+  } catch (e) {
+    console.error(`[placafacil] falha na chamada:`, e.message);
+    await registrarPlacaFacil({ status: 0, texto: e.message, sucesso: false, placa, origem: nome });
+    return { status: 502, erro: 'O sistema do fornecedor não respondeu. Nada foi cobrado — tente novamente em alguns minutos.' };
+  }
+
+  // Os dados vêm soltos na raiz (doc) ou em "dados" (desenho da despbrasil).
+  const dados = (json?.dados && typeof json.dados === 'object' && !Array.isArray(json.dados)) ? json.dados : json;
+  const recusou = !json || status >= 400 || json.ok === false || json.sucesso === false || typeof json.error === 'string';
+  // Placa já consultada volta do cache deles SEM dados soltos, só o PDF do
+  // cartão (from_cache:true, pdf_base64 + arquivo_url — OCY5C55, 13/11/2026):
+  // o código sai do texto do PDF e o cartão é entregue como veio.
+  let pdfBuf = null;
+  if (!recusou && (json.pdf_base64 || json.arquivo_url)) {
+    const pdfPronto = acharPdfDirectData({ pdf_base64: json.pdf_base64, arquivo_url: json.arquivo_url });
+    if (pdfPronto?.b64) pdfBuf = Buffer.from(pdfPronto.b64, 'base64');
+    else if (typeof json.arquivo_url === 'string' && /^https:\/\//i.test(json.arquivo_url)) {
+      try {
+        const r = await fetch(json.arquivo_url, { signal: AbortSignal.timeout(60000) });
+        const b = Buffer.from(await r.arrayBuffer());
+        if (r.ok && b.slice(0, 4).toString('latin1') === '%PDF') pdfBuf = b;
+      } catch (e) { console.error(`[placafacil] não baixou o PDF do retorno:`, e.message); }
+    }
+    if (pdfBuf && pdfBuf.slice(0, 4).toString('latin1') !== '%PDF') pdfBuf = null;
+  }
+  let codigo = recusou ? null : acharCodigoSegurancaCrv(dados);
+  if (!codigo && pdfBuf) {
+    // No cartão, renavam e número de segurança são os dois números de 11
+    // dígitos, nessa ordem (o renavam vem colado na placa, por isso não é \b);
+    // a placa tem que bater para não entregar o cartão de outra.
+    try {
+      const { text } = await pdfParseTolerante(pdfBuf);
+      const t = String(text || '');
+      const nums = t.match(/(?<!\d)\d{11}(?!\d)/g) || [];
+      if (nums.length >= 2 && t.replace(/\s/g, '').toUpperCase().includes(placa)) codigo = nums[1];
+    } catch (e) { console.error(`[placafacil] não leu o PDF do retorno:`, e.message); }
+    if (!codigo) pdfBuf = null;
+  }
+  await registrarPlacaFacil({ status, json, texto, sucesso: !!codigo, placa, origem: nome });
+  if (!codigo) {
+    console.error(`[placafacil] sem código de segurança: HTTP ${status} ${texto.slice(0, 400)}`);
+    // Chave recusada, conta sem serviço liberado ou sem saldo: problema nosso
+    // com o fornecedor — o cliente só precisa saber que está fora.
+    if (!json || [401, 402, 403].includes(status) || status >= 500) {
+      // 402 já avisa em registrarPlacaFacil (sem saldo); aqui, no máximo um aviso por hora.
+      if ([401, 403].includes(status) && ADMIN_PHONE && Date.now() - placaFacilAvisoEm > 3600 * 1000) {
+        placaFacilAvisoEm = Date.now();
+        await sendWhatsApp(ADMIN_PHONE, `🚨 *Placa Fácil Pro recusou a consulta*\nHTTP ${status}: "${String(json?.error || texto).slice(0, 150)}" (placa ${placa}).\n\nA Consulta Código Segurança CRV v2 e o Código de Segurança da assinatura estão fora até resolver com o fornecedor. Nada foi cobrado do cliente.`, { marca: false }).catch(() => {});
+      }
+      return { status: 503, erro: `${CONSULTA_FORA_MSG} Nada foi cobrado.` };
+    }
+    const motivo = recusou ? String(json.error || json.erro || json.mensagem || '').trim() : '';
+    const msg = motivo && motivo.length <= 200 && !/[{<]/.test(motivo)
+      ? motivo.replace(/[.!?]*$/, '.')
+      : 'O código de segurança do CRV não foi localizado para essa placa.';
+    return { status: 422, erro: `${msg} Nada foi cobrado.` };
+  }
+
+  if (!pdfBuf) {
+    try {
+      const limpo = { ...dados };
+      for (const k of ['ok', 'sucesso', 'consulta_id', 'status', 'valor_cobrado', 'arquivo_url', 'file_uri', 'pdf_base64', 'dados'])
+        delete limpo[k];
+      pdfBuf = await buildCodigoSegurancaV2PdfBuffer({ name: nome }, placa, codigo, limpo);
+    } catch (e) {
+      console.error(`[placafacil] erro ao gerar PDF:`, e.message);
+      return { status: 500, erro: 'Erro ao gerar o PDF do relatório. Nada foi cobrado.' };
+    }
+  }
+  return { codigo, pdfBuf };
+}
+
 // PDF da Consulta Código Segurança CRV v2: o cartão "Número de Segurança do
 // CRV" da SENATRAN (Carteira Digital de Trânsito), pedido do dono em
 // 13/11/2026 — até ali era um relatório no padrão do site. O modelo
@@ -11269,85 +11359,9 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
       if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa))
         return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
 
-      let status = 0, texto = '', json = null;
-      try {
-        const r = await fetch(PLACAFACIL_BASE_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', chaveAcesso: PLACAFACIL_KEY },
-          body: JSON.stringify({ servico: 'codigo_seguranca', placa }),
-          signal: AbortSignal.timeout(120000),
-        });
-        status = r.status;
-        texto = await r.text();
-        try { json = JSON.parse(texto); } catch { /* resposta não-JSON tratada abaixo */ }
-      } catch (e) {
-        console.error(`[${serviceId}] falha na chamada:`, e.message);
-        await registrarPlacaFacil({ status: 0, texto: e.message, sucesso: false, placa, origem: service.name });
-        return res.status(502).json({ error: 'O sistema do fornecedor não respondeu. Nada foi cobrado — tente novamente em alguns minutos.' });
-      }
-
-      // Os dados vêm soltos na raiz (doc) ou em "dados" (desenho da despbrasil).
-      const dados = (json?.dados && typeof json.dados === 'object' && !Array.isArray(json.dados)) ? json.dados : json;
-      const recusou = !json || status >= 400 || json.ok === false || json.sucesso === false || typeof json.error === 'string';
-      // Placa já consultada volta do cache deles SEM dados soltos, só o PDF do
-      // cartão (from_cache:true, pdf_base64 + arquivo_url — OCY5C55, 13/11/2026):
-      // o código sai do texto do PDF e o cartão é entregue como veio.
-      let pdfBuf = null;
-      if (!recusou && (json.pdf_base64 || json.arquivo_url)) {
-        const pdfPronto = acharPdfDirectData({ pdf_base64: json.pdf_base64, arquivo_url: json.arquivo_url });
-        if (pdfPronto?.b64) pdfBuf = Buffer.from(pdfPronto.b64, 'base64');
-        else if (typeof json.arquivo_url === 'string' && /^https:\/\//i.test(json.arquivo_url)) {
-          try {
-            const r = await fetch(json.arquivo_url, { signal: AbortSignal.timeout(60000) });
-            const b = Buffer.from(await r.arrayBuffer());
-            if (r.ok && b.slice(0, 4).toString('latin1') === '%PDF') pdfBuf = b;
-          } catch (e) { console.error(`[${serviceId}] não baixou o PDF do retorno:`, e.message); }
-        }
-        if (pdfBuf && pdfBuf.slice(0, 4).toString('latin1') !== '%PDF') pdfBuf = null;
-      }
-      let codigo = recusou ? null : acharCodigoSegurancaCrv(dados);
-      if (!codigo && pdfBuf) {
-        // No cartão, renavam e número de segurança são os dois números de 11
-        // dígitos, nessa ordem; a placa tem que bater para não entregar o cartão de outra.
-        try {
-          const { text } = await pdfParseTolerante(pdfBuf);
-          const t = String(text || '');
-          const nums = t.match(/(?<!\d)\d{11}(?!\d)/g) || [];
-          if (nums.length >= 2 && t.replace(/\s/g, '').toUpperCase().includes(placa)) codigo = nums[1];
-        } catch (e) { console.error(`[${serviceId}] não leu o PDF do retorno:`, e.message); }
-        if (!codigo) pdfBuf = null;
-      }
-      await registrarPlacaFacil({ status, json, texto, sucesso: !!codigo, placa, origem: service.name });
-      if (!codigo) {
-        console.error(`[${serviceId}] sem código de segurança: HTTP ${status} ${texto.slice(0, 400)}`);
-        // Chave recusada, conta sem serviço liberado ou sem saldo: problema nosso
-        // com o fornecedor — o cliente só precisa saber que está fora.
-        if (!json || [401, 402, 403].includes(status) || status >= 500) {
-          // 402 já avisa em registrarPlacaFacil (sem saldo); aqui, no máximo um aviso por hora.
-          if ([401, 403].includes(status) && ADMIN_PHONE && Date.now() - placaFacilAvisoEm > 3600 * 1000) {
-            placaFacilAvisoEm = Date.now();
-            await sendWhatsApp(ADMIN_PHONE, `🚨 *Placa Fácil Pro recusou a consulta*\nHTTP ${status}: "${String(json?.error || texto).slice(0, 150)}" (placa ${placa}).\n\nA Consulta Código Segurança CRV v2 está fora até resolver com o fornecedor. Nada foi cobrado do cliente.`, { marca: false }).catch(() => {});
-          }
-          return res.status(503).json({ error: `${CONSULTA_FORA_MSG} Nada foi cobrado.` });
-        }
-        const motivo = recusou ? String(json.error || json.erro || json.mensagem || '').trim() : '';
-        const msg = motivo && motivo.length <= 200 && !/[{<]/.test(motivo)
-          ? motivo.replace(/[.!?]*$/, '.')
-          : 'O código de segurança do CRV não foi localizado para essa placa.';
-        return res.status(422).json({ error: `${msg} Nada foi cobrado.` });
-      }
-
-      if (!pdfBuf) {
-        try {
-          const limpo = { ...dados };
-          for (const k of ['ok', 'sucesso', 'consulta_id', 'status', 'valor_cobrado', 'arquivo_url', 'file_uri', 'pdf_base64', 'dados'])
-            delete limpo[k];
-          pdfBuf = await buildCodigoSegurancaV2PdfBuffer(service, placa, codigo, limpo);
-        } catch (e) {
-          console.error(`[${serviceId}] erro ao gerar PDF:`, e.message);
-          return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório. Nada foi cobrado.' });
-        }
-      }
+      const cons = await consultarCodigoSegurancaPlacaFacil(placa, service.name);
+      if (cons.erro) return res.status(cons.status).json({ error: cons.erro });
+      const { pdfBuf } = cons;
 
       await debitarConsulta(userId, price);
       const txRow = await pool.query(
@@ -12476,27 +12490,20 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
     }
 
     // ── Código de Segurança CRV incluído na assinatura ──
-    // Desde 13/11/2026 vem da despbrasil (dono) — o "codigo_seguranca" v2, o
-    // mesmo do "Consulta Código Segurança CRV (PDF)" pago e do ATPVe
-    // (fetchCodigoSegurancaPdfDespbrasil, PDF pronto). Até então era a Vistocar
-    // (apiclient/security-code). Serviço à parte do pago: este não debita nada —
-    // quem paga é a assinatura, com cota própria (ASSINATURA_CRV_COTA), separada
-    // da cota de placas.
+    // Desde 13/11/2026 vem da Placa Fácil Pro (dono) — a mesma consulta da
+    // "Consulta Código Segurança CRV v2 (PDF)" do catálogo
+    // (consultarCodigoSegurancaPlacaFacil, cartão da SENATRAN). Passou pela
+    // Vistocar e pela despbrasil antes. Serviço à parte do pago: este não debita
+    // nada — quem paga é a assinatura, com cota própria (ASSINATURA_CRV_COTA),
+    // separada da cota de placas.
     if (serviceId === ASSINATURA_CRV_SERVICE_ID) {
       const placa = (params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
-      if (placa.length !== 7)
+      if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa))
         return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
 
-      let pdfBuf = null;
-      try {
-        pdfBuf = await fetchCodigoSegurancaPdfDespbrasil(placa);
-      } catch (e) {
-        console.error(`[${serviceId}] falha ao consultar a despbrasil:`, e.message);
-      }
-      // O motivo da recusa fica no log da função; para o cliente basta saber
-      // que não saiu e que a cota segue intacta.
-      if (!pdfBuf || pdfBuf.slice(0, 4).toString('latin1') !== '%PDF')
-        return res.status(502).json({ error: `${CONSULTA_FORA_MSG} Nada foi descontado da sua cota.` });
+      const cons = await consultarCodigoSegurancaPlacaFacil(placa, service.name);
+      if (cons.erro) return res.status(cons.status).json({ error: cons.erro.replace('Nada foi cobrado.', 'Nada foi descontado da sua cota.') });
+      const { pdfBuf } = cons;
 
       // Cota só é consumida com o PDF em mãos, e de forma atômica (o WHERE
       // impede duas consultas simultâneas de furarem o teto do período).
