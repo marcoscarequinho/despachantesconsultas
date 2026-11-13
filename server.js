@@ -10899,46 +10899,45 @@ function acharCodigoSegurancaCrv(obj, prof = 0) {
   return null;
 }
 
-// Relatório da Consulta Código Segurança CRV v2: o código em bloco próprio no
-// topo e, abaixo, os dados do veículo como vieram (pdfRenderDirectData desce
-// os níveis e troca booleano por Sim/Não). Campos "codigoXxx" que têm o par
-// "descricaoXxx" saem — o código interno da tabela não diz nada ao cliente.
-function buildCodigoSegurancaV2PdfBuffer(service, placa, codigo, dados) {
-  return new Promise((resolve, reject) => {
-    try {
-      const doc = new PDFDocument({ size: 'A4', margin: 50 });
-      const chunks = [];
-      doc.on('data', c => chunks.push(c));
-      doc.on('end', () => resolve(Buffer.concat(chunks)));
-      doc.on('error', reject);
-      const now = new Date();
-      const pega = (...nomes) => { for (const n of nomes) { const k = Object.keys(dados).find(x => x.toLowerCase() === n.toLowerCase()); if (k && dados[k] !== null && dados[k] !== '') return String(dados[k]); } return ''; };
-      pdfReportHeader(doc, service.name.toUpperCase(), now);
-      pdfBar(doc, 'CÓDIGO DE SEGURANÇA DO CRV');
-      pdfFieldGrid(doc, [
-        ['Código de segurança do CRV', codigo],
-        ['Placa', placa],
-        ['Renavam', pega('codigoRenavam', 'renavam') || 'Nada consta'],
-        ['Marca / Modelo', pega('descricaoMarcaModelo', 'marcaModelo') || 'Nada consta'],
-      ]);
-      const resto = {};
-      for (const [k, v] of Object.entries(dados)) {
-        if (/seguran/i.test(k)) continue;
-        if (/^(placa|codigoRenavam|renavam|descricaoMarcaModelo|marcaModelo|isPesquisado|versao)$/i.test(k)) continue;
-        if (/^codigo/i.test(k) && Object.keys(dados).some(x => x.toLowerCase() === k.toLowerCase().replace(/^codigo/, 'descricao'))) continue;
-        // "descricaoCor" sai como "Cor" (o "Descricao" é do nome do campo deles).
-        resto[k.replace(/^descricao(?=[A-Z])/, '')] = (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) ? v.slice(0, 10).split('-').reverse().join('/') : v;
-      }
-      if (Object.keys(resto).length) {
-        doc.moveDown(0.4);
-        pdfBar(doc, 'DADOS DO VEÍCULO');
-        pdfRenderDirectData(doc, resto, 1);
-      }
-      doc.moveDown(0.4);
-      pdfReportFooter(doc, now);
-      doc.end();
-    } catch (e) { reject(e); }
-  });
+// PDF da Consulta Código Segurança CRV v2: o cartão "Número de Segurança do
+// CRV" da SENATRAN (Carteira Digital de Trânsito), pedido do dono em
+// 13/11/2026 — até ali era um relatório no padrão do site. O modelo
+// (assets/codigo-seguranca-crv-template.pdf) é um cartão real com o stream dos
+// seis valores e as fontes Courier embutidas REMOVIDOS (o repositório é
+// público; conferido que placa/renavam/código do veículo de origem não
+// aparecem nem no texto nem nos bytes). As posições abaixo são as do próprio
+// cartão de origem (Tm de cada valor, Courier New Bold 9.3) — não é layout livre.
+const CODSEG_TEMPLATE_PATH = path.join(__dirname, 'assets', 'codigo-seguranca-crv-template.pdf');
+const CODSEG_CAMPOS = {
+  renavam: [15, 516], placa: [104, 516], anoFabricacao: [163, 516], anoModelo: [232, 516],
+  marcaModelo: [15, 487], codigo: [15, 457],
+};
+async function buildCodigoSegurancaV2PdfBuffer(service, placa, codigo, dados) {
+  const pega = (...nomes) => { for (const n of nomes) { const k = Object.keys(dados || {}).find(x => x.toLowerCase() === n.toLowerCase()); if (k && dados[k] !== null && dados[k] !== '') return String(dados[k]).trim(); } return ''; };
+  // Courier padrão é WinAnsi: tira acento e o que não for ASCII para não estourar o encode.
+  const ascii = v => String(v || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^ -~]/g, '').toUpperCase();
+  const renavam = pega('Renavam', 'codigoRenavam').replace(/D/g, '');
+  const valores = {
+    renavam: renavam ? renavam.padStart(11, '0') : '',
+    placa: ascii(placa),
+    anoFabricacao: ascii(pega('AnoFabricacao')),
+    anoModelo: ascii(pega('AnoModelo')),
+    marcaModelo: ascii(pega('MarcaModelo', 'descricaoMarcaModelo')),
+    codigo: String(codigo),
+  };
+  const pdfDoc = await PDFLibDocument.load(fs.readFileSync(CODSEG_TEMPLATE_PATH));
+  const page = pdfDoc.getPage(0);
+  const courier = await pdfDoc.embedFont(PDFLibStandardFonts.CourierBold);
+  for (const [campo, [x, y]] of Object.entries(CODSEG_CAMPOS)) {
+    const txt = valores[campo];
+    if (!txt) continue; // sem o dado, a célula fica em branco
+    // Marca/modelo longa encolhe para caber na caixa (205 pt) em vez de invadir a coluna ao lado.
+    let size = 9.3;
+    if (campo === 'marcaModelo') while (size > 5.5 && courier.widthOfTextAtSize(txt, size) > 205) size -= 0.3;
+    page.drawText(txt, { x, y, size, font: courier, color: rgb(0, 0, 0) });
+  }
+  pdfDoc.setTitle('Número de Segurança do CRV');
+  return Buffer.from(await pdfDoc.save());
 }
 
 // Assinatura no padrão Standard Webhooks/Svix (segredo "whsec_<base64>"):
