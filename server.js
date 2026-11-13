@@ -358,11 +358,14 @@ const directDataPreco = custo => Math.round(custo * DIRECTDATA_MARKUP * 100) / 1
 const PLACAFACIL_BASE_URL   = 'https://placa-fcil-pro.base44.app/functions/apiConsulta';
 const PLACAFACIL_KEY        = process.env.PLACAFACIL_KEY || '';
 const PLACAFACIL_SERVICE_ID = 'codigo-seguranca-crv-v2';
-// Custo por consulta para o saldo estimado do admin: a resposta da Placa Fácil NÃO traz
-// "valor_cobrado". R$ 1,00 por consulta, informado pelo dono em 13/11/2026 (a despbrasil,
-// mesma plataforma, cobra R$ 4,00 pelo mesmo produto — não é a mesma tabela).
+// Custo por consulta para o saldo estimado do admin, POR ENDPOINT (o "servico" do corpo do
+// pedido): a resposta da Placa Fácil NÃO traz "valor_cobrado". Endpoint novo = uma linha
+// aqui com o custo que o dono informar; sem linha, a consulta entra com R$ 0,00 e vai
+// para o log. codigo_seguranca = R$ 1,00 (dono, 13/11/2026; a despbrasil, mesma
+// plataforma, cobra R$ 4,00 pelo mesmo produto — não é a mesma tabela).
 // Placa que volta do cache deles (from_cache) não conta.
-const PLACAFACIL_CUSTO_CONSULTA = 1.00;
+const PLACAFACIL_CUSTOS = { codigo_seguranca: 1.00 };
+const PLACAFACIL_CUSTO_CONSULTA = PLACAFACIL_CUSTOS.codigo_seguranca; // o que a tela do admin mostra
 let placaFacilAvisoEm = 0; // último aviso de chave/conta recusada ao ADMIN_PHONE
 
 // API despbrasil.com.br — auth por header chaveAcesso (fixo); resposta traz a URL
@@ -10856,10 +10859,12 @@ async function saldoPlacaFacil() {
 // PLACAFACIL_CUSTO_CONSULTA. Falta de saldo (402, codigo "sem_saldo" ou texto
 // com "saldo insuficiente") e saldo estimado abaixo do alerta avisam o
 // ADMIN_PHONE uma vez cada; os dois rearmam quando o admin informa saldo novo.
-async function registrarPlacaFacil({ status, json, texto, sucesso, placa, origem }) {
+async function registrarPlacaFacil({ status, json, texto, sucesso, placa, origem, servico = 'codigo_seguranca' }) {
   try {
     const cobrado = Number(json?.valor_cobrado ?? json?.valorCobrado);
-    const custo = (!sucesso || json?.from_cache) ? 0 : (Number.isFinite(cobrado) && cobrado > 0 ? cobrado : (PLACAFACIL_CUSTO_CONSULTA || 0));
+    if (sucesso && !(servico in PLACAFACIL_CUSTOS) && !(Number.isFinite(cobrado) && cobrado > 0))
+      console.warn(`[placafacil] endpoint '${servico}' sem custo em PLACAFACIL_CUSTOS: entrou com R$ 0,00`);
+    const custo = (!sucesso || json?.from_cache) ? 0 : (Number.isFinite(cobrado) && cobrado > 0 ? cobrado : (PLACAFACIL_CUSTOS[servico] || 0));
     const resumo = sucesso ? 'Sucesso'
       : String(json?.error || json?.erro || json?.mensagem || texto || '').replace(/\s+/g, ' ').slice(0, 200);
     await pool.query(
@@ -10956,7 +10961,7 @@ async function consultarCodigoSegurancaPlacaFacil(placa, nomeServico) {
     } catch (e) { console.error(`[placafacil] não leu o PDF do retorno:`, e.message); }
     if (!codigo) pdfBuf = null;
   }
-  await registrarPlacaFacil({ status, json, texto, sucesso: !!codigo, placa, origem: nome });
+  await registrarPlacaFacil({ status, json, texto, sucesso: !!codigo, placa, origem: nome, servico: 'codigo_seguranca' });
   if (!codigo) {
     console.error(`[placafacil] sem código de segurança: HTTP ${status} ${texto.slice(0, 400)}`);
     // Chave recusada, conta sem serviço liberado ou sem saldo: problema nosso
