@@ -1145,16 +1145,21 @@ async function marcaPorTelefone(phone) {
   let marca = null;
   try {
     const r = await pool.query(
-      `SELECT u.id, p.id AS parceiro_id FROM users u
+      `SELECT u.id, u.phone, p.id AS parceiro_id FROM users u
          LEFT JOIN users p ON p.id = CASE WHEN u.role='reseller' THEN u.id ELSE u.revendedor_id END
                           AND p.role='reseller' AND p.active=true
         WHERE CASE WHEN length(regexp_replace(COALESCE(u.phone,''),'[^0-9]','','g')) >= 12
                     AND left(regexp_replace(COALESCE(u.phone,''),'[^0-9]','','g'), 2) = '55'
                    THEN substr(regexp_replace(COALESCE(u.phone,''),'[^0-9]','','g'), 3)
-                   ELSE regexp_replace(COALESCE(u.phone,''),'[^0-9]','','g') END = $1`, [d]
+                   ELSE regexp_replace(COALESCE(u.phone,''),'[^0-9]','','g') END = $1
+           OR right(regexp_replace(COALESCE(u.phone,''),'[^0-9]','','g'), 8) = $2`, [d, d.slice(-8)]
     );
-    const ids = [...new Set(r.rows.map(x => x.parceiro_id))];
-    if (r.rows.length && ids.length === 1 && ids[0]) marca = await marcaParceiroDoUsuario(r.rows[0].id).catch(() => null);
+    // Com ou sem o 9 da frente é o mesmo celular (chaveTelefone): o WhatsApp de
+    // número antigo chega sem ele e o menu do @consultar saía com o nome da MC
+    // para cliente de parceiro (13/11/2026).
+    const contas = r.rows.filter(x => chaveTelefone(x.phone) === chaveTelefone(d));
+    const ids = [...new Set(contas.map(x => x.parceiro_id))];
+    if (contas.length && ids.length === 1 && ids[0]) marca = await marcaParceiroDoUsuario(contas[0].id).catch(() => null);
   } catch (e) { console.error('[marca] telefone:', e.message); }
   if (cacheMarcaTelefone.size > 2000) cacheMarcaTelefone.clear();
   cacheMarcaTelefone.set(d, { marca, exp: Date.now() + 5 * 60 * 1000 });
@@ -3588,6 +3593,8 @@ async function consultasDoParceiro(parceiroId) {
   const tab = await tabelaParceiro(parceiroId);
   return servicosRevendaveis().map(s => ({
     id: s.id, name: s.name, group: s.group, icon: s.icon,
+    // Só existe no @consultar: a tela marca, para o parceiro não procurar no painel.
+    whats: !!s.soWhats,
     catalogo: catalogPrice(s),
     custo: tab.custoDe(s),
     desconto: tab.custos[s.id] != null,
@@ -4055,7 +4062,8 @@ const hostDaRequisicao = req => String(req.headers['x-forwarded-host'] || req.he
 async function dadosPaginaParceiro(rv) {
   const v = new Date(rv.pagina_atualizada_em || 0).getTime();
   const tab = await tabelaParceiro(rv.id);
-  const consultas = servicosRevendaveis().filter(s => tab.vendaDe(s) != null && !tab.ocultas.has(s.id))
+  // As só do WhatsApp ficam fora da página: ela lista o que se consulta no painel.
+  const consultas = servicosRevendaveis().filter(s => !s.soWhats && tab.vendaDe(s) != null && !tab.ocultas.has(s.id))
     .map(s => ({ name: s.name, group: s.group, icon: s.icon, preco: tab.vendaDe(s) }));
   return {
     nome: rv.name, slug: rv.slug, pagina: rv.pagina || {}, consultas,
@@ -9778,8 +9786,10 @@ async function getUserServicePrice(userId, service) {
 // user_service_prices). O ganho dele é só a diferença (ver
 // registrarLucrosParceiros). Fica de fora o que não tem preço próprio para
 // remarcar: grupo gratuito, preço por UF, suspenso e o que custa R$ 0,00.
+// As consultas só do WhatsApp (soWhats) entram desde 13/11/2026 (dono): o
+// parceiro põe o preço dele e é esse que o cliente dele vê e paga no @consultar.
 function servicoRevendavel(s) {
-  return !!s && !isFreeService(s) && !s.unavailable && !s.adminOnly && !s.soWhats && !s.precosUf
+  return !!s && !isFreeService(s) && !s.unavailable && !s.adminOnly && !s.precosUf
     && s.id !== DATACRED_ATPVE_SERVICE_ID && catalogPrice(s) > 0;
 }
 
@@ -9800,7 +9810,17 @@ function servicosAtpveUf() {
   }));
 }
 // A emissão vem primeiro: é o que o parceiro mais procura na lista.
-const servicosRevendaveis = () => [...servicosAtpveUf(), ...SERVICES.filter(servicoRevendavel)];
+// Débitos por Estado do @consultar (BOT_DEBITOS_ID) também não existe no
+// SERVICES — o pedido roda no dc-debito da UF, com preço único. Entra na lista
+// do parceiro como uma linha, para ele remarcar (13/11/2026, dono).
+const servicoDebitosBot = () => ({
+  id: BOT_DEBITOS_ID, name: `${BOT_DEBITOS_NOME} (só a placa)`, group: 'Consultas Básicas', icon: '🏛️',
+  basePrice: BOT_DEBITOS_PRECO, noMarkup: true, soWhats: true,
+});
+// Preço dos Débitos por Estado no WhatsApp para esta conta: o fixo do admin, o
+// do parceiro dela, senão BOT_DEBITOS_PRECO.
+const precoDebitosBot = userId => getUserServicePrice(userId, servicoDebitosBot());
+const servicosRevendaveis = () => [...servicosAtpveUf(), ...SERVICES.filter(servicoRevendavel), servicoDebitosBot()];
 const acharRevendavel = id => servicosRevendaveis().find(s => s.id === id) || null;
 
 // Preço da emissão de ATPV-e para um usuário, numa UF: o desconto que o admin
@@ -9895,7 +9915,7 @@ async function filtroBotClienteParceiro(userId) {
   const liberadas = await consultasLiberadasClienteParceiro(userId);
   const ocultas = await ocultasDoClienteParceiro(userId);
   if (!ocultas.size) return liberadas;
-  return { has: id => (!liberadas || liberadas.has(id)) && !ocultas.has(id) };
+  return { has: id => (!liberadas || liberadas.has(id)) && !ocultas.has(id), oculta: id => ocultas.has(id) };
 }
 
 // Tabela de preços de um parceiro, de uma vez (catálogo do cliente, página
@@ -16871,6 +16891,10 @@ function mascararChavePix(chave) {
 // custo, por exemplo) vira SEM_LUCRO para não ser revista a cada volta.
 // Estorno: ganho ainda a pagar é cancelado; o que já saiu (ou está saindo)
 // ganha uma linha ESTORNO negativa, descontada do próximo pagamento.
+// Débitos por Estado do @consultar: a consulta é gravada no dc-debito da UF,
+// mas o preço (e o custo) é o da linha BOT_DEBITOS_ID — casa pelo
+// whatsapp_pedidos.query_id; enquanto o pedido roda (EXECUTANDO) fica de fora,
+// para não sair como se fosse o débito do painel.
 async function registrarLucrosParceiros(parceiroId = null) {
   const filtro = parceiroId ? 'AND u.revendedor_id = $1' : '';
   const args = parceiroId ? [parceiroId] : [];
@@ -16881,13 +16905,17 @@ async function registrarLucrosParceiros(parceiroId = null) {
        FROM queries q
        JOIN users u ON u.id = q.user_id
        JOIN users ru ON ru.id = u.revendedor_id AND ru.role = 'reseller'
+       LEFT JOIN whatsapp_pedidos wp ON wp.query_id = q.id AND wp.service_id = '${BOT_DEBITOS_ID}'
        JOIN parceiro_consultas pc ON pc.parceiro_id = u.revendedor_id AND pc.service_id =
-            CASE WHEN q.service_id = '${DATACRED_ATPVE_SERVICE_ID}'
+            CASE WHEN wp.id IS NOT NULL THEN wp.service_id
+                 WHEN q.service_id = '${DATACRED_ATPVE_SERVICE_ID}'
                  THEN q.service_id || ':' || COALESCE(substring(q.params from '"uf":"([A-Z]{2})"'), '')
                  ELSE q.service_id END
       WHERE q.status = 'success' AND q.transaction_id IS NOT NULL AND q.amount > 0
         AND q.created_at >= pc.created_at ${filtro}
         AND NOT EXISTS (SELECT 1 FROM commissions c WHERE c.query_id = q.id AND c.origem = 'CONSULTA')
+        AND NOT (q.service_id LIKE 'dc-debito-%' AND EXISTS (SELECT 1 FROM whatsapp_pedidos e
+                  WHERE e.user_id = q.user_id AND e.service_id = '${BOT_DEBITOS_ID}' AND e.status = 'EXECUTANDO'))
       ORDER BY q.id LIMIT 500`, args
   );
   const custos = new Map();
@@ -18302,7 +18330,9 @@ const servicosDebitoUf = uf => {
   const u = String(uf || '').toLowerCase();
   return u === 'sc' ? ['dc-debito-sc-v2', 'dc-debito-sc'] : [`dc-debito-${u}`];
 };
-const debitosBotDisponivel = liberadas => SERVICES.some(s => s.id.startsWith('dc-debito-') && servicoBotWhats(s.id, liberadas));
+// "oculta" do parceiro na linha dos Débitos do WhatsApp tira a opção do menu.
+const debitosBotDisponivel = liberadas => !liberadas?.oculta?.(BOT_DEBITOS_ID)
+  && SERVICES.some(s => s.id.startsWith('dc-debito-') && servicoBotWhats(s.id, liberadas));
 const nomeServicoBot = id => id === BOT_DEBITOS_ID ? BOT_DEBITOS_NOME : (SERVICES.find(x => x.id === id)?.name || 'Consulta');
 // Grátis no @consultar, sem PIX (dono, 09/11/2026: a Consulta de Débitos sai
 // por R$ 0,00 no WhatsApp; no painel continua com o preço de sempre). Preço 0
@@ -18388,7 +18418,7 @@ async function menuBotWhats(user, liberadas) {
       continue;
     }
     if (m.id === BOT_DEBITOS_ID) {
-      if (debitosBotDisponivel(liberadas)) opcoes.push({ ...m, texto: `${m.rotulo} — ${fmtMoneyBRL(BOT_DEBITOS_PRECO)}` });
+      if (debitosBotDisponivel(liberadas)) opcoes.push({ ...m, texto: `${m.rotulo} — ${fmtMoneyBRL(await precoDebitosBot(user.id))}` });
       continue;
     }
     const s = servicoBotWhats(m.id, liberadas);
@@ -18423,7 +18453,7 @@ async function gerarPixBot(phone, chave, user, serviceId, params) {
   // completarDados (UF): CRLV-e que pede renavam/documento — soma o valor da
   // Proprietário Atual (v2), que é quem acha esses dados depois do pagamento.
   const acrescimo = params.completarDados ? BOT_CRLV_ACRESCIMO : 0;
-  const base = serviceId === BOT_DEBITOS_ID ? BOT_DEBITOS_PRECO : await getUserServicePrice(user.id, s);
+  const base = serviceId === BOT_DEBITOS_ID ? await precoDebitosBot(user.id) : await getUserServicePrice(user.id, s);
   const valor = base > 0 ? Math.round((base + acrescimo) * 100) / 100 : base;
   await encerrarSessaoBot(chave);
   if (!(valor > 0)) return sendWhatsApp(phone, 'Esta consulta não está disponível pelo WhatsApp. Digite *@consultar* para ver o menu.');
@@ -18596,7 +18626,7 @@ async function resolverCrlvBot(s, placa, uf) {
 // Roda a consulta pelo fluxo do painel com uma resposta capturada (mesmo
 // desenho do reenvio do admin) e devolve o resultado na conversa.
 // { tipo: 'ok' | 'erro' | 'pendente', erro? }
-async function executarConsultaBot(phone, chave, user, serviceId, params, pagoPix = false, gratis = false) {
+async function executarConsultaBot(phone, chave, user, serviceId, params, pagoPix = false, gratis = false, valorPago = null) {
   let precoFixo = null;
   if (serviceId === BOT_DEBITOS_ID) {
     await sendWhatsApp(phone, `⏳ ${gratis ? '' : 'Pagamento recebido! '}Buscando os dados da placa *${params.placa}* para a consulta de débitos...`);
@@ -18604,7 +18634,8 @@ async function executarConsultaBot(phone, chave, user, serviceId, params, pagoPi
     if (r.erro) return { tipo: 'erro', erro: r.erro };
     serviceId = r.serviceId;
     params = r.params;
-    precoFixo = BOT_DEBITOS_PRECO;
+    // O que foi pago no PIX (o preço do parceiro, se o cliente é de um).
+    precoFixo = valorPago > 0 ? Number(valorPago) : await precoDebitosBot(user.id);
   }
   const s = SERVICES.find(x => x.id === serviceId);
   let avisado = gratis || !!precoFixo;
@@ -18692,7 +18723,7 @@ async function processarPagamentoWhats(gatewayId) {
   const user = (await pool.query('SELECT id, name, email, role, phone FROM users WHERE id=$1', [ped.user_id])).rows[0];
   let res;
   try {
-    res = await executarConsultaBot(ped.phone, chaveTelefone(ped.phone), user, ped.service_id, ped.params || {}, true);
+    res = await executarConsultaBot(ped.phone, chaveTelefone(ped.phone), user, ped.service_id, ped.params || {}, true, false, ped.valor);
   } catch (err) {
     console.error(`[whatsapp] pedido ${ped.id}: erro na consulta:`, err.message);
     res = { tipo: 'erro', erro: 'Erro interno ao consultar.' };
@@ -18746,6 +18777,10 @@ async function processarPagamentoWhats(gatewayId) {
     await pool.query(`INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3)`,
       [ped.user_id, BOT_CRLV_ACRESCIMO, `Consulta: ${BOT_CRLV_ACRESCIMO_NOME} — dados da placa ${ped.params.placa} para o CRLV-e (pago por PIX no WhatsApp)`]);
   await pool.query(`UPDATE whatsapp_pedidos SET status='CONCLUIDO', query_id=$2 WHERE id=$1`, [ped.id, q?.id || null]);
+  // Débitos por Estado: o ganho do parceiro só casa com o pedido depois do
+  // query_id gravado acima (ver registrarLucrosParceiros).
+  if (ped.service_id === BOT_DEBITOS_ID)
+    await repassarGanhoParceiro(ped.user_id).catch(e => console.error('[whatsapp] ganho do parceiro:', e.message));
 }
 
 // Cron (pix-reconcile): pagamento que o webhook não avisou, PIX vencido e

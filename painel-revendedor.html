@@ -1117,7 +1117,7 @@ function renderCatalog() {
       <div class="divide-y divide-gray-50">${ss.map(s => `
         <div class="flex flex-col md:flex-row md:items-center gap-2 px-5 py-3 text-sm ${s.na_pagina ? 'bg-green-50/50' : ''}">
           <div class="flex-1 min-w-0">
-            <div class="text-gray-800">${esc(s.icon || '')} ${esc(s.name)} ${s.na_pagina ? '<span class="badge-green ml-1">na página</span>' : ''}${s.oculta ? '<span class="ml-1 inline-block text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-200 text-gray-700">🙈 oculta para os clientes</span>' : ''}</div>
+            <div class="text-gray-800">${esc(s.icon || '')} ${esc(s.name)} ${s.whats ? '<span class="ml-1 inline-block text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800" title="Esta consulta só existe no @consultar do WhatsApp">📱 só no WhatsApp</span>' : ''}${s.na_pagina ? `<span class="badge-green ml-1">${s.whats ? 'com seu preço' : 'na página'}</span>` : ''}${s.oculta ? '<span class="ml-1 inline-block text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-200 text-gray-700">🙈 oculta para os clientes</span>' : ''}</div>
             <div class="text-xs text-gray-500">Seu custo: <strong>${fmt(s.custo)}</strong>${s.desconto ? ` <span class="text-green-700">(desconto da MC — site: ${fmt(s.catalogo)})</span>` : ''}
               ${s.na_pagina ? ` · seu ganho: <strong class="text-green-700">${fmt(Math.max(0, s.venda - s.custo))}</strong> por consulta` : ''}</div>
             ${s.na_pagina && s.preco < s.custo ? '<div class="text-xs text-amber-700">Seu custo subiu acima do seu preço: o cliente paga o custo e você não ganha nesta consulta. Atualize o preço.</div>' : ''}

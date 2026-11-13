@@ -448,7 +448,7 @@
         </tr></thead>
         <tbody class="divide-y divide-gray-50">${lista.map(s => `
           <tr class="${s.na_pagina ? 'bg-green-50/50' : ''}">
-            <td class="px-3 py-2"><div class="font-medium text-gray-800">${esc(s.icon || '')} ${esc(s.name)}</div><div class="text-gray-400">${esc(s.group)}</div></td>
+            <td class="px-3 py-2"><div class="font-medium text-gray-800">${esc(s.icon || '')} ${esc(s.name)}</div><div class="text-gray-400">${esc(s.group)}${s.whats ? ' · 📱 só no WhatsApp' : ''}</div></td>
             <td class="px-3 py-2 text-right">${fmt(s.catalogo)}</td>
             <td class="px-3 py-2 text-right whitespace-nowrap">
               <input id="rvd-custo-${esc(s.id)}" inputmode="decimal" class="w-20 px-2 py-1 border ${s.desconto ? 'border-green-400 bg-green-50' : 'border-gray-300'} rounded text-right" value="${s.desconto ? precoTela(s.custo) : ''}" placeholder="${precoTela(s.catalogo)}">
