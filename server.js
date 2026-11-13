@@ -1684,6 +1684,10 @@ const SERVICES = [
   { id:'renainf-multas-whats', name:'Renainf Multas', group:'Consultas Básicas', basePrice:0, noMarkup:true, inputType:'placa', icon:'🚨', soWhats:true },
   // Placa Serpro (Placa Fácil Pro): SÓ no @consultar, R$ 3,00 fixo (dono, 13/11/2026). Ver SERPRO_SERVICE_ID.
   { id:'placa-serpro-whats', name:'Placa Serpro', group:'Consultas Básicas', basePrice:3.00, noMarkup:true, inputType:'placa', icon:'🔎', soWhats:true },
+  // Placa Serpro Débitos (Placa Fácil Pro): SÓ no @consultar, R$ 4,50 fixo (dono, 13/11/2026). Ver SERPRO_DEBITOS_SERVICE_ID.
+  { id:'placa-serpro-debitos-whats', name:'Placa Serpro Débitos', group:'Consultas Básicas', basePrice:4.50, noMarkup:true, inputType:'placa', icon:'💰', soWhats:true },
+  // Chassi Serpro (Placa Fácil Pro): SÓ no @consultar, R$ 5,50 fixo, entrada = chassi (dono, 13/11/2026). Ver CHASSI_SERPRO_SERVICE_ID.
+  { id:'chassi-serpro-whats', name:'Chassi Serpro', group:'Consultas Básicas', basePrice:5.50, noMarkup:true, inputType:'chassi', icon:'🔢', soWhats:true },
   // Histórico CRLV (Placa Fácil Pro): SÓ no @consultar, R$ 4,00 fixo (dono, 13/11/2026). Ver HISTORICO_SERVICE_ID.
   { id:'historico-crlv-whats', name:'Histórico CRLV', group:'Consultas Básicas', basePrice:4.00, noMarkup:true, inputType:'placa', icon:'🕘', soWhats:true },
   // Consulta do Comunicação de Venda do WhatsApp (Placa Fácil Pro): R$ 8,99, o mesmo valor da v2 da
@@ -6673,7 +6677,7 @@ async function extractValidaCrvFromPdf(pdfBuf) {
 // aviso. O próprio portal, quando falha, às vezes manda um PDF assim ("Tempo
 // esgotado aguardando resposta da consulta" — MRA9393), mas nem sempre (no
 // mesmo dia respondeu 400 só com texto); por isso o nosso.
-function buildConsultaForaPdfBuffer(titulo, placa, aviso) {
+function buildConsultaForaPdfBuffer(titulo, placa, aviso, rotulo) {
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({ size: 'A4', margin: 50 });
@@ -6684,7 +6688,7 @@ function buildConsultaForaPdfBuffer(titulo, placa, aviso) {
       const now = new Date();
       pdfReportHeader(doc, String(titulo || 'Consulta').toUpperCase(), now);
       pdfBar(doc, 'DADOS DA CONSULTA');
-      pdfFieldGrid(doc, [['Placa', placa || 'Nada consta'], ['Situação', 'Consulta não realizada']]);
+      pdfFieldGrid(doc, [[rotulo || 'Placa', placa || 'Nada consta'], ['Situação', 'Consulta não realizada']]);
       doc.moveDown(0.4);
       pdfBar(doc, 'CONSULTA NÃO REALIZADA', { bg: '#b91c1c', size: 12 });
       doc.moveDown(0.3);
@@ -11024,14 +11028,14 @@ async function consultarCodigoSegurancaPlacaFacil(placa, nomeServico) {
 // TTT7A54, o 0 no lugar do A): não é erro e não vai para o relatório.
 const RENAINF_SERVICE_ID = 'renainf-multas-whats';
 
-async function consultarServicoPlacaFacil(servico, placa, nomeServico, resultadoOk) {
+async function consultarServicoPlacaFacil(servico, placa, nomeServico, resultadoOk, campoEntrada = 'placa') {
   const nome = nomeServico || servico;
   let status = 0, texto = '', json = null;
   try {
     const r = await fetch(PLACAFACIL_BASE_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', chaveAcesso: PLACAFACIL_KEY },
-      body: JSON.stringify({ servico, placa }),
+      body: JSON.stringify({ servico, [campoEntrada]: placa }),
       signal: AbortSignal.timeout(120000),
     });
     status = r.status;
@@ -11138,6 +11142,15 @@ function buildRenainfMultasPdfBuffer(service, placa, d) {
 // mesmo 502 com outro texto ("Não foi possível consultar a placa informada",
 // visto uma vez na TTT7A54 e já ok na repetição) é falha passageira → 503.
 const SERPRO_SERVICE_ID = 'placa-serpro-whats';
+// Placa Serpro Débitos (servico "placa_serpro_debitos", R$ 4,50, só WhatsApp — dono, 13/11/2026): o mesmo
+// registro mais o bloco "debitos" { ok, error, total, detalhamento { ipva, multas, licenciamento, dpvat },
+// resumo, veiculo, indicadores, restricoes }. Conferido: BBW2A33 (PR) vem com debitos.ok:false "UF PR:
+// DÉBITOS DESCONECTADA DA SERPRO"; TTT7A54/OCY5C55 com total 0; KGU3A76 com R$ 1087,66.
+const SERPRO_DEBITOS_SERVICE_ID = 'placa-serpro-debitos-whats';
+// Chassi Serpro (servico "chassi_serpro", entrada { chassi }, R$ 5,50, só WhatsApp — dono, 13/11/2026): o mesmo
+// registro de 97 campos do Placa Serpro, buscado pelo chassi. Conferido: chassi de TTT7A54 e OCY5C55 voltam
+// o registro; chassi inexistente = 502 "veículo não encontrado no SERPRO"; chassi fora do formato = 400.
+const CHASSI_SERPRO_SERVICE_ID = 'chassi-serpro-whats';
 
 function buildPlacaSerproPdfBuffer(service, placa, d) {
   return new Promise((resolve, reject) => {
@@ -11166,6 +11179,18 @@ function buildPlacaSerproPdfBuffer(service, placa, d) {
         ['Município de emplacamento', t(d.descricaoMunicipioEmplacamento)], ['UF', t(d.ufJurisdicao)],
         ['Procedência', t(d.procedencia)], ['Remarcação do chassi', t(d.descricaoRemarcacaoChassi)],
       ]);
+      if (d.debitos && d.debitos.ok === true) {
+        const db = d.debitos, det = db.detalhamento || {};
+        const brl = v => Number.isFinite(Number(v)) && v !== null ? fmtMoneyBRL(Number(v)) : 'Nada consta';
+        doc.moveDown(0.4);
+        pdfBar(doc, 'DÉBITOS');
+        pdfFieldGrid(doc, [
+          ['Total de débitos', brl(db.total)], ['UF', t(db.veiculo?.uf || d.ufJurisdicao)],
+          ['IPVA', brl(det.ipva)], ['Multas', brl(det.multas)],
+          ['Licenciamento', brl(det.licenciamento)], ['DPVAT', brl(det.dpvat)],
+          ['Último licenciamento pago', t(db.veiculo?.ano_ultimo_licenciamento_pago)],
+        ]);
+      }
       doc.moveDown(0.4);
       pdfBar(doc, 'VEÍCULO');
       pdfFieldGrid(doc, [
@@ -12101,6 +12126,99 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
 
       await notifyAdminNewQuery(user, service, price, { placa });
       const nomeArq = `mcdespachadoria-historico-proprietario-${placa}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
+      return res.send(pdfBuf);
+    }
+
+    // ── Placa Serpro Débitos — só no @consultar, R$ 4,50 (ver SERPRO_DEBITOS_SERVICE_ID) ──
+    // O mesmo registro do Placa Serpro com o bloco "debitos" (IPVA, multas,
+    // licenciamento, DPVAT). Em UF cujos débitos o Serpro não alcança, a resposta é
+    // 200 com o registro e debitos.ok:false ("UF PR: DÉBITOS DESCONECTADA DA SERPRO",
+    // visto na BBW2A33): como o produto são os débitos, isso recusa sem cobrar.
+    if (serviceId === SERPRO_DEBITOS_SERVICE_ID) {
+      const placa = String(params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa))
+        return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+
+      const cons = await consultarServicoPlacaFacil('placa_serpro_debitos', placa, service.name,
+        j => !!j.debitos && typeof j.debitos === 'object' && (j.isPesquisado !== undefined || !!j.descricaoMarcaModelo || !!j.chassi));
+      if (cons.erro) return res.status(cons.status).json({ error: cons.erro });
+      const deb = cons.json.debitos;
+      if (deb.ok !== true) {
+        console.error(`[${serviceId}] débitos indisponíveis: ${JSON.stringify(deb.error || deb.http_code || '').slice(0, 200)}`);
+        if (/DESCONECTAD/i.test(String(deb.error || '')))
+          return res.status(422).json({ error: `Os débitos da UF ${cons.json.ufJurisdicao || ''} não estão disponíveis na base do Serpro. Nada foi cobrado.`.replace('UF  ', 'UF ') });
+        return res.status(503).json({ error: `${CONSULTA_FORA_MSG} Nada foi cobrado.` });
+      }
+      let pdfBuf;
+      try {
+        pdfBuf = await buildPlacaSerproPdfBuffer(service, placa, cons.json);
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório. Nada foi cobrado.' });
+      }
+
+      await debitarConsulta(userId, price);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name} — ${placa}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify({ placa, total: deb.total }), price, txRow.rows[0].id]
+      );
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, { placa });
+      const nomeArq = `mcdespachadoria-placa-serpro-debitos-${placa}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
+      return res.send(pdfBuf);
+    }
+
+    // ── Chassi Serpro — só no @consultar, R$ 5,50 (ver CHASSI_SERPRO_SERVICE_ID) ──
+    // Entrada é o CHASSI (17 caracteres), não a placa; o registro que volta é o
+    // mesmo do Placa Serpro (97 campos, com a placa), então o relatório é o mesmo.
+    if (serviceId === CHASSI_SERPRO_SERVICE_ID) {
+      const chassi = String(params?.chassi || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (!/^[A-HJ-NPR-Z0-9]{17}$/.test(chassi))
+        return res.status(400).json({ error: 'Chassi inválido. Informe os 17 caracteres do chassi (sem as letras I, O e Q).' });
+
+      const cons = await consultarServicoPlacaFacil('chassi_serpro', chassi, service.name,
+        j => j.isPesquisado !== undefined || !!j.descricaoMarcaModelo || !!j.chassi, 'chassi');
+      if (cons.erro) return res.status(cons.status).json({ error: cons.erro });
+      let pdfBuf;
+      try {
+        pdfBuf = await buildPlacaSerproPdfBuffer(service, String(cons.json.placa || '').toUpperCase().replace(/[^A-Z0-9]/g, ''), cons.json);
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório. Nada foi cobrado.' });
+      }
+
+      await debitarConsulta(userId, price);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name} — chassi ${chassi}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify({ chassi }), price, txRow.rows[0].id]
+      );
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, { chassi });
+      const nomeArq = `mcdespachadoria-chassi-serpro-${chassi}.pdf`;
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
       return res.send(pdfBuf);
@@ -18156,6 +18274,10 @@ const BOT_WHATS_MENU = [
   { id: RENAINF_SERVICE_ID, rotulo: '🚨 Renainf Multas' },
   // Dono, 13/11/2026: R$ 3,00, só pelo WhatsApp (SERPRO_SERVICE_ID).
   { id: SERPRO_SERVICE_ID, rotulo: '🔎 Placa Serpro' },
+  // Dono, 13/11/2026: R$ 4,50, só pelo WhatsApp (SERPRO_DEBITOS_SERVICE_ID).
+  { id: SERPRO_DEBITOS_SERVICE_ID, rotulo: '💰 Placa Serpro Débitos' },
+  // Dono, 13/11/2026: R$ 5,50, só pelo WhatsApp, pede o CHASSI (CHASSI_SERPRO_SERVICE_ID).
+  { id: CHASSI_SERPRO_SERVICE_ID, rotulo: '🔢 Chassi Serpro (informe o chassi)' },
   // Dono, 13/11/2026: R$ 4,00, só pelo WhatsApp (HISTORICO_SERVICE_ID).
   { id: HISTORICO_SERVICE_ID, rotulo: '🕘 Histórico CRLV' },
   // Dono, 13/11/2026: R$ 6,00, só pelo WhatsApp (ROUBO_FURTO_SERVICE_ID).
@@ -18309,7 +18431,7 @@ async function gerarPixBot(phone, chave, user, serviceId, params) {
   try {
     payment = await mpReq('POST', '/v1/payments', {
       transaction_amount: Number(valor.toFixed(2)),
-      description: `${s.name} - ${params.placa} (WhatsApp)`,
+      description: `${s.name} - ${refBot(params)} (WhatsApp)`,
       payment_method_id: 'pix',
       payer: { email: user.email, first_name: String(user.name || 'Cliente').split(' ')[0] },
       notification_url: `${WEBHOOK_BASE_URL || 'https://www.despachantesconsultas.com.br'}/api/pix/webhook`,
@@ -18325,7 +18447,7 @@ async function gerarPixBot(phone, chave, user, serviceId, params) {
     `INSERT INTO whatsapp_pedidos (user_id, phone, service_id, params, valor, gateway_id) VALUES ($1,$2,$3,$4,$5,$6)`,
     [user.id, phone, serviceId, JSON.stringify(params), valor, String(payment.id)]
   );
-  const legenda = `💳 *${s.name}*\n🔎 Placa ${params.placa}\n💰 *${fmtMoneyBRL(valor)}*${acrescimo ? ` (${fmtMoneyBRL(base)} + ${fmtMoneyBRL(acrescimo)} da ${BOT_CRLV_ACRESCIMO_NOME})` : ''}\n\n` +
+  const legenda = `💳 *${s.name}*\n🔎 ${params.chassi ? 'Chassi' : 'Placa'} ${refBot(params)}\n💰 *${fmtMoneyBRL(valor)}*${acrescimo ? ` (${fmtMoneyBRL(base)} + ${fmtMoneyBRL(acrescimo)} da ${BOT_CRLV_ACRESCIMO_NOME})` : ''}\n\n` +
     `Pague com o QR Code ou com o *PIX copia e cola* da próxima mensagem. Assim que o pagamento cair, a consulta roda e o PDF chega aqui. Se não sair, o PIX é devolvido.`;
   if (tx.qr_code_base64) await sendWhatsAppImage(phone, tx.qr_code_base64, legenda);
   else await sendWhatsApp(phone, legenda);
@@ -18493,7 +18615,7 @@ async function executarConsultaBot(phone, chave, user, serviceId, params, pagoPi
     params = r.params;
     avisado = true;
   }
-  await sendWhatsApp(phone, `⏳ ${avisado ? '' : 'Pagamento recebido! '}Consultando *${s.name}* da placa *${params.placa}*... isso pode levar alguns minutos.`);
+  await sendWhatsApp(phone, `⏳ ${avisado ? '' : 'Pagamento recebido! '}Consultando *${s.name}* ${params.chassi ? 'do chassi' : 'da placa'} *${refBot(params)}*... isso pode levar alguns minutos.`);
   const saida = { status: 200, json: null, pdf: null, headers: {} };
   const fake = {
     headersSent: false,
@@ -18524,10 +18646,10 @@ async function executarConsultaBot(phone, chave, user, serviceId, params, pagoPi
   if (saida.pdf) {
     if (!bot.pdfs) {
       const cd = String(saida.headers['content-disposition'] || '');
-      const nome = (cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)/i)?.[1]) || `mcdespachadoria-${serviceId}-${params.placa}.pdf`;
+      const nome = (cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)/i)?.[1]) || `mcdespachadoria-${serviceId}-${refBot(params)}.pdf`;
       let nomeArq;
       try { nomeArq = decodeURIComponent(nome); } catch { nomeArq = nome; }
-      await sendWhatsAppPdf(phone, saida.pdf, nomeArq, `✅ *${s.name}*\n🔎 ${params.placa}`);
+      await sendWhatsAppPdf(phone, saida.pdf, nomeArq, `✅ *${s.name}*\n🔎 ${refBot(params)}`);
     }
     await sendWhatsApp(phone, `✅ Pronto! O documento também fica no Histórico do painel.\nPara outra consulta, digite *@consultar*.`);
     return { tipo: 'ok', serviceId };
@@ -18585,7 +18707,7 @@ async function processarPagamentoWhats(gatewayId) {
     try { await mpRefundPayment(ped.gateway_id); devolvido = true; } catch (e) { console.error(`[whatsapp] estorno do pedido ${ped.id}:`, e.message); }
     await pool.query(`UPDATE whatsapp_pedidos SET status='ERRO', erro=$2, refund_status=$3, query_id=$4 WHERE id=$1`,
       [ped.id, res.erro, devolvido ? 'DEVOLVIDO' : 'FALHOU', q?.id || null]);
-    const msgErro = `❌ *${s?.name || 'Consulta'}* — ${ped.params?.placa || ''}\n\n${res.erro}\n\n` +
+    const msgErro = `❌ *${s?.name || 'Consulta'}* — ${refBot(ped.params)}\n\n${res.erro}\n\n` +
       (devolvido ? `O PIX de ${fmtMoneyBRL(ped.valor)} foi devolvido automaticamente.` : `Não consegui devolver o PIX automaticamente — fale com o suporte informando o pedido WhatsApp #${ped.id}.`) +
       `\n\nPara tentar de novo, digite *@consultar*.`;
     // As consultas só do WhatsApp (soWhats) respondem sempre em PDF, inclusive
@@ -18593,8 +18715,8 @@ async function processarPagamentoWhats(gatewayId) {
     if (SERVICES.find(x => x.id === (res.serviceId || ped.service_id))?.soWhats) {
       try {
         const marca = await marcaDoUsuarioCache(ped.user_id).catch(() => null);
-        const placaErro = ped.params?.placa || '';
-        const pdf = await contextoMarca.run({ marca }, () => buildConsultaForaPdfBuffer(s.name, placaErro, res.erro));
+        const placaErro = refBot(ped.params);
+        const pdf = await contextoMarca.run({ marca }, () => buildConsultaForaPdfBuffer(s.name, placaErro, res.erro, ped.params?.chassi ? 'Chassi' : 'Placa'));
         if (await sendWhatsAppPdf(ped.phone, pdf, `mcdespachadoria-consulta-nao-realizada-${placaErro}.pdf`, msgErro)) return;
       } catch (e) {
         console.error(`[whatsapp] PDF de consulta não realizada falhou (pedido ${ped.id}):`, e.message);
@@ -18651,12 +18773,14 @@ async function conferirPedidosWhats() {
     await pool.query(`UPDATE whatsapp_pedidos SET status='ERRO', refund_status=$2, erro='Não saiu no fornecedor.' WHERE id=$1`,
       [w.id, devolvido ? 'DEVOLVIDO' : 'FALHOU']);
     await sendWhatsApp(w.phone, devolvido
-      ? `O pedido WhatsApp #${w.id} (placa ${w.params?.placa || ''}) não saiu. O PIX de ${fmtMoneyBRL(w.valor)} foi devolvido automaticamente.`
-      : `O pedido WhatsApp #${w.id} (placa ${w.params?.placa || ''}) não saiu e não consegui devolver o PIX automaticamente — fale com o suporte.`).catch(() => {});
+      ? `O pedido WhatsApp #${w.id} (${w.params?.chassi ? 'chassi' : 'placa'} ${refBot(w.params)}) não saiu. O PIX de ${fmtMoneyBRL(w.valor)} foi devolvido automaticamente.`
+      : `O pedido WhatsApp #${w.id} (${w.params?.chassi ? 'chassi' : 'placa'} ${refBot(w.params)}) não saiu e não consegui devolver o PIX automaticamente — fale com o suporte.`).catch(() => {});
   }
 }
 
 const placaBot = t => String(t || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+// O que o cliente informou (placa ou chassi) para as mensagens e legendas do robô.
+const refBot = p => (p && (p.placa || p.chassi)) || '';
 const placaBotOk = p => /^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(p);
 
 async function processarMensagemBot(phone, texto) {
@@ -18703,6 +18827,10 @@ async function processarMensagemBot(phone, texto) {
       // Dono, 10/11/2026: a pergunta já diz quais CRLV-e saem, só com a sigla.
       return sendWhatsApp(phone, `Emitimos o CRLV-e destas UFs:\n*${ufsCrlvBot(liberadas).join(', ')}*\n\nInforme a *UF* do veículo (ex.: RJ):`);
     }
+    if (SERVICES.find(x => x.id === id)?.inputType === 'chassi') {
+      await salvarSessaoBot(chave, user.id, 'chassi', { serviceId: id });
+      return sendWhatsApp(phone, 'Informe o *chassi* do veículo (17 caracteres, ex.: 9BD195A44M0000000):');
+    }
     await salvarSessaoBot(chave, user.id, 'placa', { serviceId: id });
     // Aviso que no painel é termo de aceite (noteStyle 'danger', ex.: o QR Code
     // da Reemissão da ATPVe não faz leitura) vai antes do pedido da placa.
@@ -18725,6 +18853,13 @@ async function processarMensagemBot(phone, texto) {
     if (op.dados) return sendWhatsApp(phone, `*${s.name}* — ${fmtMoneyBRL(preco + BOT_CRLV_ACRESCIMO)}\n` +
       `(${fmtMoneyBRL(preco)} do CRLV-e + ${fmtMoneyBRL(BOT_CRLV_ACRESCIMO)} da ${BOT_CRLV_ACRESCIMO_NOME}, que busca o renavam e os dados que essa UF exige — você informa só a placa)\n\nInforme a *placa* do veículo (ex.: ABC1D23):`);
     return sendWhatsApp(phone, `*${s.name}* — ${fmtMoneyBRL(preco)}\n\nInforme a *placa* do veículo (ex.: ABC1D23):`);
+  }
+
+  if (sessao.etapa === 'chassi') {
+    const chassi = placaBot(texto);
+    if (!/^[A-HJ-NPR-Z0-9]{17}$/.test(chassi))
+      return sendWhatsApp(phone, 'Chassi inválido. Informe os 17 caracteres do chassi (sem as letras I, O e Q).');
+    return gerarPixBot(phone, chave, user, d.serviceId, { chassi });
   }
 
   if (sessao.etapa === 'placa') {
