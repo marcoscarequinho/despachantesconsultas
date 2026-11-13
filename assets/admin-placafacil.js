@@ -117,7 +117,7 @@
       const avisos = [];
       if (s.semSaldoEm) avisos.push(['red', `A Placa Fácil recusou uma consulta por falta de saldo em ${fmtDate(s.semSaldoEm)}. Enquanto não recarregar, a Consulta Código Segurança CRV v2 não sai. Recarregue e informe o saldo novo aqui.`]);
       if (!d.chaveConfigurada) avisos.push(['amber', 'PLACAFACIL_KEY não está configurada no servidor — as consultas vão falhar.']);
-      if (s.consultasSemCusto) avisos.push(['amber', `${s.consultasSemCusto} consulta(s) saíram sem a API informar o valor cobrado — elas não foram descontadas do saldo estimado. Confira o saldo no painel deles e informe aqui.`]);
+      if (s.consultasSemCusto && !s.custoConsulta) avisos.push(['amber', `${s.consultasSemCusto} consulta(s) saíram sem a API informar o valor cobrado — elas não foram descontadas do saldo estimado. Confira o saldo no painel deles e informe aqui.`]);
       if (baixo && !s.semSaldoEm) avisos.push(['amber', `Saldo estimado abaixo de ${fmt(s.alertaAbaixo)}. Recarregue e informe o saldo novo aqui.`]);
       const cor = { red: 'bg-red-50 border-red-200 text-red-800', amber: 'bg-amber-50 border-amber-200 text-amber-800' };
       document.getElementById('pf-avisos').innerHTML = avisos.map(([c, a]) =>

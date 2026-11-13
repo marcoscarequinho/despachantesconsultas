@@ -358,10 +358,11 @@ const directDataPreco = custo => Math.round(custo * DIRECTDATA_MARKUP * 100) / 1
 const PLACAFACIL_BASE_URL   = 'https://placa-fcil-pro.base44.app/functions/apiConsulta';
 const PLACAFACIL_KEY        = process.env.PLACAFACIL_KEY || '';
 const PLACAFACIL_SERVICE_ID = 'codigo-seguranca-crv-v2';
-// Custo por consulta para o saldo estimado do admin quando a resposta não traz
-// "valor_cobrado" (a despbrasil, que tem o mesmo desenho, traz). null = sem
-// custo conhecido: a consulta é registrada com R$ 0,00 e o admin avisa.
-const PLACAFACIL_CUSTO_CONSULTA = null;
+// Custo por consulta para o saldo estimado do admin: a resposta da Placa Fácil NÃO traz
+// "valor_cobrado". R$ 1,00 por consulta, informado pelo dono em 13/11/2026 (a despbrasil,
+// mesma plataforma, cobra R$ 4,00 pelo mesmo produto — não é a mesma tabela).
+// Placa que volta do cache deles (from_cache) não conta.
+const PLACAFACIL_CUSTO_CONSULTA = 1.00;
 let placaFacilAvisoEm = 0; // último aviso de chave/conta recusada ao ADMIN_PHONE
 
 // API despbrasil.com.br — auth por header chaveAcesso (fixo); resposta traz a URL
@@ -10858,7 +10859,7 @@ async function saldoPlacaFacil() {
 async function registrarPlacaFacil({ status, json, texto, sucesso, placa, origem }) {
   try {
     const cobrado = Number(json?.valor_cobrado ?? json?.valorCobrado);
-    const custo = !sucesso ? 0 : (Number.isFinite(cobrado) && cobrado > 0 ? cobrado : (PLACAFACIL_CUSTO_CONSULTA || 0));
+    const custo = (!sucesso || json?.from_cache) ? 0 : (Number.isFinite(cobrado) && cobrado > 0 ? cobrado : (PLACAFACIL_CUSTO_CONSULTA || 0));
     const resumo = sucesso ? 'Sucesso'
       : String(json?.error || json?.erro || json?.mensagem || texto || '').replace(/\s+/g, ' ').slice(0, 200);
     await pool.query(
