@@ -1679,6 +1679,20 @@ const SERVICES = [
   // Entrou no catálogo no mesmo dia, depois da primeira resposta real (a conta
   // respondia 403 "sem_servico" até o fornecedor liberar).
   { id:PLACAFACIL_SERVICE_ID, name:'Consulta Código Segurança CRV v2 (PDF)', group:'CRV', basePrice:7.99, noMarkup:true, inputType:'placa', icon:'🔐' },
+  // Renainf Multas (Placa Fácil Pro): SÓ no @consultar do WhatsApp e grátis (dono, 13/11/2026).
+  // soWhats = fora do /api/services (painel) e recusado no /api/query; ver RENAINF_SERVICE_ID.
+  { id:'renainf-multas-whats', name:'Renainf Multas', group:'Consultas Básicas', basePrice:0, noMarkup:true, inputType:'placa', icon:'🚨', soWhats:true },
+  // Placa Serpro (Placa Fácil Pro): SÓ no @consultar, R$ 3,00 fixo (dono, 13/11/2026). Ver SERPRO_SERVICE_ID.
+  { id:'placa-serpro-whats', name:'Placa Serpro', group:'Consultas Básicas', basePrice:3.00, noMarkup:true, inputType:'placa', icon:'🔎', soWhats:true },
+  // Histórico CRLV (Placa Fácil Pro): SÓ no @consultar, R$ 4,00 fixo (dono, 13/11/2026). Ver HISTORICO_SERVICE_ID.
+  { id:'historico-crlv-whats', name:'Histórico CRLV', group:'Consultas Básicas', basePrice:4.00, noMarkup:true, inputType:'placa', icon:'🕘', soWhats:true },
+  // Consulta do Comunicação de Venda do WhatsApp (Placa Fácil Pro): R$ 8,99, o mesmo valor da v2 da
+  // despbrasil que ela substitui NO MENU DO ROBÔ (dono, 13/11/2026). Só WhatsApp. Ver COMUNICACAO_VENDA_WHATS_ID.
+  { id:'comunicacao-venda-whats', name:'Consulta do Comunicação de Venda', group:'Consultas Básicas', basePrice:8.99, noMarkup:true, inputType:'placa', icon:'📝', soWhats:true },
+  // Ocorrências de Roubo/Furto por placa, via Senatran (Placa Fácil Pro): SÓ no @consultar, R$ 6,00 fixo (dono, 13/11/2026). Ver ROUBO_FURTO_SERVICE_ID.
+  { id:'roubo-furto-senatran-whats', name:'Ocorrências Roubo/Furto (Senatran)', group:'Consultas Básicas', basePrice:6.00, noMarkup:true, inputType:'placa', icon:'🚔', soWhats:true },
+  // Histórico Proprietário (Placa Fácil Pro): SÓ no @consultar, R$ 6,50 fixo (dono, 13/11/2026). Ver HISTORICO_PROP_SERVICE_ID.
+  { id:'historico-proprietario-whats', name:'Histórico Proprietário', group:'Consultas Básicas', basePrice:6.50, noMarkup:true, inputType:'placa', icon:'👥', soWhats:true },
   // API despbrasil (serviço "verificar_crlv", o MESMO do "Verificar CRLV e
   // Último Licenciamento" do grupo Consultas Básicas — ver DESPBRASIL_SVCS).
   // Id separado de propósito: aquele serviço segue intocado a R$ 3,00, e este
@@ -4665,7 +4679,7 @@ app.get('/api/services', requireAuth, async (req, res) => {
       if (ocultas.has(p.id)) return;
       precosUfDoUsuario[p.ufAtpve] = overrides[p.id] ?? (tab && tab.vendaDe(p)) ?? p.basePrice;
     });
-    const visiveis = SERVICES.filter(s => !ocultas.has(s.id) && !(s.precosUf && !Object.keys(precosUfDoUsuario).length));
+    const visiveis = SERVICES.filter(s => !s.soWhats && !ocultas.has(s.id) && !(s.precosUf && !Object.keys(precosUfDoUsuario).length));
     res.json({
       services: visiveis.map(s => (liberadas && !liberadas.has(s.id)) ? { ...s, price: null, naoLiberada: true } : s.precosUf ? {
         ...s, precosUf: precosUfDoUsuario, price: Math.min(...Object.values(precosUfDoUsuario)),
@@ -9761,7 +9775,7 @@ async function getUserServicePrice(userId, service) {
 // registrarLucrosParceiros). Fica de fora o que não tem preço próprio para
 // remarcar: grupo gratuito, preço por UF, suspenso e o que custa R$ 0,00.
 function servicoRevendavel(s) {
-  return !!s && !isFreeService(s) && !s.unavailable && !s.adminOnly && !s.precosUf
+  return !!s && !isFreeService(s) && !s.unavailable && !s.adminOnly && !s.soWhats && !s.precosUf
     && s.id !== DATACRED_ATPVE_SERVICE_ID && catalogPrice(s) > 0;
 }
 
@@ -10995,6 +11009,449 @@ async function consultarCodigoSegurancaPlacaFacil(placa, nomeServico) {
   return { codigo, pdfBuf };
 }
 
+// ── Renainf Multas (Placa Fácil Pro, servico "renainf_multas") ───────────────
+// Só no @consultar do WhatsApp e grátis para o cliente (dono, 13/11/2026): o id
+// tem soWhats:true (fora do /api/services e recusado no /api/query) e está em
+// BOT_WHATS_GRATIS. Resposta real conferida (TTT7A54, BBW2A33, KGU3A76, OCY5C55,
+// RFU2E12, ABC1D23): JSON SOLTO na raiz, sem PDF — { success, placa,
+// placa_consultada, quantidade, valor_total, valor_total_exigivel,
+// valor_total_nao_exigivel, multas: [...], placa_resposta, message? }. A doc
+// deles mostra "infracoes" com um bloco "ctb"; a API de verdade manda "multas"
+// com os campos do CTB já na linha. Placa limpa volta success:true, multas:[]
+// e message "Nenhuma multa encontrada…". Com muita multa vem message "Existem
+// mais infrações do que o limite desta consulta." (17 itens nos dois casos
+// vistos). "placa_resposta" é a placa como o Renainf devolveu (TTT7054 para
+// TTT7A54, o 0 no lugar do A): não é erro e não vai para o relatório.
+const RENAINF_SERVICE_ID = 'renainf-multas-whats';
+
+async function consultarServicoPlacaFacil(servico, placa, nomeServico, resultadoOk) {
+  const nome = nomeServico || servico;
+  let status = 0, texto = '', json = null;
+  try {
+    const r = await fetch(PLACAFACIL_BASE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', chaveAcesso: PLACAFACIL_KEY },
+      body: JSON.stringify({ servico, placa }),
+      signal: AbortSignal.timeout(120000),
+    });
+    status = r.status;
+    texto = await r.text();
+    try { json = JSON.parse(texto); } catch { /* resposta não-JSON tratada abaixo */ }
+  } catch (e) {
+    console.error(`[placafacil] ${servico}: falha na chamada:`, e.message);
+    await registrarPlacaFacil({ status: 0, texto: e.message, sucesso: false, placa, origem: nome, servico });
+    return { status: 502, erro: 'O sistema do fornecedor não respondeu. Tente novamente em alguns minutos.' };
+  }
+  const ok = !!json && status < 400 && json.ok !== false && json.success !== false && !(typeof json.error === 'string') && !!resultadoOk(json);
+  await registrarPlacaFacil({ status, json, texto, sucesso: ok, placa, origem: nome, servico });
+  if (ok) return { json };
+  console.error(`[placafacil] ${servico} sem resultado: HTTP ${status} ${texto.slice(0, 400)}`);
+  // Placa que a base não tem (Serpro responde 502 com "veículo não encontrado"): é resposta, não falha.
+  if (json && /n[ãa]o encontrad|n[ãa]o localizad|n[ãa]o foi poss[ií]vel obter renavam/i.test(String(json.error || json.erro || ''))) {
+    const m = String(json.error || json.erro).trim();
+    // O fornecedor manda alguns textos sem acento ("Nao foi possivel obter renavam/chassi…").
+    if (/n[ãa]o foi poss[ií]vel obter renavam/i.test(m))
+      return { status: 422, erro: 'Placa não localizada: não foi possível obter o renavam/chassi desta placa.' };
+    return { status: 422, erro: (m.length <= 200 && !/[{<]/.test(m) ? m.replace(/[.!?]*$/, '.') : 'Veículo não encontrado para essa placa.') };
+  }
+  // Chave recusada, conta sem o serviço liberado ou sem saldo: problema nosso
+  // com o fornecedor — o cliente só precisa saber que está fora.
+  if (!json || [401, 402, 403].includes(status) || status >= 500) {
+    if ([401, 403].includes(status) && ADMIN_PHONE && Date.now() - placaFacilAvisoEm > 3600 * 1000) {
+      placaFacilAvisoEm = Date.now();
+      await sendWhatsApp(ADMIN_PHONE, `🚨 *Placa Fácil Pro recusou a consulta*\nHTTP ${status}: "${String(json?.error || texto).slice(0, 150)}" (${nome}, placa ${placa}).\n\nO ${nome} do @consultar está fora até resolver com o fornecedor.`, { marca: false }).catch(() => {});
+    }
+    return { status: 503, erro: CONSULTA_FORA_MSG };
+  }
+  const motivo = String(json.error || json.erro || json.mensagem || json.message || '').trim();
+  const msg = motivo && motivo.length <= 200 && !/[{<]/.test(motivo) ? motivo.replace(/[.!?]*$/, '.') : 'Não foi possível consultar as multas dessa placa.';
+  return { status: 422, erro: msg };
+}
+
+// Relatório do Renainf Multas no padrão do site: resumo (quantidade e valores)
+// e uma ficha por multa. Placa sem multa também sai (é o "nada consta").
+function buildRenainfMultasPdfBuffer(service, placa, d) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+      const brl = v => { const n = Number(v); return Number.isFinite(n) ? fmtMoneyBRL(n) : 'Nada consta'; };
+      const data = iso => /^\d{4}-\d{2}-\d{2}/.test(String(iso || '')) ? String(iso).slice(0, 10).split('-').reverse().join('/') : 'Nada consta';
+      const sn = v => (v === true || v === 'true' || v === '1' || v === 1) ? 'Sim' : 'Não';
+      const t = v => (v === null || v === undefined || String(v).trim() === '') ? 'Nada consta' : String(v).trim();
+      const multas = d.multas || [];
+      pdfReportHeader(doc, service.name.toUpperCase(), now);
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Placa', maskPlacaDisplay(placa)], ['Consulta', 'Multas Renainf']]);
+      doc.moveDown(0.4);
+      pdfBar(doc, 'RESUMO');
+      pdfFieldGrid(doc, [
+        ['Multas encontradas', String(d.quantidade ?? multas.length)],
+        ['Valor total', brl(d.valor_total)],
+        ['Total exigível', brl(d.valor_total_exigivel)],
+        ['Total não exigível', brl(d.valor_total_nao_exigivel)],
+        ...(d.message ? [['Observação', String(d.message)]] : []),
+      ]);
+      doc.moveDown(0.4);
+      pdfBar(doc, 'MULTAS');
+      if (!multas.length) pdfEmptyNotice(doc);
+      multas.forEach((m, i) => {
+        pdfSubBar(doc, `Multa ${i + 1} — Auto ${t(m.auto_infracao)}`);
+        pdfFieldGrid(doc, [
+          ['Data da infração', data(m.data_infracao_iso)],
+          ['Órgão autuador', t(m.orgao_autuador)],
+          ['Infração', `${t(m.codigo_completo || m.cod_infracao)} — ${t(m.descricao || m.cod_infracao_descricao)}`],
+          ['Enquadramento', t(m.artigo_ctb)],
+          ['Gravidade', t(m.nivel_gravidade)],
+          ['Pontos', t(m.pontos)],
+          ['Valor da multa', brl(m.valor_multa)],
+          ['Exigível', sn(m.exigivel)],
+          ['Infrator', t(m.infrator)],
+          ['Órgãos competentes', t(m.orgaos_competentes)],
+          ['Medida administrativa', t(m.medida_administrativa)],
+          ['Suspensão do direito de dirigir', sn(m.suspensao_direito_dirigir)],
+        ]);
+        doc.moveDown(0.3);
+      });
+      doc.moveDown(0.4);
+      pdfReportFooter(doc, now);
+      doc.end();
+    } catch (e) { reject(e); }
+  });
+}
+
+// ── Placa Serpro (Placa Fácil Pro, servico "placa_serpro") ───────────────────
+// Só no @consultar do WhatsApp, R$ 3,00 pagos por PIX como as outras (dono,
+// 13/11/2026). soWhats:true tira do painel e da API de chave. Resposta real
+// conferida (TTT7A54, OCY5C55, RFU2E12, BBW2A33, ABC1D23): JSON SOLTO na raiz
+// com 97 campos, o mesmo formato do exemplo da doc — chassi, renavam, município
+// de emplacamento, marca/modelo, cor, ano, restrições 1–4, indicadores
+// (Renainf, comunicação de venda, Renajud, leilão, roubo/furto), proprietário,
+// CRV/CRLV. Nota: a "placa" que volta no JSON pode vir com O/0 trocados
+// (ABC1D23 → ABC1323): o relatório usa a placa consultada. Placa que o Serpro
+// não tem volta HTTP 502 { ok:false, codigo:"consulta_falhou", error:"Consulta
+// concluída: veículo não encontrado no SERPRO…" } — vira 422 sem cobrar; o
+// mesmo 502 com outro texto ("Não foi possível consultar a placa informada",
+// visto uma vez na TTT7A54 e já ok na repetição) é falha passageira → 503.
+const SERPRO_SERVICE_ID = 'placa-serpro-whats';
+
+function buildPlacaSerproPdfBuffer(service, placa, d) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+      const t = v => {
+        if (v === true) return 'Sim';
+        if (v === false) return 'Não';
+        if (v === null || v === undefined || String(v).trim() === '') return 'Nada consta';
+        const s = String(v).trim();
+        return /^\d{4}-\d{2}-\d{2}(T|$)/.test(s) ? s.slice(0, 10).split('-').reverse().join('/') : s;
+      };
+      // Restrição "SEM RESTRICAO" / código 00 não é restrição.
+      const restricoes = [1, 2, 3, 4].map(i => d[`descricaoRestricao${i}`]).filter(x => x && !/^SEM RESTRI/i.test(String(x)));
+      const ton = v => (Number(v) > 0 ? `${v} t` : 'Nada consta');
+      pdfReportHeader(doc, service.name.toUpperCase(), now);
+      pdfBar(doc, 'IDENTIFICAÇÃO');
+      pdfFieldGrid(doc, [
+        ['Placa', maskPlacaDisplay(placa)], ['Situação', t(d.situacao).replace(/_/g, ' ')],
+        ['Chassi', t(d.chassi)], ['Renavam', t(d.codigoRenavam)],
+        ['Município de emplacamento', t(d.descricaoMunicipioEmplacamento)], ['UF', t(d.ufJurisdicao)],
+        ['Procedência', t(d.procedencia)], ['Remarcação do chassi', t(d.descricaoRemarcacaoChassi)],
+      ]);
+      doc.moveDown(0.4);
+      pdfBar(doc, 'VEÍCULO');
+      pdfFieldGrid(doc, [
+        ['Marca / Modelo', t(d.descricaoMarcaModelo)], ['Tipo', t(d.descricaoTipoVeiculo)],
+        ['Espécie', t(d.descricaoEspecieVeiculo)], ['Carroceria', t(d.descricaoTipoCarroceria)],
+        ['Cor', t(d.descricaoCor)], ['Categoria', t(d.descricaoCategoria)],
+        ['Ano de fabricação', t(d.anoFabricacao)], ['Ano do modelo', t(d.anoModelo)],
+        ['Combustível', t(d.descricaoCombustivel)], ['Potência', t(d.potencia)],
+        ['Cilindradas', t(d.cilindradas)], ['Número do motor', t(d.numeroMotor)],
+        ['Câmbio', t(d.numeroCambio)], ['Lotação', t(d.lotacao)],
+        ['Eixos', t(d.qtdEixos)], ['CMT / PBT / CMC', `${ton(d.cmt)} / ${ton(d.pbt)} / ${ton(d.cmc)}`],
+      ]);
+      doc.moveDown(0.4);
+      pdfBar(doc, 'PROPRIETÁRIO');
+      pdfFieldGrid(doc, [
+        ['Nome', t(d.nomeProprietario)], ['Tipo', t(d.descricaoTipoProprietario)],
+        ['CPF / CNPJ', t(d.numeroIdentificacaoProprietario)], ['Emissão do CRV', t(d.dataEmissaoCrv)],
+      ]);
+      doc.moveDown(0.4);
+      pdfBar(doc, 'RESTRIÇÕES E INDICADORES');
+      pdfFieldGrid(doc, [
+        ['Restrições', restricoes.length ? restricoes.join(', ') : 'Nenhuma restrição'],
+        ['Multa Renainf', t(d.indicadorMultaRenainf)], ['Comunicação de venda', t(d.indicadorComunicacaoVenda)],
+        ['Restrição Renajud', t(d.indicadorRestricaoRenajud)], ['Roubo / furto', t(d.indicadorRouboFurto)],
+        ['Leilão', t(d.indicadorLeilao)], ['Pendência de emissão', t(d.indicadorPendenciaEmissao)],
+        ['Alarme', t(d.indicadorAlarme)], ['Exercício do licenciamento pago', t(d.anoExercicioLicenciamentoPago)],
+        ['Emissão do CRLV', t(d.dataEmissaoCRLV)],
+      ]);
+      doc.moveDown(0.4);
+      pdfReportFooter(doc, now);
+      doc.end();
+    } catch (e) { reject(e); }
+  });
+}
+
+// ── Histórico CRLV (Placa Fácil Pro, servico "renavam_historico_crlv") ───────
+// Só no @consultar do WhatsApp, R$ 4,00 pagos por PIX (dono, 13/11/2026).
+// Resposta real conferida (BBW2A33 com 10 ocorrências, TTT7A54 com 3): JSON
+// SOLTO na raiz — { success, placa, renavam, quantidade, ocorrencias: [...],
+// truncado } —, cada ocorrência é um ato do RENAVAM (Licenciamento, Emissão de
+// CRV…) com data/hora, UF e município de emplacamento, exercício, via do CRV,
+// tipo e número do documento do proprietário e a situação. Os textos vêm sem
+// acento ("Emissao de CRV", "Autorizado e nao cancelado"): o relatório repõe o
+// acento nos que se repetem. Placa que o RENAVAM não resolve volta 502
+// "Nao foi possivel obter renavam/chassi para esta placa" (AAA0000) — é
+// resposta, não falha: 422 sem cobrar. O documento do proprietário sai como o
+// fornecedor entrega (CPF/CNPJ inteiro), porque o histórico serve justamente
+// para seguir a cadeia de donos.
+const HISTORICO_SERVICE_ID = 'historico-crlv-whats';
+
+function buildHistoricoCrlvPdfBuffer(service, placa, d) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+      const t = v => (v === null || v === undefined || String(v).trim() === '') ? 'Nada consta'
+        : String(v).trim().replace(/Emissao/g, 'Emissão').replace(/\bnao\b/g, 'não').replace(/\bAutorizacao\b/g, 'Autorização');
+      const data = iso => /^\d{4}-\d{2}-\d{2}/.test(String(iso || '')) ? String(iso).slice(0, 10).split('-').reverse().join('/') : 'Nada consta';
+      const oc = d.ocorrencias || [];
+      pdfReportHeader(doc, service.name.toUpperCase(), now);
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Placa', maskPlacaDisplay(placa)], ['Renavam', t(d.renavam)]]);
+      doc.moveDown(0.4);
+      pdfBar(doc, 'RESUMO');
+      pdfFieldGrid(doc, [
+        ['Ocorrências encontradas', String(d.quantidade ?? oc.length)],
+        ['Ordem', 'Da mais recente para a mais antiga'],
+        ...(d.truncado ? [['Observação', 'A lista foi limitada pela base: há ocorrências mais antigas que não aparecem aqui.']] : []),
+      ]);
+      doc.moveDown(0.4);
+      pdfBar(doc, 'HISTÓRICO');
+      if (!oc.length) pdfEmptyNotice(doc);
+      oc.forEach((o, i) => {
+        pdfSubBar(doc, `${i + 1}. ${data(o.data_autorizacao_iso)} — ${t(o.desc_motivo_emissao)}`);
+        pdfFieldGrid(doc, [
+          ['Data e hora', `${data(o.data_autorizacao_iso)} ${t(o.hora_autorizacao_iso) === 'Nada consta' ? '' : o.hora_autorizacao_iso}`.trim()],
+          ['Exercício (licenciamento)', t(o.ano_licenciamento)],
+          ['Município / UF de emplacamento', t(o.cod_munic_emplac_descricao)],
+          ['Via do CRV', t(o.num_via_crv)],
+          ['Proprietário', `${t(o.desc_tipo_doc_prop)}: ${t(o.num_ident_prop)}`],
+          ['Situação', t(o.desc_indicador_situacao)],
+        ]);
+        doc.moveDown(0.3);
+      });
+      doc.moveDown(0.4);
+      pdfReportFooter(doc, now);
+      doc.end();
+    } catch (e) { reject(e); }
+  });
+}
+
+// ── Consulta do Comunicação de Venda — WhatsApp (Placa Fácil Pro, "renavam_comunicacao_venda") ──
+// No @consultar ela TOMA O LUGAR da v2 da despbrasil (comunicado-venda-placa-v2)
+// pelo mesmo valor, R$ 8,99 (dono, 13/11/2026); no painel as duas da despbrasil
+// continuam como sempre. soWhats:true: fora do painel e da API de chave. A v2 da
+// despbrasil segue servindo o conferir-comprador dos Débitos por Estado do robô
+// (compradorComunicadoVenda), que não mudou. Resposta real conferida (KGU3A76,
+// com comunicação ativa; TTT7A54, sem; AAA0000, placa que o RENAVAM não resolve):
+// JSON SOLTO — { success, placa, renavam, quantidade, ocorrencias: [...],
+// comunicacao_venda, comprador, endereco_comprador, dados_veiculo_cartorio (o CRV
+// de origem), dados_cartorio (quem registrou), dados_controle (situação,
+// registro e cancelamento), origem_registro }. Sem comunicação: success:true,
+// quantidade 0 e message "Nenhuma comunicacao de venda encontrada para este
+// veiculo" — é resposta ("nada consta"), sai em PDF e cobra como as outras.
+// AAA0000 volta 502 "Nao foi possivel obter renavam/chassi…" — 422 sem cobrar.
+const COMUNICACAO_VENDA_WHATS_ID = 'comunicacao-venda-whats';
+
+function buildComunicacaoVendaWhatsPdfBuffer(service, placa, d) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+      const t = v => (v === null || v === undefined || String(v).trim() === '') ? 'Nada consta' : String(v).trim();
+      const data = iso => /^\d{4}-\d{2}-\d{2}/.test(String(iso || '')) ? String(iso).slice(0, 10).split('-').reverse().join('/') : 'Nada consta';
+      const quando = (iso, hora) => data(iso) === 'Nada consta' ? 'Nada consta' : `${data(iso)}${hora ? ' ' + hora : ''}`;
+      const oc = d.ocorrencias || [];
+      pdfReportHeader(doc, service.name.toUpperCase(), now);
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Placa', maskPlacaDisplay(placa)], ['Renavam', t(d.renavam)]]);
+      doc.moveDown(0.4);
+      pdfBar(doc, 'COMUNICAÇÃO DE VENDA');
+      if (!oc.length) {
+        pdfFieldGrid(doc, [['Resultado', 'Nenhuma comunicação de venda encontrada para este veículo.']]);
+      }
+      oc.forEach((o, i) => {
+        if (oc.length > 1) pdfSubBar(doc, `Comunicação ${i + 1} — venda em ${data(o.data_venda_iso)}`);
+        pdfFieldGrid(doc, [
+          ['Data da venda', data(o.data_venda_iso)], ['Situação', t(o.indicador_situacao_descricao)],
+          ['Registro', quando(o.data_registro_iso, o.hora_registro_iso)], ['Local da venda', t(o.cod_municipio_local_venda_descricao)],
+          ['Comprador', t(o.nome_comprador)], [t(o.tipo_documento_comprador_descricao) === 'Nada consta' ? 'Documento' : o.tipo_documento_comprador_descricao, t(o.numero_documento_comprador)],
+          ['Endereço', [o.logradouro_comprador, o.numero_imovel_comprador, o.complemento_imovel_comprador].filter(x => x && String(x).trim()).join(', ') || 'Nada consta'],
+          ['Bairro', t(o.bairro_imovel_comprador)],
+          ['Município / UF', t(o.cod_municipio_imovel_comprador_descricao)], ['CEP', t(o.cep_imovel_comprador)],
+        ]);
+        doc.moveDown(0.3);
+      });
+      if (oc.length) {
+        const v = d.dados_veiculo_cartorio || {};
+        doc.moveDown(0.4);
+        pdfBar(doc, 'CRV DE ORIGEM');
+        pdfFieldGrid(doc, [
+          ['Proprietário no CRV', t(v.nome_proprietario_crv)], [t(v.tipo_documento_proprietario_crv_descricao) === 'Nada consta' ? 'Documento' : v.tipo_documento_proprietario_crv_descricao, t(v.numero_documento_proprietario_crv)],
+          ['Número do CRV', t(v.numero_crv)], ['Via', t(v.numero_via_crv)],
+          ['Emissão do CRV', data(v.data_emissao_crv_iso)], ['UF de emissão', t(v.uf_emissao_crv)],
+          ['Ano de fabricação', t(v.ano_fabricacao_crv)], ['Ano do modelo', t(v.ano_modelo_crv)],
+        ]);
+        const c = d.dados_cartorio || {};
+        doc.moveDown(0.4);
+        pdfBar(doc, 'REGISTRO');
+        pdfFieldGrid(doc, [
+          ['Cartório / registrador', t(c.nome_cartorio)], ['CNPJ', t(c.numero_identificacao_cartorio)],
+          ['Município / UF', t(c.cod_municipio_cartorio_descricao)], ['Telefone', c.numero_fone_cartorio ? `(${t(c.ddd_fone_cartorio)}) ${c.numero_fone_cartorio}` : 'Nada consta'],
+        ]);
+        const k = d.dados_controle || {};
+        const cancelada = !!k.data_cancelamento_iso;
+        doc.moveDown(0.4);
+        pdfBar(doc, 'SITUAÇÃO');
+        pdfFieldGrid(doc, [
+          ['Situação', t(k.indicador_situacao_descricao)], ['Última atualização', quando(k.data_situacao_iso, k.hora_situacao_iso)],
+          ['Aceite da UF', data(k.data_aceite_uf_registro_iso)], ['Cancelamento', cancelada ? quando(k.data_cancelamento_iso, k.hora_cancelamento_iso) : 'Não cancelada'],
+        ]);
+      }
+      doc.moveDown(0.4);
+      pdfReportFooter(doc, now);
+      doc.end();
+    } catch (e) { reject(e); }
+  });
+}
+
+// ── Ocorrências de Roubo/Furto por placa — Senatran (Placa Fácil Pro, "ocorrencias_senatran") ──
+// Só no @consultar do WhatsApp, R$ 6,00 pagos por PIX (dono, 13/11/2026).
+// Resposta real conferida (KGN3387 com roubo, TTT7A54 e BBW2A33 sem nada,
+// AAA0000 sem veículo): JSON SOLTO — { success, placa_consultada, ocorrencias:
+// [{ tipo, data (dd/mm/aaaa), municipio, numeroBoletimAno, orgaoSegurancaUf,
+// descricao, quantidade }], message? }. Placa limpa: success:true, ocorrencias []
+// e message "…nenhuma ocorrência de roubo/furto encontrada." — é o "nada consta",
+// sai em PDF e cobra. Placa que a base não tem também vem 200 e success:true, só
+// que com message "…nenhum veículo encontrado para a placa informada.": isso não
+// é resposta sobre o veículo, então recusa sem cobrar (422).
+const ROUBO_FURTO_SERVICE_ID = 'roubo-furto-senatran-whats';
+
+function buildRouboFurtoSenatranPdfBuffer(service, placa, d) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+      const t = v => (v === null || v === undefined || String(v).trim() === '') ? 'Nada consta' : String(v).trim();
+      const oc = d.ocorrencias || [];
+      pdfReportHeader(doc, service.name.toUpperCase(), now);
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Placa', maskPlacaDisplay(placa)], ['Base', 'Senatran']]);
+      doc.moveDown(0.4);
+      pdfBar(doc, 'RESULTADO');
+      pdfFieldGrid(doc, [
+        ['Ocorrências de roubo/furto', oc.length ? String(oc.length) : 'Nenhuma'],
+        ...(oc.length ? [] : [['Resultado', 'Nenhuma ocorrência de roubo/furto encontrada para esta placa.']]),
+      ]);
+      oc.forEach((o, i) => {
+        doc.moveDown(0.3);
+        pdfSubBar(doc, `Ocorrência ${i + 1} — ${t(o.tipo)}`);
+        pdfFieldGrid(doc, [
+          ['Tipo', t(o.tipo)], ['Data', t(o.data)],
+          ['Município', t(o.municipio)], ['Órgão de segurança / UF', t(o.orgaoSegurancaUf)],
+          ['Boletim (número/ano)', t(o.numeroBoletimAno)], ['Descrição', t(o.descricao)],
+          ['Quantidade', t(o.quantidade)],
+        ]);
+      });
+      doc.moveDown(0.4);
+      pdfReportFooter(doc, now);
+      doc.end();
+    } catch (e) { reject(e); }
+  });
+}
+
+// ── Histórico Proprietário (Placa Fácil Pro, "historico_proprietario") ───────
+// Só no @consultar do WhatsApp, R$ 6,50 pagos por PIX (dono, 13/11/2026).
+// Resposta real conferida (BBW2A33 com 6 donos, TTT7A54 com 2; AAA0000 recusa):
+// JSON SOLTO — { success, placa, renavam, consulta_em, total, proprietario_atual
+// { nome, documento, tipo, evento, uf, municipio }, historico: [{ ordem, documento,
+// tipo, nome, data (dd/mm/aaaa), hora, uf, municipio, evento, atual }], message }.
+// O "evento" é null nos atos mais recentes (visto em BBW2A33/TTT7A54) e vem
+// "Transferencia de propriedade"/"Licenciamento" nos antigos. Placa que o RENAVAM
+// não resolve volta 502 "Nao foi possivel obter renavam/chassi…" — 422 sem
+// cobrar. Nome e CPF/CNPJ saem inteiros, como o fornecedor entrega: o histórico
+// serve para seguir a cadeia de donos.
+const HISTORICO_PROP_SERVICE_ID = 'historico-proprietario-whats';
+
+function buildHistoricoProprietarioPdfBuffer(service, placa, d) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+      // Textos do fornecedor vêm sem acento ("Transferencia", "Pessoa fisica").
+      const t = v => (v === null || v === undefined || String(v).trim() === '') ? 'Nada consta'
+        : String(v).trim().replace(/Transferencia/g, 'Transferência').replace(/propriedade/g, 'propriedade')
+          .replace(/Pessoa fisica/g, 'Pessoa física').replace(/Pessoa juridica/g, 'Pessoa jurídica');
+      const h = d.historico || [];
+      const atual = d.proprietario_atual || {};
+      pdfReportHeader(doc, service.name.toUpperCase(), now);
+      pdfBar(doc, 'DADOS DA CONSULTA');
+      pdfFieldGrid(doc, [['Placa', maskPlacaDisplay(placa)], ['Renavam', t(d.renavam)]]);
+      doc.moveDown(0.4);
+      pdfBar(doc, 'PROPRIETÁRIO ATUAL');
+      pdfFieldGrid(doc, [
+        ['Nome', t(atual.nome)], ['CPF / CNPJ', t(atual.documento)],
+        ['Tipo', t(atual.tipo)], ['Município / UF', [atual.municipio, atual.uf].filter(Boolean).join(' / ') || 'Nada consta'],
+      ]);
+      doc.moveDown(0.4);
+      pdfBar(doc, 'HISTÓRICO DE PROPRIETÁRIOS');
+      pdfFieldGrid(doc, [
+        ['Registros', String(d.total ?? h.length)], ['Ordem', 'Do mais recente para o mais antigo'],
+        ...(d.message ? [['Observação', String(d.message)]] : []),
+      ]);
+      if (!h.length) pdfEmptyNotice(doc);
+      h.forEach((o, i) => {
+        doc.moveDown(0.3);
+        pdfSubBar(doc, `${o.ordem ?? i + 1}. ${t(o.data)} — ${o.atual ? 'Proprietário atual' : 'Proprietário anterior'}`);
+        pdfFieldGrid(doc, [
+          ['Nome', t(o.nome)], ['CPF / CNPJ', t(o.documento)],
+          ['Tipo', t(o.tipo)], ['Data e hora', `${t(o.data)}${o.hora ? ' ' + o.hora : ''}`],
+          ['Município / UF', [o.municipio, o.uf].filter(Boolean).join(' / ') || 'Nada consta'], ['Evento', t(o.evento)],
+        ]);
+      });
+      doc.moveDown(0.4);
+      pdfReportFooter(doc, now);
+      doc.end();
+    } catch (e) { reject(e); }
+  });
+}
+
 // PDF da Consulta Código Segurança CRV v2: o cartão "Número de Segurança do
 // CRV" da SENATRAN (Carteira Digital de Trânsito), pedido do dono em
 // 13/11/2026 — até ali era um relatório no padrão do site. O modelo
@@ -11161,6 +11618,9 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
   // quanto a API externa (ambos passam por processCatalogQuery).
   if (service.unavailable)
     return res.status(400).json({ error: service.slowNote || 'Consulta temporariamente indisponível.' });
+  // Consulta só do WhatsApp: no painel e na API de chave ela não existe (dono, 13/11/2026).
+  if (service.soWhats && !contextoBotWhats.getStore())
+    return res.status(403).json({ error: 'Essa consulta está disponível só pelo WhatsApp (@consultar).' });
 
   const price = await getUserServicePrice(userId, service);
 
@@ -11389,6 +11849,258 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
       const nomeArq = `mcdespachadoria-cod-seguranca-crv-${placa}.pdf`;
       if (user.phone)
         await sendWhatsAppPdf(user.phone, pdfBuf, nomeArq, `✅ *${service.name}*\n🚗 ${placa}`).catch(() => {});
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
+      return res.send(pdfBuf);
+    }
+
+    // ── Renainf Multas — só no @consultar, grátis (ver RENAINF_SERVICE_ID) ──────
+    // O PDF é montado aqui; quem o manda ao cliente é o robô (executarConsultaBot).
+    // Com preço 0 não há débito nem transação; se um dia ganhar preço, cobra como
+    // as outras (só com o PDF pronto).
+    if (serviceId === RENAINF_SERVICE_ID) {
+      const placa = String(params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa))
+        return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+
+      const cons = await consultarServicoPlacaFacil('renainf_multas', placa, service.name, j => Array.isArray(j.multas));
+      if (cons.erro) return res.status(cons.status).json({ error: cons.erro });
+      let pdfBuf;
+      try {
+        pdfBuf = await buildRenainfMultasPdfBuffer(service, placa, cons.json);
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório.' });
+      }
+
+      let transactionId = null;
+      if (price > 0) {
+        await debitarConsulta(userId, price);
+        const txRow = await pool.query(
+          `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+          [userId, price, `Consulta: ${service.name} — ${placa}`]
+        );
+        transactionId = txRow.rows[0].id;
+      }
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify({ placa, multas: cons.json.quantidade ?? cons.json.multas.length }), price, transactionId]
+      );
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      const nomeArq = `mcdespachadoria-renainf-multas-${placa}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
+      return res.send(pdfBuf);
+    }
+
+    // ── Placa Serpro — só no @consultar, R$ 3,00 (ver SERPRO_SERVICE_ID) ────────
+    // O PDF é montado aqui; o robô o manda ao cliente (executarConsultaBot). Só
+    // cobra com o registro do Serpro na mão (nunca com recusa ou falha).
+    if (serviceId === SERPRO_SERVICE_ID) {
+      const placa = String(params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa))
+        return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+
+      const cons = await consultarServicoPlacaFacil('placa_serpro', placa, service.name,
+        j => j.isPesquisado !== undefined || !!j.descricaoMarcaModelo || !!j.chassi);
+      if (cons.erro) return res.status(cons.status).json({ error: cons.erro });
+      let pdfBuf;
+      try {
+        pdfBuf = await buildPlacaSerproPdfBuffer(service, placa, cons.json);
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório. Nada foi cobrado.' });
+      }
+
+      await debitarConsulta(userId, price);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name} — ${placa}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify({ placa }), price, txRow.rows[0].id]
+      );
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, { placa });
+      const nomeArq = `mcdespachadoria-placa-serpro-${placa}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
+      return res.send(pdfBuf);
+    }
+
+    // ── Histórico CRLV — só no @consultar, R$ 4,00 (ver HISTORICO_SERVICE_ID) ────
+    // O PDF é montado aqui; o robô o manda ao cliente (executarConsultaBot). Só
+    // cobra com o histórico na mão (nunca com recusa ou falha).
+    if (serviceId === HISTORICO_SERVICE_ID) {
+      const placa = String(params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa))
+        return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+
+      const cons = await consultarServicoPlacaFacil('renavam_historico_crlv', placa, service.name, j => Array.isArray(j.ocorrencias));
+      if (cons.erro) return res.status(cons.status).json({ error: cons.erro });
+      let pdfBuf;
+      try {
+        pdfBuf = await buildHistoricoCrlvPdfBuffer(service, placa, cons.json);
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório. Nada foi cobrado.' });
+      }
+
+      await debitarConsulta(userId, price);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name} — ${placa}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify({ placa, ocorrencias: cons.json.quantidade ?? cons.json.ocorrencias.length }), price, txRow.rows[0].id]
+      );
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, { placa });
+      const nomeArq = `mcdespachadoria-historico-crlv-${placa}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
+      return res.send(pdfBuf);
+    }
+
+    // ── Consulta do Comunicação de Venda (WhatsApp) — Placa Fácil, R$ 8,99 ───────
+    // Ver COMUNICACAO_VENDA_WHATS_ID. O PDF é montado aqui; o robô o manda ao
+    // cliente. Só cobra com resposta do fornecedor (inclui "nenhuma comunicação").
+    if (serviceId === COMUNICACAO_VENDA_WHATS_ID) {
+      const placa = String(params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa))
+        return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+
+      const cons = await consultarServicoPlacaFacil('renavam_comunicacao_venda', placa, service.name, j => Array.isArray(j.ocorrencias));
+      if (cons.erro) return res.status(cons.status).json({ error: cons.erro });
+      let pdfBuf;
+      try {
+        pdfBuf = await buildComunicacaoVendaWhatsPdfBuffer(service, placa, cons.json);
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório. Nada foi cobrado.' });
+      }
+
+      await debitarConsulta(userId, price);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name} — ${placa}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify({ placa, comunicacoes: cons.json.ocorrencias.length }), price, txRow.rows[0].id]
+      );
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, { placa });
+      const nomeArq = `mcdespachadoria-comunicado-venda-${placa}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
+      return res.send(pdfBuf);
+    }
+
+    // ── Ocorrências Roubo/Furto (Senatran) — só no @consultar, R$ 6,00 ───────────
+    // Ver ROUBO_FURTO_SERVICE_ID. O PDF é montado aqui; o robô o manda ao cliente.
+    if (serviceId === ROUBO_FURTO_SERVICE_ID) {
+      const placa = String(params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa))
+        return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+
+      const cons = await consultarServicoPlacaFacil('ocorrencias_senatran', placa, service.name, j => Array.isArray(j.ocorrencias));
+      if (cons.erro) return res.status(cons.status).json({ error: cons.erro });
+      // Placa que a Senatran não tem volta 200 com a lista vazia e uma mensagem.
+      if (!cons.json.ocorrencias.length && /nenhum ve[ií]culo/i.test(String(cons.json.message || '')))
+        return res.status(422).json({ error: 'Nenhum veículo encontrado para a placa informada. Nada foi cobrado.' });
+      let pdfBuf;
+      try {
+        pdfBuf = await buildRouboFurtoSenatranPdfBuffer(service, placa, cons.json);
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório. Nada foi cobrado.' });
+      }
+
+      await debitarConsulta(userId, price);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name} — ${placa}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify({ placa, ocorrencias: cons.json.ocorrencias.length }), price, txRow.rows[0].id]
+      );
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, { placa });
+      const nomeArq = `mcdespachadoria-roubo-furto-${placa}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
+      return res.send(pdfBuf);
+    }
+
+    // ── Histórico Proprietário — só no @consultar, R$ 6,50 (ver HISTORICO_PROP_SERVICE_ID) ──
+    // O PDF é montado aqui; o robô o manda ao cliente. Só cobra com o histórico na mão.
+    if (serviceId === HISTORICO_PROP_SERVICE_ID) {
+      const placa = String(params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa))
+        return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+
+      const cons = await consultarServicoPlacaFacil('historico_proprietario', placa, service.name, j => Array.isArray(j.historico));
+      if (cons.erro) return res.status(cons.status).json({ error: cons.erro });
+      let pdfBuf;
+      try {
+        pdfBuf = await buildHistoricoProprietarioPdfBuffer(service, placa, cons.json);
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório. Nada foi cobrado.' });
+      }
+
+      await debitarConsulta(userId, price);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name} — ${placa}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify({ placa, proprietarios: cons.json.historico.length }), price, txRow.rows[0].id]
+      );
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, { placa });
+      const nomeArq = `mcdespachadoria-historico-proprietario-${placa}.pdf`;
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
       return res.send(pdfBuf);
@@ -17432,7 +18144,7 @@ const BOT_WHATS_MENU = [
   { id: 'crlv', rotulo: '📄 CRLV-e (emissão na hora — informe UF e placa)' },
   { id: 'base-nacional', rotulo: '🗺️ Base Nacional' },
   // A v2 (R$ 8,99) no lugar da de R$ 12,00 — dono, 12/11/2026. A mesma chamada.
-  { id: 'comunicado-venda-placa-v2', rotulo: '📝 Consulta do Comunicação de Venda' },
+  { id: COMUNICACAO_VENDA_WHATS_ID, rotulo: '📝 Consulta do Comunicação de Venda' },
   { id: 'crlv-rj-reemissao-2', rotulo: '🔑 📄 CRLV 2 Rio Reemissão' },
   { id: 'dcr-reemissao-atpve', rotulo: '📝 Reemissão ATPV-e (PDF)' },
   // Dono, 10/11/2026. Só a placa; com os dois fornecedores fora a recusa leva
@@ -17440,6 +18152,16 @@ const BOT_WHATS_MENU = [
   { id: 'consultar-Numero-ATPVE', rotulo: '🔢 Reemissão da ATPVe Com Comunicação de Venda' },
   { id: 'dcr-pacote-completa-top', rotulo: '🚘 Pacote Veicular Completa TOP' },
   { id: 'consulta-debitos-portal', rotulo: '💳 Consulta de Débitos' },
+  // Dono, 13/11/2026: grátis e só pelo WhatsApp (RENAINF_SERVICE_ID).
+  { id: RENAINF_SERVICE_ID, rotulo: '🚨 Renainf Multas' },
+  // Dono, 13/11/2026: R$ 3,00, só pelo WhatsApp (SERPRO_SERVICE_ID).
+  { id: SERPRO_SERVICE_ID, rotulo: '🔎 Placa Serpro' },
+  // Dono, 13/11/2026: R$ 4,00, só pelo WhatsApp (HISTORICO_SERVICE_ID).
+  { id: HISTORICO_SERVICE_ID, rotulo: '🕘 Histórico CRLV' },
+  // Dono, 13/11/2026: R$ 6,00, só pelo WhatsApp (ROUBO_FURTO_SERVICE_ID).
+  { id: ROUBO_FURTO_SERVICE_ID, rotulo: '🚔 Ocorrências de Roubo/Furto por placa (Senatran)' },
+  // Dono, 13/11/2026: R$ 6,50, só pelo WhatsApp (HISTORICO_PROP_SERVICE_ID).
+  { id: HISTORICO_PROP_SERVICE_ID, rotulo: '👥 Histórico Proprietário' },
   { id: 'debitos-estado-whats', rotulo: '🏛️ Débitos por Estado (só a placa)' },
 ];
 // Débitos por Estado só com a placa (dono, 09/11/2026): no painel cada UF pede
@@ -17464,7 +18186,7 @@ const nomeServicoBot = id => id === BOT_DEBITOS_ID ? BOT_DEBITOS_NOME : (SERVICE
 // por R$ 0,00 no WhatsApp; no painel continua com o preço de sempre). Preço 0
 // não debita, não gera ganho de parceiro (registrarLucrosParceiros pede
 // amount > 0) e não passa pelo porteiro de saldo/fatura.
-const BOT_WHATS_GRATIS = new Set(['consulta-debitos-portal']);
+const BOT_WHATS_GRATIS = new Set(['consulta-debitos-portal', RENAINF_SERVICE_ID]);
 // Só consultas que pedem só a placa entram aqui (dono, 08/11/2026: o
 // Cancelamento de ATPV-e saiu por pedir renavam, nº do ATPV-e, CPF e DUDA).
 
@@ -17863,9 +18585,22 @@ async function processarPagamentoWhats(gatewayId) {
     try { await mpRefundPayment(ped.gateway_id); devolvido = true; } catch (e) { console.error(`[whatsapp] estorno do pedido ${ped.id}:`, e.message); }
     await pool.query(`UPDATE whatsapp_pedidos SET status='ERRO', erro=$2, refund_status=$3, query_id=$4 WHERE id=$1`,
       [ped.id, res.erro, devolvido ? 'DEVOLVIDO' : 'FALHOU', q?.id || null]);
-    return sendWhatsApp(ped.phone, `❌ *${s?.name || 'Consulta'}* — ${ped.params?.placa || ''}\n\n${res.erro}\n\n` +
+    const msgErro = `❌ *${s?.name || 'Consulta'}* — ${ped.params?.placa || ''}\n\n${res.erro}\n\n` +
       (devolvido ? `O PIX de ${fmtMoneyBRL(ped.valor)} foi devolvido automaticamente.` : `Não consegui devolver o PIX automaticamente — fale com o suporte informando o pedido WhatsApp #${ped.id}.`) +
-      `\n\nPara tentar de novo, digite *@consultar*.`);
+      `\n\nPara tentar de novo, digite *@consultar*.`;
+    // As consultas só do WhatsApp (soWhats) respondem sempre em PDF, inclusive
+    // quando não saem (dono, 13/11/2026: "todos devem retornar .pdf"). Se o PDF não for, vai o texto.
+    if (SERVICES.find(x => x.id === (res.serviceId || ped.service_id))?.soWhats) {
+      try {
+        const marca = await marcaDoUsuarioCache(ped.user_id).catch(() => null);
+        const placaErro = ped.params?.placa || '';
+        const pdf = await contextoMarca.run({ marca }, () => buildConsultaForaPdfBuffer(s.name, placaErro, res.erro));
+        if (await sendWhatsAppPdf(ped.phone, pdf, `mcdespachadoria-consulta-nao-realizada-${placaErro}.pdf`, msgErro)) return;
+      } catch (e) {
+        console.error(`[whatsapp] PDF de consulta não realizada falhou (pedido ${ped.id}):`, e.message);
+      }
+    }
+    return sendWhatsApp(ped.phone, msgErro);
   }
   if (q?.transaction_id)
     await pool.query(`UPDATE transactions SET description = description || ' (pago por PIX no WhatsApp)' WHERE id=$1`, [q.transaction_id]);
@@ -18006,7 +18741,7 @@ async function processarMensagemBot(phone, texto) {
         try {
           const marca = await marcaDoUsuarioCache(user.id).catch(() => null);
           const pdf = await contextoMarca.run({ marca }, () => buildConsultaForaPdfBuffer(nome, placa, r.erro));
-          foi = await sendWhatsAppPdf(phone, pdf, `mcdespachadoria-consulta-debitos-${placa}.pdf`,
+          foi = await sendWhatsAppPdf(phone, pdf, `mcdespachadoria-${d.serviceId === RENAINF_SERVICE_ID ? 'renainf-multas' : 'consulta-debitos'}-${placa}.pdf`,
             `❌ *${nome}* — placa ${placa}\n${r.erro}\n\nPara tentar de novo, digite *@consultar*.`);
         } catch (e) {
           console.error(`[@consultar] PDF de consulta fora falhou (placa ${placa}):`, e.message);
