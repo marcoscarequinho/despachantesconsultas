@@ -351,8 +351,10 @@ const directDataPreco = custo => Math.round(custo * DIRECTDATA_MARKUP * 100) / 1
 // JSON de dados do veículo (sem PDF) — o relatório é montado aqui
 // (buildCodigoSegurancaV2PdfBuffer). Bloco próprio em processCatalogQuery; o
 // id NÃO entra no DESPBRASIL_SVCS (sairia com a chave errada).
-// SUCESSO AINDA NÃO VISTO: em 13/11/2026 a conta respondia 403 "sem_servico"
-// ("Nenhuma consulta está liberada para esta conta").
+// Conferido em 13/11/2026 com a TTT7A54 (depois de a conta sair do 403
+// "sem_servico"): 200 em 7 s, JSON SOLTO na raiz, sem envelope, sem PDF e sem
+// valor cobrado — { Placa, MarcaModelo, AnoFabricacao, AnoModelo, Renavam,
+// codigoSegurancaCrv, Versao }. O código bateu com o da despbrasil.
 const PLACAFACIL_BASE_URL   = 'https://placa-fcil-pro.base44.app/functions/apiConsulta';
 const PLACAFACIL_KEY        = process.env.PLACAFACIL_KEY || '';
 const PLACAFACIL_SERVICE_ID = 'codigo-seguranca-crv-v2';
@@ -1669,10 +1671,9 @@ const SERVICES = [
   // CRV (PDF)", Vistocar, R$ 8,10). O da assinatura
   // (assinatura-codigo-seguranca-crv) foi para a despbrasil no mesmo dia: a
   // Vistocar não atende mais nenhum Código de Segurança.
-  // FORA DO CATÁLOGO até a primeira consulta de verdade passar (dono, 13/11/2026):
-  // a conta respondia 403 "sem_servico". Para ligar, é só tirar o comentário da
-  // linha abaixo e pôr a PLACAFACIL_KEY na Vercel — bloco, PDF e saldo já estão prontos.
-  // { id:PLACAFACIL_SERVICE_ID, name:'Consulta Código Segurança CRV v2 (PDF)', group:'CRV', basePrice:7.99, noMarkup:true, inputType:'placa', icon:'🔐' },
+  // Entrou no catálogo no mesmo dia, depois da primeira resposta real (a conta
+  // respondia 403 "sem_servico" até o fornecedor liberar).
+  { id:PLACAFACIL_SERVICE_ID, name:'Consulta Código Segurança CRV v2 (PDF)', group:'CRV', basePrice:7.99, noMarkup:true, inputType:'placa', icon:'🔐' },
   // API despbrasil (serviço "verificar_crlv", o MESMO do "Verificar CRLV e
   // Último Licenciamento" do grupo Consultas Básicas — ver DESPBRASIL_SVCS).
   // Id separado de propósito: aquele serviço segue intocado a R$ 3,00, e este
