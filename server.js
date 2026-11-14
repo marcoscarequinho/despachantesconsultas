@@ -18679,8 +18679,20 @@ async function executarConsultaBot(phone, chave, user, serviceId, params, pagoPi
   };
   const bot = { chave, pdfs: 0, pagoPix, gratis, precoFixo, precoFixoServico: precoFixo != null ? serviceId : null };
   const marca = await marcaDoUsuarioCache(user.id).catch(() => null);
-  await contextoBotWhats.run(bot, () =>
+  const rodar = () => contextoBotWhats.run(bot, () =>
     contextoMarca.run({ marca }, () => processCatalogQuery(user.id, serviceId, params, fake)));
+  await rodar();
+  // Débitos por Estado: o órgão cai e volta em seguida (AVD6434, 14/11/2026 —
+  // "Orgão fora de operação" à 0h13 e, de dia, a mesma chamada com o mesmo CNPJ
+  // do comprador saiu em 2 s). Uma segunda tentativa antes de devolver o PIX;
+  // nada foi cobrado na primeira. 400/403/409 são recusa nossa, não do órgão.
+  if (serviceId.startsWith('dc-debito-') && saida.status >= 400 && ![400, 403, 409].includes(saida.status) && !bot.estornou) {
+    console.error(`[@consultar débitos] ${serviceId} falhou (HTTP ${saida.status}), tentando de novo (placa ${params.placa})`);
+    Object.assign(saida, { status: 200, json: null, pdf: null, headers: {} });
+    fake.headersSent = false;
+    await new Promise(r => setTimeout(r, 5000));
+    await rodar();
+  }
 
   if (saida.status >= 400 || bot.estornou) {
     const msg = (saida.json && typeof saida.json === 'object' ? saida.json.error : null) || 'A consulta não saiu.';
