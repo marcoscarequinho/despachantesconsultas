@@ -22238,6 +22238,19 @@ https://chromewebstore.google.com/detail/despachantes-consultas/cjplmhogifgnengh
 SE VOCÊ FOR PREGUIÇOSO E NÃO LER TODO O TEXTO, VEJA A PÁGINA DA VANIA COMO PARCEIRA, COM DOMÍNIO PRÓPRIO 👉 https://vaniadespachante.com.br/?entrar=1`,
 };
 
+// Segunda campanha (pedido do dono, 14/11/2026): o @consultar para parceiros,
+// as 14:30 — todo dia em SERVIÇOS/PORTAL e de 2 em 2 dias nos demais grupos, na
+// mesma contagem da campanha da manha, que segue igual. So a imagem com o texto
+// na legenda (cabe nos ~1.024 caracteres), sem video e sem mensagem a parte.
+const BROADCAST_CAMPANHA_CONSULTAR = {
+  semVideo: true,
+  imagem: path.join(__dirname, 'assets', 'promo-consultar-whatsapp.jpg'),
+  legenda:
+`PARA VOCÊ FAZER PARTE DESSE GRUPO SELETO DE PARCEIROS E INDICAR O SERVIÇO AO SEU CLIENTE É PRECISO QUE ESTEJA CADASTRADO NA NOSSA PLATAFORMA, USUARIOS JÁ CADASTRADO JÁ TEM SEU USO ATIVO É SÓ ENTRAR NO NUMERO 2299995-1574 E ENVIA UMA MENSAGEM COM ESSE COMANDO: @consultar
+
+https://www.despachantesconsultas.com.br/`,
+};
+
 // Primeiro dia do disparo dos DEMAIS grupos (fuso de Brasilia); a cadencia de
 // 2 em 2 dias conta a partir dele: 26/10, 28/10, 30/10... SERVIÇOS e PORTAL
 // nao esperam esta data — ja recebem todo dia desde a troca (24/10/2026).
@@ -22436,20 +22449,20 @@ async function selecionarDestinosBroadcast({ canal, incluir, excluir, minMembros
 }
 
 async function runWhatsAppBroadcast(opts = {}) {
-  const { canal } = opts;
+  const { canal, campanha = BROADCAST_CAMPANHA } = opts;
   const dests = await selecionarDestinosBroadcast(opts);
   console.log(`📢 Broadcast [${canal || 'geral'}]: ${dests.length} grupos`);
 
   // Link novo a cada disparo: o da HeyGen é assinado e expira.
   let videoUrl = null;
-  try {
+  if (!campanha.semVideo) try {
     const v = await buscarVideoApresentacao();
     if (v.status === 'completed' && v.video_url) videoUrl = v.video_url;
     else console.error(`Broadcast: vídeo de apresentação indisponível (status ${v.status}) — indo só com a imagem.`);
   } catch (e) {
     console.error('Broadcast: HeyGen falhou, indo só com a imagem:', e.message);
   }
-  const imageBase64 = fs.readFileSync(BROADCAST_CAMPANHA.imagem).toString('base64');
+  const imageBase64 = fs.readFileSync(campanha.imagem).toString('base64');
   let sent = 0, failed = 0;
   for (const dest of dests) {
     try {
@@ -22463,9 +22476,11 @@ async function runWhatsAppBroadcast(opts = {}) {
       // Legenda de imagem no WhatsApp para em ~1.024 caracteres e o texto da
       // campanha passa disso (31/10/2026: o link do site caía no corte). Por
       // isso a imagem leva só o link e o texto inteiro vai numa mensagem própria.
-      await sendBroadcastImage(dest.phone, imageBase64, BROADCAST_CAMPANHA.legenda, 'image/jpeg');
-      await new Promise(r => setTimeout(r, 1000));
-      await sendBroadcastText(dest.phone, BROADCAST_CAMPANHA.mensagem);
+      await sendBroadcastImage(dest.phone, imageBase64, campanha.legenda, 'image/jpeg');
+      if (campanha.mensagem) {
+        await new Promise(r => setTimeout(r, 1000));
+        await sendBroadcastText(dest.phone, campanha.mensagem);
+      }
       sent++;
     } catch {
       failed++;
@@ -22478,6 +22493,10 @@ async function runWhatsAppBroadcast(opts = {}) {
 
 const BROADCAST_OPTS_PRIORIDADE = { canal: 'prioridade', incluir: BROADCAST_GRUPOS_PRIORIDADE };
 const BROADCAST_OPTS_GERAL = { canal: 'geral', excluir: BROADCAST_GRUPOS_PRIORIDADE };
+// Campanha das 14:30: mesmos grupos, canal proprio (a trava e por canal — com o
+// da manha, o disparo das 14:30 seria barrado pelo das 10h).
+const BROADCAST_OPTS_CONSULTAR_PRIORIDADE = { ...BROADCAST_OPTS_PRIORIDADE, canal: 'consultar-prio', campanha: BROADCAST_CAMPANHA_CONSULTAR };
+const BROADCAST_OPTS_CONSULTAR_GERAL = { ...BROADCAST_OPTS_GERAL, canal: 'consultar-geral', campanha: BROADCAST_CAMPANHA_CONSULTAR };
 
 // Data de hoje no fuso de Brasilia (AAAA-MM-DD).
 const hojeBroadcast = () => new Date(Date.now() - TZ_BR_OFFSET_MS).toISOString().slice(0, 10);
@@ -22543,6 +22562,13 @@ app.get('/api/cron/broadcast-whatsapp-priority', (req, res) =>
 app.get('/api/cron/broadcast-whatsapp', (req, res) =>
   cronBroadcast(req, res, BROADCAST_OPTS_GERAL, { inicio: BROADCAST_INICIO, cadenciaDias: 2, travaMin: 600 }));
 
+// ── Campanha do @consultar (Vercel Cron — 17:30 UTC = 14:30 BRT) ── todo dia
+// nos grupos de prioridade; nos demais, nos mesmos dias da campanha da manha.
+app.get('/api/cron/broadcast-consultar-priority', (req, res) =>
+  cronBroadcast(req, res, BROADCAST_OPTS_CONSULTAR_PRIORIDADE, { travaMin: 120 }));
+app.get('/api/cron/broadcast-consultar', (req, res) =>
+  cronBroadcast(req, res, BROADCAST_OPTS_CONSULTAR_GERAL, { inicio: BROADCAST_INICIO, cadenciaDias: 2, travaMin: 600 }));
+
 // ── POST /api/admin/broadcast-whatsapp[-priority] (disparo manual pelo admin) ─
 // Sai na hora, sem olhar data nem trava.
 app.post('/api/admin/broadcast-whatsapp', requireAuth, requireSuperAdmin, async (req, res) => {
@@ -22571,9 +22597,11 @@ app.post('/api/admin/broadcast-whatsapp-teste', requireAuth, requireSuperAdmin, 
   try {
     const grupo = String(req.body?.grupo || '').trim();
     if (grupo.length < 3) return res.status(400).json({ error: 'Informe o nome do grupo.' });
-    const opts = { canal: 'teste', incluir: [grupo] };
+    // campanha:'consultar' testa a das 14:30; sem, a da manhã.
+    const campanha = req.body?.campanha === 'consultar' ? BROADCAST_CAMPANHA_CONSULTAR : BROADCAST_CAMPANHA;
+    const opts = { canal: 'teste', incluir: [grupo], campanha };
     // O texto vai junto para o admin conferir o que sai antes de enviar.
-    if (req.body?.listar) return res.json({ success: true, grupos: (await selecionarDestinosBroadcast(opts)).map(d => d.name), mensagem: BROADCAST_CAMPANHA.mensagem });
+    if (req.body?.listar) return res.json({ success: true, grupos: (await selecionarDestinosBroadcast(opts)).map(d => d.name), mensagem: campanha.mensagem || campanha.legenda });
     res.json({ success: true, ...await runWhatsAppBroadcast(opts) });
   } catch (err) {
     console.error('Erro no teste do broadcast:', err.message);
