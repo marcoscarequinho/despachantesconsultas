@@ -364,7 +364,19 @@ const PLACAFACIL_SERVICE_ID = 'codigo-seguranca-crv-v2';
 // para o log. codigo_seguranca = R$ 1,00 (dono, 13/11/2026; a despbrasil, mesma
 // plataforma, cobra R$ 4,00 pelo mesmo produto — não é a mesma tabela).
 // Placa que volta do cache deles (from_cache) não conta.
-const PLACAFACIL_CUSTOS = { codigo_seguranca: 1.00 };
+// As oito do @consultar: custos informados pelo dono em 14/11/2026 (a página
+// de integração deles só abre com login e a API não lista preço).
+const PLACAFACIL_CUSTOS = {
+  codigo_seguranca: 1.00,
+  renainf_multas: 0.60,
+  placa_serpro: 0.21,
+  placa_serpro_debitos: 0.60,
+  chassi_serpro: 0.21,
+  renavam_historico_crlv: 0.60,
+  ocorrencias_senatran: 0.60,
+  historico_proprietario: 0.70,
+  renavam_comunicacao_venda: 0.60,
+};
 const PLACAFACIL_CUSTO_CONSULTA = PLACAFACIL_CUSTOS.codigo_seguranca; // o que a tela do admin mostra
 let placaFacilAvisoEm = 0; // último aviso de chave/conta recusada ao ADMIN_PHONE
 
