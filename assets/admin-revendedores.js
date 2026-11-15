@@ -250,7 +250,6 @@
         <td class="px-4 py-3">
           <div class="font-medium text-gray-800">${esc(r.name)} ${r.active ? '' : '<span class="badge-red">Inativo</span>'}</div>
           <div class="text-xs text-gray-400">${esc(r.email)}</div>
-          ${r.ultimo_erro ? `<div class="text-xs text-red-600 mt-0.5" title="${esc(r.ultimo_erro)}">⚠️ envio não saiu</div>` : ''}
         </td>
         <td class="px-4 py-3 hidden lg:table-cell text-xs">
           ${r.pix_chave ? `<div class="text-gray-500">${esc(r.pix_tipo_nome)}</div><div class="font-mono text-gray-700 break-all">${esc(r.pix_chave)}</div>${r.envio_automatico ? '' : '<div class="text-amber-600">envio manual</div>'}` : '<span class="badge-red">sem chave PIX</span>'}
@@ -506,7 +505,6 @@
           ${card('Ganhos pagos', fmt(rv.comissao_paga), 'border-l-purple-500', `de ${fmt(rv.comissao_gerada)} gerados`)}
           ${card('A pagar', fmt(rv.comissao_a_pagar), 'border-l-red-500', rv.comissao_enviando > 0 ? `${fmt(rv.comissao_enviando)} enviando` : '')}
         </div>
-        ${rv.ultimo_erro ? `<div class="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm">⚠️ Último envio automático: ${esc(rv.ultimo_erro)}</div>` : ''}
         ${travado ? `<div class="bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-4 py-3 text-sm">Há ganho em envio sem resposta do Mercado Pago. Confira no extrato do Mercado Pago se o PIX saiu antes de pagar de novo. Se <strong>não</strong> saiu, use “Registrar pagamento manual” e marque a opção de incluir esse lote depois de pagar.</div>` : ''}
         <div class="flex flex-wrap gap-2">
           <button onclick="rvGerarPixComissao(${rv.id})" class="btn-secondary" ${rv.comissao_a_pagar > 0 && rv.pix_chave ? '' : 'disabled style="opacity:.5"'}>🔑 Gerar PIX copia e cola</button>
@@ -552,12 +550,12 @@
               <table class="w-full text-xs">
                 <thead class="bg-gray-50"><tr><th class="px-3 py-2 text-left">Data</th><th class="px-3 py-2 text-left">Usuário / consulta</th><th class="px-3 py-2 text-right">Venda</th><th class="px-3 py-2 text-right">Ganho</th><th class="px-3 py-2 text-center">Situação</th></tr></thead>
                 <tbody class="divide-y divide-gray-50">${d.comissoes.length ? d.comissoes.map(c => `
-                  <tr title="${esc(c.envio_erro || '')}">
+                  <tr>
                     <td class="px-3 py-2">${fmtDate(c.created_at)}</td>
                     <td class="px-3 py-2">${esc(c.client_name)}${ORIGEM[c.origem] || ''}<div class="text-gray-400">${esc(c.service_name || '')}</div></td>
                     <td class="px-3 py-2 text-right">${fmt(c.base)}${c.custo != null ? `<div class="text-gray-400">custo ${fmt(c.custo)}</div>` : ''}</td>
                     <td class="px-3 py-2 text-right font-semibold ${c.amount < 0 ? 'text-red-600' : ''}">${fmt(c.amount)}</td>
-                    <td class="px-3 py-2 text-center">${STATUS_COMISSAO[c.status] || esc(c.status)}${c.envio_erro && c.status !== 'PAGA' ? ' ⚠️' : ''}</td>
+                    <td class="px-3 py-2 text-center">${STATUS_COMISSAO[c.status] || esc(c.status)}</td>
                   </tr>`).join('') : '<tr><td colspan="5" class="px-3 py-6 text-center text-gray-400">Nenhum ganho ainda.</td></tr>'}
                 </tbody>
               </table>
