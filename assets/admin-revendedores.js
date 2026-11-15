@@ -65,9 +65,6 @@
           <div class="text-xs text-gray-400 mt-0.5"><span id="rv-enviando">R$ 0,00</span> em envio · <span id="rv-dom-pend">0</span> domínio(s) a configurar</div>
         </div>
       </div>
-      <div id="rv-aviso-manual" class="hidden bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
-        O envio automático está desligado (<code>COMISSAO_ENVIO_AUTOMATICO</code> no server.js): todo ganho fica a pagar.
-      </div>
       <div class="card p-0 overflow-hidden">
         <div class="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-gray-100">
           <input id="rv-busca" type="text" class="input-field flex-1 min-w-48" placeholder="Buscar por nome, e-mail ou CPF/CNPJ..." oninput="rvRender()">
@@ -213,7 +210,6 @@
       revendedores = d.revendedores || [];
       pixTipos = d.pixTipos || {};
       envioAutomatico = !!d.envioAutomatico;
-      document.getElementById('rv-aviso-manual').classList.toggle('hidden', envioAutomatico);
       rvRender();
     } catch (e) { toast(e.message, 'error'); }
   };
@@ -277,9 +273,7 @@
     const t = document.getElementById('rv-pix-tipo').value;
     const ph = { cpf: '000.000.000-00', cnpj: '00.000.000/0000-00', email: 'email@exemplo.com', telefone: '(21) 90000-0000', aleatoria: '00000000-0000-0000-0000-000000000000' };
     document.getElementById('rv-pix-chave').placeholder = ph[t] || '';
-    document.getElementById('rv-pix-dica').textContent = t === 'aleatoria'
-      ? 'Atenção: o envio automático do Mercado Pago não aceita chave aleatória. Com ela, o ganho fica a pagar e você paga pelo banco.'
-      : (envioAutomatico ? 'O ganho é enviado automaticamente para esta chave a cada consulta dos clientes do parceiro.' : '');
+    document.getElementById('rv-pix-dica').textContent = '';
   };
 
   function erroForm(msg) {
@@ -496,7 +490,6 @@
           <div class="bg-green-50 border border-green-200 rounded-lg px-4 py-3">
             <div class="text-xs text-green-700 font-semibold">Chave PIX (${esc(rv.pix_tipo_nome || '—')})</div>
             <div class="font-mono text-green-900 break-all">${esc(rv.pix_chave || 'não cadastrada')}</div>
-            <div class="text-xs text-green-700 mt-1">${rv.envio_automatico ? 'Envio automático do ganho a cada consulta.' : 'Envio manual (pague pelo banco e dê baixa abaixo).'}</div>
           </div>
         </div>
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
