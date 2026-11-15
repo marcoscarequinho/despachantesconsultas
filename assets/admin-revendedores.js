@@ -177,6 +177,15 @@
           </div>
           <div id="rvdp-corpo" class="p-6 space-y-4 text-sm text-gray-700"></div>
         </div>
+      </div>
+      <div id="modal-pix-comissao" class="modal-backdrop hidden">
+        <div class="modal-box" style="max-width:460px">
+          <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+            <h3 class="font-bold text-gray-800">🔑 PIX da comissão</h3>
+            <button onclick="closeModal('modal-pix-comissao')" class="text-gray-400 hover:text-gray-600 text-xl font-bold">✕</button>
+          </div>
+          <div id="rvpc-corpo" class="p-6 space-y-2 text-sm text-gray-700"></div>
+        </div>
       </div>`;
     document.body.appendChild(modais);
     document.getElementById('rv-doc').addEventListener('input', e => { e.target.value = mascaraDoc(e.target.value); });
@@ -500,8 +509,8 @@
         ${rv.ultimo_erro ? `<div class="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm">⚠️ Último envio automático: ${esc(rv.ultimo_erro)}</div>` : ''}
         ${travado ? `<div class="bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-4 py-3 text-sm">Há ganho em envio sem resposta do Mercado Pago. Confira no extrato do Mercado Pago se o PIX saiu antes de pagar de novo. Se <strong>não</strong> saiu, use “Registrar pagamento manual” e marque a opção de incluir esse lote depois de pagar.</div>` : ''}
         <div class="flex flex-wrap gap-2">
-          <button onclick="rvEnviarAgora(${rv.id})" class="btn-secondary" ${rv.comissao_a_pagar > 0 && rv.envio_automatico ? '' : 'disabled style="opacity:.5"'}>💸 Tentar envio automático agora</button>
-          <button onclick="rvPagamentoManual(${rv.id}, ${travado})" class="btn-primary" ${rv.comissao_a_pagar > 0 || travado ? '' : 'disabled style="opacity:.5"'}>✅ Registrar pagamento manual</button>
+          <button onclick="rvGerarPixComissao(${rv.id})" class="btn-secondary" ${rv.comissao_a_pagar > 0 && rv.pix_chave ? '' : 'disabled style="opacity:.5"'}>🔑 Gerar PIX copia e cola</button>
+          <button onclick="rvPagamentoManual(${rv.id}, ${travado})" class="btn-primary" ${rv.comissao_a_pagar > 0 || travado ? '' : 'disabled style="opacity:.5"'}>✅ Comissão paga</button>
           <button onclick="rvAbrirEdicao(${rv.id})" class="btn-ghost">✏️ Editar PIX e página</button>
         </div>
 
@@ -696,15 +705,38 @@
     recarregar(id);
   };
 
-  window.rvPagamentoManual = async function (id, travado) {
+  // PIX copia e cola da comissão (pagamento manual, 15/11/2026): monta o código
+  // com a chave do parceiro e o valor a pagar; o dono paga pelo banco e depois
+  // clica em "Comissão paga", que dá a baixa e avisa o parceiro no WhatsApp.
+  let pixComissaoValor = null;
+  window.rvGerarPixComissao = async function (id) {
+    const d = await acao(`/api/admin/revendedores/${id}/pix-comissao`, { method: 'POST' });
+    if (!d) return;
+    pixComissaoValor = d.valor;
+    const r = revendedores.find(x => x.id === id);
+    document.getElementById('rvpc-corpo').innerHTML = `
+      <p class="text-sm">Pagar <strong>${fmt(d.valor)}</strong> a <strong>${esc(r?.name || 'parceiro')}</strong> (chave ${esc(d.pixTipoNome || 'PIX')}).</p>
+      <div class="flex justify-center"><img alt="QR Code PIX" class="w-56 h-56 border rounded-lg" src="data:image/png;base64,${esc(d.qrCode || '')}"></div>
+      <div class="text-xs text-gray-500 mt-3 mb-1">PIX copia e cola</div>
+      <textarea id="rvpc-copia" readonly rows="4" class="input-field font-mono text-xs">${esc(d.pixCopiaECola || '')}</textarea>
+      <button onclick="navigator.clipboard.writeText(document.getElementById('rvpc-copia').value).then(() => toast('Código PIX copiado.'))" class="btn-secondary w-full justify-center mt-2">📋 Copiar chave copia e cola</button>
+      <button onclick="rvPagamentoManual(${id}, false, true)" class="btn-primary w-full justify-center mt-2">✅ Comissão paga</button>
+      <p class="text-xs text-gray-500 mt-2">Pague no seu banco e só então clique em “Comissão paga”: o parceiro recebe o aviso no WhatsApp.</p>`;
+    openModal('modal-pix-comissao');
+  };
+
+  window.rvPagamentoManual = async function (id, travado, comPix) {
     const r = revendedores.find(x => x.id === id);
     const valor = r ? fmt(r.comissao_a_pagar) : '';
-    if (!confirm(`Confirmar que você já pagou ${valor} a ${r?.name || 'este parceiro'} pelo banco?\n\nTodos os ganhos "a pagar" serão marcados como pagos.`)) return;
+    if (!confirm(`Confirmar que você já pagou ${valor} a ${r?.name || 'este parceiro'} pelo banco?\n\nTodos os ganhos "a pagar" serão marcados como pagos e o parceiro será avisado no WhatsApp.`)) return;
     let incluirTravados = false;
     if (travado) incluirTravados = confirm('Incluir também o lote que ficou "enviando" sem resposta do Mercado Pago?\n\nSó confirme se você conferiu no Mercado Pago que esse PIX automático NÃO saiu.');
-    const observacao = prompt('Observação do pagamento (opcional, ex.: id do PIX no banco):', '') || '';
-    await acao(`/api/admin/revendedores/${id}/pagamento-manual`, { method: 'POST', body: JSON.stringify({ incluirTravados, observacao }) },
-      d => `Baixa de ${fmt(d.valor)} registrada (${d.comissoes} lançamentos).`);
+    const observacao = comPix ? 'PIX copia e cola' : (prompt('Observação do pagamento (opcional, ex.: id do PIX no banco):', '') || '');
+    const corpo = { incluirTravados, observacao };
+    if (comPix && pixComissaoValor != null) corpo.valor = pixComissaoValor;
+    const d = await acao(`/api/admin/revendedores/${id}/pagamento-manual`, { method: 'POST', body: JSON.stringify(corpo) },
+      d => `Baixa de ${fmt(d.valor)} registrada (${d.comissoes} lançamentos).${d.avisado ? ' Parceiro avisado no WhatsApp.' : ' Parceiro sem WhatsApp válido: não foi avisado.'}`);
+    if (d && comPix) { closeModal('modal-pix-comissao'); pixComissaoValor = null; }
     recarregar(id);
   };
 

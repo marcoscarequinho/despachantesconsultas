@@ -4639,6 +4639,13 @@ app.post('/api/admin/revendedores/:id/pagamento-manual', requireAuth, requireSup
     );
     if (!sel.rows.length) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Não há ganho a pagar para esse parceiro.' }); }
     const total = sel.rows.reduce((s, c) => s + parseFloat(c.amount), 0);
+    // O valor do PIX gerado na tela: se entrou ganho novo desde então, a baixa
+    // cobriria mais do que o dono pagou — melhor gerar o PIX de novo.
+    const esperado = req.body?.valor != null ? parseFloat(req.body.valor) : null;
+    if (esperado != null && (!Number.isFinite(esperado) || Math.abs(esperado - total) > 0.005)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: `O valor a pagar mudou para R$ ${total.toFixed(2).replace('.', ',')}. Gere o PIX de novo antes de dar a baixa.` });
+    }
     const pg = await client.query(
       `INSERT INTO revendedor_pagamentos (revendedor_id, valor, origem, observacao) VALUES ($1,$2,'MANUAL',$3) RETURNING id`,
       [rid, total.toFixed(2), observacao]
@@ -4648,12 +4655,98 @@ app.post('/api/admin/revendedores/:id/pagamento-manual', requireAuth, requireSup
       [pg.rows[0].id, sel.rows.map(c => c.id)]
     );
     await client.query('COMMIT');
-    res.json({ success: true, valor: parseFloat(total.toFixed(2)), comissoes: sel.rows.length });
+    // Avisa o parceiro no WhatsApp (o PIX foi pago à mão pelo dono).
+    let avisado = false;
+    try {
+      const u = await pool.query('SELECT name, phone FROM users WHERE id=$1', [rid]);
+      if (u.rows[0]?.phone) {
+        avisado = !!(await sendWhatsApp(u.rows[0].phone,
+          `✅ *Comissão paga*\n\nOlá, ${u.rows[0].name}! Pagamos *R$ ${total.toFixed(2).replace('.', ',')}* da sua comissão de parceiro por PIX, na chave cadastrada.\n\nObrigado pela parceria! 🤝`,
+          { marca: false }).catch(() => false));
+      }
+    } catch (e) { console.error('Aviso de comissão paga:', e.message); }
+    res.json({ success: true, valor: parseFloat(total.toFixed(2)), comissoes: sel.rows.length, avisado });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('Erro no pagamento manual de parceiro:', err.message);
     res.status(500).json({ error: 'Erro interno.' });
   } finally { client.release(); }
+});
+
+// ── PIX copia e cola da comissão (pagamento manual, 15/11/2026) ──────────────
+// BR Code estático do Banco Central: chave do parceiro + valor, sem passar por
+// nenhum provedor. Só o dono paga, pelo banco dele — nada sai daqui.
+function emvCampo(id, valor) { return id + String(valor.length).padStart(2, '0') + valor; }
+function crc16Pix(texto) {
+  let crc = 0xFFFF;
+  for (let i = 0; i < texto.length; i++) {
+    crc ^= texto.charCodeAt(i) << 8;
+    for (let b = 0; b < 8; b++) crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xFFFF : (crc << 1) & 0xFFFF;
+  }
+  return crc.toString(16).toUpperCase().padStart(4, '0');
+}
+function textoPixAscii(s, max) {
+  return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9 ]/g, '')
+    .replace(/\s+/g, ' ').trim().toUpperCase().slice(0, max);
+}
+function gerarPixCopiaECola({ chave, valor, nome }) {
+  const gui = emvCampo('00', 'br.gov.bcb.pix') + emvCampo('01', chave);
+  const corpo =
+    emvCampo('00', '01') + emvCampo('26', gui) + emvCampo('52', '0000') + emvCampo('53', '986') +
+    emvCampo('54', Number(valor).toFixed(2)) + emvCampo('58', 'BR') +
+    emvCampo('59', textoPixAscii(nome, 25) || 'PARCEIRO') + emvCampo('60', 'BRASIL') +
+    emvCampo('62', emvCampo('05', 'COMISSAO')) + '6304';
+  return corpo + crc16Pix(corpo);
+}
+async function pixComissaoParceiro(rid) {
+  const r = await pool.query(
+    `SELECT u.name, u.phone, rv.pix_tipo, rv.pix_chave,
+            (SELECT COALESCE(SUM(amount),0) FROM commissions c
+              WHERE c.reseller_id=u.id AND c.origem IS NOT NULL AND c.status='A_PAGAR') AS a_pagar
+       FROM users u LEFT JOIN revendedores rv ON rv.user_id=u.id
+      WHERE u.id=$1 AND u.role='reseller'`, [rid]);
+  if (!r.rows.length) return null;
+  const p = r.rows[0];
+  const valor = parseFloat(parseFloat(p.a_pagar).toFixed(2));
+  const base = { nome: p.name, telefone: p.phone, pixTipo: p.pix_tipo, pixTipoNome: PIX_TIPOS[p.pix_tipo] || null, pixChave: p.pix_chave || null, valor };
+  if (!p.pix_chave || valor <= 0) return base;
+  const pixCopiaECola = gerarPixCopiaECola({ chave: p.pix_chave, valor, nome: p.name });
+  const png = await bwipjs.toBuffer({ bcid: 'qrcode', text: pixCopiaECola, scale: 4, eclevel: 'M', padding: 2 });
+  return { ...base, pixCopiaECola, qrCode: png.toString('base64') };
+}
+
+// Admin: monta o PIX copia e cola com a chave do parceiro e o valor a pagar.
+app.post('/api/admin/revendedores/:id/pix-comissao', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const p = await pixComissaoParceiro(parseInt(req.params.id, 10));
+    if (!p) return res.status(404).json({ error: 'Parceiro não encontrado.' });
+    if (!p.pixChave) return res.status(400).json({ error: 'Esse parceiro não tem chave PIX cadastrada. Use "Editar PIX e página".' });
+    if (p.valor <= 0) return res.status(400).json({ error: 'Não há comissão a pagar para esse parceiro.' });
+    res.json({ valor: p.valor, pixTipoNome: p.pixTipoNome, pixCopiaECola: p.pixCopiaECola, qrCode: p.qrCode });
+  } catch (err) {
+    console.error('Erro ao gerar PIX da comissão:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+// Parceiro: popup "Verificar comissão a receber". O PIX (QR e copia e cola) só
+// vem com o valor a partir do mínimo; abaixo dele a tela só mostra quanto falta.
+app.get('/api/reseller/comissao-receber', requireAuth, requireReseller, async (req, res) => {
+  try {
+    await registrarLucrosParceiros(req.user.id).catch(e => console.error('[parceiro] lucros:', e.message));
+    const p = await pixComissaoParceiro(req.user.id);
+    if (!p) return res.status(404).json({ error: 'Parceiro não encontrado.' });
+    const liberado = p.valor >= COMISSAO_MINIMO_SAQUE && !!p.pixChave;
+    res.json({
+      valor: p.valor, minimo: COMISSAO_MINIMO_SAQUE, liberado, semChavePix: !p.pixChave,
+      whatsapp: COMISSAO_WHATSAPP_DONO,
+      pixTipoNome: p.pixTipoNome, pixChave: p.pixChave,
+      pixCopiaECola: liberado ? p.pixCopiaECola : null, qrCode: liberado ? p.qrCode : null,
+    });
+  } catch (err) {
+    console.error('Erro em comissao-receber:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
 });
 
 // ── GET /api/auth/me (extended) ───────────────────────────────────────────────
@@ -16849,7 +16942,16 @@ app.get('/api/admin/assinantes', requireAuth, requireSuperAdmin, async (req, res
 // que escapar disso, no cron do PIX de 10 em 10 minutos.
 // Envio automático pelo Payouts do Mercado Pago (POST /v1/payouts). Com false,
 // o ganho fica "a pagar" e o admin paga e dá baixa na tela Parceiros.
-const COMISSAO_ENVIO_AUTOMATICO = true;
+// Desligado em 15/11/2026 (dono): o pagamento é manual. No admin o botão "Gerar
+// PIX copia e cola" monta o código com a chave do parceiro e o dono paga pelo
+// banco; "Comissão paga" dá a baixa e avisa o parceiro no WhatsApp. O código do
+// Payouts continua aqui, parado, caso ele queira religar.
+const COMISSAO_ENVIO_AUTOMATICO = false;
+// O parceiro só pede o repasse ao acumular este valor (popup "Verificar
+// comissão a receber" da Visão Geral do painel dele).
+const COMISSAO_MINIMO_SAQUE = 50.00;
+// WhatsApp que recebe o "Quero receber minha comissão" do parceiro.
+const COMISSAO_WHATSAPP_DONO = '5522992090682';
 // O Payouts recusa transferência abaixo de R$ 1,00: comissão menor espera
 // somar com a próxima.
 const PAYOUT_MINIMO = 1.00;
@@ -16988,6 +17090,7 @@ async function repassarGanhoParceiro(userId) {
 // manual), senão o WhatsApp de falha sairia a cada 10 minutos.
 async function pagarGanhosParceiros() {
   await registrarLucrosParceiros().catch(e => console.error('[parceiro] lucros:', e.message));
+  if (!COMISSAO_ENVIO_AUTOMATICO) return { parceiros: 0, enviados: 0 };
   const r = await pool.query(
     `SELECT reseller_id FROM commissions WHERE status='A_PAGAR' AND origem IS NOT NULL
       GROUP BY reseller_id HAVING SUM(amount) >= $1 AND bool_or(envio_tentado_em IS NULL)`, [PAYOUT_MINIMO]
@@ -17033,7 +17136,8 @@ async function enviarComissoesRevendedor(revendedorId, { avisar = true } = {}) {
     ).catch(() => {});
   };
 
-  if (!COMISSAO_ENVIO_AUTOMATICO) { await avisarAdmin('envio automático desligado'); return { enviado: false, motivo: 'desligado' }; }
+  // Pagamento manual: sem aviso por consulta (seria um WhatsApp a cada ganho).
+  if (!COMISSAO_ENVIO_AUTOMATICO) return { enviado: false, motivo: 'desligado' };
   if (!tipoPayout) { await avisarAdmin('chave aleatória não é aceita pelo Payouts do Mercado Pago'); return { enviado: false, motivo: 'chave aleatória' }; }
   if (totalAPagar < PAYOUT_MINIMO) return { enviado: false, motivo: 'abaixo do mínimo' };
 
