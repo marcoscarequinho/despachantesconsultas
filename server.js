@@ -4729,6 +4729,29 @@ app.post('/api/admin/revendedores/:id/pix-comissao', requireAuth, requireSuperAd
   }
 });
 
+// Parceiro troca a própria chave PIX (Perfil, 15/11/2026). É a chave que
+// recebe a comissão, então a troca avisa o parceiro e o dono por WhatsApp
+// (chave mascarada): se a conta for invadida, alguém percebe.
+app.put('/api/reseller/pix', requireAuth, requireReseller, async (req, res) => {
+  try {
+    const pix = normalizarChavePix(req.body?.pix_tipo, req.body?.pix_chave);
+    if (pix.error) return res.status(400).json({ error: pix.error.replace('do revendedor', 'PIX') });
+    const r = await pool.query(
+      `UPDATE revendedores SET pix_tipo=$1, pix_chave=$2 WHERE user_id=$3 RETURNING user_id`,
+      [req.body.pix_tipo, pix.chave, req.user.id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Cadastro de parceiro não encontrado.' });
+    const u = await pool.query('SELECT name, phone FROM users WHERE id=$1', [req.user.id]);
+    const nome = u.rows[0]?.name || 'Parceiro';
+    const aviso = `🔑 *Chave PIX alterada*\n\nParceiro: ${nome}\nNova chave (${PIX_TIPOS[req.body.pix_tipo]}): ${mascararChavePix(pix.chave)}\n\nSe não foi você, avise o suporte.`;
+    if (u.rows[0]?.phone) sendWhatsApp(u.rows[0].phone, aviso, { marca: false }).catch(() => {});
+    if (ADMIN_PHONE) sendWhatsApp(ADMIN_PHONE, aviso.replace('Se não foi você, avise o suporte.', 'O parceiro trocou a própria chave no Perfil.'), { marca: false }).catch(() => {});
+    res.json({ success: true, pix_tipo: req.body.pix_tipo, pix_tipo_nome: PIX_TIPOS[req.body.pix_tipo], pix_chave: pix.chave });
+  } catch (err) {
+    console.error('Erro ao trocar PIX do parceiro:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
 // Parceiro: popup "Verificar comissão a receber". O PIX (QR e copia e cola) só
 // vem com o valor a partir do mínimo; abaixo dele a tela só mostra quanto falta.
 app.get('/api/reseller/comissao-receber', requireAuth, requireReseller, async (req, res) => {
