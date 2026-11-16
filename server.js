@@ -355,9 +355,10 @@ const directDataPreco = custo => Math.round(custo * DIRECTDATA_MARKUP * 100) / 1
 // "sem_servico"): 200 em 7 s, JSON SOLTO na raiz, sem envelope, sem PDF e sem
 // valor cobrado — { Placa, MarcaModelo, AnoFabricacao, AnoModelo, Renavam,
 // codigoSegurancaCrv, Versao }. O código bateu com o da despbrasil.
-const PLACAFACIL_BASE_URL   = 'https://placa-fcil-pro.base44.app/functions/apiConsulta';
+const PLACAFACIL_BASE_URL   = 'https://facilplacaa.com.br/functions/apiConsulta';
 const PLACAFACIL_KEY        = process.env.PLACAFACIL_KEY || '';
 const PLACAFACIL_SERVICE_ID = 'codigo-seguranca-crv-v2';
+const PLACAFACIL_SERVICO_CODSEG = 'Código Segurança V1'; // nome do serviço no fornecedor (host novo, 16/11/2026); o id de custo segue 'codigo_seguranca'
 // Custo por consulta para o saldo estimado do admin, POR ENDPOINT (o "servico" do corpo do
 // pedido): a resposta da Placa Fácil NÃO traz "valor_cobrado". Endpoint novo = uma linha
 // aqui com o custo que o dono informar; sem linha, a consulta entra com R$ 0,00 e vai
@@ -11077,7 +11078,7 @@ async function consultarCodigoSegurancaPlacaFacil(placa, nomeServico) {
     const r = await fetch(PLACAFACIL_BASE_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', chaveAcesso: PLACAFACIL_KEY },
-      body: JSON.stringify({ servico: 'codigo_seguranca', placa }),
+      body: JSON.stringify({ servico: PLACAFACIL_SERVICO_CODSEG, placa }),
       signal: AbortSignal.timeout(120000),
     });
     status = r.status;
