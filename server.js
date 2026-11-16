@@ -355,7 +355,8 @@ const directDataPreco = custo => Math.round(custo * DIRECTDATA_MARKUP * 100) / 1
 // "sem_servico"): 200 em 7 s, JSON SOLTO na raiz, sem envelope, sem PDF e sem
 // valor cobrado — { Placa, MarcaModelo, AnoFabricacao, AnoModelo, Renavam,
 // codigoSegurancaCrv, Versao }. O código bateu com o da despbrasil.
-const PLACAFACIL_BASE_URL   = 'https://facilplacaa.com.br/functions/apiConsulta';
+const PLACAFACIL_BASE_URL   = 'https://placa-fcil-pro.base44.app/functions/apiConsulta'; // consultas só do WhatsApp (host antigo, não mexer)
+const PLACAFACIL_CODSEG_URL = 'https://facilplacaa.com.br/functions/apiConsulta'; // só o Código de Segurança CRV da plataforma (host novo, 16/11/2026)
 const PLACAFACIL_KEY        = process.env.PLACAFACIL_KEY || '';
 const PLACAFACIL_SERVICE_ID = 'codigo-seguranca-crv-v2';
 const PLACAFACIL_SERVICO_CODSEG = 'Código Segurança V1'; // nome do serviço no fornecedor (host novo, 16/11/2026); o id de custo segue 'codigo_seguranca'
