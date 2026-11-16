@@ -363,13 +363,13 @@ const PLACAFACIL_SERVICO_CODSEG = 'Código Segurança V1'; // nome do serviço n
 // Custo por consulta para o saldo estimado do admin, POR ENDPOINT (o "servico" do corpo do
 // pedido): a resposta da Placa Fácil NÃO traz "valor_cobrado". Endpoint novo = uma linha
 // aqui com o custo que o dono informar; sem linha, a consulta entra com R$ 0,00 e vai
-// para o log. codigo_seguranca = R$ 1,00 (dono, 13/11/2026; a despbrasil, mesma
+// para o log. codigo_seguranca = R$ 0,60 (dono, 16/11/2026; era R$ 1,00 desde 13/11; a despbrasil, mesma
 // plataforma, cobra R$ 4,00 pelo mesmo produto — não é a mesma tabela).
 // Placa que volta do cache deles (from_cache) não conta.
 // As oito do @consultar: custos informados pelo dono em 14/11/2026 (a página
 // de integração deles só abre com login e a API não lista preço).
 const PLACAFACIL_CUSTOS = {
-  codigo_seguranca: 1.00,
+  codigo_seguranca: 0.60, // R$ 0,60 desde 16/11/2026 (dono; era R$ 1,00)
   renainf_multas: 0.60,
   placa_serpro: 0.21,
   placa_serpro_debitos: 0.60,
