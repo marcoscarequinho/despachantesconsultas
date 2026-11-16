@@ -11076,7 +11076,7 @@ async function consultarCodigoSegurancaPlacaFacil(placa, nomeServico) {
   const nome = nomeServico || 'Código Segurança CRV v2';
   let status = 0, texto = '', json = null;
   try {
-    const r = await fetch(PLACAFACIL_BASE_URL, {
+    const r = await fetch(PLACAFACIL_CODSEG_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', chaveAcesso: PLACAFACIL_KEY },
       body: JSON.stringify({ servico: PLACAFACIL_SERVICO_CODSEG, placa }),
