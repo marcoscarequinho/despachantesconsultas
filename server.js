@@ -22655,6 +22655,8 @@ async function sendBroadcastVideo(dest, video, caption) {
 const BROADCAST_GROUP_PORTAL = 'PORTAL⚔️DESPACHANTES';
 const BROADCAST_GROUP_SERVICOS = 'SERVIÇOS, OFERTAS E AMIGOS';
 const BROADCAST_GRUPOS_PRIORIDADE = [BROADCAST_GROUP_SERVICOS, BROADCAST_GROUP_PORTAL];
+// Fora de todas as programações de disparo (a comparação ignora acento e maiúscula).
+const BROADCAST_GRUPOS_EXCLUIDOS = ['EMISSÕES Marcos Américo'];
 
 // Nome de grupo no WhatsApp costuma ter emoji/sufixo extra
 // (ex.: "PORTAL⚔️DESPACHANTES🇧🇷📌"), por isso startsWith e nao igualdade.
@@ -22698,6 +22700,8 @@ async function contarMembrosGrupo(phone) {
 async function selecionarDestinosBroadcast({ canal, incluir, excluir, minMembros, excluirAoAtingir } = {}) {
   if (!ZAPI_INSTANCE_ID || !ZAPI_TOKEN) throw new Error('Z-API não configurada');
   let dests = await fetchZApiDestinations();
+  // Grupos que não recebem NENHUM disparo, em nenhum canal (dono, 17/11/2026).
+  dests = dests.filter(d => !nomeGrupoCombina(d.name, BROADCAST_GRUPOS_EXCLUIDOS));
   if (incluir?.length) dests = dests.filter(d => nomeGrupoCombina(d.name, incluir));
   if (excluir?.length) dests = dests.filter(d => !nomeGrupoCombina(d.name, excluir));
 
