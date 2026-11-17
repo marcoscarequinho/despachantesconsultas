@@ -137,8 +137,10 @@ const CRLV_PORTAL_PDF_SVCS = new Set([
 // checkCrlvAgendadoStatus).
 const PORTAL_PEDIDO_PREFIX = 'PORTAL-';
 // "Solicitar" do CRLV-e Agendado. O "Ver Status" é outro fluxo e fica de fora.
+// O DF saiu do portal em 17/11/2026 (dono) e é da Vistocar (VISTOCAR_ENDPOINTS), então o
+// fluxo do portal não pode pegá-lo — o id foi mantido pelo histórico e pelo preço.
 const isAgendadoSolicitar = id =>
-  id.startsWith('crlv-agendado-') && id !== 'crlv-agendado-status';
+  id.startsWith('crlv-agendado-') && id !== 'crlv-agendado-status' && !VISTOCAR_ENDPOINTS[id];
 const DATACUBE_API_URL = 'https://api.consultasdeveiculos.com';
 const DATACUBE_TOKEN   = process.env.DATACUBE_TOKEN || '';
 const INFOSIMPLES_API_URL = 'https://api.infosimples.com/api/v2/consultas';
@@ -645,6 +647,12 @@ const VISTOCAR_ENDPOINTS = {
   // (VISTOCAR_ASYNC_SVCS), cobrado só na entrega. A resposta traz também um campo
   // numeroCrv: sem PDF, o relatório é montado com ele (pdfNumeroCrvVistocar).
   'numero-crv-digital-vistocar': 'security-code-crv',
+  // CRLV-e Distrito Federal (17/11/2026, dono; antes era o agendado do portal, mesmo
+  // preço de R$ 53,90): { plate } só REGISTRA a consulta (movementId, paid:true,
+  // pdfBase64 com um TEXTO "Solitação API CRLV-e DF - <nome>", não um PDF) e o
+  // documento chega pelo webhook. Sem homologação. Conferido com uma placa
+  // inventada: registrou (movimento 70548) e cobrou.
+  'crlv-agendado-df': 'crlv-df',
 };
 
 // ── Nome dos arquivos que vêm da Vistocar ────────────────────────────────────
@@ -661,6 +669,7 @@ const VISTOCAR_ARQUIVO_NOMES = {
   'numero-crv-digital':              'numero-crv',
   'vistocar-debitos-cod-barra':      'debitos',
   'numero-crv-digital-vistocar':     'numero-crv',
+  'crlv-agendado-df':                'crlv-df',
   'atpve-vistocar-rj':               'atpve-rj',
   'atpve-vistocar-mg':               'atpve-mg',
   // É da despbrasil, mas o nome segue o padrão para o cliente.
@@ -696,7 +705,7 @@ const VISTOCAR_ATPVE_SVCS = new Set(['atpve-vistocar-rj', 'atpve-vistocar-mg']);
 // e a entrega continuam de pé também para os pedidos antigos do CE em
 // vistocar_pending, e habilitar outra UF continua sendo: rota em
 // VISTOCAR_ENDPOINTS + serviço em SERVICES + id aqui.
-const VISTOCAR_ASYNC_SVCS = new Set([...VISTOCAR_ATPVE_SVCS, 'numero-crv-digital-vistocar']);
+const VISTOCAR_ASYNC_SVCS = new Set([...VISTOCAR_ATPVE_SVCS, 'numero-crv-digital-vistocar', 'crlv-agendado-df']);
 
 // Cache do token JWT da Vistocar em memória do processo — o login devolve um token
 // válido por 40 min (doc da Vistocar), então evitamos logar a cada consulta. Renova
@@ -1672,7 +1681,9 @@ const SERVICES = [
   // ── CRLV-e Agendado (assíncrono) ──
   { id:'crlv-agendado-al', name:'CRLV-e Agendado Alagoas (AL)',            group:'CRLV-e Agendado', basePrice:28.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'al' },
   // CE saiu do agendado — hoje só o CRLV-e Ceará via Vistocar (crlv-ce, acima).
-  { id:'crlv-agendado-df', name:'CRLV-e Agendado Distrito Federal (DF)',   group:'CRLV-e Agendado', basePrice:38.50,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'df' },
+  // DF pela Vistocar desde 17/11/2026 (ver VISTOCAR_ENDPOINTS); mesmo preço de antes (38,50 x 1,40 = R$ 53,90).
+  { id:'crlv-agendado-df', name:'CRLV-e Distrito Federal (DF)',   group:'CRLV-e Agendado', basePrice:38.50,  inputType:'placa', icon:'⏳', uf:'df',
+    slowNote:'O CRLV-e do DF não sai na hora: assim que o documento for emitido, ele chega pelo WhatsApp e fica no seu histórico. Você só é cobrado quando o PDF for entregue.' },
   { id:'crlv-agendado-es', name:'CRLV-e Agendado Espírito Santo (ES)',     group:'CRLV-e Agendado', basePrice:20.00,  inputType:'crlv_agendado_placa', icon:'⏳', uf:'es' },
   { id:'crlv-agendado-pb', name:'CRLV-e Agendado Paraíba (PB)',            group:'CRLV-e Agendado', basePrice:35.00,  inputType:'crlv_agendado_cpf',   icon:'⏳', uf:'pb' },
   // PE saiu do agendado — hoje só a emissão instantânea via Vistocar
@@ -14764,6 +14775,9 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
         let bufPronto = jaPronto
           ? Buffer.from(String(jaPronto).replace(/^data:[^,]+,/, '').replace(/\s/g, ''), 'base64')
           : null;
+        // O pdfBase64 do registro às vezes é só um texto ("Solitação API CRLV-e DF - NOME"):
+        // só vale como documento pronto se for um PDF de verdade.
+        if (bufPronto && bufPronto.slice(0, 4).toString('latin1') !== '%PDF') bufPronto = null;
         if (!bufPronto && serviceId === 'numero-crv-digital-vistocar' && numeroCrvValido(parsed?.response?.numeroCrv)) {
           bufPronto = await pdfNumeroCrvVistocar(service, parsed.response.numeroCrv, params);
         }
