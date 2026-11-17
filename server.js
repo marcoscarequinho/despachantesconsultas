@@ -416,6 +416,7 @@ const DESPBRASIL_SVCS = {
   // buildVerificarCrlvDataCrvPdfBuffer) e tem preço próprio.
   'verificar-crlv-data-crv': { servico: 'verificar_crlv' },
   'consulta-renavam':  { servico: 'consulta_renavam' },
+  'consulta-veicular-360': { servico: 'consulta_veicular_360', arquivo: 'mcdespachadoria-consulta-veicular-360' },
   // Comunicação de Venda só com a placa (R$ 4,50 de custo, ~19 s), 04/11/2026.
   // O PDF deles não tem marca (KGU3A76). É também a reserva da Consulta
   // Comunicado do portal no ATPVe (fetchComunicadoDataVendaDespbrasil).
@@ -1839,6 +1840,13 @@ const SERVICES = [
   // o PDF é montado a partir do JSON retornado (ver buildBinEstadualPdfBuffer),
   // no mesmo padrão visual do relatório de Débitos por Estado.
   { id:'dc-bin-estadual', name:'Base Estadual (BIN)', group:'Consulta Completa', basePrice:9.90, noMarkup:true, inputType:'placa', icon:'🚗', dcPath:'/veiculos/bin-estadual' },
+  // Consulta Veicular 360 (despbrasil, 17/11/2026, dono): relatório completo
+  // num PDF só (veículo, BIN, débitos, proprietários, RENAJUD, gravame, multas,
+  // CNH, radar, roubo/furto…). Conferido contra a API real com a TTT7A54: 200 em
+  // ~73 s, custo R$ 12,00, resposta SÓ com PDF (arquivo_url + pdf_base64, sem
+  // "dados"), então o PDF vai como veio pelo fluxo genérico do DESPBRASIL_SVCS.
+  { id:'consulta-veicular-360', name:'Consulta Veicular 360', group:'Consulta Completa', basePrice:26.00, noMarkup:true, inputType:'placa', icon:'🧾',
+    slowNote:'Relatório completo em um único PDF. Esta consulta pode levar até 2 minutos — aguarde sem fechar a página.' },
   // ── Número CRV (Apenas antigos) — processamento manual (entrega via upload no admin) ──
   // slowNote: mesmo aviso de prazo que antes aparecia num popup global, agora exibido
   // só ao selecionar uma consulta deste grupo (ver form-slow-note em painel-usuario.html).
