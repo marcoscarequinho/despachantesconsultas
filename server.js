@@ -8336,10 +8336,44 @@ async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam, docVended
   // Repetir na hora cai de novo no limite — foi assim que a RKQ7C90 saiu
   // recusada por "dados faltando" em 29/09/2026 com os dados existindo. Nesse
   // erro espera a janela antes da próxima tentativa; nos outros, repete logo.
+  // 1ª fonte desde 17/11/2026 (dono): a Proprietário Atual da Datacube; a
+  // Proprietário Atual (v2) do portal é a 2ª e só completa o que a Datacube
+  // deixou em branco — a data do CRV, que a Datacube não tem, vem só dela (ou
+  // da despbrasil, mais abaixo). Antes era o contrário. A Datacube fora do ar
+  // (402 de fatura em 17/11/2026) falha rápido e o portal cobre tudo.
+  // O nome só entra se o documento do proprietário for o do vendedor do ATPVe —
+  // se o veículo já foi transferido, o proprietário atual é o COMPRADOR, e o
+  // nome dele na célula do vendedor seria um documento falso.
+  let dcMarcaModelo = null;
+  try {
+    const dc = await fetchProprietarioAtualDatacube(placa);
+    const docVend = String(docVendedor || '').replace(/\D/g, '');
+    const mesmoDono = !!docVend && dc.documento === docVend;
+    if (dc.anofabricacao) merged.anofabricacao = dc.anofabricacao;
+    if (dc.anomodelo) merged.anomodelo = dc.anomodelo;
+    if (dc.cor) merged.cor = dc.cor;
+    dcMarcaModelo = dc.marcaModelo;
+    if (mesmoDono) {
+      if (dc.nome) merged.nomevendedor = dc.nome;
+      if (dc.municipio) { merged.municipiovendedor = dc.municipio; merged.municipioemplacamento = dc.municipio; }
+      if (dc.uf) { merged.ufvendedor = dc.uf; merged.ufemplacamento = dc.uf; }
+    } else {
+      console.error(`[consultar-Numero-ATPVE] Datacube (placa ${placa}): proprietário atual não é o vendedor do ATPVe (${dc.documento.replace(/\d(?=\d{4})/g, '*')} x ${docVend.replace(/\d(?=\d{4})/g, '*')}) — nome/município do vendedor não usados.`);
+    }
+  } catch (e) {
+    console.error(`[consultar-Numero-ATPVE] Proprietário Atual da Datacube (1ª fonte) falhou (placa ${placa}):`, e.message);
+  }
+
   let prop = null;
-  // Só 2: sem o portal, Datacube e despbrasil cobrem todos os campos dele.
+  // Só 2: sem o portal, a despbrasil cobre a data do CRV e a marca/modelo.
   const PROP_TENTATIVAS = 2;
-  for (let tentativa = 1; tentativa <= PROP_TENTATIVAS && !prop; tentativa++) {
+  // O portal só é chamado se a Datacube não trouxe tudo (inclui a data do CRV).
+  const faltaAlgo = () => ['anofabricacao', 'anomodelo', 'cor', 'marcamodeloversao', 'nomevendedor', 'municipiovendedor', 'ufvendedor', 'datacrv']
+    .some(k => !merged[k]);
+  // marcamodeloversao: a Datacube só a devolve em dcMarcaModelo (última opção
+  // abaixo, depois do código de segurança e da despbrasil), então o portal
+  // continua sendo chamado para ela.
+  for (let tentativa = 1; tentativa <= PROP_TENTATIVAS && !prop && faltaAlgo(); tentativa++) {
     try {
       prop = await fetchProprietarioAtualV2Fields(placa);
     } catch (e) {
@@ -8352,20 +8386,21 @@ async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam, docVended
     }
   }
   if (prop) {
-    if (prop.anodefabricacao) merged.anofabricacao = prop.anodefabricacao;
-    if (prop.anodomodelo) merged.anomodelo = prop.anodomodelo;
+    // Só completa o que a Datacube deixou em branco.
+    if (prop.anodefabricacao && !merged.anofabricacao) merged.anofabricacao = prop.anodefabricacao;
+    if (prop.anodomodelo && !merged.anomodelo) merged.anomodelo = prop.anodomodelo;
     if (prop.marcamodelo) merged.marcamodeloversao = prop.marcamodelo;
-    if (prop.cor) merged.cor = prop.cor;
+    if (prop.cor && !merged.cor) merged.cor = prop.cor;
     // Espécie, Tipo e Categoria não são lidos: o formulário do ATPVe não tem
     // célula para os dois primeiros e a CAT é fixa (ver ATPVE_CAT_SEM_CATEGORIA).
     if (prop.datadocrv) merged.datacrv = prop.datadocrv;
-    if (prop.nomedoproprietario) merged.nomevendedor = prop.nomedoproprietario;
+    if (prop.nomedoproprietario && !merged.nomevendedor) merged.nomevendedor = prop.nomedoproprietario;
     // "DADOS DO EMPLACAMENTO" (município/UF de registro do veículo) — usado
     // tanto pro domicílio exibido do vendedor quanto pro "DETRAN - UF" do
     // cabeçalho, que deve refletir a origem de onde o veículo foi
     // emplacado, não a UF da intenção de venda.
-    if (prop.municipio) { merged.municipiovendedor = prop.municipio; merged.municipioemplacamento = prop.municipio; }
-    if (prop.ufjurisdicao) { merged.ufvendedor = prop.ufjurisdicao; merged.ufemplacamento = prop.ufjurisdicao; }
+    if (prop.municipio && !merged.municipiovendedor) { merged.municipiovendedor = prop.municipio; merged.municipioemplacamento = prop.municipio; }
+    if (prop.ufjurisdicao && !merged.ufvendedor) { merged.ufvendedor = prop.ufjurisdicao; merged.ufemplacamento = prop.ufjurisdicao; }
   }
 
   // verificar_crlv da despbrasil: chamado no máximo uma vez, e só quando falta
@@ -8388,36 +8423,6 @@ async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam, docVended
     if (v?.dataCrv) merged.datacrv = v.dataCrv;
     else if (v) console.error(`[consultar-Numero-ATPVE] despbrasil verificar_crlv sem data do CRV (placa ${placa}).`);
   }
-  let dcMarcaModelo = null;
-
-  // Portal fora (ou sem algum campo): a Datacube completa o que dá. O nome só
-  // entra se o documento do proprietário for o do vendedor do ATPVe — se o
-  // veículo já foi transferido, o proprietário atual é o COMPRADOR, e o nome
-  // dele na célula do vendedor seria um documento falso. (A data do CRV vem da
-  // despbrasil, acima; a Datacube não tem.)
-  const faltaDoPortal = ['anofabricacao', 'anomodelo', 'cor', 'marcamodeloversao', 'nomevendedor', 'municipiovendedor', 'ufvendedor']
-    .some(k => !merged[k]);
-  if (faltaDoPortal) {
-    try {
-      const dc = await fetchProprietarioAtualDatacube(placa);
-      const docVend = String(docVendedor || '').replace(/\D/g, '');
-      const mesmoDono = !!docVend && dc.documento === docVend;
-      if (!merged.anofabricacao && dc.anofabricacao) merged.anofabricacao = dc.anofabricacao;
-      if (!merged.anomodelo && dc.anomodelo) merged.anomodelo = dc.anomodelo;
-      if (!merged.cor && dc.cor) merged.cor = dc.cor;
-      dcMarcaModelo = dc.marcaModelo;
-      if (mesmoDono) {
-        if (!merged.nomevendedor && dc.nome) merged.nomevendedor = dc.nome;
-        if (!merged.municipiovendedor && dc.municipio) { merged.municipiovendedor = dc.municipio; merged.municipioemplacamento = dc.municipio; }
-        if (!merged.ufvendedor && dc.uf) { merged.ufvendedor = dc.uf; merged.ufemplacamento = dc.uf; }
-      } else {
-        console.error(`[consultar-Numero-ATPVE] Datacube (placa ${placa}): proprietário atual não é o vendedor do ATPVe (${dc.documento.replace(/\d(?=\d{4})/g, '*')} x ${docVend.replace(/\d(?=\d{4})/g, '*')}) — nome/município do vendedor não usados.`);
-      }
-    } catch (e) {
-      console.error(`[consultar-Numero-ATPVE] Proprietário Atual da Datacube (reserva) falhou (placa ${placa}):`, e.message);
-    }
-  }
-
   const f = await codigoPromise;
   if (f.codigosegurancacrv) merged.codigosegurancacrv = f.codigosegurancacrv;
   if (f.marcamodeloversao && !merged.marcamodeloversao) merged.marcamodeloversao = f.marcamodeloversao;
