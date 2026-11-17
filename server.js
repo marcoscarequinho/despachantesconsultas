@@ -378,6 +378,7 @@ const PLACAFACIL_CUSTOS = {
   ocorrencias_senatran: 0.60,
   historico_proprietario: 0.70,
   renavam_comunicacao_venda: 0.60,
+  'Bin Placa': 0.09, // dono, 17/11/2026 (host novo, facilplacaa.com.br)
 };
 const PLACAFACIL_CUSTO_CONSULTA = PLACAFACIL_CUSTOS.codigo_seguranca; // o que a tela do admin mostra
 let placaFacilAvisoEm = 0; // último aviso de chave/conta recusada ao ADMIN_PHONE
@@ -1702,6 +1703,9 @@ const SERVICES = [
   // Renainf Multas (Placa Fácil Pro): SÓ no @consultar do WhatsApp e grátis (dono, 13/11/2026).
   // soWhats = fora do /api/services (painel) e recusado no /api/query; ver RENAINF_SERVICE_ID.
   { id:'renainf-multas-whats', name:'Renainf Multas', group:'Consultas Básicas', basePrice:0, noMarkup:true, inputType:'placa', icon:'🚨', soWhats:true },
+  // Bin Placa (Placa Fácil Pro, host novo facilplacaa.com.br, servico "Bin Placa"): base do Detran
+  // por placa, custo R$ 0,09, R$ 5,00 fixo (dono, 17/11/2026). Ver BIN_PLACA_SERVICE_ID.
+  { id:'bin-placa', name:'Bin Placa', group:'Consultas Básicas', basePrice:5.00, noMarkup:true, inputType:'placa', icon:'🔎' },
   // Placa Serpro (Placa Fácil Pro): SÓ no @consultar, R$ 3,00 fixo (dono, 13/11/2026). Ver SERPRO_SERVICE_ID.
   { id:'placa-serpro-whats', name:'Placa Serpro', group:'Consultas Básicas', basePrice:3.00, noMarkup:true, inputType:'placa', icon:'🔎', soWhats:true },
   // Placa Serpro Débitos (Placa Fácil Pro): SÓ no @consultar, R$ 4,50 fixo (dono, 13/11/2026). Ver SERPRO_DEBITOS_SERVICE_ID.
@@ -11185,11 +11189,11 @@ async function consultarCodigoSegurancaPlacaFacil(placa, nomeServico) {
 // TTT7A54, o 0 no lugar do A): não é erro e não vai para o relatório.
 const RENAINF_SERVICE_ID = 'renainf-multas-whats';
 
-async function consultarServicoPlacaFacil(servico, placa, nomeServico, resultadoOk, campoEntrada = 'placa') {
+async function consultarServicoPlacaFacil(servico, placa, nomeServico, resultadoOk, campoEntrada = 'placa', urlBase = PLACAFACIL_BASE_URL) {
   const nome = nomeServico || servico;
   let status = 0, texto = '', json = null;
   try {
-    const r = await fetch(PLACAFACIL_BASE_URL, {
+    const r = await fetch(urlBase, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', chaveAcesso: PLACAFACIL_KEY },
       body: JSON.stringify({ servico, [campoEntrada]: placa }),
@@ -11299,6 +11303,62 @@ function buildRenainfMultasPdfBuffer(service, placa, d) {
 // mesmo 502 com outro texto ("Não foi possível consultar a placa informada",
 // visto uma vez na TTT7A54 e já ok na repetição) é falha passageira → 503.
 const SERPRO_SERVICE_ID = 'placa-serpro-whats';
+
+// Bin Placa (servico "Bin Placa", host novo PLACAFACIL_CODSEG_URL, 17/11/2026): resposta
+// { success, tipo, query, fonte, cached, data: { placa, chassi, renavam, situacao,
+// endereco, restricoes[], veiculo: {...} } }, sem PDF — o relatório é montado aqui.
+const BIN_PLACA_SERVICE_ID = 'bin-placa';
+function buildBinPlacaPdfBuffer(service, placa, resp) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const chunks = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+      const now = new Date();
+      // Resposta real (17/11/2026): campos soltos na raiz; a doc mostra o envelope { data }.
+      const d = (resp?.data && typeof resp.data === 'object') ? resp.data : (resp || {});
+      const v = d.veiculo || {};
+      const t = x => {
+        if (x === true) return 'Sim';
+        if (x === false) return 'Não';
+        if (x === null || x === undefined || String(x).trim() === '') return 'Nada consta';
+        const s = String(x).trim();
+        return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10).split('-').reverse().join('/') : s;
+      };
+      const restricoes = (Array.isArray(d.restricoes) ? d.restricoes : [])
+        .map(r => String(r || '').trim()).filter(r => r && !/^SEM RESTRI/i.test(r));
+      pdfReportHeader(doc, service.name.toUpperCase(), now);
+      pdfBar(doc, 'IDENTIFICAÇÃO');
+      pdfFieldGrid(doc, [
+        ['Placa', maskPlacaDisplay(placa)], ['Situação', t(d.situacao)],
+        ['Chassi', t(d.chassi || v.chassi)], ['Renavam', t(d.renavam)],
+        ['Município', t(d.endereco?.cidade || v.municipio_nome)], ['UF', t(d.endereco?.uf || v.municipio_uf)],
+        ['Placa modelo antigo', t(v.placa_modelo_antigo)], ['Placa Mercosul', t(v.placa_modelo_novo)],
+      ]);
+      doc.moveDown(0.4);
+      pdfBar(doc, 'VEÍCULO');
+      pdfFieldGrid(doc, [
+        ['Marca / Modelo', t(v.modelo_nome)], ['Marca', t(v.marca_nome)],
+        ['Segmento', t(v.segmento_nome)], ['Tipo', t(v.tipo_veiculo_nome)],
+        ['Espécie', t(v.especie_veiculo_nome)], ['Cor', t(v.cor_nome)],
+        ['Ano de fabricação', t(v.ano_fabricacao)], ['Ano do modelo', t(v.ano_modelo)],
+        ['Combustível', t(v.combustivel_nome)], ['Cilindradas', t(v.cilindradas)],
+        ['Número do motor', t(v.motor)], ['Nacionalidade', t(v.nacionalidade_nome)],
+        ['Passageiros', t(v.quantidade_passageiro)], ['Eixos', t(v.eixos)],
+        ['Última atualização', t(v.ultima_atualizacao)],
+      ]);
+      doc.moveDown(0.4);
+      pdfBar(doc, 'RESTRIÇÕES');
+      if (restricoes.length) pdfFieldGrid(doc, restricoes.map((r, i) => [`Restrição ${i + 1}`, r]));
+      else pdfEmptyNotice(doc, 'Nenhuma restrição registrada.');
+      doc.moveDown(0.4);
+      pdfReportFooter(doc, now);
+      doc.end();
+    } catch (e) { reject(e); }
+  });
+}
 // Placa Serpro Débitos (servico "placa_serpro_debitos", R$ 4,50, só WhatsApp — dono, 13/11/2026): o mesmo
 // registro mais o bloco "debitos" { ok, error, total, detalhamento { ipva, multas, licenciamento, dpvat },
 // resumo, veiculo, indicadores, restricoes }. Conferido: BBW2A33 (PR) vem com debitos.ok:false "UF PR:
@@ -12120,6 +12180,47 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
       const nomeArq = `mcdespachadoria-placa-serpro-${placa}.pdf`;
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
+      return res.send(pdfBuf);
+    }
+
+    // ── Bin Placa — Placa Fácil Pro, host novo (ver BIN_PLACA_SERVICE_ID) ────────
+    // O PDF é montado do JSON; só cobra com o registro na mão (nunca com
+    // recusa ou falha).
+    if (serviceId === BIN_PLACA_SERVICE_ID) {
+      const placa = String(params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+      if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa))
+        return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+
+      const cons = await consultarServicoPlacaFacil('Bin Placa', placa, service.name,
+        j => { const d = (j.data && typeof j.data === 'object') ? j.data : j; return !!(d.chassi || d.renavam || d.veiculo); }, 'placa', PLACAFACIL_CODSEG_URL);
+      if (cons.erro) return res.status(cons.status).json({ error: cons.erro });
+      let pdfBuf;
+      try {
+        pdfBuf = await buildBinPlacaPdfBuffer(service, placa, cons.json);
+      } catch (e) {
+        console.error(`[${serviceId}] erro ao gerar PDF:`, e.message);
+        return res.status(500).json({ error: 'Erro ao gerar o PDF do relatório. Nada foi cobrado.' });
+      }
+
+      await debitarConsulta(userId, price);
+      const txRow = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [userId, price, `Consulta: ${service.name} — ${placa}`]
+      );
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, transaction_id, result_type)
+         VALUES ($1,$2,$3,$4,'success',$5,$6,'pdf') RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify({ placa }), price, txRow.rows[0].id]
+      );
+      const token = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [qRow.rows[0].id, userId, token, pdfBuf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+      ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+
+      await notifyAdminNewQuery(user, service, price, { placa });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="mcdespachadoria-bin-placa-${placa}.pdf"`);
       return res.send(pdfBuf);
     }
 
