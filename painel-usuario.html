@@ -1401,6 +1401,19 @@
 </div>
 
 <!-- TOAST (popup) -->
+<div id="modal-so-whats" class="fixed inset-0 z-[9999] hidden items-center justify-center p-4" style="background:rgba(0,0,0,.6);" onclick="if(event.target===this) fecharSoWhats()">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden">
+    <div class="px-5 py-5">
+      <div class="text-2xl mb-2">📱</div>
+      <div id="so-whats-nome" class="text-sm font-bold text-gray-800 mb-2"></div>
+      <div class="text-sm text-gray-700 leading-relaxed">Essa consulta agora é <b>somente pelo WhatsApp</b>. Clique no botão abaixo, envie <b>@consultar</b> e escolha a consulta no menu.</div>
+    </div>
+    <div class="px-5 py-3 border-t border-gray-100 flex justify-end gap-2">
+      <button onclick="fecharSoWhats()" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-1.5 rounded font-medium">Fechar</button>
+      <a href="https://wa.me/5522999951574?text=%40consultar" target="_blank" rel="noopener" onclick="fecharSoWhats()" class="text-xs bg-green-600 hover:bg-green-700 text-white px-4 py-1.5 rounded font-medium">💬 Abrir WhatsApp</a>
+    </div>
+  </div>
+</div>
 <div id="toast-modal" class="fixed inset-0 z-[9999] hidden items-center justify-center p-4" style="background:rgba(0,0,0,.6);" onclick="if(event.target===this) closeToast()">
   <div class="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden">
     <div class="px-5 py-5 flex items-start gap-3">
@@ -1475,6 +1488,17 @@ function toast(msg, type = 'success') {
   const modal = document.getElementById('toast-modal');
   modal.classList.remove('hidden');
   modal.classList.add('flex');
+}
+
+// Consulta que agora é só pelo WhatsApp (18/11/2026, dono): o card continua, o clique abre este aviso.
+function avisoSoWhats(svc) {
+  document.getElementById('so-whats-nome').textContent = (svc.icon ? svc.icon + ' ' : '') + svc.name;
+  const m = document.getElementById('modal-so-whats');
+  m.classList.remove('hidden'); m.classList.add('flex');
+}
+function fecharSoWhats() {
+  const m = document.getElementById('modal-so-whats');
+  m.classList.add('hidden'); m.classList.remove('flex');
 }
 
 function closeToast() {
@@ -2449,6 +2473,7 @@ function renderApiDocs() {
   const groups = {};
   allServices.forEach(s => {
     if (s.group === 'Número CRV (Apenas antigos)') return;
+    if (s.soWhatsAviso) return; // só pelo WhatsApp, fora da API
     if (!groups[s.group]) groups[s.group] = [];
     groups[s.group].push(s);
   });
@@ -3348,6 +3373,7 @@ function catalogKeydown(ev) {
 function openCatalogService(id) {
   const svc = allServices.find(s => s.id === id);
   if (!svc) { toast('Este serviço não está mais disponível.', 'error'); return; }
+  if (svc.soWhatsAviso) { avisoSoWhats(svc); return; }
   // Suspenso: só o pop-up, sem sair da Visão Geral (ver selectService).
   if (svc.unavailable && svc.slowNote && !ehAtpveVistocar({ service_id: svc.id })) { toast(svc.slowNote, 'aviso'); return; }
   quickSelect(id);
@@ -4071,6 +4097,7 @@ function renderServiceList(cat) {
 
 function selectService(svc) {
   if (typeof svc === 'string') svc = JSON.parse(svc);
+  if (svc && svc.soWhatsAviso) { avisoSoWhats(svc); return; }
   // Cliente de parceiro: consulta que o parceiro ainda não marcou com o preço
   // dele (dono, 08/11/2026). O card aparece, mas o formulário não abre.
   if (svc.naoLiberada) { toast(consultaNaoLiberadaMsg, 'aviso'); return; }

@@ -1419,7 +1419,7 @@ const SERVICES = [
   // via portal) pra completar os campos que a despbrasil não retorna ou
   // retorna errado — ver runNumeroAtpveSupplementaryQueries. Preço fixo
   // (noMarkup) cobrindo o custo das 4 consultas + margem.
-  { id:'consultar-Numero-ATPVE',          name:'Reemissão da ATPVe Com Comunicação de Venda', group:'Débitos e Documentação', basePrice:120.00, noMarkup:true, inputType:'placa', icon:'🔢',
+  { id:'consultar-Numero-ATPVE',          name:'Reemissão da ATPVe Com Comunicação de Venda', group:'Débitos e Documentação', basePrice:120.00, noMarkup:true, inputType:'placa', icon:'🔢', soWhatsAviso:true,
     // noteStyle:'danger' — o aviso vira termo de aceite (fundo/texto vermelho no
     // painel), porque a limitação do QR Code precisa ser lida antes de consultar.
     slowNote:'ATENÇÃO, ao inserir a placa você concorda com os termos: "Devido ao formato como esta ATPVe é gerada, o QR Code não faz leitura — todas as demais informações deste documento são reais. Fica a seu critério."',
@@ -1431,7 +1431,7 @@ const SERVICES = [
   // CRLV-e Rio, com Comunicação de Venda (09/10/2026): Licenciamento + BIN e
   // Consulta Comunicado do portal montados no modelo do CRLV-e — ver
   // gerarCrlveComunicacaoVenda. Só sai com comunicação de venda, intenção de venda ou gravame.
-  { id:'crlve-comunicacao-venda',         name:'CRLV-e Rio, com Comunicação de Venda e ou Intenção de Venda, ou Gravame', group:'Débitos e Documentação', basePrice:80.00, noMarkup:true, inputType:'placa', icon:'🚘',
+  { id:'crlve-comunicacao-venda',         name:'CRLV-e Rio, com Comunicação de Venda e ou Intenção de Venda, ou Gravame', group:'Débitos e Documentação', basePrice:80.00, noMarkup:true, inputType:'placa', icon:'🚘', soWhatsAviso:true,
     slowNote:'ATENÇÃO, ao inserir a placa você concorda com os termos: "Devido ao formato como este CRLVe é gerado, o QR Code não faz leitura — todas as demais informações deste documento são reais. Esse modelo de CRLVe serve para o Despachante usar para fins profissionais, quando necessita do CRLVe real e não tem as informações. Obs.: mesmo que esteja com todos os débitos pagos, mas no sistema não tiver atualizado para o ano vigente, vai sair o último CRLVe que estiver no sistema."',
     noteStyle:'danger',
     modeloUrl:'/assets/modelo-crlve.pdf', modeloLabel:'Visualize modelo do CRLVe' },
@@ -11872,7 +11872,8 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
   if (service.unavailable)
     return res.status(400).json({ error: service.slowNote || 'Consulta temporariamente indisponível.' });
   // Consulta só do WhatsApp: no painel e na API de chave ela não existe (dono, 13/11/2026).
-  if (service.soWhats && !contextoBotWhats.getStore())
+  // soWhatsAviso (18/11/2026): continua no catálogo, mas o painel só abre o aviso do @consultar.
+  if ((service.soWhats || service.soWhatsAviso) && !contextoBotWhats.getStore())
     return res.status(403).json({ error: 'Essa consulta está disponível só pelo WhatsApp (@consultar).' });
 
   const price = await getUserServicePrice(userId, service);
@@ -15175,6 +15176,7 @@ function isV1Eligible(serviceId) {
   if (!svc) return false;
   if (V1_EXCLUDED_GROUPS.includes(svc.group)) return false;
   if (MANUAL_SERVICE_IDS.includes(svc.id)) return false;
+  if (svc.soWhatsAviso) return false; // só pelo WhatsApp (18/11/2026)
   return true;
 }
 
@@ -18559,6 +18561,8 @@ const BOT_WHATS_MENU = [
   // Dono, 10/11/2026. Só a placa; com os dois fornecedores fora a recusa leva
   // ~5 min (60 s da Consultas Fácil + ~230 s da despbrasil) e o PIX é devolvido.
   { id: 'consultar-Numero-ATPVE', rotulo: '🔢 Reemissão da ATPVe Com Comunicação de Venda' },
+  // Dono, 18/11/2026: só pelo WhatsApp (soWhatsAviso); o painel abre o aviso do @consultar.
+  { id: 'crlve-comunicacao-venda', rotulo: '🚘 CRLV-e Rio, com Comunicação de Venda e ou Intenção de Venda, ou Gravame' },
   { id: 'dcr-pacote-completa-top', rotulo: '🚘 Pacote Veicular Completa TOP' },
   { id: 'consulta-debitos-portal', rotulo: '💳 Consulta de Débitos' },
   // Dono, 13/11/2026: grátis e só pelo WhatsApp (RENAINF_SERVICE_ID).
