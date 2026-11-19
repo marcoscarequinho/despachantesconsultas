@@ -6799,6 +6799,25 @@ function pdfNumeroCrvVistocar(service, numero, params) {
     { secoes: { crlv: [['NUMERO CRV', String(numero).trim()]], veiculo: [], proprietario: [] } }, params);
 }
 
+// Número do CRV Digital v2 (Vistocar) no padrão do site (dono, 19/11/2026: o PDF
+// saía com a logo deles). Com PDF do fornecedor, o texto dele é lido pelo mesmo
+// extrator da despbrasil (número, veículo, proprietário) e remontado; sem o que
+// ler, vale o campo numeroCrv da resposta. Sem nenhum dos dois devolve null e
+// quem chamou segue com o PDF do fornecedor — melhor com a logo deles que sem
+// documento nenhum.
+async function padronizarNumeroCrvVistocar(service, response, pdfBuf, params) {
+  try {
+    if (pdfBuf && pdfBuf.slice(0, 4).toString('latin1') === '%PDF') {
+      const dados = await extractNumeroCrvDigitalFromPdf(pdfBuf);
+      if (numeroCrvValido(dados.numeroCrv)) return await buildNumeroCrvDigitalPdfBuffer(service, dados, params);
+    }
+    if (numeroCrvValido(response?.numeroCrv)) return await pdfNumeroCrvVistocar(service, response.numeroCrv, params);
+  } catch (e) {
+    console.error(`[numero-crv-digital-vistocar] não consegui remontar o PDF no padrão do site: ${e.message}`);
+  }
+  return null;
+}
+
 // ── Valida CRV — relatório no padrão do site ─────────────────────────────────
 // O portal (/valida-crv) devolve JSON com status/impedimentos E um pdf_base64.
 // O JSON NÃO é confiável: em 07/10/2026 levantamos as 13 consultas desde
@@ -14779,8 +14798,8 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
         // O pdfBase64 do registro às vezes é só um texto ("Solitação API CRLV-e DF - NOME"):
         // só vale como documento pronto se for um PDF de verdade.
         if (bufPronto && bufPronto.slice(0, 4).toString('latin1') !== '%PDF') bufPronto = null;
-        if (!bufPronto && serviceId === 'numero-crv-digital-vistocar' && numeroCrvValido(parsed?.response?.numeroCrv)) {
-          bufPronto = await pdfNumeroCrvVistocar(service, parsed.response.numeroCrv, params);
+        if (serviceId === 'numero-crv-digital-vistocar') {
+          bufPronto = (await padronizarNumeroCrvVistocar(service, parsed?.response, bufPronto, params)) || bufPronto;
         }
         // Mesma conferência da entrega posterior (conferirPdfAtpve): PDF pronto de
         // OUTRA venda não é cobrado na hora. O pedido segue como pendente, e quem
@@ -17932,10 +17951,11 @@ async function buscarDocumentoVistocar(pend, opcoes = {}) {
   const data = await r.json().catch(() => null);
   // CRLV usa response.pdfBase64; ATPV-e usa response.arquivoPdfBase64 (doc, seção 8).
   const b64 = data?.response?.pdfBase64 || data?.response?.arquivoPdfBase64;
-  if (!b64 && pend.service_id === 'numero-crv-digital-vistocar' && numeroCrvValido(data?.response?.numeroCrv)) {
+  if (pend.service_id === 'numero-crv-digital-vistocar') {
     const svc = SERVICES.find(s => s.id === pend.service_id);
-    const buf = await pdfNumeroCrvVistocar(svc, data.response.numeroCrv, { placa: pend.placa });
-    return { b64: buf.toString('base64') };
+    const original = b64 ? Buffer.from(String(b64).replace(/^data:[^,]+,/, '').replace(/\s/g, ''), 'base64') : null;
+    const buf = await padronizarNumeroCrvVistocar(svc, data?.response, original, { placa: pend.placa });
+    if (buf) return { b64: buf.toString('base64') };
   }
   if (!b64) return { motivo: 'resposta sem PDF' };
   return { b64 };
