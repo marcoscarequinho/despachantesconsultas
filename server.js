@@ -10486,6 +10486,8 @@ function validarAtpveDataCred(c, anexos) {
   if (!c.venda_valor) return 'Informe o valor da venda.';
   if (valorVendaSemPonto(c.venda_valor) === null) return VALOR_VENDA_SEM_PONTO_MSG;
   if (['MG', 'MS', 'PR', 'SP'].includes(c.uf) && !c.odometro) return `Em ${c.uf} o Detran pede a quilometragem (odômetro).`;
+  // MG: a emissora recusou "numero chassi ausente" (SYG9G16, 20/11/2026) e o formulário não tinha o campo.
+  if (c.uf === 'MG' && !/^[A-HJ-NPR-Z0-9]{17}$/.test(c.chassi || '')) return 'Em MG o Detran pede o chassi (17 caracteres, sem as letras I, O e Q).';
   if (c.uf === 'SP' && (!/^[A-HJ-NPR-Z0-9]{17}$/.test(c.chassi || '') || !c.vendedor_email || !c.comprador_email))
     return 'Em SP o Detran pede o chassi e o e-mail do vendedor e do comprador.';
   if (c.uf === 'PR' && (!c.crv_numero || !c.vendedor_email || !c.comprador_email)) return 'No PR o Detran pede o número do CRV e o e-mail do vendedor e do comprador.';

@@ -4838,7 +4838,7 @@ function renderFormFields(inputType, svc) {
         ${c('ano_modelo', 'Ano do modelo', '2023', true, 'inputmode="numeric" maxlength="4"')}
         ${c('crv_numero', 'Número do CRV (obrigatório no PR)', '', false, 'inputmode="numeric"')}
       </div>
-      ${bloco('DF,GO,RS,SP', `<div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
+      ${bloco('DF,GO,MG,RS,SP', `<div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
         ${c('chassi', 'Chassi', '17 caracteres', true, 'maxlength="17" style="text-transform:uppercase"')}
         <div data-a2-ufs="DF,GO,RS" class="hidden">${c('marca', 'Marca', 'VOLKSWAGEN', true)}</div>
         <div data-a2-ufs="DF,GO,RS" class="hidden">${c('modelo', 'Modelo', 'GOL 1.6', true)}</div></div>`)}
