@@ -18621,7 +18621,9 @@ const BOT_WHATS_MENU = [
   // A v2 (R$ 8,99) no lugar da de R$ 12,00 — dono, 12/11/2026. A mesma chamada.
   { id: COMUNICACAO_VENDA_WHATS_ID, rotulo: '📝 Consulta do Comunicação de Venda' },
   { id: 'crlv-rj-reemissao-2', rotulo: '🔑 📄 CRLV 2 Rio Reemissão' },
-  { id: 'dcr-reemissao-atpve', rotulo: '📝 Reemissão ATPV-e (PDF)' },
+  // Dono, 23/11/2026: no lugar da Reemissão ATPV-e (PDF) da DataCred. Só a placa:
+  // o chassi vem da Consulta Veicular Nacional e a 2ª via sai pela Reemissão ATPV-e (Chassi).
+  { id: 'atpve-placa-whats', rotulo: '📝 Reemissão ATPV-e (só Placa)' },
   // Dono, 10/11/2026. Só a placa; com os dois fornecedores fora a recusa leva
   // ~5 min (60 s da Consultas Fácil + ~230 s da despbrasil) e o PIX é devolvido.
   { id: 'consultar-Numero-ATPVE', rotulo: '🔢 Reemissão da ATPVe Com Comunicação de Venda' },
@@ -18664,7 +18666,37 @@ const servicosDebitoUf = uf => {
 // "oculta" do parceiro na linha dos Débitos do WhatsApp tira a opção do menu.
 const debitosBotDisponivel = liberadas => !liberadas?.oculta?.(BOT_DEBITOS_ID)
   && SERVICES.some(s => s.id.startsWith('dc-debito-') && servicoBotWhats(s.id, liberadas));
-const nomeServicoBot = id => id === BOT_DEBITOS_ID ? BOT_DEBITOS_NOME : (SERVICES.find(x => x.id === id)?.name || 'Consulta');
+const nomeServicoBot = id => id === BOT_DEBITOS_ID ? BOT_DEBITOS_NOME : id === BOT_ATPVE_PLACA_ID ? BOT_ATPVE_PLACA_NOME : (SERVICES.find(x => x.id === id)?.name || 'Consulta');
+// Reemissão ATPV-e só com a placa (dono, 23/11/2026, R$ 22,99 fixo, só no
+// WhatsApp): depois do PIX, a Consulta Veicular Nacional da DirectData acha o
+// chassi (retorno.veiculo.chassi — conferido com a TTT7A54, 1,6 s) e a consulta
+// roda como "Reemissão ATPV-e (Chassi)" (consultar-atpve) com o preço pago. Não
+// existe no SERVICES (id virtual, como os Débitos por Estado).
+const BOT_ATPVE_PLACA_ID = 'atpve-placa-whats';
+const BOT_ATPVE_PLACA_NOME = 'Reemissão ATPV-e (só Placa)';
+const BOT_ATPVE_PLACA_PRECO = 22.99;
+const BOT_ATPVE_CHASSI_ID = 'consultar-atpve';
+// { chassi } | { erro }. Custa só quando a DirectData dá resultado (entra no saldo dela).
+async function chassiPorPlacaDirectData(userId, placa) {
+  const svc = DIRECTDATA_SVCS['dd-veicular-nacional'];
+  let resp;
+  for (let t = 1; t <= 2; t++) {
+    try { resp = await chamarDirectData(svc.endpoint, { Placa: placa }); }
+    catch (e) {
+      console.error(`[@consultar atpve] Consulta Nacional falhou (placa ${placa}, tentativa ${t}/2):`, e.semChave ? 'sem DIRECTDATA_TOKEN' : e.message);
+      if (t === 2) return { erro: 'Não consegui buscar o chassi dessa placa agora. Tente de novo em alguns minutos.' };
+      continue;
+    }
+    if (resp.json?.metaDados?.resultadoId !== 21 && resp.status < 500) break;
+    if (t < 2) await new Promise(r => setTimeout(r, 3000));
+  }
+  const meta = resp?.json?.metaDados || {};
+  const chassi = String(resp?.json?.retorno?.veiculo?.chassi || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  await registrarConsumoDirectData({ serviceId: BOT_ATPVE_PLACA_ID, svc, meta, custo: meta.resultadoId === 1 ? svc.custo : 0, userId });
+  if (meta.resultadoId !== 1 || !/^[A-HJ-NPR-Z0-9]{17}$/.test(chassi))
+    return { erro: 'Não encontrei o chassi dessa placa. Confira a placa e tente de novo.' };
+  return { chassi };
+}
 // Grátis no @consultar, sem PIX (dono, 09/11/2026: a Consulta de Débitos sai
 // por R$ 0,00 no WhatsApp; no painel continua com o preço de sempre). Preço 0
 // não debita, não gera ganho de parceiro (registrarLucrosParceiros pede
@@ -18752,6 +18784,10 @@ async function menuBotWhats(user, liberadas) {
       if (debitosBotDisponivel(liberadas)) opcoes.push({ ...m, texto: `${m.rotulo} — ${fmtMoneyBRL(await precoDebitosBot(user.id))}` });
       continue;
     }
+    if (m.id === BOT_ATPVE_PLACA_ID) {
+      if (servicoBotWhats(BOT_ATPVE_CHASSI_ID, liberadas)) opcoes.push({ ...m, texto: `${m.rotulo} — ${fmtMoneyBRL(BOT_ATPVE_PLACA_PRECO)}` });
+      continue;
+    }
     const s = servicoBotWhats(m.id, liberadas);
     if (s) opcoes.push({ ...m, texto: `${m.rotulo} — ${BOT_WHATS_GRATIS.has(s.id) ? '*GRÁTIS*' : fmtMoneyBRL(await getUserServicePrice(user.id, s))}` });
   }
@@ -18780,11 +18816,11 @@ async function enviarMenuBot(phone, chave, user, liberadas) {
 // (processarPagamentoWhats). O notification_url garante o aviso do Mercado
 // Pago mesmo sem webhook cadastrado no app; o cron pix-reconcile é a reserva.
 async function gerarPixBot(phone, chave, user, serviceId, params) {
-  const s = serviceId === BOT_DEBITOS_ID ? { name: BOT_DEBITOS_NOME } : SERVICES.find(x => x.id === serviceId);
+  const s = serviceId === BOT_DEBITOS_ID ? { name: BOT_DEBITOS_NOME } : serviceId === BOT_ATPVE_PLACA_ID ? { name: BOT_ATPVE_PLACA_NOME } : SERVICES.find(x => x.id === serviceId);
   // completarDados (UF): CRLV-e que pede renavam/documento — soma o valor da
   // Proprietário Atual (v2), que é quem acha esses dados depois do pagamento.
   const acrescimo = params.completarDados ? BOT_CRLV_ACRESCIMO : 0;
-  const base = serviceId === BOT_DEBITOS_ID ? await precoDebitosBot(user.id) : await getUserServicePrice(user.id, s);
+  const base = serviceId === BOT_DEBITOS_ID ? await precoDebitosBot(user.id) : serviceId === BOT_ATPVE_PLACA_ID ? BOT_ATPVE_PLACA_PRECO : await getUserServicePrice(user.id, s);
   const valor = base > 0 ? Math.round((base + acrescimo) * 100) / 100 : base;
   await encerrarSessaoBot(chave);
   if (!(valor > 0)) return sendWhatsApp(phone, 'Esta consulta não está disponível pelo WhatsApp. Digite *@consultar* para ver o menu.');
@@ -18968,7 +19004,18 @@ async function executarConsultaBot(phone, chave, user, serviceId, params, pagoPi
     // O que foi pago no PIX (o preço do parceiro, se o cliente é de um).
     precoFixo = valorPago > 0 ? Number(valorPago) : await precoDebitosBot(user.id);
   }
-  const s = SERVICES.find(x => x.id === serviceId);
+  let nomeVirtual = null;
+  if (serviceId === BOT_ATPVE_PLACA_ID) {
+    await sendWhatsApp(phone, `⏳ Pagamento recebido! Buscando o chassi da placa *${params.placa}* para a *${BOT_ATPVE_PLACA_NOME}*...`);
+    const r = await chassiPorPlacaDirectData(user.id, params.placa);
+    if (r.erro) return { tipo: 'erro', erro: r.erro };
+    nomeVirtual = BOT_ATPVE_PLACA_NOME;
+    serviceId = BOT_ATPVE_CHASSI_ID;
+    params = { chassi: r.chassi, placa: params.placa };
+    precoFixo = valorPago > 0 ? Number(valorPago) : BOT_ATPVE_PLACA_PRECO;
+  }
+  const s0 = SERVICES.find(x => x.id === serviceId);
+  const s = nomeVirtual ? { ...s0, name: nomeVirtual } : s0;
   let avisado = gratis || !!precoFixo;
   if (params.completarDados) {
     await sendWhatsApp(phone, `⏳ Pagamento recebido! Buscando o renavam da placa *${params.placa}* para emitir o *${s.name}*...`);
@@ -18977,7 +19024,7 @@ async function executarConsultaBot(phone, chave, user, serviceId, params, pagoPi
     params = r.params;
     avisado = true;
   }
-  await sendWhatsApp(phone, `⏳ ${avisado ? '' : 'Pagamento recebido! '}Consultando *${s.name}* ${params.chassi ? 'do chassi' : 'da placa'} *${refBot(params)}*... isso pode levar alguns minutos.`);
+  await sendWhatsApp(phone, `⏳ ${avisado ? '' : 'Pagamento recebido! '}Consultando *${s.name}* ${params.chassi && !params.placa ? 'do chassi' : 'da placa'} *${refBot(params)}*... isso pode levar alguns minutos.`);
   const saida = { status: 200, json: null, pdf: null, headers: {} };
   const fake = {
     headersSent: false,
@@ -19074,7 +19121,7 @@ async function processarPagamentoWhats(gatewayId) {
   const q = (await pool.query(
     `SELECT id, transaction_id FROM queries WHERE user_id=$1 AND service_id=$2 AND created_at >= $3 ORDER BY id DESC LIMIT 1`,
     [ped.user_id, res.serviceId || ped.service_id, inicio])).rows[0];
-  const s = { name: nomeServicoBot(res.serviceId || ped.service_id) };
+  const s = { name: nomeServicoBot(ped.service_id === BOT_ATPVE_PLACA_ID ? ped.service_id : (res.serviceId || ped.service_id)) };
 
   if (res.tipo === 'erro') {
     let devolvido = false;
