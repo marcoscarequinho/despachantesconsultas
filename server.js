@@ -1526,7 +1526,7 @@ const SERVICES = [
   // "assinatura-consulta-placas" de propósito: mexer no id quebraria o histórico
   // já gravado em queries/transactions e a coluna subscriptions.plan.
   { id:'assinatura-consulta-placas', name:'Veicular Completa', group:'Para os Despachantes', basePrice:0, noMarkup:true, inputType:'placa', icon:'🔎',
-    slowNote:'Consulta de proprietário atual pela placa, com retorno em PDF no padrão MC Despachadoria. Incluída na Assinatura Coisas de Despachantes.',
+    slowNote:'Consulta veicular nacional pela placa (dados do veículo, proprietário, data do último CRV e indicadores), com retorno em PDF no padrão MC Despachadoria. Incluída na Assinatura Coisas de Despachantes.',
     modeloUrl:'/assets/modelo-consulta-placas.pdf', modeloLabel:'Veja modelo da consulta' },
   // Código de Segurança CRV incluído na assinatura — mesmo desenho do item acima:
   // usa a MESMA API do "Consulta Código Segurança CRV (PDF)" pago (despbrasil
@@ -8353,6 +8353,24 @@ async function fetchProprietarioAtualDatacube(placa) {
 // Também devolve a marca/modelo (dados.MarcaModelo, já no formato do Detran,
 // "VW/GOL CL 1.6 MI") — reserva dela quando o portal e o PDF do código de
 // segurança não trazem (KMZ5J93, 29/09/2026). Devolve { dataCrv, marcaModelo }.
+// Data do último CRV pela Consulta Veicular Nacional da DirectData
+// (retorno.veiculo.dataEmissaoCrv, "12/08/2019 00:00:00" — conferido com a
+// LPU3C91, cujo CRV é de 12/08/2019; dataEmissaoCrlv é outra data). Devolve
+// dd/mm/aaaa ou null, sem nunca derrubar a consulta que já está montando o PDF.
+async function fetchDataCrvNacional(placa) {
+  const svc = DIRECTDATA_SVCS['dd-veicular-nacional'];
+  try {
+    const resp = await chamarDirectData(svc.endpoint, { Placa: placa });
+    const meta = resp.json?.metaDados || {};
+    await registrarConsumoDirectData({ serviceId: 'consultar-Numero-ATPVE', svc, meta, custo: meta.resultadoId === 1 ? svc.custo : 0 });
+    const m = /^(\d{2}\/\d{2}\/\d{4})/.exec(String(resp.json?.retorno?.veiculo?.dataEmissaoCrv || '').trim());
+    return meta.resultadoId === 1 && m ? m[1] : null;
+  } catch (e) {
+    console.error(`[consultar-Numero-ATPVE] Consulta Veicular Nacional falhou (placa ${placa}):`, e.semChave ? 'sem DIRECTDATA_TOKEN' : e.message);
+    return null;
+  }
+}
+
 async function fetchVerificarCrlvDespbrasil(placa) {
   const r = await fetch(DESPBRASIL_BASE_URL, {
     method: 'POST',
@@ -8486,6 +8504,12 @@ async function runNumeroAtpveSupplementaryQueries(placa, knownRenavam, docVended
     const v = await verificarCrlvDesp();
     if (v?.dataCrv) merged.datacrv = v.dataCrv;
     else if (v) console.error(`[consultar-Numero-ATPVE] despbrasil verificar_crlv sem data do CRV (placa ${placa}).`);
+  }
+  // Última opção (dono, 23/11/2026): Consulta Veicular Nacional da DirectData,
+  // quando o portal e a despbrasil não trouxeram a data do CRV.
+  if (!merged.datacrv) {
+    const d = await fetchDataCrvNacional(placa);
+    if (d) { merged.datacrv = d; console.log(`[consultar-Numero-ATPVE] data do CRV veio da Consulta Veicular Nacional (placa ${placa}).`); }
   }
   const f = await codigoPromise;
   if (f.codigosegurancacrv) merged.codigosegurancacrv = f.codigosegurancacrv;
@@ -13578,32 +13602,31 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
       if (placa.length !== 7)
         return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
 
-      let dcData;
+      // Desde 23/11/2026 (dono) a Veicular Completa vem da Consulta Veicular
+      // Nacional da DirectData (mais completa: traz a data do último CRV), no
+      // lugar da Proprietário Atual da Datacube. Só vale com resultadoId 1.
+      const svcNac = DIRECTDATA_SVCS['dd-veicular-nacional'];
+      let resp;
       try {
-        const dcRes = await fetch(`${DATACUBE_API_URL}/veiculos/proprietario-atual`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ auth_token: DATACUBE_TOKEN, placa }).toString(),
-        });
-        const parsed = await dcRes.json().catch(() => null);
-        if (!dcRes.ok || !parsed || parsed.status === false) {
-          const msg = parsed ? extractApiErrorMsg(parsed) : `Erro HTTP ${dcRes.status}.`;
-          console.error(`[${serviceId}] erro na Datacube: ${msg}`);
-          return res.status(502).json({ error: msg });
-        }
-        dcData = parsed.result ?? parsed;
+        resp = await chamarDirectData(svcNac.endpoint, { Placa: placa });
       } catch (e) {
-        console.error(`[${serviceId}] falha ao consultar a Datacube:`, e.message);
-        return res.status(502).json({ error: 'Erro ao consultar a API. Tente novamente.' });
+        console.error(`[${serviceId}] falha na DirectData:`, e.semChave ? 'sem DIRECTDATA_TOKEN' : e.message);
+        return res.status(502).json({ error: 'Erro ao consultar a API. Tente novamente. Nada foi descontado da sua cota.' });
       }
-
-      const temDados = dcData && (Array.isArray(dcData) ? dcData.length > 0 : Object.keys(dcData).length > 0);
-      if (!temDados)
-        return res.status(422).json({ error: 'Nenhum dado encontrado para essa placa. Nada foi descontado da sua cota.' });
+      const metaNac = resp.json?.metaDados || {};
+      const dcData = resp.json?.retorno;
+      await registrarConsumoDirectData({ serviceId, svc: svcNac, meta: metaNac, custo: metaNac.resultadoId === 1 ? svcNac.custo : 0, userId });
+      if (!resp.json)
+        return res.status(502).json({ error: 'O sistema do fornecedor respondeu de forma inesperada. Nada foi descontado da sua cota.' });
+      if (metaNac.resultadoId !== 1 || !dcData || typeof dcData !== 'object' || !Object.keys(dcData).length) {
+        const msg = String(metaNac.mensagem || metaNac.resultado || '').trim();
+        return res.status(metaNac.resultadoId === 6 || metaNac.resultadoId === 1 ? 422 : 502)
+          .json({ error: `${msg || 'Nenhum dado encontrado para essa placa.'} Nada foi descontado da sua cota.` });
+      }
 
       let pdfBuf;
       try {
-        pdfBuf = await buildProprietarioAtualPdfBuffer(service, dcData, { placa });
+        pdfBuf = await buildDirectDataPdfBuffer(service, metaNac, dcData, { placa });
       } catch (e) {
         console.error(`[${serviceId}] erro ao gerar PDF:`, e.message);
         return res.status(500).json({ error: 'Erro ao gerar o PDF da consulta. Nada foi descontado da sua cota.' });
@@ -13642,7 +13665,7 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
       ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
 
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="proprietario-atual-${placa}.pdf"`);
+      res.setHeader('Content-Disposition', `attachment; filename="veicular-completa-${placa}.pdf"`);
       return res.send(pdfBuf);
     }
 

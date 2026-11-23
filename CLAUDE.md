@@ -166,6 +166,11 @@ O `verificar-crlv` (R$ 3,00, grupo Consultas Básicas) **continua intocado** —
 
 Conferido contra a API real em 22/09/2026: a resposta **nem sempre traz as datas nem `arquivo_url`** (placa ABC1D23, veículo de 1979, voltou só com os dados do veículo e `arquivo_url: null`). Por isso o relatório é montado do JSON e a linha da data sai com "Nada consta" em vez de sumir — o serviço que promete a data do CRV tem que dizer quando a base não tem essa data. Placa que a base recusa volta 400 ("Erro ao consultar veículo"), sem cobrar.
 
+### Consulta Veicular Nacional (DirectData) em dois usos novos (23/11/2026)
+
+- **Veicular Completa** (`assinatura-consulta-placas`, Coisas de Despachantes, mesmo nome, mesma cota): saiu a Proprietário Atual da Datacube e entrou a `dd-veicular-nacional` (`ConsultaVeicular`), com o relatório genérico da DirectData (`buildDirectDataPdfBuffer`) e consumo no saldo DirectData. O `assets/modelo-consulta-placas.pdf` do link "Veja modelo" ainda é o layout antigo.
+- **Data do CRV da Reemissão da ATPVe com Comunicação de Venda** (`consultar-Numero-ATPVE`): `fetchDataCrvNacional` é a última opção, depois do portal e da despbrasil. Vem de `retorno.veiculo.dataEmissaoCrv` (LPU3C91: 12/08/2019, a data certa do CRV; `dataEmissaoCrlv` é a do CRLV). **Ainda não vista numa emissão real.**
+
 ### Código de Segurança CRV — quem atende (13/11/2026)
 
 O dono deixou **um só** Código de Segurança no catálogo, o da Placa Fácil Pro (v2), no grupo CRV e na aba Coisas de Despachantes:
