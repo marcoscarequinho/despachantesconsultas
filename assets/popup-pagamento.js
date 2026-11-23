@@ -18,6 +18,8 @@
         <div class="text-sm font-semibold mt-1" style="color:#c7d2fe;">Não saiu a consulta? <b class="text-white">O PIX volta para você.</b> Sem ligar, sem pedir.</div>
       </div>
 
+      <div id="pg-pos-nota" class="hidden rounded-xl px-3 py-2 text-xs font-bold text-center" style="background:rgba(250,204,21,.2);color:#fde68a;">🧾 Sua conta é pós-paga: as consultas vão para a fatura. Este aviso é informativo, para você conhecer a novidade.</div>
+
       <!-- Contagem regressiva -->
       <div class="rounded-2xl p-3 text-center pg-vidro">
         <div class="text-[11px] font-bold uppercase tracking-wider" style="color:#fde047;">⏳ Vale para TODAS as consultas a partir de 15/12/2026</div>
@@ -223,11 +225,11 @@
     if (e.key === 'Escape' && m && !m.classList.contains('hidden')) fecharPopupPagamento(false);
   });
 
-  // Abre TODA vez que o painel é acessado (pedido do dono, 23/11/2026). Pós-pago não usa
-  // recarga nem este fluxo, então não é incomodado.
+  // Abre TODA vez que o painel é acessado (pedido do dono, 23/11/2026). Vale também para pós-pago
+  // (dono, 23/11/2026), com uma nota explicando que a conta dele vai para a fatura.
   // Abre na hora (sem esperar a rede); quem é pós-pago fecha em seguida.
   abrirPopupPagamento();
-  fetch('/api/auth/me').then(r => r.json()).then(u => { if (u && u.pos_pago) { clearInterval(timer); el('popup-pagamento').classList.add('hidden'); } }).catch(() => {});
+  fetch('/api/auth/me').then(r => r.json()).then(u => { if (u && u.pos_pago) el('pg-pos-nota').classList.remove('hidden'); }).catch(() => {});
 })();
 
   }

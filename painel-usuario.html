@@ -1833,7 +1833,7 @@ function aplicarPosPagoNaTela(d) {
   // Recarga some das duas pontas (menu e topo). Recarregar no pós-pago deixaria
   // o dinheiro parado — o consumo desse cliente vai todo para a fatura —, e o
   // servidor recusa a rota de qualquer jeito (RECARGA_POS_PAGO_MSG).
-  document.getElementById('nav-recarga')?.classList.add('hidden'); document.getElementById('nav-como-pagar')?.classList.add('hidden');
+  document.getElementById('nav-recarga')?.classList.add('hidden');
   const topo = document.getElementById('topbar-recarga');
   if (topo) {
     topo.removeAttribute('href');
