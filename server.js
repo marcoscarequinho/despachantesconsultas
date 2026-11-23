@@ -23088,7 +23088,7 @@ const BROADCAST_GROUP_PORTAL = 'PORTAL⚔️DESPACHANTES';
 const BROADCAST_GROUP_SERVICOS = 'SERVIÇOS, OFERTAS E AMIGOS';
 const BROADCAST_GRUPOS_PRIORIDADE = [BROADCAST_GROUP_SERVICOS, BROADCAST_GROUP_PORTAL];
 // Fora de todas as programações de disparo (a comparação ignora acento e maiúscula).
-const BROADCAST_GRUPOS_EXCLUIDOS = ['EMISSÕES Marcos Américo'];
+const BROADCAST_GRUPOS_EXCLUIDOS = ['EMISSÕES Marcos Américo', 'CONFRATERNIZAÇÃO DOS DESPACHANTES 2026'];
 
 // Nome de grupo no WhatsApp costuma ter emoji/sufixo extra
 // (ex.: "PORTAL⚔️DESPACHANTES🇧🇷📌"), por isso startsWith e nao igualdade.
