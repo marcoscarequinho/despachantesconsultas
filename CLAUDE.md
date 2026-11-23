@@ -331,7 +331,17 @@ A assinatura é **R$ 30,00 por 30 dias corridos contados do pagamento**, com as 
 - O painel lê preço, dias, vencimento e cotas do `/api/assinatura/status` (`proximoPreco`, `proximoDias`, `proximoVencimento`, `proximoCotas`), e o aviso de vencimento por WhatsApp mostra o valor e o fim da renovação.
 - Assinatura de **cortesia do admin** não entra nessa conta: o admin escolhe a data e a cota, como antes.
 
-## Pagamento: PIX (0%) e cartão de crédito (+7%) — débito desligado
+## Pague apenas esta consulta (PIX avulso, 23/11/2026)
+
+Cliente com pouco saldo recarregava só para uma consulta, ela não saía e ele ligava pedindo estorno (dono, 23/11/2026). **Cartão acabou em toda a plataforma** (`CARTAO_ATIVO = false`: `/api/pagamento/config` devolve `cartaoDisponivel:false` — as telas ficam só com PIX — e `validarCartao` recusa nas três rotas; religar = `true` + `credito:true` em `CARTAO_TIPOS_HABILITADOS`).
+
+- **Pop-up de 3 saídas** no `submitQuery` do painel (`#modal-pague`, `escolherPagamentoConsulta`): **Usar saldo** (fluxo de sempre; desabilitado se o saldo não cobre), **Recarga PIX** (`/recarga-pix`) e **Pague Apenas Esta Consulta** (QR + copia e cola só daquela consulta). Só aparece nos serviços que o `/api/services` marca com `pagaPorConsulta` e para quem **não** é pós-pago; a API de chave, a Opção 2 e a Infosimples não passam por aqui.
+- **Quais consultas** (`pagueConsultaAtivo`): até 14/12/2026 só `dcr-cancelamento-atpve` e `consultar-crlv-rj` (`PAGUE_CONSULTA_FASE_TESTE`); a partir de **15/12/2026 00:00 (Brasília)** (`PAGUE_CONSULTA_INICIO_GERAL`) todas as que cobram, menos o grupo gratuito e as duas só do WhatsApp (`soWhats`/`soWhatsAviso`). A virada é **por data, na hora do pedido** — não precisa de cron nem de novo deploy.
+- **Fluxo**: `POST /api/consulta-pix` valida (mesmas travas do `/api/query`), calcula o valor igual à cobrança normal (`valorConsultaPix`; emissão de ATPV-e pelo preço da UF) e gera o PIX no Mercado Pago (tabela `consulta_pix_pedidos`; o mesmo pedido ainda sem pagar devolve o mesmo QR). `GET /api/consulta-pix/:token` é o polling da tela; pagamento aprovado (polling, webhook `/api/pix/webhook` ou cron `pix-reconcile` → `conferirConsultaPixPedidos`) roda `processarPagamentoConsultaPix`: claim atômico PENDENTE → EXECUTANDO e `processCatalogQuery` com resposta capturada dentro do `contextoBotWhats` com `pagoPix` + **`painelPago`** (o débito não sai do saldo nem entra na fatura; `painelPago` mantém as consultas só-WhatsApp fechadas e o preço normal do painel — ver `noContextoWhats`).
+- **Não saiu = PIX devolvido** (`devolverConsultaPix`, `mpRefundPayment`): erro da consulta, pedido que fica `aguardando_pdf` e termina recusado (a transação é apagada), execução parada há 30 min. Devolução que falha avisa o `ADMIN_PHONE`. O cliente é avisado por WhatsApp só se não estava com a tela aberta (`visto_em`).
+- Resultado: PDF pelo `pdf_cache` (`/api/pdf/:token`); JSON/HTML/pendente pelo mesmo `renderJsonOutcome` do envio normal. **Validação só no cliente antes do PIX**: dado que a consulta recusa depois de pago volta como PIX devolvido. **Ainda não visto com PIX pago de verdade nem pela tela logada.**
+
+## Pagamento: PIX (0%) e cartão de crédito (+7%) — débito desligado — **cartão desligado desde 23/11/2026, ver acima**
 
 **Conta do Mercado Pago trocada em 20/10/2026** (user id 162577678): `MP_ACCESS_TOKEN`/`MP_PUBLIC_KEY`/`MP_CLIENT_ID`/`MP_CLIENT_SECRET` novos no `.env` e na Vercel, e a API voltou. Pagamento feito na conta antiga não é mais consultado pelo polling/cron (o token novo não enxerga esses ids). O webhook do MP precisa estar cadastrado no app da conta nova (sem ele, quem confirma é o polling e o `runPixReconcile`).
 

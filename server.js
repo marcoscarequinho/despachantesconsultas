@@ -1157,6 +1157,10 @@ const chaveTelefone = t => { const d = digitosTelefone(t); return d.length >= 10
 // Consulta pelo WhatsApp (@consultar): conta os PDFs que a própria consulta já
 // mandou para quem pediu, para o robô não mandar o mesmo documento duas vezes.
 const contextoBotWhats = new AsyncLocalStorage();
+// "Pague apenas esta consulta" (painel) reaproveita este contexto para o débito
+// não sair do saldo (pagoPix) — mas NÃO é conversa do WhatsApp: `painelPago`
+// mantém as consultas só do WhatsApp fechadas e o preço normal do painel.
+const noContextoWhats = () => { const c = contextoBotWhats.getStore(); return !!c && !c.painelPago; };
 const cacheMarcaTelefone = new Map();
 // Só troca quando TODAS as contas com esse telefone são do mesmo parceiro
 // (dele ou de clientes dele); telefone do dono e dos avisos fica sempre MC.
@@ -2490,6 +2494,29 @@ async function initDB() {
       dados         JSONB NOT NULL DEFAULT '{}',
       atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    -- "Pague apenas esta consulta" (painel, 23/11/2026): PIX avulso de UMA consulta,
+    -- sem passar pelo saldo. Mesmo desenho do whatsapp_pedidos.
+    CREATE TABLE IF NOT EXISTS consulta_pix_pedidos (
+      id            SERIAL PRIMARY KEY,
+      token         VARCHAR(64) UNIQUE NOT NULL,
+      user_id       INTEGER NOT NULL,
+      service_id    VARCHAR(80) NOT NULL,
+      params        JSONB NOT NULL DEFAULT '{}',
+      params_hash   VARCHAR(64) NOT NULL,
+      valor         NUMERIC(10,2) NOT NULL,
+      gateway_id    VARCHAR(60) UNIQUE NOT NULL,
+      qr_code       TEXT,
+      qr_base64     TEXT,
+      status        VARCHAR(20) NOT NULL DEFAULT 'PENDENTE',
+      query_id      INTEGER,
+      resultado     JSONB,
+      refund_status VARCHAR(20),
+      erro          TEXT,
+      visto_em      TIMESTAMPTZ,
+      pago_em       TIMESTAMPTZ,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_consulta_pix_status ON consulta_pix_pedidos (status, created_at);
     CREATE TABLE IF NOT EXISTS whatsapp_pedidos (
       id            SERIAL PRIMARY KEY,
       user_id       INTEGER NOT NULL,
@@ -4839,6 +4866,9 @@ app.get('/api/services', requireAuth, async (req, res) => {
       precosUfDoUsuario[p.ufAtpve] = overrides[p.id] ?? (tab && tab.vendaDe(p)) ?? p.basePrice;
     });
     const visiveis = SERVICES.filter(s => !s.soWhats && !ocultas.has(s.id) && !(s.precosUf && !Object.keys(precosUfDoUsuario).length));
+    // "Pague apenas esta consulta": pós-pago tem fatura, então fica de fora.
+    const posPagoR = await pool.query('SELECT pos_pago FROM users WHERE id=$1', [req.user.id]);
+    const pagaAvulso = !posPagoR.rows[0]?.pos_pago;
     res.json({
       services: visiveis.map(s => (liberadas && !liberadas.has(s.id)) ? { ...s, price: null, naoLiberada: true } : s.precosUf ? {
         ...s, precosUf: precosUfDoUsuario, price: Math.min(...Object.values(precosUfDoUsuario)),
@@ -4847,7 +4877,7 @@ app.get('/api/services', requireAuth, async (req, res) => {
         // Serviço de grupo gratuito ignora o preço fixo por usuário (catalogPrice
         // devolve 0) — é a mesma regra aplicada na cobrança em getUserServicePrice.
         price: isFreeService(s) ? 0 : (overrides[s.id] ?? (tab && tab.vendaDe(s)) ?? catalogPrice(s)),
-      }),
+      }).map(o => (o.price === null || !pagaAvulso || !pagueConsultaAtivo(o)) ? o : { ...o, pagaPorConsulta: true }),
       consultaNaoLiberadaMsg: liberadas ? CONSULTA_FORA_DO_PARCEIRO_MSG : undefined,
     });
   } catch (err) {
@@ -9934,7 +9964,7 @@ async function getUserServicePrice(userId, service) {
   if (isFreeService(service)) return 0;
   // Grátis só pelo @consultar do WhatsApp (dono, 09/11/2026); no painel segue
   // o preço normal.
-  if (contextoBotWhats.getStore() && BOT_WHATS_GRATIS.has(service.id)) return 0;
+  if (noContextoWhats() && BOT_WHATS_GRATIS.has(service.id)) return 0;
   // Preço único do @consultar para os Débitos por Estado (BOT_DEBITOS_PRECO).
   const botCtx = contextoBotWhats.getStore();
   if (botCtx?.precoFixo != null && botCtx.precoFixoServico === service.id) return botCtx.precoFixo;
@@ -11894,7 +11924,7 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
     return res.status(400).json({ error: service.slowNote || 'Consulta temporariamente indisponível.' });
   // Consulta só do WhatsApp: no painel e na API de chave ela não existe (dono, 13/11/2026).
   // soWhatsAviso (18/11/2026): continua no catálogo, mas o painel só abre o aviso do @consultar.
-  if ((service.soWhats || service.soWhatsAviso) && !contextoBotWhats.getStore())
+  if ((service.soWhats || service.soWhatsAviso) && !noContextoWhats())
     return res.status(403).json({ error: 'Essa consulta está disponível só pelo WhatsApp (@consultar).' });
 
   const price = await getUserServicePrice(userId, service);
@@ -16428,7 +16458,12 @@ const CARTAO_ACRESCIMOS = { debit_card: 0.05, credit_card: 0.07 };
 // é de crédito. Quando o MP habilitar, ligar aqui é trocar false por true — o
 // que a conta suporta continua sendo conferido por mpTiposCartaoDisponiveis, e
 // vale o E das duas coisas.
-const CARTAO_TIPOS_HABILITADOS = { debito: false, credito: true };
+const CARTAO_TIPOS_HABILITADOS = { debito: false, credito: false };
+// Interruptor geral (dono, 23/11/2026): acabou o pagamento por cartão em toda a
+// plataforma. Cliente com pouco saldo recarregava no cartão para uma consulta
+// que não saía e ligava pedindo estorno. Fica só o PIX. Para religar: true aqui
+// e `credito: true` acima — o resto do código do cartão segue de pé.
+const CARTAO_ATIVO = false;
 // Parcelamento no crédito, com JUROS DO COMPRADOR: o Mercado Pago soma o juro
 // por cima, na fatura do cliente, e nós continuamos recebendo o mesmo
 // transaction_amount (o valor à vista com os 7%). Por isso o número de parcelas
@@ -16481,7 +16516,7 @@ async function mpTiposCartaoDisponiveis() {
 // front esconde a opção de cartão e segue só com PIX.
 app.get('/api/pagamento/config', async (req, res) => {
   const temChaves = Boolean(MP_PUBLIC_KEY && MP_ACCESS_TOKEN);
-  const suportados = temChaves ? await mpTiposCartaoDisponiveis() : { debito: false, credito: false };
+  const suportados = temChaves && CARTAO_ATIVO ? await mpTiposCartaoDisponiveis() : { debito: false, credito: false };
   // Oferece só o que a casa quer E a conta processa.
   const tipos = {
     debito: suportados.debito && CARTAO_TIPOS_HABILITADOS.debito,
@@ -16525,6 +16560,7 @@ async function validarCartao(corpo) {
     e.entradaInvalida = true;
     return e;
   };
+  if (!CARTAO_ATIVO) throw recusa('Não aceitamos mais pagamento por cartão. Pague com PIX.');
   const token = String(corpo?.token || '').trim();
   const metodo = String(corpo?.payment_method_id || '').trim();
   if (!token || !metodo) throw recusa('Dados do cartão incompletos. Recarregue a página e tente de novo.');
@@ -17593,6 +17629,11 @@ app.post('/api/pix/webhook', async (req, res) => {
         depoisDaResposta(processarPagamentoWhats(String(paymentId)));
         return res.sendStatus(200);
       }
+      const cp = await pool.query('SELECT 1 FROM consulta_pix_pedidos WHERE gateway_id=$1', [String(paymentId)]);
+      if (cp.rows.length) {
+        depoisDaResposta(processarPagamentoConsultaPix(String(paymentId)));
+        return res.sendStatus(200);
+      }
     } catch (err) {
       console.error('Webhook PIX (WhatsApp) erro:', err.message);
     }
@@ -17630,6 +17671,7 @@ async function runPixReconcile() {
     }
   }
   console.log(`✅ Reconciliação PIX: ${checked} verificados, ${credited} creditados`);
+  await conferirConsultaPixPedidos().catch(e => console.error('[consulta-pix] conferência:', e.message));
   await conferirPayoutsRevendedores().catch(e => console.error('[revendedor] conferência de payouts:', e.message));
   await pagarGanhosParceiros().catch(e => console.error('[parceiro] repasse:', e.message));
   return { checked, credited, pending: pendentes.length };
@@ -19113,6 +19155,298 @@ async function conferirPedidosWhats() {
       : `O pedido WhatsApp #${w.id} (${w.params?.chassi ? 'chassi' : 'placa'} ${refBot(w.params)}) não saiu e não consegui devolver o PIX automaticamente — fale com o suporte.`).catch(() => {});
   }
 }
+
+// ── "Pague apenas esta consulta" (painel, dono, 23/11/2026) ───────────────────
+// Cliente com pouco saldo recarregava só para UMA consulta, ela não saía e ele
+// ligava pedindo reembolso. Agora, nas consultas cobertas, o painel abre um
+// pop-up com três saídas: usar o saldo, recarregar por PIX ou pagar só aquela
+// consulta por PIX (QR + copia e cola). A consulta só roda depois do PIX
+// aprovado e, se não sair, o PIX é devolvido na hora (mpRefundPayment).
+// Mesmo desenho do pagamento do WhatsApp: o débito NÃO sai do saldo nem entra na
+// fatura (contextoBotWhats.pagoPix), só a transação fica no histórico.
+//
+// Quais consultas: até 14/12/2026 só as duas da fase de teste; a partir de
+// 15/12/2026 00:00 (Brasília) TODAS as que cobram, menos as do grupo gratuito e
+// as duas que só existem pelo WhatsApp (soWhats/soWhatsAviso). A virada é por
+// data, na hora do pedido — não depende de cron nem de novo deploy.
+// Pós-pago fica de fora (tem fatura) e a API de chave não passa por aqui.
+const PAGUE_CONSULTA_INICIO_GERAL = Date.UTC(2026, 11, 15, 3, 0, 0); // 15/12/2026 00:00 em UTC-3
+const PAGUE_CONSULTA_FASE_TESTE = new Set(['dcr-cancelamento-atpve', 'consultar-crlv-rj']);
+function pagueConsultaAtivo(service) {
+  if (!service || service.unavailable || service.soWhats || service.soWhatsAviso || isFreeService(service)) return false;
+  if (Date.now() >= PAGUE_CONSULTA_INICIO_GERAL) return true;
+  return PAGUE_CONSULTA_FASE_TESTE.has(service.id);
+}
+const CONSULTA_PIX_EXPIRA_DIAS = 2;
+
+// Valor da consulta para ESTE usuário, igual ao que a cobrança normal usaria.
+async function valorConsultaPix(userId, service, params) {
+  if (service.precosUf) {
+    const uf = String(params?.uf || '').toUpperCase();
+    if (!DATACRED_ATPVE_PRECOS[uf]) return 0;
+    return precoAtpveUf(userId, uf);
+  }
+  return getUserServicePrice(userId, service);
+}
+
+// Resposta "de mentira" que captura o que o processCatalogQuery devolveria ao
+// navegador (mesmo desenho do executarConsultaBot).
+function respostaCapturada() {
+  const saida = { status: 200, json: null, pdf: null, headers: {} };
+  const fake = {
+    headersSent: false,
+    status(c) { saida.status = c; return this; },
+    json(b) { saida.json = b; this.headersSent = true; return this; },
+    setHeader(k, v) { saida.headers[String(k).toLowerCase()] = v; return this; },
+    set(k, v) {
+      if (k && typeof k === 'object') Object.entries(k).forEach(([a, b]) => this.setHeader(a, b));
+      else this.setHeader(k, v);
+      return this;
+    },
+    header(k, v) { return this.set(k, v); },
+    type() { return this; },
+    attachment() { return this; },
+    sendStatus(c) { saida.status = c; this.headersSent = true; return this; },
+    send(b) { if (Buffer.isBuffer(b)) saida.pdf = b; else saida.json = b; this.headersSent = true; return this; },
+    end(b) { if (Buffer.isBuffer(b)) saida.pdf = b; this.headersSent = true; return this; },
+  };
+  return { saida, fake };
+}
+
+// Avisa o cliente no WhatsApp quando o resultado sai sem ele olhando a tela
+// (fechou o pop-up/aba antes do fim). Com o navegador acompanhando (poll nos
+// últimos 30 s) a própria tela já mostra.
+async function avisarConsultaPix(ped, texto) {
+  const visto = ped.visto_em ? Date.now() - new Date(ped.visto_em).getTime() : Infinity;
+  if (visto < 30000) return;
+  const u = (await pool.query('SELECT phone FROM users WHERE id=$1', [ped.user_id])).rows[0];
+  if (u?.phone) await sendWhatsApp(u.phone, texto).catch(() => {});
+}
+
+// Devolve o PIX e fecha o pedido como ERRO. Falha na devolução avisa o dono.
+async function devolverConsultaPix(ped, motivo, queryId = null) {
+  let devolvido = false;
+  try { await mpRefundPayment(ped.gateway_id); devolvido = true; }
+  catch (e) { console.error(`[consulta-pix] estorno do pedido ${ped.id}:`, e.message); }
+  await pool.query(
+    `UPDATE consulta_pix_pedidos SET status='ERRO', erro=$2, refund_status=$3, query_id=COALESCE($4, query_id) WHERE id=$1`,
+    [ped.id, motivo, devolvido ? 'DEVOLVIDO' : 'FALHOU', queryId]);
+  const nome = SERVICES.find(x => x.id === ped.service_id)?.name || 'Consulta';
+  if (!devolvido && ADMIN_PHONE)
+    await sendWhatsApp(ADMIN_PHONE, `🚨 *PIX de consulta NÃO devolvido*\nPedido avulso #${ped.id} — ${nome}, ${fmtMoneyBRL(ped.valor)} (pagamento MP ${ped.gateway_id}).\nMotivo: ${motivo}\nDevolva pelo painel do Mercado Pago.`, { marca: false }).catch(() => {});
+  await avisarConsultaPix(ped, `❌ *${nome}* não saiu: ${motivo}\n\n` + (devolvido
+    ? `O PIX de ${fmtMoneyBRL(ped.valor)} foi devolvido automaticamente.`
+    : `Não consegui devolver o PIX automaticamente — fale com o suporte informando o pedido avulso #${ped.id}.`));
+  return devolvido;
+}
+
+// Pagamento aprovado → roda a consulta. Claim atômico (PENDENTE → EXECUTANDO):
+// webhook, polling da tela e cron juntos nunca rodam a consulta duas vezes.
+async function processarPagamentoConsultaPix(gatewayId) {
+  const r = await pool.query(`SELECT * FROM consulta_pix_pedidos WHERE gateway_id=$1`, [String(gatewayId)]);
+  const ped = r.rows[0];
+  if (!ped || ped.status !== 'PENDENTE') return;
+  const pg = await mpReq('GET', `/v1/payments/${ped.gateway_id}`);
+  if (['cancelled', 'rejected', 'refunded'].includes(pg.status)) {
+    await pool.query(`UPDATE consulta_pix_pedidos SET status='EXPIRADO' WHERE id=$1 AND status='PENDENTE'`, [ped.id]);
+    return;
+  }
+  if (pg.status !== 'approved') return;
+  if (Math.abs(Number(pg.transaction_amount) - Number(ped.valor)) > 0.009) {
+    console.error(`[consulta-pix] pedido ${ped.id}: valor pago ${pg.transaction_amount} difere de ${ped.valor}`);
+    return;
+  }
+  const claim = await pool.query(
+    `UPDATE consulta_pix_pedidos SET status='EXECUTANDO', pago_em=NOW() WHERE id=$1 AND status='PENDENTE' RETURNING id`, [ped.id]);
+  if (!claim.rows.length) return;
+
+  const inicio = (await pool.query('SELECT NOW() AS t')).rows[0].t;
+  const user = (await pool.query('SELECT id, name, email, role, phone FROM users WHERE id=$1', [ped.user_id])).rows[0];
+  const service = SERVICES.find(x => x.id === ped.service_id);
+  const { saida, fake } = respostaCapturada();
+  const bot = { chave: '__painel__', pdfs: 0, pagoPix: true, painelPago: true, gratis: false, precoFixo: null, precoFixoServico: null };
+  try {
+    const marca = await marcaDoUsuarioCache(user.id).catch(() => null);
+    await contextoBotWhats.run(bot, () =>
+      contextoMarca.run({ marca }, () => processCatalogQuery(user.id, ped.service_id, ped.params || {}, fake)));
+  } catch (err) {
+    console.error(`[consulta-pix] pedido ${ped.id}: erro na consulta:`, err.message);
+    saida.status = 500;
+    saida.json = { error: 'Erro interno ao consultar.' };
+  }
+  const q = (await pool.query(
+    `SELECT id, transaction_id FROM queries WHERE user_id=$1 AND service_id=$2 AND created_at >= $3 ORDER BY id DESC LIMIT 1`,
+    [ped.user_id, ped.service_id, inicio])).rows[0];
+
+  if (saida.status >= 400 || bot.estornou) {
+    const msg = (saida.json && typeof saida.json === 'object' ? saida.json.error : null) || 'A consulta não saiu.';
+    return void await devolverConsultaPix(ped, erroParaWhats(msg), q?.id || null);
+  }
+  if (q?.transaction_id)
+    await pool.query(`UPDATE transactions SET description = description || ' (pago por PIX — só esta consulta)' WHERE id=$1`, [q.transaction_id]);
+
+  const j = saida.json && typeof saida.json === 'object' ? saida.json : {};
+  // Pedido que fica processando (cancelamento de ATPV-e, emissões manuais): já
+  // está pago, então ganha a transação agora — finalizePendingQuery vê o
+  // transaction_id e não tira do saldo quando confirmar. Terminando recusado,
+  // conferirConsultaPixPedidos devolve o PIX.
+  if (!saida.pdf && j.pending && q) {
+    if (!q.transaction_id) {
+      const tx = await pool.query(
+        `INSERT INTO transactions (user_id, type, amount, description) VALUES ($1,'debit',$2,$3) RETURNING id`,
+        [ped.user_id, ped.valor, `Consulta: ${service?.name || ped.service_id} (pago por PIX — só esta consulta)`]);
+      await pool.query('UPDATE queries SET transaction_id=$1 WHERE id=$2', [tx.rows[0].id, q.id]);
+    }
+    await pool.query(`UPDATE consulta_pix_pedidos SET status='AGUARDANDO', query_id=$2, resultado=$3 WHERE id=$1`,
+      [ped.id, q.id, JSON.stringify({ tipo: 'json', data: j })]);
+    return void await avisarConsultaPix(ped, `⏳ *${service?.name || 'Consulta'}* — pagamento recebido. ${j.result?.mensagem || 'O pedido foi registrado e o resultado chega por aqui e no Histórico do painel.'}`);
+  }
+
+  let resultado;
+  if (saida.pdf) {
+    // O PDF já foi guardado no pdf_cache pela própria consulta; o fallback cobre
+    // o caminho que devolve o documento sem gravar.
+    let token = q ? (await pool.query(`SELECT token FROM pdf_cache WHERE query_id=$1 AND user_id=$2 AND expires_at > NOW() ORDER BY id DESC LIMIT 1`, [q.id, ped.user_id])).rows[0]?.token : null;
+    if (!token) {
+      token = crypto.randomBytes(32).toString('hex');
+      await pool.query(`INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+        [q?.id || null, ped.user_id, token, saida.pdf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]);
+    }
+    resultado = { tipo: 'pdf', pdfToken: token };
+  } else if (j.html_token) {
+    resultado = { tipo: 'html', data: j };
+  } else {
+    resultado = { tipo: 'json', data: j };
+  }
+  await pool.query(`UPDATE consulta_pix_pedidos SET status='CONCLUIDO', query_id=$2, resultado=$3 WHERE id=$1`,
+    [ped.id, q?.id || null, JSON.stringify(resultado)]);
+  await avisarConsultaPix(ped, `✅ *${service?.name || 'Consulta'}* concluída. O documento está no Histórico do painel.`);
+}
+
+// Cron (pix-reconcile): pagamento que o webhook não avisou, PIX vencido, pedido
+// que ficou processando (recusado → devolve o PIX) e execução que morreu no meio.
+async function conferirConsultaPixPedidos() {
+  await ensureDbReady();
+  await pool.query(`UPDATE consulta_pix_pedidos SET status='EXPIRADO' WHERE status='PENDENTE' AND created_at < NOW() - ($1 || ' days')::interval`, [String(CONSULTA_PIX_EXPIRA_DIAS)]);
+  const pend = await pool.query(`SELECT gateway_id FROM consulta_pix_pedidos WHERE status='PENDENTE' ORDER BY id LIMIT 50`);
+  for (const p of pend.rows)
+    await processarPagamentoConsultaPix(p.gateway_id).catch(e => console.error(`[consulta-pix] conferir ${p.gateway_id}:`, e.message));
+
+  // Pedido que ficou processando (aguardando_pdf): saiu → concluído; recusado → devolve.
+  const agu = await pool.query(
+    `SELECT c.*, q.status AS q_status, q.transaction_id FROM consulta_pix_pedidos c JOIN queries q ON q.id = c.query_id
+      WHERE c.status='AGUARDANDO' AND q.status <> 'aguardando_pdf'`);
+  for (const w of agu.rows) {
+    if (w.q_status === 'success') {
+      await pool.query(`UPDATE consulta_pix_pedidos SET status='CONCLUIDO' WHERE id=$1`, [w.id]);
+      continue;
+    }
+    if (w.transaction_id) {
+      await pool.query('UPDATE queries SET transaction_id=NULL WHERE id=$1', [w.query_id]);
+      await pool.query('DELETE FROM transactions WHERE id=$1', [w.transaction_id]);
+    }
+    await devolverConsultaPix(w, 'Não saiu no fornecedor.');
+  }
+
+  // Execução que morreu no meio (instância derrubada): passou de 30 min pago e
+  // sem resposta. Se a consulta chegou a dar certo, fecha como concluída; senão devolve.
+  const presos = await pool.query(
+    `SELECT * FROM consulta_pix_pedidos WHERE status='EXECUTANDO' AND pago_em < NOW() - INTERVAL '30 minutes'`);
+  for (const w of presos.rows) {
+    const ok = (await pool.query(
+      `SELECT id FROM queries WHERE user_id=$1 AND service_id=$2 AND status='success' AND created_at >= $3 ORDER BY id DESC LIMIT 1`,
+      [w.user_id, w.service_id, w.pago_em])).rows[0];
+    if (ok) {
+      await pool.query(`UPDATE consulta_pix_pedidos SET status='CONCLUIDO', query_id=$2, resultado=$3 WHERE id=$1`,
+        [w.id, ok.id, JSON.stringify({ tipo: 'json', data: { mensagem: 'Consulta concluída. Veja o resultado no Histórico.' } })]);
+      continue;
+    }
+    await devolverConsultaPix(w, 'A consulta não terminou.');
+  }
+}
+
+// POST /api/consulta-pix — gera o PIX de UMA consulta (QR + copia e cola).
+app.post('/api/consulta-pix', requireAuth, bloquearApiPagamento, async (req, res) => {
+  try {
+    const { serviceId, params } = req.body || {};
+    const service = SERVICES.find(s => s.id === serviceId);
+    if (!service) return res.status(400).json({ error: 'Serviço inválido.' });
+    if (!pagueConsultaAtivo(service))
+      return res.status(400).json({ error: 'Esta consulta não aceita o pagamento avulso por PIX. Use o saldo ou faça uma recarga.' });
+    if (!params || typeof params !== 'object' || Array.isArray(params))
+      return res.status(400).json({ error: 'Dados da consulta ausentes.' });
+    // Mesmas travas do /api/query (cliente de parceiro e consulta oculta).
+    const liberadas = await consultasLiberadasClienteParceiro(req.user.id);
+    if (liberadas && !liberadas.has(serviceId)) return res.status(403).json({ error: CONSULTA_FORA_DO_PARCEIRO_MSG });
+    const ocultas = await ocultasDoClienteParceiro(req.user.id);
+    if (ocultas.has(idParaOcultacao(serviceId, params))) return res.status(403).json({ error: CONSULTA_OCULTA_MSG });
+
+    const ur = await pool.query('SELECT id, name, email, active, pos_pago FROM users WHERE id=$1', [req.user.id]);
+    const user = ur.rows[0];
+    if (!user?.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+    if (user.pos_pago) return res.status(400).json({ error: 'Sua conta é pós-paga: as consultas entram na fatura.' });
+
+    const valor = Math.round((await valorConsultaPix(user.id, service, params)) * 100) / 100;
+    if (!(valor > 0)) return res.status(400).json({ error: 'Não foi possível calcular o valor desta consulta. Confira os dados (UF) e tente de novo.' });
+
+    // Mesmo pedido ainda sem pagar: devolve o mesmo QR em vez de abrir outro PIX.
+    const hash = crypto.createHash('sha256').update(`${user.id}|${serviceId}|${JSON.stringify(params)}`).digest('hex');
+    const ja = await pool.query(
+      `SELECT * FROM consulta_pix_pedidos WHERE user_id=$1 AND params_hash=$2 AND status='PENDENTE' AND created_at > NOW() - INTERVAL '2 hours' ORDER BY id DESC LIMIT 1`,
+      [user.id, hash]);
+    if (ja.rows.length && Math.abs(Number(ja.rows[0].valor) - valor) < 0.009) {
+      const p = ja.rows[0];
+      return res.json({ token: p.token, valor: Number(p.valor), qr_code: p.qr_code, qr_base64: p.qr_base64 });
+    }
+
+    let payment;
+    try {
+      payment = await mpReq('POST', '/v1/payments', {
+        transaction_amount: Number(valor.toFixed(2)),
+        description: `${service.name} (consulta avulsa)`,
+        payment_method_id: 'pix',
+        payer: { email: user.email, first_name: String(user.name || 'Cliente').split(' ')[0] },
+        notification_url: `${WEBHOOK_BASE_URL || 'https://www.despachantesconsultas.com.br'}/api/pix/webhook`,
+      }, { 'X-Idempotency-Key': crypto.randomUUID() });
+    } catch (err) {
+      console.error('[consulta-pix] erro ao gerar PIX:', err.message);
+      await alertAdminPixFalha(err, 'Pague apenas esta consulta').catch(() => {});
+      return res.status(502).json({ error: mpErroAmigavel(err, 'Não consegui gerar o PIX agora. Tente de novo.') });
+    }
+    const tx = payment.point_of_interaction?.transaction_data || {};
+    if (!tx.qr_code) return res.status(502).json({ error: 'Não consegui gerar o PIX agora. Tente de novo.' });
+    const token = crypto.randomBytes(24).toString('hex');
+    await pool.query(
+      `INSERT INTO consulta_pix_pedidos (token, user_id, service_id, params, params_hash, valor, gateway_id, qr_code, qr_base64)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [token, user.id, serviceId, JSON.stringify(params), hash, valor, String(payment.id), tx.qr_code, tx.qr_code_base64 || null]);
+    res.json({ token, valor, qr_code: tx.qr_code, qr_base64: tx.qr_code_base64 || null });
+  } catch (err) {
+    console.error('[consulta-pix] erro:', err.message);
+    res.status(500).json({ error: 'Erro interno. Tente novamente.' });
+  }
+});
+
+// GET /api/consulta-pix/:token — a tela pergunta de tempos em tempos. Pagamento
+// aprovado dispara a consulta em segundo plano (pode levar minutos) e a tela
+// segue perguntando até sair o resultado.
+app.get('/api/consulta-pix/:token', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `UPDATE consulta_pix_pedidos SET visto_em=NOW() WHERE token=$1 AND user_id=$2
+       RETURNING status, valor, erro, refund_status, resultado, gateway_id`, [req.params.token, req.user.id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    const p = r.rows[0];
+    if (p.status === 'PENDENTE') depoisDaResposta(processarPagamentoConsultaPix(p.gateway_id));
+    res.json({
+      status: p.status, valor: Number(p.valor), erro: p.erro, refund_status: p.refund_status,
+      resultado: ['CONCLUIDO', 'AGUARDANDO'].includes(p.status) ? p.resultado : null,
+    });
+  } catch (err) {
+    console.error('[consulta-pix] status:', err.message);
+    res.status(500).json({ error: 'Erro ao verificar o pagamento.' });
+  }
+});
 
 const placaBot = t => String(t || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 // O que o cliente informou (placa ou chassi) para as mensagens e legendas do robô.

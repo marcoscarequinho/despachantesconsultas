@@ -1414,6 +1414,54 @@
     </div>
   </div>
 </div>
+<!-- COMO PAGAR A CONSULTA (saldo / recarga / só esta consulta por PIX) -->
+<div id="modal-pague" class="fixed inset-0 z-[9998] hidden items-center justify-center p-4" style="background:rgba(0,0,0,.6);">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden max-h-[92vh] overflow-y-auto">
+    <!-- Etapa 1: escolha -->
+    <div id="pague-escolha">
+      <div class="px-5 pt-5 pb-3">
+        <div class="text-xs text-gray-500 mb-1">Como você quer pagar?</div>
+        <div id="pague-nome" class="text-base font-bold text-gray-800"></div>
+        <div class="text-sm text-gray-600 mt-1">Valor da consulta: <b id="pague-valor"></b> · Seu saldo: <b id="pague-saldo">...</b></div>
+      </div>
+      <div class="px-5 pb-4 space-y-2">
+        <button id="pague-btn-saldo" onclick="pagueEscolher('saldo')" class="w-full text-left rounded-lg border border-gray-200 hover:border-blue-400 hover:bg-blue-50 px-4 py-3 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-gray-200">
+          <div class="text-sm font-semibold text-gray-800">💰 Usar saldo</div>
+          <div id="pague-saldo-obs" class="text-xs text-gray-500">Desconta o valor do seu saldo e consulta na hora.</div>
+        </button>
+        <button onclick="pagueEscolher('recarga')" class="w-full text-left rounded-lg border border-gray-200 hover:border-blue-400 hover:bg-blue-50 px-4 py-3">
+          <div class="text-sm font-semibold text-gray-800">💸 Recarga PIX</div>
+          <div class="text-xs text-gray-500">Adicione crédito ao seu saldo por PIX e consulte quando quiser.</div>
+        </button>
+        <button onclick="pagueEscolher('pix')" class="w-full text-left rounded-lg border-2 border-green-500 bg-green-50 hover:bg-green-100 px-4 py-3">
+          <div class="text-sm font-semibold text-green-800">⚡ Pague Apenas Esta Consulta</div>
+          <div class="text-xs text-green-700">Pague só esta consulta por PIX (QR Code ou copia e cola). Se a consulta não sair, o valor é devolvido.</div>
+        </button>
+      </div>
+      <div class="px-5 py-3 border-t border-gray-100 flex justify-end">
+        <button onclick="pagueEscolher(null)" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-1.5 rounded font-medium">Cancelar</button>
+      </div>
+    </div>
+    <!-- Etapa 2: PIX da consulta -->
+    <div id="pague-pix" class="hidden">
+      <div class="px-5 pt-5 pb-3 text-center">
+        <div id="pague-pix-nome" class="text-sm font-bold text-gray-800"></div>
+        <div class="text-2xl font-bold text-green-700 mt-1" id="pague-pix-valor"></div>
+        <div id="pague-pix-qr" class="mt-3 flex justify-center"></div>
+        <div id="pague-pix-copia-wrap" class="mt-3 text-left">
+          <div class="text-xs text-gray-500 mb-1">PIX copia e cola</div>
+          <textarea id="pague-pix-copia" readonly rows="3" class="w-full text-xs font-mono border border-gray-300 rounded p-2 bg-gray-50" onclick="this.select()"></textarea>
+          <button id="pague-pix-copiar" onclick="pagueCopiar()" class="mt-1 w-full text-xs bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 rounded font-medium">📋 Copiar código PIX</button>
+        </div>
+        <div id="pague-pix-status" class="mt-3 text-sm text-gray-700"></div>
+        <div id="pague-pix-aviso" class="mt-2 text-xs text-gray-500">Assim que o pagamento cair, a consulta roda sozinha. Se ela não sair, o PIX é devolvido automaticamente.</div>
+      </div>
+      <div class="px-5 py-3 border-t border-gray-100 flex justify-end">
+        <button id="pague-pix-fechar" onclick="pagueFecharPix()" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-1.5 rounded font-medium">Fechar</button>
+      </div>
+    </div>
+  </div>
+</div>
 <div id="toast-modal" class="fixed inset-0 z-[9999] hidden items-center justify-center p-4" style="background:rgba(0,0,0,.6);" onclick="if(event.target===this) closeToast()">
   <div class="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden">
     <div class="px-5 py-5 flex items-start gap-3">
@@ -6022,6 +6070,15 @@ async function submitQuery(e) {
   const validationError = validateParams(selectedSvc.inputType, params);
   if (validationError) { showFormError(validationError); return; }
 
+  // Consultas cobertas pelo "Pague apenas esta consulta": pop-up com as três
+  // saídas (saldo / recarga PIX / pagar só esta). Só a escolha "saldo" segue o
+  // fluxo de sempre; "pix" gera o QR e roda a consulta depois do pagamento.
+  if (selectedSvc.pagaPorConsulta && !editingComunicacaoVendaQueryId) {
+    const escolha = await escolherPagamentoConsulta(selectedSvc, params);
+    if (!escolha) return;
+    if (escolha === 'pix') { await pagarSomenteEstaConsulta(selectedSvc, params); return; }
+  }
+
   setQueryLoading(true);
 
   // Modo "Alterar" (botão ✏️ Alterar em Meus Comunicados de Venda): reenvia o
@@ -6097,39 +6154,197 @@ async function submitQuery(e) {
         showFormError(data.error || 'Erro ao realizar consulta.');
         return;
       }
-      // Pedido aceito mas ainda sem documento (ATPV-e e demais assíncronos da
-      // Vistocar): em vez do card de "consulta concluída", que mentiria, abre a
-      // barra de progresso, que acompanha a emissão até o PDF sair.
-      if (data.pending && selectedSvc.inputType === 'atpve_vistocar') {
-        showAtpveProgress(data, selectedSvc);
-        await loadQueries();
-        return;
-      }
-      // Assinatura Digital: o pedido foi criado, mas o documento assinado só
-      // existe depois que a pessoa assina — mesma ideia, tela própria.
-      if (data.pending && selectedSvc.inputType === 'dcr_atpve') {
-        showDcrPendente(data, selectedSvc);
-        await loadQueries();
-        return;
-      }
-      if (data.pending && selectedSvc.inputType === 'assinatura_digital') {
-        showAssinaturaProgress(data, selectedSvc);
-        await Promise.all([loadQueries(), loadAssinaturaStatus()]);
-        return;
-      }
-      if (data.html_token) {
-        window.open(`/api/html/${data.html_token}`, '_blank');
-        showHtmlResult(selectedSvc, data);
-      } else {
-        showJsonResult(data, selectedSvc);
-      }
-      await Promise.all([loadStats(), loadQueries()]);
+      await renderJsonOutcome(data);
     }
   } catch {
     showFormError('Erro de conexão. Verifique sua internet e tente novamente.');
   } finally {
     setQueryLoading(false);
   }
+}
+
+// Mostra o resultado de uma consulta que voltou como JSON (pedido pendente,
+// HTML ou dados). Compartilhado com o "Pague apenas esta consulta", que recebe
+// o mesmo JSON só que depois do PIX.
+async function renderJsonOutcome(data) {
+  // Pedido aceito mas ainda sem documento (ATPV-e e demais assíncronos da
+  // Vistocar): em vez do card de "consulta concluída", que mentiria, abre a
+  // barra de progresso, que acompanha a emissão até o PDF sair.
+  if (data.pending && selectedSvc.inputType === 'atpve_vistocar') {
+    showAtpveProgress(data, selectedSvc);
+    await loadQueries();
+    return;
+  }
+  // Assinatura Digital: o pedido foi criado, mas o documento assinado só
+  // existe depois que a pessoa assina — mesma ideia, tela própria.
+  if (data.pending && selectedSvc.inputType === 'dcr_atpve') {
+    showDcrPendente(data, selectedSvc);
+    await loadQueries();
+    return;
+  }
+  if (data.pending && selectedSvc.inputType === 'assinatura_digital') {
+    showAssinaturaProgress(data, selectedSvc);
+    await Promise.all([loadQueries(), loadAssinaturaStatus()]);
+    return;
+  }
+  if (data.html_token) {
+    window.open(`/api/html/${data.html_token}`, '_blank');
+    showHtmlResult(selectedSvc, data);
+  } else {
+    showJsonResult(data, selectedSvc);
+  }
+  await Promise.all([loadStats(), loadQueries()]);
+}
+
+// ── Como pagar a consulta: saldo, recarga ou "Pague apenas esta consulta" ────
+// O servidor marca `pagaPorConsulta` nos serviços cobertos (ver
+// pagueConsultaAtivo no server.js — a data de entrada em vigor é decidida lá).
+// Resolve 'saldo' | 'pix' | null (fechou). "Recarga PIX" leva à página de recarga.
+let pagueResolve = null;
+function pagueEscolher(op) {
+  if (op === 'recarga') { window.location.href = '/recarga-pix'; return; }
+  document.getElementById('modal-pague').classList.add('hidden');
+  document.getElementById('modal-pague').classList.remove('flex');
+  const r = pagueResolve; pagueResolve = null;
+  if (r) r(op);
+}
+
+async function escolherPagamentoConsulta(svc, params) {
+  const valor = svc.precosUf ? (svc.precosUf[String(params.uf || '').toUpperCase()] ?? svc.price) : svc.price;
+  document.getElementById('pague-nome').textContent = svc.name;
+  document.getElementById('pague-valor').textContent = fmt(valor);
+  document.getElementById('pague-saldo').textContent = '...';
+  document.getElementById('pague-escolha').classList.remove('hidden');
+  document.getElementById('pague-pix').classList.add('hidden');
+  const btnSaldo = document.getElementById('pague-btn-saldo');
+  const obs = document.getElementById('pague-saldo-obs');
+  btnSaldo.disabled = false;
+  obs.textContent = 'Desconta o valor do seu saldo e consulta na hora.';
+  const modal = document.getElementById('modal-pague');
+  modal.classList.remove('hidden'); modal.classList.add('flex');
+  try {
+    const st = await (await fetch('/api/user/stats')).json();
+    const credits = Number(st.credits);
+    document.getElementById('pague-saldo').textContent = fmt(credits);
+    if (credits + 0.0001 < Number(valor)) {
+      btnSaldo.disabled = true;
+      obs.textContent = 'Saldo insuficiente para esta consulta.';
+    }
+  } catch { document.getElementById('pague-saldo').textContent = '—'; }
+  return new Promise(resolve => { pagueResolve = resolve; });
+}
+
+// Etapa 2: gera o PIX só desta consulta e acompanha até sair o resultado.
+let pagueTimer = null;
+let paguePixFechado = true;
+function pagueFecharPix() {
+  paguePixFechado = true;
+  clearTimeout(pagueTimer);
+  const modal = document.getElementById('modal-pague');
+  modal.classList.add('hidden'); modal.classList.remove('flex');
+  setQueryLoading(false);
+}
+function pagueCopiar() {
+  const t = document.getElementById('pague-pix-copia');
+  t.select();
+  (navigator.clipboard?.writeText(t.value) || Promise.reject()).catch(() => document.execCommand('copy'));
+  const b = document.getElementById('pague-pix-copiar');
+  b.textContent = '✅ Código copiado!';
+  setTimeout(() => { b.textContent = '📋 Copiar código PIX'; }, 2500);
+}
+
+async function pagarSomenteEstaConsulta(svc, params) {
+  const setStatus = (html) => { document.getElementById('pague-pix-status').innerHTML = html; };
+  setQueryLoading(true);
+  document.getElementById('pague-escolha').classList.add('hidden');
+  document.getElementById('pague-pix').classList.remove('hidden');
+  document.getElementById('pague-pix-nome').textContent = svc.name;
+  document.getElementById('pague-pix-valor').textContent = '...';
+  document.getElementById('pague-pix-qr').innerHTML = '';
+  document.getElementById('pague-pix-copia-wrap').classList.add('hidden');
+  document.getElementById('pague-pix-aviso').classList.remove('hidden');
+  document.getElementById('pague-pix-fechar').textContent = 'Fechar';
+  setStatus('Gerando o PIX...');
+  const modal = document.getElementById('modal-pague');
+  modal.classList.remove('hidden'); modal.classList.add('flex');
+  paguePixFechado = false;
+
+  let ped;
+  try {
+    const r = await fetch('/api/consulta-pix', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serviceId: svc.id, params }),
+    });
+    ped = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      pagueFecharPix();
+      showFormError(ped.error || 'Não foi possível gerar o PIX. Tente novamente.');
+      return;
+    }
+  } catch {
+    pagueFecharPix();
+    showFormError('Erro de conexão. Verifique sua internet e tente novamente.');
+    return;
+  }
+
+  document.getElementById('pague-pix-valor').textContent = fmt(ped.valor);
+  if (ped.qr_base64) {
+    const img = document.createElement('img');
+    img.src = 'data:image/png;base64,' + ped.qr_base64;
+    img.alt = 'QR Code PIX'; img.className = 'w-52 h-52 border border-gray-200 rounded';
+    document.getElementById('pague-pix-qr').appendChild(img);
+  }
+  document.getElementById('pague-pix-copia').value = ped.qr_code || '';
+  document.getElementById('pague-pix-copia-wrap').classList.remove('hidden');
+  setStatus('⏳ Aguardando o pagamento...');
+
+  const inicio = Date.now();
+  const terminar = async (p) => {
+    paguePixFechado = true;
+    const m = document.getElementById('modal-pague');
+    m.classList.add('hidden'); m.classList.remove('flex');
+    setQueryLoading(false);
+    selectedSvc = svc;
+    const res = p.resultado || {};
+    if (res.tipo === 'pdf') {
+      const b = await (await fetch(`/api/pdf/${res.pdfToken}`)).blob();
+      lastPdfBlob = b;
+      triggerPdfDownload(b, svc.id);
+      showPdfResult(svc);
+      await Promise.all([loadStats(), loadQueries(), loadAssinaturaStatus()]);
+    } else {
+      await renderJsonOutcome(res.data || {});
+    }
+  };
+  const ciclo = async () => {
+    if (paguePixFechado) return;
+    let p;
+    try { p = await (await fetch(`/api/consulta-pix/${ped.token}`)).json(); } catch { p = null; }
+    if (paguePixFechado) return;
+    if (p?.status === 'CONCLUIDO' || p?.status === 'AGUARDANDO') return terminar(p);
+    if (p?.status === 'ERRO') {
+      document.getElementById('pague-pix-qr').innerHTML = '';
+      document.getElementById('pague-pix-copia-wrap').classList.add('hidden');
+      document.getElementById('pague-pix-aviso').classList.add('hidden');
+      setStatus(`❌ <b>A consulta não saiu.</b><br>${(p.erro || '').replace(/</g, '&lt;')}<br><br>` +
+        (p.refund_status === 'DEVOLVIDO' ? '✅ O PIX foi <b>devolvido automaticamente</b>.' : '⚠️ Não consegui devolver o PIX automaticamente — fale com o suporte.'));
+      document.getElementById('pague-pix-fechar').textContent = 'OK';
+      setQueryLoading(false);
+      paguePixFechado = true;
+      return;
+    }
+    if (p?.status === 'EXPIRADO') {
+      setStatus('Este PIX expirou. Feche e gere um novo.');
+      setQueryLoading(false); paguePixFechado = true; return;
+    }
+    if (p?.status === 'EXECUTANDO') {
+      document.getElementById('pague-pix-qr').innerHTML = '';
+      document.getElementById('pague-pix-copia-wrap').classList.add('hidden');
+      setStatus('✅ <b>Pagamento confirmado!</b> Consultando... isso pode levar alguns minutos. Pode deixar esta janela aberta.');
+    }
+    pagueTimer = setTimeout(ciclo, Date.now() - inicio > 120000 ? 10000 : 4000);
+  };
+  pagueTimer = setTimeout(ciclo, 4000);
 }
 
 function buildParams(inputType) {
