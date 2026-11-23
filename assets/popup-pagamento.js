@@ -213,7 +213,6 @@
 
   window.fecharPopupPagamento = function (lido) {
     const m = el('popup-pagamento'); if (!m) return;
-    if (lido) { try { localStorage.setItem(CHAVE, '1'); } catch (e) {} }
     clearInterval(timer);
     m.style.transition = 'opacity .3s,transform .3s'; m.style.opacity = '0'; m.style.transform = 'scale(.95)';
     setTimeout(() => m.classList.add('hidden'), 300);
@@ -224,11 +223,9 @@
     if (e.key === 'Escape' && m && !m.classList.contains('hidden')) fecharPopupPagamento(false);
   });
 
-  // Abre ao entrar no painel até o cliente confirmar que leu. Pós-pago não usa
+  // Abre TODA vez que o painel é acessado (pedido do dono, 23/11/2026). Pós-pago não usa
   // recarga nem este fluxo, então não é incomodado.
   (() => {
-    let lido = false; try { lido = !!localStorage.getItem(CHAVE); } catch (e) {}
-    if (lido) return;
     setTimeout(async () => {
       try { const u = await (await fetch('/api/auth/me')).json(); if (u && u.pos_pago) return; } catch (e) {}
       abrirPopupPagamento();
