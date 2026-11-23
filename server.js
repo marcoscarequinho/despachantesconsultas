@@ -19172,8 +19172,10 @@ async function conferirPedidosWhats() {
 // Pós-pago fica de fora (tem fatura) e a API de chave não passa por aqui.
 const PAGUE_CONSULTA_INICIO_GERAL = Date.UTC(2026, 11, 15, 3, 0, 0); // 15/12/2026 00:00 em UTC-3
 const PAGUE_CONSULTA_FASE_TESTE = new Set(['dcr-cancelamento-atpve', 'consultar-crlv-rj']);
+// CRLV-e agendado (entrega horas depois, a consulta fica pendente): fora do pagamento avulso (dono, 23/11/2026).
+const ehConsultaAgendada = svc => svc.group === 'CRLV-e Agendado' || /^(crlv-agendado-|dcr-crlv-ag-)/.test(svc.id) || svc.id === 'dc-crlve-rs-v2';
 function pagueConsultaAtivo(service) {
-  if (!service || service.unavailable || service.soWhats || service.soWhatsAviso || isFreeService(service)) return false;
+  if (!service || service.unavailable || service.soWhats || service.soWhatsAviso || isFreeService(service) || ehConsultaAgendada(service)) return false;
   if (Date.now() >= PAGUE_CONSULTA_INICIO_GERAL) return true;
   return PAGUE_CONSULTA_FASE_TESTE.has(service.id);
 }
