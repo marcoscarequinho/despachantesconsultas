@@ -1,7 +1,7 @@
 /* Popup "Nova forma de pagamento" (23/11/2026) — usado no painel do cliente e no do parceiro.
    Injeta o HTML/CSS na página e abre até o cliente confirmar a leitura. Precisa do Tailwind da página. */
 (function(){
-  const html = `<div id="popup-pagamento" class="fixed inset-0 z-[9999] hidden" style="background:rgba(7,10,30,.78);backdrop-filter:blur(6px);">
+  const html = `<div id="popup-pagamento" class="fixed inset-0 hidden" style="z-index:2147483000;background:rgba(7,10,30,.78);backdrop-filter:blur(6px);">
   <div class="w-full h-full overflow-y-auto flex items-start justify-center p-3 sm:p-4" style="-webkit-overflow-scrolling:touch;overscroll-behavior:contain;">
   <div class="pg-card relative w-full max-w-lg md:max-w-3xl rounded-3xl overflow-hidden shadow-2xl my-4 sm:my-6">
     <div class="pg-fundo absolute inset-0"></div>
@@ -225,12 +225,9 @@
 
   // Abre TODA vez que o painel é acessado (pedido do dono, 23/11/2026). Pós-pago não usa
   // recarga nem este fluxo, então não é incomodado.
-  (() => {
-    setTimeout(async () => {
-      try { const u = await (await fetch('/api/auth/me')).json(); if (u && u.pos_pago) return; } catch (e) {}
-      abrirPopupPagamento();
-    }, 1200);
-  })();
+  // Abre na hora (sem esperar a rede); quem é pós-pago fecha em seguida.
+  abrirPopupPagamento();
+  fetch('/api/auth/me').then(r => r.json()).then(u => { if (u && u.pos_pago) { clearInterval(timer); el('popup-pagamento').classList.add('hidden'); } }).catch(() => {});
 })();
 
   }
