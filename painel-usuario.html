@@ -4069,7 +4069,7 @@ function buildNovasList() {
   const subs = [...new Set(svcs.map(s => s.subgrupo || 'Outras'))]
     .sort((a, b) => (NOVAS_SUBGRUPOS.indexOf(a) + 1 || 99) - (NOVAS_SUBGRUPOS.indexOf(b) + 1 || 99));
   wrap.innerHTML = subs.map(sub => sub === 'Emissão de ATPV-e' ? svcs.filter(s => s.inputType === 'atpve_crdd').map(s => `
-    <div class="mb-3 bg-gradient-to-r from-amber-50 to-white border-2 border-amber-300 rounded-xl p-4 sm:p-5">
+    <div role="button" tabindex="0" onclick="selectService(${JSON.stringify(s).replace(/"/g,"&quot;")})" onkeydown="if(event.key==='Enter'){selectService(${JSON.stringify(s).replace(/"/g,"&quot;")})}" class="cursor-pointer hover:border-amber-500 transition-all mb-3 bg-gradient-to-r from-amber-50 to-white border-2 border-amber-300 rounded-xl p-4 sm:p-5">
       <div class="flex items-center gap-4">
         <div class="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center text-2xl flex-shrink-0">${s.icon}</div>
         <div class="flex-1 min-w-0">
@@ -4080,7 +4080,7 @@ function buildNovasList() {
           <p class="text-xs text-gray-600 mt-1 leading-snug">Intenção de venda do <strong>Rio de Janeiro</strong>.
             <strong>Só é cobrada quando o ATPV-e sai.</strong></p>
         </div>
-        <button type="button" onclick="selectService(${JSON.stringify(s).replace(/"/g,"&quot;")})"
+        <button type="button"
           class="flex items-center gap-2 bg-white border border-amber-300 rounded-lg px-3 py-2 hover:border-amber-500 hover:bg-amber-50 transition-all flex-shrink-0">
           <span class="font-bold text-gray-800 text-sm">RJ</span>
           <span class="price-tag text-sm">${fmtPrice(s.price)}</span>
