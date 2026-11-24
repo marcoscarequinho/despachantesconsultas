@@ -2369,7 +2369,7 @@ async function initDB() {
       id                INTEGER PRIMARY KEY,
       saldo             NUMERIC(12,2),
       lido_em           TIMESTAMPTZ,
-      alerta_abaixo     NUMERIC(12,2) NOT NULL DEFAULT 200,
+      alerta_abaixo     NUMERIC(12,2) NOT NULL DEFAULT 100,
       alerta_enviado_em TIMESTAMPTZ,
       sem_saldo_em      TIMESTAMPTZ
     );

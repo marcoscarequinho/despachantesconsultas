@@ -58,7 +58,7 @@
         <div class="flex flex-wrap items-end gap-3">
           <div>
             <label class="block text-xs font-semibold text-gray-600 mb-1">Avisar abaixo de (R$)</label>
-            <input id="crdd-input-alerta" type="text" inputmode="decimal" class="input-field w-44" placeholder="ex.: 200,00">
+            <input id="crdd-input-alerta" type="text" inputmode="decimal" class="input-field w-44" placeholder="ex.: 100,00">
           </div>
           <button id="crdd-salvar" class="btn-primary">💾 Salvar alerta</button>
           <button id="crdd-atualizar" class="btn-secondary">🔄 Atualizar</button>
