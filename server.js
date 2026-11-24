@@ -20000,7 +20000,10 @@ async function processarMensagemBot(phone, texto) {
     // Aviso que no painel é termo de aceite (noteStyle 'danger', ex.: o QR Code
     // da Reemissão da ATPVe não faz leitura) vai antes do pedido da placa.
     const termo = SERVICES.find(x => x.id === id);
-    const aviso = termo?.noteStyle === 'danger' && termo.slowNote ? `⚠️ ${termo.slowNote}\n\n` : '';
+    // Link do modelo (o mesmo "Visualize modelo…" do painel, `modeloUrl`) logo abaixo do aviso (dono, 24/11/2026).
+    const modelo = termo?.modeloUrl
+      ? `📄 ${termo.modeloLabel || 'Visualize modelo da ATPVe'}: ${WEBHOOK_BASE_URL || 'https://www.despachantesconsultas.com.br'}${termo.modeloUrl}\n\n` : '';
+    const aviso = termo?.noteStyle === 'danger' && termo.slowNote ? `⚠️ ${termo.slowNote}\n\n${modelo}` : '';
     return sendWhatsApp(phone, `${aviso}Informe a *placa* do veículo (ex.: ABC1D23):`);
   }
 
