@@ -1633,7 +1633,7 @@ const SERVICES = [
   })),
   // ATPVe Rio v2 (portal CRDD-RJ) — card ao lado da Emissão de ATPV-e, na mesma página.
   { id:CRDD_ATPVE_SERVICE_ID, name:'ATPVe Rio v2', group:DATACRED_GRUPO, subgrupo:'Emissão de ATPV-e', basePrice:CRDD_ATPVE_PRECO, noMarkup:true, inputType:'atpve_crdd', icon:'📝', uf:'rj',
-    slowNote:'Intenção de venda / ATPV-e do Rio de Janeiro pelo portal do CRDD-RJ. É um ato no Detran e não pode ser desfeito. O ATPV-e chega no seu WhatsApp e no Histórico quando sair — só é cobrado quando o documento existir.' },
+    slowNote:'Intenção de venda / ATPV-e do Rio de Janeiro. É um ato no Detran e não pode ser desfeito. O ATPV-e chega no seu WhatsApp e no Histórico quando sair — só é cobrado quando o documento existir.' },
   { id:'recurso-multa-ia', name:'Recurso de Multa com IA', group:'Recurso de Multas', basePrice:80, noMarkup:true, inputType:'recurso_multa', icon:'⚖️',
     slowNote:'Envie a foto ou o PDF da notificação, confira os dados e responda as perguntas. A IA redige a defesa prévia ou o recurso à JARI em PDF, pronto para assinar e protocolar (leva cerca de 1 minuto). Só é cobrado se o PDF for gerado.' },
   // ── CRLV-e Rio de Janeiro (destaque no topo da Nova Consulta) ──
