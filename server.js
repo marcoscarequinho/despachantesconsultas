@@ -2362,6 +2362,18 @@ async function initDB() {
       verificado_em TIMESTAMPTZ
     );
   `);
+  // Saldo pré-pago do CRDD: o valor vem do próprio portal (cabeçalho "Saldo: R$ …"),
+  // então é leitura e não estimativa. Aqui ficam o último valor lido e o alerta.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS crdd_saldo (
+      id                INTEGER PRIMARY KEY,
+      saldo             NUMERIC(12,2),
+      lido_em           TIMESTAMPTZ,
+      alerta_abaixo     NUMERIC(12,2) NOT NULL DEFAULT 200,
+      alerta_enviado_em TIMESTAMPTZ,
+      sem_saldo_em      TIMESTAMPTZ
+    );
+  `);
   // ATPVe Rio v2 (portal CRDD-RJ) que ainda não tem o ATPV-e: o cron confere a
   // listagem do portal e entrega/cobra ou cancela sem cobrar. ids_antes guarda
   // os ids que a placa já tinha no portal, para reconhecer o pedido novo.
@@ -10596,6 +10608,34 @@ async function listarIntencoesCrdd(placa) {
   return r.json.data;
 }
 
+// Saldo pré-pago do CRDD, lido do cabeçalho de qualquer página logada
+// (data-bs-content="Saldo: R$ 300,00"). Devolve número ou null se não achar.
+function saldoCrddDoHtml(html) {
+  const m = /Saldo:\s*(-?)\s*R\$\s*(-?[\d.]*\d,\d{2})/.exec(html || '');
+  if (!m) return null;
+  const n = Number(m[2].replace(/\./g, '').replace(',', '.').replace('-', ''));
+  return Number.isFinite(n) ? ((m[1] || m[2].startsWith('-')) ? -n : n) : null;
+}
+
+// Lê o saldo no portal, guarda e avisa o ADMIN_PHONE uma vez quando fica abaixo
+// do alerta (o aviso rearma quando o saldo volta para cima).
+async function conferirSaldoCrdd() {
+  const pag = await crddFetch('/intencao-venda');
+  const saldo = saldoCrddDoHtml(pag.buf.toString('utf8'));
+  if (saldo === null) throw new Error('saldo não encontrado na página do CRDD (o portal mudou?)');
+  await pool.query('INSERT INTO crdd_saldo (id) VALUES (1) ON CONFLICT (id) DO NOTHING');
+  const { rows: [s] } = await pool.query('UPDATE crdd_saldo SET saldo=$1, lido_em=NOW() WHERE id=1 RETURNING alerta_abaixo, alerta_enviado_em', [saldo]);
+  const limite = parseFloat(s.alerta_abaixo);
+  if (saldo >= limite) {
+    if (s.alerta_enviado_em) await pool.query('UPDATE crdd_saldo SET alerta_enviado_em=NULL WHERE id=1');
+  } else {
+    const claim = await pool.query('UPDATE crdd_saldo SET alerta_enviado_em=NOW() WHERE id=1 AND alerta_enviado_em IS NULL RETURNING id');
+    if (claim.rows.length && ADMIN_PHONE)
+      await sendWhatsApp(ADMIN_PHONE, `⚠️ *Saldo do CRDD baixo*\nR$ ${saldo.toFixed(2).replace('.', ',')} (alerta abaixo de R$ ${limite.toFixed(2).replace('.', ',')}). Cada ATPVe Rio v2 gasta R$ ${CRDD_ATPVE_CUSTO.toFixed(2).replace('.', ',')} — recarregue no portal para o serviço não parar.`).catch(() => {});
+  }
+  return saldo;
+}
+
 // RENAVAM com dígito verificador — a mesma conta que o portal faz na tela.
 function renavamValidoCrdd(v) {
   if (!/^\d{9,11}$/.test(v) || /^0+$/.test(v)) return false;
@@ -10665,6 +10705,9 @@ async function cadastrarIntencaoCrdd(c) {
     const token = form.match(/name="_token"[^>]*value="([^"]+)"/)?.[1];
     const requestId = form.match(/name="request_id"[^>]*value="([^"]+)"/)?.[1];
     if (!token || !requestId) throw new Error('formulário da intenção de venda do CRDD não encontrado (o portal mudou?)');
+    // Saldo insuficiente: recusa antes de cadastrar (o portal debitaria e falharia).
+    const saldoAgora = saldoCrddDoHtml(pag.buf.toString('utf8'));
+    if (saldoAgora !== null && saldoAgora < CRDD_ATPVE_CUSTO) { const e = new Error(`saldo do CRDD insuficiente (R$ ${saldoAgora.toFixed(2)})`); e.semSaldo = true; throw e; }
     const fd = new FormData();
     const add = (k, v) => fd.append(k, v ?? '');
     add('_token', token); add('request_id', requestId); add('notificar_assinatura_partes', '0'); add('tokenAssinaturaDigital', 'N'); add('uf', 'RJ');
@@ -10746,7 +10789,9 @@ async function runCrddPendingCheck() {
     try { s = await entregarAtpveCrdd(pend); } catch (e) { console.error(`[${CRDD_ATPVE_SERVICE_ID}] #${pend.query_id}:`, e.message); s = 'erro'; }
     resumo[s] = (resumo[s] || 0) + 1;
   }
-  return { verificadas: r.rows.length, ...resumo };
+  // Mantém o saldo lido em dia (e dispara o alerta) mesmo sem pedido novo.
+  const saldo = await conferirSaldoCrdd().catch(e => { console.error('[crdd] saldo:', e.message); return null; });
+  return { verificadas: r.rows.length, ...resumo, saldo };
 }
 
 // ── Emissão de ATPV-e (DataCred) ─────────────────────────────────────────────
@@ -12981,6 +13026,7 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
       } catch (e) {
         console.error(`[${serviceId}]`, e.message);
         if (e.semCredencial || e.loginRecusado) avisarAdminCrdd(`Não consegui entrar no portal: ${e.message}`);
+        if (e.semSaldo) { avisarAdminCrdd(`Pedido recusado: ${e.message}. Recarregue o saldo no portal.`); conferirSaldoCrdd().catch(() => {}); return res.status(503).json({ error: 'Serviço temporariamente indisponível. Nada foi cobrado — tente mais tarde.' }); }
         return res.status(502).json({ error: 'A emissão não pôde ser enviada agora. Nada foi cobrado — tente de novo em instantes.' });
       }
       if (r.status < 200 || r.status >= 300) {
@@ -12991,6 +13037,7 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
         if (r.status >= 500 || !msg) return res.status(502).json({ error: 'O portal não respondeu agora. Nada foi cobrado — confira o Histórico antes de tentar de novo.' });
         return res.status(r.status === 422 ? 400 : 422).json({ error: `${msg} Nada foi cobrado.` });
       }
+      await conferirSaldoCrdd().catch(e => console.error('[crdd] saldo:', e.message));   // o cadastro debitou o saldo
       const qRow = await pool.query(
         `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
          VALUES ($1,$2,$3,$4,'aguardando_pdf',$5,'pdf',$6) RETURNING id`,
@@ -22650,25 +22697,52 @@ app.post('/api/admin/atpve-pedidos/:id/entregar-manual', requireAuth, requireSup
 // finalizePendingQuery) para o que o admin faz e o que o automático faz não
 // gerarem estado diferente. Cancelar aqui encerra só a NOSSA pendência — não
 // cancela nada no fornecedor (se o ATPV-e sair depois, eles cobram).
-// Controle do ATPVe Rio v2 (portal CRDD): quanto entrou, quanto custou (R$ 26,90
-// por ATPV-e entregue, ver CRDD_ATPVE_CUSTO) e o que ainda está pendente.
-// ?dias=N (padrão 30). Receita = o que o cliente pagou (queries.amount).
-app.get('/api/admin/atpve-rio-v2', requireAuth, requireSuperAdmin, async (req, res) => {
+// Admin → Saldo CRDD (ATPVe Rio v2). O saldo é LIDO no portal na hora (não é
+// estimativa); custo = R$ 26,90 por ATPV-e entregue (CRDD_ATPVE_CUSTO).
+app.get('/api/admin/crdd', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
-    const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 30, 1), 365);
-    const r = await pool.query(
-      `SELECT status, COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS receita
-         FROM queries WHERE service_id=$1 AND created_at >= NOW() - ($2 || ' days')::interval GROUP BY status`,
-      [CRDD_ATPVE_SERVICE_ID, String(dias)]);
-    const por = Object.fromEntries(r.rows.map(x => [x.status, x]));
-    const entregues = por.success?.n || 0, receita = por.success?.receita || 0;
-    const custo = Math.round(entregues * CRDD_ATPVE_CUSTO * 100) / 100;
+    let saldo = null, erroLeitura = null;
+    try { saldo = await conferirSaldoCrdd(); } catch (e) { erroLeitura = e.semCredencial ? 'CRDD_EMAIL/CRDD_SENHA não estão configurados no servidor.' : e.message; }
+    await pool.query('INSERT INTO crdd_saldo (id) VALUES (1) ON CONFLICT (id) DO NOTHING');
+    const { rows: [s] } = await pool.query('SELECT saldo::float AS saldo, lido_em, alerta_abaixo::float AS alerta_abaixo, alerta_enviado_em FROM crdd_saldo WHERE id=1');
+    const dia = "date_trunc('day', NOW() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'";
+    const mes = "date_trunc('month', NOW() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'";
+    const { rows: [p] } = await pool.query(`
+      SELECT COUNT(*) FILTER (WHERE status='success' AND created_at >= ${dia})::int AS hoje_n,
+             COALESCE(SUM(amount) FILTER (WHERE status='success' AND created_at >= ${dia}),0)::float AS hoje_receita,
+             COUNT(*) FILTER (WHERE status='success' AND created_at >= ${mes})::int AS mes_n,
+             COALESCE(SUM(amount) FILTER (WHERE status='success' AND created_at >= ${mes}),0)::float AS mes_receita,
+             COUNT(*) FILTER (WHERE status='aguardando_pdf')::int AS pendentes,
+             COUNT(*) FILTER (WHERE status='cancelado' AND created_at >= ${mes})::int AS recusados_mes
+        FROM queries WHERE service_id=$1`, [CRDD_ATPVE_SERVICE_ID]);
+    const { rows: pedidos } = await pool.query(`
+      SELECT q.id, q.status, q.amount::float AS amount, q.created_at, q.result_data, u.name AS cliente, u.email
+        FROM queries q LEFT JOIN users u ON u.id = q.user_id
+       WHERE q.service_id=$1 ORDER BY q.id DESC LIMIT 50`, [CRDD_ATPVE_SERVICE_ID]);
     res.json({
-      dias, preco: CRDD_ATPVE_PRECO, custoUnitario: CRDD_ATPVE_CUSTO,
-      entregues, receita, custo, lucro: Math.round((receita - custo) * 100) / 100,
-      pendentes: por.aguardando_pdf?.n || 0, recusados: por.cancelado?.n || 0,
+      saldo: saldo ?? s.saldo, lidoEm: saldo !== null ? new Date() : s.lido_em, erroLeitura,
+      alertaAbaixo: s.alerta_abaixo, alertaEnviadoEm: s.alerta_enviado_em,
+      preco: CRDD_ATPVE_PRECO, custoUnitario: CRDD_ATPVE_CUSTO,
+      hoje: { n: p.hoje_n, receita: p.hoje_receita, custo: Math.round(p.hoje_n * CRDD_ATPVE_CUSTO * 100) / 100 },
+      mes: { n: p.mes_n, receita: p.mes_receita, custo: Math.round(p.mes_n * CRDD_ATPVE_CUSTO * 100) / 100 },
+      pendentes: p.pendentes, recusadosMes: p.recusados_mes,
+      credenciais: !!(process.env.CRDD_EMAIL && process.env.CRDD_SENHA),
+      pedidos: pedidos.map(x => { let rd = {}; try { rd = JSON.parse(x.result_data || '{}'); } catch {} return { id: x.id, status: x.status, amount: x.amount, created_at: x.created_at, placa: rd.placa || null, crdd: rd.crdd || null, motivo: rd.motivo || null, cliente: x.cliente, email: x.email }; }),
     });
-  } catch (e) { console.error('Erro no controle do ATPVe Rio v2:', e.message); res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    console.error('[admin/crdd] erro:', e.message);
+    res.status(500).json({ error: 'Erro ao carregar o saldo do CRDD.' });
+  }
+});
+
+app.post('/api/admin/crdd/alerta', requireAuth, requireSuperAdmin, async (req, res) => {
+  const v = Number(String(req.body?.alertaAbaixo ?? '').replace(',', '.'));
+  if (!Number.isFinite(v) || v < 0 || v > 1e6) return res.status(400).json({ error: 'Valor do alerta inválido.' });
+  try {
+    await pool.query('INSERT INTO crdd_saldo (id) VALUES (1) ON CONFLICT (id) DO NOTHING');
+    await pool.query('UPDATE crdd_saldo SET alerta_abaixo=$1, alerta_enviado_em=NULL WHERE id=1', [v]);
+    res.json({ ok: true });
+  } catch (e) { console.error('[admin/crdd/alerta] erro:', e.message); res.status(500).json({ error: 'Erro ao salvar.' }); }
 });
 
 app.get('/api/admin/novas-pedidos', requireAuth, requireSuperAdmin, async (req, res) => {
