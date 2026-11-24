@@ -377,6 +377,10 @@ Toda cobrança do cliente aceita PIX sem acréscimo ou cartão com acréscimo �
 - **3DS**: `three_d_secure_mode: 'optional'` com `binary_mode: false`. No débito o emissor quase sempre pede o desafio: a resposta volta `pending`/`pending_challenge` com `three_ds_info`, que o front entrega ao Status Screen Brick. Por isso o pagamento no cartão **não é confirmado na resposta da rota** — quem confirma é o mesmo polling do PIX (`/api/pix/status/:id` ou `/api/public/pedido/:token`), mais o webhook e o cron `runPixReconcile`.
 - **Colunas**: `pix_payments.value` e `public_orders.amount` continuam sendo o valor LÍQUIDO (o crédito que o cliente recebe / o preço do serviço) — é o que credita. O cobrado com acréscimo fica em `charged_value`/`charged_amount`, e `method` diz `PIX`, `CARTAO` (débito, nome herdado do primeiro dia do cartão) ou `CREDITO`.
 
+## Anti-robô do login (24/11/2026)
+
+Pedido do dono: conta simples (`4 + 2 = 6`, `10 − 7 = 3`) ao lado do "Esqueci minha senha" em `/entrar`. `GET /api/auth/captcha` devolve `{ pergunta, token }`; o token é `nonce.exp.HMAC(JWT_SECRET, nonce|exp|resposta)` — a resposta não vai no token, nada fica no banco. `POST /api/auth/login` **exige** `captchaToken` + `captchaResposta` (400 com `captcha:true` se faltar ou errar), conferidos no servidor (`conferirCaptcha`): vale 5 min e **uma tentativa por token**, certa ou errada (nonce usado é lembrado por instância, melhor esforço na Vercel); a tela pede outra conta depois de qualquer erro. Somas e subtrações de 1 a 10, nunca negativas. A página do parceiro ([revendedor-pagina.html](revendedor-pagina.html)) usa a mesma rota e ganhou o mesmo campo; **qualquer cliente novo do `/api/auth/login` precisa mandar os dois campos**. Só o login: cadastro e "esqueci minha senha" não têm o desafio.
+
 ## Convenções
 
 - Idioma do código, comentários, mensagens de erro e UI: **português (pt-BR)**. Valores em BRL (`fmtMoneyBRL`).

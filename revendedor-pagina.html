@@ -98,6 +98,11 @@
               <input id="l-id" class="input" placeholder="E-mail ou CPF/CNPJ" autocomplete="username" required>
               <input id="l-senha" type="password" class="input" placeholder="Senha" autocomplete="current-password" required>
               <div id="erro-entrar" class="hidden text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2"></div>
+              <div class="flex items-center gap-2 text-sm text-gray-700">
+                <label for="l-captcha">🤖 Anti-robô: <b id="l-captcha-pergunta">…</b> =</label>
+                <input id="l-captcha" type="text" inputmode="numeric" maxlength="3" autocomplete="off" class="input" style="width:5rem;text-align:center" placeholder="?">
+                <button type="button" onclick="carregarCaptcha()" title="Outra conta" class="text-gray-400">↻</button>
+              </div>
               <button id="btn-entrar" class="cor-bg w-full text-white font-semibold py-3 rounded-xl hover:opacity-90">Entrar</button>
               <button type="button" onclick="mostrarEsqueci()" class="w-full text-sm cor-txt font-semibold">Esqueci minha senha</button>
             </form>
@@ -241,6 +246,15 @@ function destinoDepoisDoLogin(role) {
   if (voltar && (role === 'reseller') === voltar.startsWith('/painel/revendedor')) return voltar;
   return role === 'reseller' ? '/painel/revendedor' : '/painel/usuario';
 }
+let captchaToken = '';
+async function carregarCaptcha() {
+  const q = $('l-captcha-pergunta'), c = $('l-captcha');
+  if (!q) return;
+  c.value = ''; q.textContent = '…';
+  try { const d = await (await fetch('/api/auth/captcha', { cache: 'no-store' })).json(); captchaToken = d.token; q.textContent = d.pergunta; }
+  catch { captchaToken = ''; q.textContent = '?'; }
+}
+carregarCaptcha();
 async function entrar(e) {
   e.preventDefault();
   $('erro-entrar').classList.add('hidden');
@@ -248,7 +262,7 @@ async function entrar(e) {
   try {
     const r = await fetch('/api/auth/login', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: $('l-id').value, password: $('l-senha').value }),
+      body: JSON.stringify({ identifier: $('l-id').value, password: $('l-senha').value, captchaToken, captchaResposta: $('l-captcha').value }),
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || 'Não foi possível entrar.');
@@ -257,6 +271,7 @@ async function entrar(e) {
     $('erro-entrar').textContent = err.message;
     $('erro-entrar').classList.remove('hidden');
     $('btn-entrar').disabled = false; $('btn-entrar').textContent = 'Entrar';
+    carregarCaptcha();
   }
 }
 function mostrarEsqueci() {

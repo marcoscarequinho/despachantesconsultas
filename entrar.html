@@ -132,8 +132,16 @@
             </div>
           </div>
 
-          <!-- Esqueci senha -->
-          <div class="text-right mb-6">
+          <!-- Anti-robô (conta simples) + Esqueci senha -->
+          <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
+            <div class="flex items-center gap-2">
+              <label for="captcha-resposta" class="text-xs font-semibold text-gray-700 whitespace-nowrap">
+                🤖 Anti-robô: <span id="captcha-pergunta" class="font-bold text-gray-900">…</span> =
+              </label>
+              <input id="captcha-resposta" type="text" inputmode="numeric" maxlength="3" autocomplete="off"
+                class="w-16 px-2 py-1.5 border border-gray-300 rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-400" placeholder="?">
+              <button type="button" id="captcha-trocar" title="Outra conta" class="text-gray-400 hover:text-gray-600 text-base leading-none">↻</button>
+            </div>
             <button type="button" id="btn-forgot" class="text-xs text-blue-700 hover:text-orange-500 font-medium">
               Esqueci minha senha
             </button>
@@ -303,6 +311,12 @@
         showError('Preencha todos os campos.');
         return;
       }
+      const captchaResposta = document.getElementById('captcha-resposta').value.trim();
+      if (!captchaResposta) {
+        showError('Responda a conta do anti-robô.');
+        document.getElementById('captcha-resposta').focus();
+        return;
+      }
 
       setLoading(true);
       hideError();
@@ -311,12 +325,13 @@
         const res = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ identifier, password }),
+          body: JSON.stringify({ identifier, password, captchaToken, captchaResposta }),
         });
         const data = await res.json();
 
         if (!res.ok) {
           showError(data.error || 'Erro ao entrar. Tente novamente.');
+          carregarCaptcha();   // o desafio vale uma vez: sempre vem outro
           return;
         }
 
@@ -328,6 +343,21 @@
         setLoading(false);
       }
     });
+
+    // ── Anti-robô: conta simples vinda do servidor (token assinado, vale uma vez) ──
+    let captchaToken = '';
+    async function carregarCaptcha() {
+      const q = document.getElementById('captcha-pergunta');
+      document.getElementById('captcha-resposta').value = '';
+      q.textContent = '…';
+      try {
+        const r = await fetch('/api/auth/captcha', { cache: 'no-store' });
+        const d = await r.json();
+        captchaToken = d.token; q.textContent = d.pergunta;
+      } catch { captchaToken = ''; q.textContent = '?'; showError('Não consegui carregar o anti-robô. Atualize a página.'); }
+    }
+    document.getElementById('captcha-trocar').addEventListener('click', carregarCaptcha);
+    carregarCaptcha();
 
     function setLoading(on) {
       document.getElementById('btn-submit').disabled = on;

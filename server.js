@@ -3367,11 +3367,47 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
+// ── Anti-robô do login (24/11/2026, dono): conta simples, ex.: 4 + 2 = 6 ou 10 − 7 = 3 ──
+// Sem estado no banco: o token leva um nonce, a validade e um HMAC de nonce|resposta
+// (a resposta NÃO vai no token). Vale uma vez por instância (nonce usado é lembrado
+// até vencer) e por 5 minutos. A conferência é no servidor — o campo na tela é só UX.
+const CAPTCHA_VALIDADE_MS = 5 * 60 * 1000;
+const captchaUsados = new Map();   // nonce → expira (melhor esforço, por instância)
+const captchaHmac = (nonce, exp, resposta) =>
+  crypto.createHmac('sha256', JWT_SECRET).update(`captcha|${nonce}|${exp}|${resposta}`).digest('hex');
+function novoCaptcha() {
+  let a = crypto.randomInt(1, 11), b = crypto.randomInt(1, 11), op = crypto.randomInt(0, 2) ? '+' : '-';
+  if (op === '-' && b > a) [a, b] = [b, a];                 // nunca negativo
+  const resposta = op === '+' ? a + b : a - b;
+  const nonce = crypto.randomBytes(12).toString('hex'), exp = Date.now() + CAPTCHA_VALIDADE_MS;
+  return { pergunta: `${a} ${op === '-' ? '−' : '+'} ${b}`, token: `${nonce}.${exp}.${captchaHmac(nonce, exp, resposta)}` };
+}
+function conferirCaptcha(token, resposta) {
+  const [nonce, expTxt, mac] = String(token || '').split('.');
+  const exp = Number(expTxt);
+  const n = String(resposta ?? '').trim();
+  if (!nonce || !mac || !Number.isFinite(exp) || exp < Date.now() || !/^\d{1,3}$/.test(n)) return false;
+  // Cada token vale UMA tentativa (certa ou errada): chutar respostas no mesmo token não rende.
+  if (captchaUsados.has(nonce)) return false;
+  captchaUsados.set(nonce, exp);
+  const esperado = captchaHmac(nonce, exp, Number(n));
+  const ok = esperado.length === mac.length && crypto.timingSafeEqual(Buffer.from(esperado), Buffer.from(mac));
+  if (!ok) return false;
+  for (const [k, v] of captchaUsados) if (v < Date.now()) captchaUsados.delete(k);   // limpeza
+  return true;
+}
+app.get('/api/auth/captcha', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(novoCaptcha());
+});
+
 // ── POST /api/auth/login ──────────────────────────────────────────────────────
 app.post('/api/auth/login', async (req, res) => {
   const { identifier, password } = req.body;
   if (!identifier || !password)
     return res.status(400).json({ error: 'Preencha e-mail/CPF/CNPJ e senha.' });
+  if (!conferirCaptcha(req.body.captchaToken, req.body.captchaResposta))
+    return res.status(400).json({ error: 'Anti-robô: confira o resultado da conta e tente de novo.', captcha: true });
 
   const id = identifier.trim();
   const isEmail = id.includes('@');
