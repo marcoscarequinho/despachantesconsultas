@@ -2481,6 +2481,7 @@ function inputTypeLabel(t) {
     contrato_social:     'Entrada: Dados da empresa e dos sócios (constituição ou alteração)',
     dcr_cancelar_atpve:  'Entrada: Placa + Renavam + UF (só RJ) + Número do ATPV-e + DUDA + CPF/CNPJ do vendedor',
     dcr_atpve:           'Entrada: Veículo, vendedor, comprador e venda (+ anexos conforme a UF)',
+    atpve_crdd:          'Entrada: Veículo, vendedor, comprador e venda (só RJ)',
     dcr_cancelar_cve:    'Entrada: Placa + Protocolo e Renavam, ou DUDA',
     arrendamento_veicular: 'Entrada: Placa + CPF/CNPJ do arrendador e do arrendatário + condições',
     cancelar_venda:      'Entrada: ID + Protocolo + Motivo',
@@ -3971,6 +3972,28 @@ function iniciarAtpveNova(ufInicial) {
   });
 }
 
+// ── ATPVe Rio v2 (atpve_crdd): data com máscara, valor sem ponto e CEP do comprador ──
+function iniciarAtpveCrdd() {
+  document.querySelectorAll('[data-crdd-data]').forEach(el => el.addEventListener('input', function () {
+    const d = this.value.replace(/\D/g, '').slice(0, 8);
+    this.value = d.replace(/^(\d{2})(\d{1,2})?(\d{1,4})?$/, (_, a, b, c) => [a, b, c].filter(Boolean).join('/'));
+  }));
+  document.getElementById('f-crdd-valor_venda')?.addEventListener('keydown', e => { if (e.key === '.') e.preventDefault(); });
+  document.getElementById('f-crdd-comprador_cep')?.addEventListener('input', async function () {
+    this.value = this.value.replace(/\D/g, '').slice(0, 8);
+    if (this.value.length !== 8) return;
+    const st = document.getElementById('crdd-cep-status');
+    st.className = 'text-xs mt-1 text-gray-500'; st.textContent = '⏳ Buscando o CEP…';
+    try {
+      const r = await fetch('/api/cep/' + this.value); const d = await r.json();
+      if (!r.ok) { st.className = 'text-xs mt-1 text-red-600'; st.textContent = d.error || 'CEP não encontrado — preencha o endereço à mão.'; return; }
+      const set = (k, v) => { const el = document.getElementById('f-crdd-' + k); if (el && v) el.value = v; };
+      set('comprador_logradouro', d.logradouro); set('comprador_bairro', d.bairro); set('comprador_cidade', d.cidade_nome || d.cidade); set('comprador_uf', d.uf);
+      st.className = 'text-xs mt-1 text-green-700'; st.textContent = '✓ Endereço preenchido — confira e informe o número.';
+    } catch { st.className = 'text-xs mt-1 text-red-600'; st.textContent = 'Erro ao buscar o CEP — preencha o endereço à mão.'; }
+  });
+}
+
 // O código TOM do município (comprador_city_id) só vem por aqui.
 async function buscarCepAtpveNova(cep) {
   const st = document.getElementById('a2-cep-status');
@@ -4045,7 +4068,7 @@ function buildNovasList() {
   const svcs = allServices.filter(s => s.group === GRUPO_NOVAS);
   const subs = [...new Set(svcs.map(s => s.subgrupo || 'Outras'))]
     .sort((a, b) => (NOVAS_SUBGRUPOS.indexOf(a) + 1 || 99) - (NOVAS_SUBGRUPOS.indexOf(b) + 1 || 99));
-  wrap.innerHTML = subs.map(sub => sub === 'Emissão de ATPV-e' ? svcs.filter(s => s.subgrupo === sub).map(s => `
+  wrap.innerHTML = subs.map(sub => sub === 'Emissão de ATPV-e' ? svcs.filter(s => s.subgrupo === sub && s.precosUf).map(s => `
     <div class="bg-gradient-to-r from-amber-50 to-white border-2 border-amber-300 rounded-xl p-4 sm:p-5">
       <div class="flex items-center gap-4">
         <div class="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center text-2xl flex-shrink-0">${s.icon}</div>
@@ -4067,6 +4090,24 @@ function buildNovasList() {
             <span class="font-bold text-gray-800">${u}</span>
             <span class="price-tag text-sm">${fmtPrice(p)}</span>
           </button>`).join('')}
+      </div>
+    </div>`).join('') + svcs.filter(s => s.inputType === 'atpve_crdd').map(s => `
+    <div class="mt-3 bg-gradient-to-r from-amber-50 to-white border-2 border-amber-300 rounded-xl p-4 sm:p-5">
+      <div class="flex items-center gap-4">
+        <div class="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center text-2xl flex-shrink-0">${s.icon}</div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="font-bold text-gray-800">${escapeHtml(s.name)}</span>
+            <span class="svc-badge bg-orange-100 text-orange-700">⭐ Destaque</span>
+          </div>
+          <p class="text-xs text-gray-600 mt-1 leading-snug">Intenção de venda do <strong>Rio de Janeiro</strong> por outro caminho — use se a primeira não sair.
+            <strong>Só é cobrada quando o ATPV-e sai.</strong></p>
+        </div>
+        <button type="button" onclick="selectService(${JSON.stringify(s).replace(/"/g,"&quot;")})"
+          class="flex items-center gap-2 bg-white border border-amber-300 rounded-lg px-3 py-2 hover:border-amber-500 hover:bg-amber-50 transition-all flex-shrink-0">
+          <span class="font-bold text-gray-800 text-sm">RJ</span>
+          <span class="price-tag text-sm">${fmtPrice(s.price)}</span>
+        </button>
       </div>
     </div>`).join('') : `
     <div class="card">
@@ -4226,7 +4267,7 @@ function queryActionLabel(inputType) {
   if (inputType === 'recurso_multa') return 'Gerar Recurso';
   if (inputType === 'contrato_social') return 'Gerar Contrato Social';
   if (inputType === 'dcr_cancelar_atpve' || inputType === 'dcr_cancelar_cve') return 'Solicitar Cancelamento';
-  if (inputType === 'dcr_atpve') return 'Emitir ATPV-e';
+  if (inputType === 'dcr_atpve' || inputType === 'atpve_crdd') return 'Emitir ATPV-e';
   if (inputType === 'arrendamento_veicular') return 'Gerar Contrato de Arrendamento';
   return 'Realizar Consulta';
 }
@@ -4964,6 +5005,68 @@ function renderFormFields(inputType, svc) {
       </label>`;
     })(),
 
+    // ATPVe Rio v2 (portal CRDD-RJ) — ids f-crdd-<campo>; os campos são os do formulário do portal.
+    atpve_crdd: (() => {
+      const c = (id, label, ph = '', estrela = false, extra = '') => `<div>
+        <label class="label">${label}${estrela ? ' <span class="text-red-500">*</span>' : ''}</label>
+        <input id="f-crdd-${id}" type="text" placeholder="${ph}" class="input-field" ${extra}></div>`;
+      const titulo = t => `<div class="font-semibold text-blue-800 text-sm mt-4 mb-2 uppercase tracking-wide">${t}</div>`;
+      return `
+      <div class="bg-amber-50 border border-amber-300 text-amber-900 rounded-lg px-3 py-2 text-sm mb-3">
+        <strong>Atenção:</strong> isto não é uma consulta. Emitir registra oficialmente o veículo como vendido ao comprador informado no Detran-RJ — é um <strong>ato irreversível</strong>. Só veículos do Rio de Janeiro.
+      </div>
+      ${titulo('Veículo')}
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        ${c('placa', 'Placa', 'ABC1D23', true, 'maxlength="8" style="text-transform:uppercase"')}
+        ${c('renavam', 'Renavam', 'só números', true, 'inputmode="numeric" maxlength="11"')}
+        ${c('chassi', 'Chassi', 'até 17 caracteres', false, 'maxlength="17" style="text-transform:uppercase"')}
+        ${c('marca', 'Marca', 'VOLKSWAGEN')}
+        ${c('modelo', 'Modelo', 'GOL 1.6')}
+        ${c('cor', 'Cor', 'PRATA')}
+        ${c('ano_fabricacao', 'Ano de fabricação', '2022', true, 'inputmode="numeric" maxlength="4"')}
+        ${c('ano_modelo', 'Ano do modelo', '2023', true, 'inputmode="numeric" maxlength="4"')}
+        ${c('categoria', 'Categoria', 'PARTICULAR', true, 'maxlength="255" style="text-transform:uppercase"')}
+        ${c('numero_crv', 'Número do CRV', 'só números', true, 'inputmode="numeric" maxlength="25"')}
+      </div>
+
+      ${titulo('Vendedor (proprietário atual)')}
+      <div class="grid sm:grid-cols-2 gap-3">
+        ${c('vendedor_documento', 'CPF/CNPJ do vendedor', 'só números', true, 'inputmode="numeric" maxlength="18"')}
+        ${c('vendedor_nome', 'Nome do vendedor', '', true)}
+        ${c('vendedor_email', 'E-mail do vendedor', 'vendedor@email.com', true)}
+        ${c('vendedor_telefone', 'Telefone do vendedor', '21999999999', false, 'inputmode="numeric" maxlength="11"')}
+      </div>
+
+      ${titulo('Comprador')}
+      <div class="grid sm:grid-cols-2 gap-3">
+        ${c('comprador_documento', 'CPF/CNPJ do comprador', 'só números', true, 'inputmode="numeric" maxlength="18"')}
+        ${c('comprador_nome', 'Nome do comprador (pessoa física: até 43 caracteres)', '', true)}
+        ${c('comprador_email', 'E-mail do comprador', 'comprador@email.com', true)}
+        ${c('comprador_telefone', 'Telefone do comprador', '21999999999', false, 'inputmode="numeric" maxlength="11"')}
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
+        ${c('comprador_cep', 'CEP do comprador', '00000000', true, 'inputmode="numeric" maxlength="9"')}
+        <div class="col-span-1 sm:col-span-2">${c('comprador_logradouro', 'Rua', '', true)}</div>
+        ${c('comprador_numero', 'Número (até 5 caracteres)', '123 ou S/N', false, 'maxlength="5"')}
+        ${c('comprador_complemento', 'Complemento', 'Apto 101')}
+        ${c('comprador_bairro', 'Bairro', '', true)}
+        ${c('comprador_cidade', 'Cidade', '', true)}
+        ${c('comprador_uf', 'UF', '', true, 'maxlength="2" style="text-transform:uppercase"')}
+      </div>
+      <p id="crdd-cep-status" class="text-xs mt-1 text-gray-500">Digite o CEP para preencher rua, bairro e cidade.</p>
+
+      ${titulo('Venda')}
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        ${c('data_venda', 'Data da venda', 'dd/mm/aaaa', true, 'maxlength="10" inputmode="numeric" data-crdd-data="1"')}
+        ${c('valor_venda', 'Valor da venda (R$) — sem ponto', '45000,00', true, 'inputmode="decimal"')}
+      </div>
+
+      <label class="flex items-start gap-2 text-sm text-red-800 bg-red-50 border border-red-200 rounded p-2 mt-4">
+        <input type="checkbox" id="f-crdd-confirmar" class="mt-1">
+        <span>Conferi os dados e confirmo a emissão do ATPV-e. <strong>É um ato no Detran e não pode ser desfeito.</strong></span>
+      </label>`;
+    })(),
+
     // Cancelamentos (página ATPVe's e Consultas Novas). Campos que a API pede,
     // conferidos pelas recusas dela em 22/10/2026.
     // Só RJ (decisão do dono, 28/10/2026); desde 29/10/2026 as outras UFs não
@@ -5159,6 +5262,7 @@ function renderFormFields(inputType, svc) {
   if (inputType === 'assinatura_digital') assinaturaArquivo = { base64: '', nome: '' };
   if (inputType === 'contrato_social') csIniciar();
   if (inputType === 'dcr_atpve') iniciarAtpveNova();
+  if (inputType === 'atpve_crdd') iniciarAtpveCrdd();
   if (inputType === 'arrendamento_veicular') avIniciar();
   // Recurso de Multa: mesmo motivo — os arquivos lidos ficam em memória.
   if (inputType === 'recurso_multa') {
@@ -6181,7 +6285,7 @@ async function renderJsonOutcome(data) {
   }
   // Assinatura Digital: o pedido foi criado, mas o documento assinado só
   // existe depois que a pessoa assina — mesma ideia, tela própria.
-  if (data.pending && selectedSvc.inputType === 'dcr_atpve') {
+  if (data.pending && (selectedSvc.inputType === 'dcr_atpve' || selectedSvc.inputType === 'atpve_crdd')) {
     showDcrPendente(data, selectedSvc);
     await loadQueries();
     return;
@@ -6370,6 +6474,12 @@ function buildParams(inputType) {
                                          return { id: g('id') };
   if (inputType === 'pedido_id_get')     return { pedido_id: g('pedido_id') };
 
+  if (inputType === 'atpve_crdd') {
+    const p = {};
+    document.querySelectorAll('[id^="f-crdd-"]').forEach(el => { if (el.type !== 'checkbox') p[el.id.slice(7)] = el.value.trim(); });
+    p.confirmar = !!document.getElementById('f-crdd-confirmar')?.checked;
+    return p;
+  }
   if (inputType === 'dcr_atpve') {
     const p = {};
     document.querySelectorAll('[id^="f-a2-"]').forEach(el => { if (el.type !== 'file' && el.type !== 'checkbox') p[el.id.slice(5)] = el.value.trim(); });
@@ -6648,6 +6758,21 @@ function buildParams(inputType) {
 // para dar feedback imediato sem depender da resposta da API externa).
 function validateParams(inputType, p) {
   if (inputType === 'contrato_social') return csValidar(p);
+  if (inputType === 'atpve_crdd') {
+    const dg = v => String(v || '').replace(/\D/g, '');
+    if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(String(p.placa).toUpperCase().replace(/[^A-Z0-9]/g, ''))) return 'Placa inválida.';
+    if (dg(p.renavam).length < 9) return 'Renavam inválido.';
+    if (dg(p.ano_fabricacao).length !== 4 || dg(p.ano_modelo).length !== 4) return 'Informe os anos de fabricação e modelo.';
+    if (!p.categoria) return 'Informe a categoria do veículo.';
+    if (!dg(p.numero_crv)) return 'Informe o número do CRV.';
+    if (![11, 14].includes(dg(p.vendedor_documento).length) || ![11, 14].includes(dg(p.comprador_documento).length)) return 'Informe o CPF/CNPJ do vendedor e do comprador.';
+    if (!p.vendedor_nome || !p.comprador_nome) return 'Informe o nome do vendedor e do comprador.';
+    if (!p.vendedor_email || !p.comprador_email) return 'Informe o e-mail do vendedor e do comprador.';
+    if (dg(p.comprador_cep).length !== 8 || !p.comprador_logradouro || !p.comprador_bairro || !p.comprador_cidade || !p.comprador_uf) return 'Complete o endereço do comprador (digite o CEP).';
+    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(p.data_venda)) return 'Informe a data da venda (dd/mm/aaaa).';
+    if (valorVendaErro(p.valor_venda)) return valorVendaErro(p.valor_venda);
+    if (!p.confirmar) return 'Marque a confirmação da emissão.';
+  }
   if (inputType === 'dcr_atpve') {
     const dg = v => String(v || '').replace(/\D/g, '');
     if (!p.uf) return 'Escolha a UF de origem do veículo.';

@@ -316,6 +316,14 @@ const DATACRED_ATPVE_UFS = ['DF', 'GO', 'MG', 'MS', 'PR', 'RJ', 'RS', 'SP'];
 const DATACRED_ATPVE_PRECOS = { RJ: 47.84, DF: 192.00, GO: 79.84, MG: 47.84, MS: 47.84, PR: 79.84, RS: 79.84, SP: 38.90 };
 const DATACRED_ATPVE_UFS_ANEXO = new Set(['DF', 'GO', 'MS', 'PR', 'RS', 'SP']);
 const DATACRED_ATPVE_SERVICE_ID = 'dcr-atpve';
+// ATPVe Rio v2 (24/11/2026, pedido do dono, R$ 46,00 fixo): a Intenção de Venda do
+// portal do CRDD-RJ, acessada por login e senha (CRDD_EMAIL / CRDD_SENHA) — o
+// portal não tem API. Ver "ATPVe Rio v2" mais abaixo.
+const CRDD_ATPVE_SERVICE_ID = 'atpve-rio-v2';
+const CRDD_ATPVE_PRECO = 46.00;
+const CRDD_BASE_URL = 'https://portal.crddrj.com.br';
+// Sem o ATPV-e em 10 dias a pendência é encerrada sem cobrar e o dono avisado.
+const CRDD_PENDENTE_DIAS = 10;
 // Manual sem resposta em 15 dias: a pendência é encerrada sem cobrar e o dono avisado.
 const DATACRED_PENDENTE_DIAS = 15;
 const dataCredPreco = custo => Math.round(custo * DATACRED_MARKUP * 100) / 100;
@@ -1623,6 +1631,9 @@ const SERVICES = [
     ...(id === DATACRED_ATPVE_SERVICE_ID ? { precosUf: DATACRED_ATPVE_PRECOS } : {}),
     inputType: DATACRED_INPUT_TYPES[s.entrada], icon: s.icon, ...(s.uf ? { uf: s.uf } : {}),
   })),
+  // ATPVe Rio v2 (portal CRDD-RJ) — card ao lado da Emissão de ATPV-e, na mesma página.
+  { id:CRDD_ATPVE_SERVICE_ID, name:'ATPVe Rio v2', group:DATACRED_GRUPO, subgrupo:'Emissão de ATPV-e', basePrice:CRDD_ATPVE_PRECO, noMarkup:true, inputType:'atpve_crdd', icon:'📝', uf:'rj',
+    slowNote:'Intenção de venda / ATPV-e do Rio de Janeiro pelo portal do CRDD-RJ. É um ato no Detran e não pode ser desfeito. O ATPV-e chega no seu WhatsApp e no Histórico quando sair — só é cobrado quando o documento existir.' },
   { id:'recurso-multa-ia', name:'Recurso de Multa com IA', group:'Recurso de Multas', basePrice:80, noMarkup:true, inputType:'recurso_multa', icon:'⚖️',
     slowNote:'Envie a foto ou o PDF da notificação, confira os dados e responda as perguntas. A IA redige a defesa prévia ou o recurso à JARI em PDF, pronto para assinar e protocolar (leva cerca de 1 minuto). Só é cobrado se o PDF for gerado.' },
   // ── CRLV-e Rio de Janeiro (destaque no topo da Nova Consulta) ──
@@ -2347,6 +2358,21 @@ async function initDB() {
       user_id       INTEGER REFERENCES users(id) ON DELETE CASCADE,
       phone         TEXT,
       placa         TEXT,
+      created_at    TIMESTAMPTZ DEFAULT NOW(),
+      verificado_em TIMESTAMPTZ
+    );
+  `);
+  // ATPVe Rio v2 (portal CRDD-RJ) que ainda não tem o ATPV-e: o cron confere a
+  // listagem do portal e entrega/cobra ou cancela sem cobrar. ids_antes guarda
+  // os ids que a placa já tinha no portal, para reconhecer o pedido novo.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS crdd_pendentes (
+      query_id      INTEGER PRIMARY KEY REFERENCES queries(id) ON DELETE CASCADE,
+      user_id       INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      phone         TEXT,
+      placa         TEXT,
+      crdd_id       TEXT,
+      ids_antes     TEXT,
       created_at    TIMESTAMPTZ DEFAULT NOW(),
       verificado_em TIMESTAMPTZ
     );
@@ -10483,6 +10509,246 @@ function erroDataCred(resp) {
   return { status: resp.status === 404 ? 404 : 400, error: (msgDataCred(resp.json) || 'Consulta recusada.') + ' Nada foi cobrado.' };
 }
 
+// ── ATPVe Rio v2 (portal CRDD-RJ, por login e senha) ─────────────────────────
+// O portal (Laravel) não tem API: entra com e-mail e senha do despachante
+// (CRDD_EMAIL / CRDD_SENHA, só em variável de ambiente — o repositório é
+// público), mantém o cookie de sessão e usa as mesmas rotas que a tela dele:
+//   GET  /intencao-venda            página com o _token e o request_id do form
+//   POST /intencao-venda            cadastra (FormData; responde JSON)
+//   GET  /intencao-venda?placa=X    listagem JSON (id, passo_atual, atpve_url…)
+// O cadastro DEBITA o saldo pré-pago do CRDD (nosso custo, CRDD_ATPVE_CUSTO).
+// O cliente só é cobrado quando o ATPV-e existe (finalizePendingQuery); recusa
+// do Detran ou cancelamento = nada cobrado. Login: sucesso = 302 para /home;
+// senha errada = 302 de volta para /despachante com "Senha incorreta !".
+// Custo do ATPV-e no CRDD, para o controle do admin (informado pelo dono em
+// 24/11/2026). É gravado em result_data de cada pedido entregue.
+const CRDD_ATPVE_CUSTO = 26.90;
+let crddSessao = null;     // { cookies, em } — vive enquanto a instância viver
+let crddAvisoEm = 0;
+
+function avisarAdminCrdd(motivo) {
+  if (!ADMIN_PHONE || Date.now() - crddAvisoEm < 3600 * 1000) return;
+  crddAvisoEm = Date.now();
+  sendWhatsApp(ADMIN_PHONE, `⚠️ *ATPVe Rio v2 (portal CRDD)*\n${motivo}\n\nOs pedidos novos estão sendo recusados, sem cobrar o cliente, até isso ser resolvido.`).catch(() => {});
+}
+
+function crddGuardarCookies(sessao, resp) {
+  for (const c of (resp.headers.getSetCookie?.() || [])) {
+    const [kv] = c.split(';'); const i = kv.indexOf('=');
+    if (i > 0) sessao.cookies[kv.slice(0, i).trim()] = kv.slice(i + 1).trim();
+  }
+}
+const crddCookieHeader = s => Object.entries(s.cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+
+async function crddLogin() {
+  const email = process.env.CRDD_EMAIL, senha = process.env.CRDD_SENHA;
+  if (!email || !senha) { const e = new Error('CRDD_EMAIL/CRDD_SENHA não configurados'); e.semCredencial = true; throw e; }
+  const sessao = { cookies: {}, em: Date.now() };
+  let r = await fetch(`${CRDD_BASE_URL}/despachante`, { redirect: 'manual', signal: AbortSignal.timeout(20000) });
+  crddGuardarCookies(sessao, r);
+  const token = (await r.text()).match(/name="_token"[^>]*value="([^"]+)"/)?.[1];
+  if (!token) throw new Error('página de login do CRDD sem _token (o portal mudou?)');
+  r = await fetch(`${CRDD_BASE_URL}/despachante/login`, {
+    method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(20000),
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie: crddCookieHeader(sessao), referer: `${CRDD_BASE_URL}/despachante` },
+    body: new URLSearchParams({ _token: token, email, senha }),
+  });
+  crddGuardarCookies(sessao, r);
+  const loc = r.headers.get('location') || '';
+  if (r.status !== 302 || /\/despachante\/?$/.test(loc)) {
+    // A mensagem vem na página de volta (flash): diz se foi senha, bloqueio etc.
+    let msg = 'login recusado';
+    try {
+      const pg = await fetch(`${CRDD_BASE_URL}/despachante`, { redirect: 'manual', headers: { cookie: crddCookieHeader(sessao) }, signal: AbortSignal.timeout(20000) });
+      msg = (await pg.text()).match(/id="errorMessage"[\s\S]*?<\/svg>([\s\S]*?)<button/)?.[1]?.replace(/<[^>]+>|\s+/g, ' ').trim() || msg;
+    } catch {}
+    const e = new Error(`login no CRDD recusado: ${msg}`); e.loginRecusado = true; throw e;
+  }
+  return sessao;
+}
+
+// Requisição já logada. Sessão vencida (419/401 ou 302 para o login) refaz o
+// login uma vez. Devolve { status, headers, buf, json }.
+async function crddFetch(path, { method = 'GET', body = null, ajax = false, tentou = false, timeout = 30000 } = {}) {
+  if (!crddSessao) crddSessao = await crddLogin();
+  const url = /^https?:/.test(path) ? path.replace(/^http:\/\/portal\.crddrj\.com\.br/, CRDD_BASE_URL) : CRDD_BASE_URL + path;
+  const headers = { cookie: crddCookieHeader(crddSessao), referer: `${CRDD_BASE_URL}/intencao-venda` };
+  if (ajax) { headers.Accept = 'application/json'; headers['X-Requested-With'] = 'XMLHttpRequest'; }
+  const r = await fetch(url, { method, headers, body, redirect: 'manual', signal: AbortSignal.timeout(timeout) });
+  crddGuardarCookies(crddSessao, r);
+  const loc = r.headers.get('location') || '';
+  if ((r.status === 401 || (r.status === 302 && /\/(despachante|login)\/?$/.test(loc))) && !tentou) {
+    crddSessao = null;
+    return crddFetch(path, { method, body, ajax, tentou: true, timeout });
+  }
+  const buf = Buffer.from(await r.arrayBuffer());
+  let json = null;
+  try { json = JSON.parse(buf.toString('utf8')); } catch {}
+  return { status: r.status, headers: r.headers, buf, json };
+}
+
+// Texto do portal sem o prefixo "PORTAL:/DETRAN-RJ:" que ele põe nas recusas.
+const crddMsgPublica = v => String(v ?? '').trimStart().replace(/^(?:(?:PORTAL|TRANSFERE|DETRAN-RJ):\s*)+/i, '').trim();
+
+async function listarIntencoesCrdd(placa) {
+  const r = await crddFetch(`/intencao-venda?placa=${encodeURIComponent(placa)}`, { ajax: true });
+  if (r.status !== 200 || !Array.isArray(r.json?.data)) throw new Error(`listagem do CRDD: HTTP ${r.status}`);
+  return r.json.data;
+}
+
+// RENAVAM com dígito verificador — a mesma conta que o portal faz na tela.
+function renavamValidoCrdd(v) {
+  if (!/^\d{9,11}$/.test(v) || /^0+$/.test(v)) return false;
+  const r = v.padStart(11, '0'), pesos = [3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+  let soma = 0;
+  for (let i = 0; i < 10; i++) soma += Number(r[i]) * pesos[i];
+  const resto = soma % 11;
+  return (resto < 2 ? 0 : 11 - resto) === Number(r[10]);
+}
+
+// Campos do formulário do portal (names veiculo[…]/vendedor[…]/comprador[…]).
+// O portal põe tudo em maiúsculas e a data vai como AAAA-MM-DD.
+function montarCorpoAtpveCrdd(p = {}) {
+  const t = v => String(v ?? '').replace(/\s+/g, ' ').trim();
+  const d = v => String(v ?? '').replace(/\D/g, '');
+  const up = v => t(v).toLocaleUpperCase('pt-BR');
+  const doc = v => String(v ?? '').toUpperCase().replace(/[^0-9A-Z]/g, '');
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(t(p.data_venda));
+  return {
+    placa: up(p.placa).replace(/[^A-Z0-9]/g, ''), renavam: d(p.renavam),
+    chassi: up(p.chassi).replace(/[^A-Z0-9]/g, ''), marca: up(p.marca), modelo: up(p.modelo), cor: up(p.cor),
+    ano_fabricacao: d(p.ano_fabricacao), ano_modelo: d(p.ano_modelo), categoria: up(p.categoria), numero_crv: d(p.numero_crv),
+    valor_venda: t(p.valor_venda).replace(/^R\$\s*/i, ''), data_venda: m ? `${m[3]}-${m[2]}-${m[1]}` : '',
+    vendedor_documento: doc(p.vendedor_documento), vendedor_nome: up(p.vendedor_nome), vendedor_email: t(p.vendedor_email).toLowerCase(), vendedor_telefone: d(p.vendedor_telefone),
+    comprador_documento: doc(p.comprador_documento), comprador_nome: up(p.comprador_nome), comprador_email: t(p.comprador_email).toLowerCase(), comprador_telefone: d(p.comprador_telefone),
+    comprador_cep: d(p.comprador_cep), comprador_uf: up(p.comprador_uf), comprador_cidade: up(p.comprador_cidade), comprador_bairro: up(p.comprador_bairro),
+    comprador_logradouro: up(p.comprador_logradouro), comprador_numero: up(p.comprador_numero), comprador_complemento: up(p.comprador_complemento),
+  };
+}
+
+// O que o portal recusaria na própria tela (mesmas regras do cadastro.js dele),
+// para recusar aqui antes de gastar o saldo do CRDD. string de erro ou null.
+function validarAtpveCrdd(c) {
+  if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(c.placa)) return 'Placa inválida.';
+  if (!renavamValidoCrdd(c.renavam)) return 'Renavam inválido — confira o número no documento do veículo.';
+  const ano = new Date().getFullYear() + 1;
+  if (!(+c.ano_fabricacao >= 1900 && +c.ano_fabricacao <= ano) || !(+c.ano_modelo >= 1900 && +c.ano_modelo <= ano)) return 'Informe os anos de fabricação e modelo com quatro dígitos.';
+  if (c.chassi && !/^[A-Z0-9]{1,17}$/.test(c.chassi)) return 'Chassi inválido (até 17 letras ou números).';
+  if (!c.categoria) return 'Informe a categoria do veículo (ex.: PARTICULAR, ALUGUEL).';
+  if (!c.numero_crv || c.numero_crv.length > 25) return 'Informe o número do CRV (até 25 dígitos).';
+  if (valorVendaSemPonto(c.valor_venda) === null) return VALOR_VENDA_SEM_PONTO_MSG;
+  if (!c.data_venda || c.data_venda > new Date().toISOString().slice(0, 10)) return 'Informe a data da venda (dd/mm/aaaa), que não pode ser futura.';
+  for (const [quem, dc] of [['vendedor', c.vendedor_documento], ['comprador', c.comprador_documento]])
+    if (!(dc && (dc.length === 11 ? isValidDoc(dc) : dc.length === 14 && cnpjValido(dc)))) return `CPF/CNPJ do ${quem} inválido.`;
+  if (c.vendedor_documento === c.comprador_documento) return 'Vendedor e comprador não podem ter o mesmo documento.';
+  const nomeOk = n => /^[\p{L}\p{M}\s'.’-]+$/u.test(n);
+  if (c.vendedor_nome.length < 5 || (c.vendedor_documento.length === 11 && !nomeOk(c.vendedor_nome))) return 'Informe o nome completo do vendedor, só com letras.';
+  if (c.comprador_nome.length < 5 || (c.comprador_documento.length === 11 && !nomeOk(c.comprador_nome))) return 'Informe o nome completo do comprador, só com letras.';
+  if (c.comprador_documento.length === 11 && c.comprador_nome.length > 43) return 'O nome do comprador pessoa física deve ter no máximo 43 caracteres.';
+  const emailOk = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+  if (!emailOk(c.vendedor_email) || !emailOk(c.comprador_email)) return 'Informe o e-mail do vendedor e do comprador.';
+  for (const [quem, tel] of [['vendedor', c.vendedor_telefone], ['comprador', c.comprador_telefone]])
+    if (tel && !/^\d{10,11}$/.test(tel)) return `Telefone do ${quem} inválido — informe com DDD.`;
+  if (c.comprador_cep.length !== 8) return 'Informe o CEP do comprador (8 dígitos).';
+  if (!/^(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)$/.test(c.comprador_uf)) return 'Informe a UF do comprador.';
+  if (!c.comprador_cidade || !c.comprador_bairro || !c.comprador_logradouro) return 'Endereço do comprador incompleto (cidade, bairro e rua).';
+  if (c.comprador_numero.length > 5) return 'Número do endereço do comprador: até 5 caracteres.';
+  return null;
+}
+
+// Cadastra a intenção. A página traz o _token e o request_id (chave de
+// idempotência) da mesma sessão. 419 (token vencido) refaz tudo uma vez.
+async function cadastrarIntencaoCrdd(c) {
+  for (let tentativa = 0; tentativa < 2; tentativa++) {
+    const pag = await crddFetch('/intencao-venda');
+    const form = pag.buf.toString('utf8').match(/<form[^>]*id="iv-form"[\s\S]*?<\/form>/)?.[0] || '';
+    const token = form.match(/name="_token"[^>]*value="([^"]+)"/)?.[1];
+    const requestId = form.match(/name="request_id"[^>]*value="([^"]+)"/)?.[1];
+    if (!token || !requestId) throw new Error('formulário da intenção de venda do CRDD não encontrado (o portal mudou?)');
+    const fd = new FormData();
+    const add = (k, v) => fd.append(k, v ?? '');
+    add('_token', token); add('request_id', requestId); add('notificar_assinatura_partes', '0'); add('tokenAssinaturaDigital', 'N'); add('uf', 'RJ');
+    for (const k of ['placa', 'renavam', 'chassi', 'marca', 'modelo', 'cor', 'ano_fabricacao', 'ano_modelo', 'categoria', 'numero_crv', 'valor_venda', 'data_venda']) add(`veiculo[${k}]`, c[k]);
+    for (const k of ['documento', 'nome', 'email', 'telefone']) add(`vendedor[${k}]`, c[`vendedor_${k}`]);
+    add('vendedor[data_nascimento]', ''); for (const k of ['cep', 'uf', 'cidade', 'bairro', 'logradouro', 'numero', 'complemento']) add(`vendedor[endereco][${k}]`, '');
+    for (const k of ['documento', 'nome', 'email', 'telefone']) add(`comprador[${k}]`, c[`comprador_${k}`]);
+    for (const k of ['cep', 'uf', 'cidade', 'bairro', 'logradouro', 'numero', 'complemento']) add(`comprador[endereco][${k}]`, c[`comprador_${k}`]);
+    const r = await crddFetch('/intencao-venda', { method: 'POST', body: fd, ajax: true, tentou: true, timeout: 60000 });
+    if (r.status === 419 && tentativa === 0) { crddSessao = null; continue; }
+    return r;
+  }
+}
+
+// Situação de UMA intenção do portal: 'entregue' (PDF baixado, cobrado, enviado),
+// 'recusada', 'aguardando', 'expirada', 'ja-entregue' ou 'erro'. O pedido é o
+// primeiro id da placa que não existia antes do cadastro (ids_antes).
+async function entregarAtpveCrdd(pend) {
+  const itens = await listarIntencoesCrdd(pend.placa);
+  const antes = new Set(JSON.parse(pend.ids_antes || '[]').map(String));
+  let item = pend.crdd_id ? itens.find(i => String(i.id) === String(pend.crdd_id)) : null;
+  if (!item) {
+    const novos = itens.filter(i => !antes.has(String(i.id))).sort((a, b) => Number(b.id) - Number(a.id));
+    item = novos[0];
+    if (item) await pool.query('UPDATE crdd_pendentes SET crdd_id=$2 WHERE query_id=$1', [pend.query_id, String(item.id)]);
+  }
+  const encerrar = async (motivo, avisarAdmin) => {
+    await pool.query(`UPDATE queries SET status='cancelado', result_data=$2 WHERE id=$1 AND status='aguardando_pdf'`,
+      [pend.query_id, JSON.stringify({ crdd: pend.crdd_id || item?.id || null, placa: pend.placa, motivo })]);
+    await pool.query('DELETE FROM crdd_pendentes WHERE query_id=$1', [pend.query_id]);
+    if (pend.phone) await sendWhatsApp(pend.phone, `❌ *ATPV-e não emitido*\n🔤 Placa: ${pend.placa}\n\n${motivo}\n\nNada foi cobrado.`).catch(() => {});
+    if (avisarAdmin && ADMIN_PHONE) await sendWhatsApp(ADMIN_PHONE, `⚠️ ATPVe Rio v2: pedido #${pend.query_id} (${pend.placa}) encerrado sem cobrar — ${motivo}\nConfira a intenção no portal do CRDD (o saldo pré-pago pode ter sido debitado/estornado por lá).`).catch(() => {});
+  };
+  if (!item) {
+    // Sem aparecer na listagem depois de cadastrar: espera um pouco, depois desiste.
+    if (Date.now() - new Date(pend.created_at).getTime() > 3 * 3600 * 1000) { await encerrar('O pedido não apareceu no portal do CRDD.', true); return 'recusada'; }
+    await pool.query('UPDATE crdd_pendentes SET verificado_em=NOW() WHERE query_id=$1', [pend.query_id]);
+    return 'aguardando';
+  }
+  if (item.cancelado) { await encerrar(crddMsgPublica(item.recusa?.mensagem_detran) || 'A intenção de venda foi cancelada no portal.', true); return 'recusada'; }
+  // Recusa do Detran: o portal deixa o pedido em "correção pendente". A correção
+  // é feita lá; aqui o pedido encerra sem cobrar e o cliente reenvia corrigido.
+  if (item.passo_atual === 'correcao_pendente') {
+    await encerrar(`O Detran recusou: ${crddMsgPublica(item.recusa?.mensagem_detran) || 'dados divergentes'}. Corrija os dados e envie de novo.`, true);
+    return 'recusada';
+  }
+  const url = item.atpve_url || item.atpvd_url;
+  if (!url) {
+    if (Date.now() - new Date(pend.created_at).getTime() > CRDD_PENDENTE_DIAS * 86400000) {
+      await encerrar(`O ATPV-e não saiu em ${CRDD_PENDENTE_DIAS} dias.`, true); return 'expirada';
+    }
+    await pool.query('UPDATE crdd_pendentes SET verificado_em=NOW() WHERE query_id=$1', [pend.query_id]);
+    return 'aguardando';
+  }
+  const p = await crddFetch(url, { timeout: 60000 });
+  if (p.status !== 200 || p.buf.slice(0, 4).toString() !== '%PDF') { console.error(`[${CRDD_ATPVE_SERVICE_ID}] PDF ${item.id}: HTTP ${p.status}`); return 'erro'; }
+  const fechou = await finalizePendingQuery(pend.query_id, pend.user_id, `Consulta: ATPVe Rio v2 — ${pend.placa}`);
+  await pool.query('DELETE FROM crdd_pendentes WHERE query_id=$1', [pend.query_id]);
+  if (!fechou) return 'ja-entregue';
+  // Custo do CRDD congelado no pedido, para o controle do admin.
+  await pool.query(`UPDATE queries SET result_data=$2 WHERE id=$1`,
+    [pend.query_id, JSON.stringify({ crdd: String(item.id), placa: pend.placa, custo: CRDD_ATPVE_CUSTO })]).catch(() => {});
+  const token = crypto.randomBytes(32).toString('hex');
+  await pool.query(
+    `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+    [pend.query_id, pend.user_id, token, p.buf.toString('base64'), new Date(Date.now() + 7 * 24 * 3600 * 1000)]
+  ).catch(e => console.error('Erro ao salvar pdf_cache:', e.message));
+  if (pend.phone)
+    await sendWhatsAppPdf(pend.phone, p.buf, `${MC_ARQUIVO_PREFIXO}-atpve-${pend.placa}.pdf`, `✅ *ATPV-e emitido!*\n🔤 Placa: ${pend.placa}\n\nDocumento gerado pela MC Despachadoria.`).catch(() => {});
+  return 'entregue';
+}
+
+// Pega carona no cron de 15 em 15 minutos, como a DataCred.
+async function runCrddPendingCheck() {
+  const r = await pool.query('SELECT * FROM crdd_pendentes ORDER BY verificado_em NULLS FIRST LIMIT 30');
+  const resumo = {};
+  for (const pend of r.rows) {
+    let s;
+    try { s = await entregarAtpveCrdd(pend); } catch (e) { console.error(`[${CRDD_ATPVE_SERVICE_ID}] #${pend.query_id}:`, e.message); s = 'erro'; }
+    resumo[s] = (resumo[s] || 0) + 1;
+  }
+  return { verificadas: r.rows.length, ...resumo };
+}
+
 // ── Emissão de ATPV-e (DataCred) ─────────────────────────────────────────────
 // Corpo de POST /comunicados-venda (e da /procuracao, que usa os mesmos nomes).
 // Os 18 campos de toda UF mais os que cada documento/UF pede (doc, 5.2 e 5.3).
@@ -12693,6 +12959,73 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${nomeArq}"`);
       return res.send(pdfBuf);
+    }
+
+    // ── ATPVe Rio v2 (portal CRDD-RJ) — ato no Detran, assíncrono ─────────────
+    // Cadastra a intenção pelo portal (login e senha, ver cadastrarIntencaoCrdd)
+    // e espera até ~90 s; se não sair, fica 'aguardando_pdf' em crdd_pendentes
+    // e o cron entrega. Só cobra com o ATPV-e na mão (finalizePendingQuery).
+    if (serviceId === CRDD_ATPVE_SERVICE_ID) {
+      if (params?.confirmar !== true) return res.status(400).json({ error: 'Confirme que a emissão do ATPV-e é um ato irreversível.' });
+      const c = montarCorpoAtpveCrdd(params || {});
+      const erroVal = validarAtpveCrdd(c);
+      if (erroVal) return res.status(400).json({ error: erroVal });
+      const preco = await getUserServicePrice(userId, service);
+      const bloqueio = await bloqueioPagamentoConsulta(user.id, user, preco);
+      if (bloqueio) return res.status(bloqueio.status).json(bloqueio.body);
+      const paramsLog = { placa: c.placa, vendedor: maskDocDisplay(c.vendedor_documento), comprador: maskDocDisplay(c.comprador_documento) };
+      let antes, r;
+      try {
+        antes = (await listarIntencoesCrdd(c.placa)).map(i => String(i.id));
+        r = await cadastrarIntencaoCrdd(c);
+      } catch (e) {
+        console.error(`[${serviceId}]`, e.message);
+        if (e.semCredencial || e.loginRecusado) avisarAdminCrdd(`Não consegui entrar no portal: ${e.message}`);
+        return res.status(502).json({ error: 'A emissão não pôde ser enviada agora. Nada foi cobrado — tente de novo em instantes.' });
+      }
+      if (r.status < 200 || r.status >= 300) {
+        const j = r.json || {};
+        const msg = crddMsgPublica(j.message || Object.values(j.errors || {}).flat()[0] || '');
+        console.error(`[${serviceId}] cadastro recusado: HTTP ${r.status} ${msg.slice(0, 300)}`);
+        if (/saldo/i.test(msg)) { avisarAdminCrdd(`Saldo do CRDD insuficiente: ${msg}`); return res.status(503).json({ error: 'Serviço temporariamente indisponível. Nada foi cobrado — tente mais tarde.' }); }
+        if (r.status >= 500 || !msg) return res.status(502).json({ error: 'O portal não respondeu agora. Nada foi cobrado — confira o Histórico antes de tentar de novo.' });
+        return res.status(r.status === 422 ? 400 : 422).json({ error: `${msg} Nada foi cobrado.` });
+      }
+      const qRow = await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
+         VALUES ($1,$2,$3,$4,'aguardando_pdf',$5,'pdf',$6) RETURNING id`,
+        [userId, serviceId, service.name, JSON.stringify(paramsLog), preco, JSON.stringify({ placa: c.placa })]
+      );
+      const pend = { query_id: qRow.rows[0].id, user_id: userId, phone: user.phone || null, placa: c.placa, crdd_id: null, ids_antes: JSON.stringify(antes), created_at: new Date() };
+      await pool.query(
+        `INSERT INTO crdd_pendentes (query_id, user_id, phone, placa, ids_antes) VALUES ($1,$2,$3,$4,$5)`,
+        [pend.query_id, userId, pend.phone, pend.placa, pend.ids_antes]
+      );
+      await notifyAdminNewQuery(user, service, preco, paramsLog);
+      const t0 = Date.now();
+      while (Date.now() - t0 < 90000) {
+        await new Promise(rs => setTimeout(rs, 10000));
+        const atual = (await pool.query('SELECT * FROM crdd_pendentes WHERE query_id=$1', [pend.query_id])).rows[0] || pend;
+        const s = await entregarAtpveCrdd(atual).catch(e => { console.error(`[${serviceId}]`, e.message); return 'erro'; });
+        if (s === 'entregue' || s === 'ja-entregue') {
+          const pdf = await pool.query('SELECT pdf_data FROM pdf_cache WHERE query_id=$1 ORDER BY id DESC LIMIT 1', [pend.query_id]);
+          if (pdf.rows[0]) {
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename="${MC_ARQUIVO_PREFIXO}-atpve-${c.placa}.pdf"`);
+            return res.send(Buffer.from(pdf.rows[0].pdf_data, 'base64'));
+          }
+          break;
+        }
+        if (s === 'recusada') {
+          const q = await pool.query('SELECT result_data FROM queries WHERE id=$1', [pend.query_id]);
+          let rd = q.rows[0]?.result_data; try { if (typeof rd === 'string') rd = JSON.parse(rd); } catch {}
+          return res.status(422).json({ error: `${rd?.motivo || 'O Detran recusou a emissão.'} Nada foi cobrado.` });
+        }
+      }
+      return res.json({
+        success: true, pending: true, queryId: pend.query_id,
+        result: { mensagem: 'Pedido registrado e em processamento no Detran. O ATPV-e chega no seu WhatsApp e no Histórico quando sair — só é cobrado quando o documento existir.' },
+      });
     }
 
     // ── Emissão de ATPV-e (DataCred) — ato no Detran, assíncrono ──────────────
@@ -22317,6 +22650,27 @@ app.post('/api/admin/atpve-pedidos/:id/entregar-manual', requireAuth, requireSup
 // finalizePendingQuery) para o que o admin faz e o que o automático faz não
 // gerarem estado diferente. Cancelar aqui encerra só a NOSSA pendência — não
 // cancela nada no fornecedor (se o ATPV-e sair depois, eles cobram).
+// Controle do ATPVe Rio v2 (portal CRDD): quanto entrou, quanto custou (R$ 26,90
+// por ATPV-e entregue, ver CRDD_ATPVE_CUSTO) e o que ainda está pendente.
+// ?dias=N (padrão 30). Receita = o que o cliente pagou (queries.amount).
+app.get('/api/admin/atpve-rio-v2', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 30, 1), 365);
+    const r = await pool.query(
+      `SELECT status, COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS receita
+         FROM queries WHERE service_id=$1 AND created_at >= NOW() - ($2 || ' days')::interval GROUP BY status`,
+      [CRDD_ATPVE_SERVICE_ID, String(dias)]);
+    const por = Object.fromEntries(r.rows.map(x => [x.status, x]));
+    const entregues = por.success?.n || 0, receita = por.success?.receita || 0;
+    const custo = Math.round(entregues * CRDD_ATPVE_CUSTO * 100) / 100;
+    res.json({
+      dias, preco: CRDD_ATPVE_PRECO, custoUnitario: CRDD_ATPVE_CUSTO,
+      entregues, receita, custo, lucro: Math.round((receita - custo) * 100) / 100,
+      pendentes: por.aguardando_pdf?.n || 0, recusados: por.cancelado?.n || 0,
+    });
+  } catch (e) { console.error('Erro no controle do ATPVe Rio v2:', e.message); res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/admin/novas-pedidos', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
     await ensureDbReady();
@@ -23597,7 +23951,11 @@ app.get('/api/cron/crlv-agendado-status', async (req, res) => {
     let datacred = null;
     try { datacred = await runDataCredPendingCheck(); }
     catch (e) { console.error('Erro na checagem de ATPV-e DataCred:', e.message); datacred = { erro: e.message }; }
-    res.json({ success: true, ...result, vistocar, assinafy, datacred });
+    // ATPVe Rio v2 (portal CRDD) — mesma carona.
+    let crdd = null;
+    try { crdd = await runCrddPendingCheck(); }
+    catch (e) { console.error('Erro na checagem de ATPVe Rio v2:', e.message); crdd = { erro: e.message }; }
+    res.json({ success: true, ...result, vistocar, assinafy, datacred, crdd });
   } catch (err) {
     console.error('Erro no cron crlv-agendado-status:', err.message);
     res.status(500).json({ error: err.message });
