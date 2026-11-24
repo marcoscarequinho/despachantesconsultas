@@ -4078,7 +4078,7 @@ function buildNovasList() {
             <span class="svc-badge bg-orange-100 text-orange-700">⭐ Destaque</span>
           </div>
           <p class="text-xs text-gray-600 mt-1 leading-snug">Intenção de venda do <strong>Rio de Janeiro</strong>.
-            <strong>Só é cobrada quando o ATPV-e sai.</strong></p>
+            <strong>Pagamento na hora por PIX</strong> (QR Code ou copia e cola) — se o ATPV-e não sair, o valor é devolvido. <strong>Não usa o saldo da plataforma:</strong> para pagar com saldo, use a outra opção, a Emissão de ATPV-e.</p>
         </div>
         <button type="button"
           class="flex items-center gap-2 bg-white border border-amber-300 rounded-lg px-3 py-2 hover:border-amber-500 hover:bg-amber-50 transition-all flex-shrink-0">
@@ -4267,7 +4267,8 @@ function queryActionLabel(inputType) {
   if (inputType === 'recurso_multa') return 'Gerar Recurso';
   if (inputType === 'contrato_social') return 'Gerar Contrato Social';
   if (inputType === 'dcr_cancelar_atpve' || inputType === 'dcr_cancelar_cve') return 'Solicitar Cancelamento';
-  if (inputType === 'dcr_atpve' || inputType === 'atpve_crdd') return 'Emitir ATPV-e';
+  if (inputType === 'atpve_crdd') return 'Pagar por PIX e emitir ATPV-e';
+  if (inputType === 'dcr_atpve') return 'Emitir ATPV-e';
   if (inputType === 'arrendamento_veicular') return 'Gerar Contrato de Arrendamento';
   return 'Realizar Consulta';
 }
@@ -5013,7 +5014,7 @@ function renderFormFields(inputType, svc) {
       const titulo = t => `<div class="font-semibold text-blue-800 text-sm mt-4 mb-2 uppercase tracking-wide">${t}</div>`;
       return `
       <div class="bg-amber-50 border border-amber-300 text-amber-900 rounded-lg px-3 py-2 text-sm mb-3">
-        <strong>Atenção:</strong> isto não é uma consulta. Emitir registra oficialmente o veículo como vendido ao comprador informado no Detran-RJ — é um <strong>ato irreversível</strong>. Só veículos do Rio de Janeiro.
+        <strong>Atenção:</strong> isto não é uma consulta. Emitir registra oficialmente o veículo como vendido ao comprador informado no Detran-RJ — é um <strong>ato irreversível</strong>. Só veículos do Rio de Janeiro.<br><strong>Pagamento na hora por PIX:</strong> esta opção não usa o saldo da plataforma. Para pagar com saldo, use a outra opção de emissão de ATPV-e (Emissão de ATPV-e).
       </div>
       ${titulo('Veículo')}
       <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -6182,6 +6183,8 @@ async function submitQuery(e) {
   // saídas (saldo / recarga PIX / pagar só esta). Só a escolha "saldo" segue o
   // fluxo de sempre; "pix" gera o QR e roda a consulta depois do pagamento.
   if (selectedSvc.pagaPorConsulta && !editingComunicacaoVendaQueryId) {
+    // Só PIX na hora (ATPVe Rio v2): vai direto ao QR Code/copia e cola, sem pedir saldo.
+    if (selectedSvc.soPix) { await pagarSomenteEstaConsulta(selectedSvc, params); return; }
     const escolha = await escolherPagamentoConsulta(selectedSvc, params);
     if (!escolha) return;
     if (escolha === 'pix') { await pagarSomenteEstaConsulta(selectedSvc, params); return; }

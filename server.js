@@ -4915,7 +4915,7 @@ app.get('/api/services', requireAuth, async (req, res) => {
         // Serviço de grupo gratuito ignora o preço fixo por usuário (catalogPrice
         // devolve 0) — é a mesma regra aplicada na cobrança em getUserServicePrice.
         price: isFreeService(s) ? 0 : (overrides[s.id] ?? (tab && tab.vendaDe(s)) ?? catalogPrice(s)),
-      }).map(o => (o.price === null || !pagaAvulso || !pagueConsultaAtivo(o)) ? o : { ...o, pagaPorConsulta: true }),
+      }).map(o => (o.price === null || !(pagaAvulso || ehSoPix(o)) || !pagueConsultaAtivo(o)) ? o : { ...o, pagaPorConsulta: true, ...(ehSoPix(o) ? { soPix: true } : {}) }),
       consultaNaoLiberadaMsg: liberadas ? CONSULTA_FORA_DO_PARCEIRO_MSG : undefined,
     });
   } catch (err) {
@@ -13011,6 +13011,9 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
     // e espera até ~90 s; se não sair, fica 'aguardando_pdf' em crdd_pendentes
     // e o cron entrega. Só cobra com o ATPV-e na mão (finalizePendingQuery).
     if (serviceId === CRDD_ATPVE_SERVICE_ID) {
+      // Só roda depois do PIX pago (consulta-pix): nem saldo, nem fatura, nem chave de API.
+      if (!contextoBotWhats.getStore()?.painelPago)
+        return res.status(403).json({ error: 'O ATPVe Rio v2 é pago na hora por PIX (QR Code ou copia e cola). Para usar o saldo da plataforma, use a outra opção de emissão de ATPV-e (Emissão de ATPV-e).' });
       if (params?.confirmar !== true) return res.status(400).json({ error: 'Confirme que a emissão do ATPV-e é um ato irreversível.' });
       const c = montarCorpoAtpveCrdd(params || {});
       const erroVal = validarAtpveCrdd(c);
@@ -19624,8 +19627,12 @@ const PAGUE_CONSULTA_INICIO_GERAL = Date.UTC(2026, 11, 15, 3, 0, 0); // 15/12/20
 const PAGUE_CONSULTA_FASE_TESTE = new Set(['dcr-cancelamento-atpve', 'consultar-crlv-rj']);
 // CRLV-e agendado (entrega horas depois, a consulta fica pendente): fora do pagamento avulso (dono, 23/11/2026).
 const ehConsultaAgendada = svc => svc.group === 'CRLV-e Agendado' || /^(crlv-agendado-|dcr-crlv-ag-)/.test(svc.id) || svc.id === 'dc-crlve-rs-v2';
+// ATPVe Rio v2 (24/11/2026, dono): só por PIX na hora — nunca saldo nem fatura — e
+// desde já, sem esperar o 15/12/2026. Se o ATPV-e não sair, o PIX é devolvido.
+const ehSoPix = svc => svc?.id === CRDD_ATPVE_SERVICE_ID;
 function pagueConsultaAtivo(service) {
   if (!service || service.unavailable || service.soWhats || service.soWhatsAviso || isFreeService(service) || ehConsultaAgendada(service)) return false;
+  if (ehSoPix(service)) return true;
   if (Date.now() >= PAGUE_CONSULTA_INICIO_GERAL) return true;
   return PAGUE_CONSULTA_FASE_TESTE.has(service.id);
 }
@@ -19836,7 +19843,7 @@ app.post('/api/consulta-pix', requireAuth, bloquearApiPagamento, async (req, res
     const ur = await pool.query('SELECT id, name, email, active, pos_pago FROM users WHERE id=$1', [req.user.id]);
     const user = ur.rows[0];
     if (!user?.active) return res.status(403).json({ error: 'Conta bloqueada.' });
-    if (user.pos_pago) return res.status(400).json({ error: 'Sua conta é pós-paga: as consultas entram na fatura.' });
+    if (user.pos_pago && !ehSoPix(service)) return res.status(400).json({ error: 'Sua conta é pós-paga: as consultas entram na fatura.' });
 
     const valor = Math.round((await valorConsultaPix(user.id, service, params)) * 100) / 100;
     if (!(valor > 0)) return res.status(400).json({ error: 'Não foi possível calcular o valor desta consulta. Confira os dados (UF) e tente de novo.' });
