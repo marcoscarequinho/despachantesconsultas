@@ -10707,13 +10707,18 @@ function montarCorpoAtpveCrdd(p = {}) {
   const d = v => String(v ?? '').replace(/\D/g, '');
   const up = v => t(v).toLocaleUpperCase('pt-BR');
   const doc = v => String(v ?? '').toUpperCase().replace(/[^0-9A-Z]/g, '');
-  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(t(p.data_venda));
+  const iso = v => { const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(t(v)); return m ? `${m[3]}-${m[2]}-${m[1]}` : ''; };
   return {
     placa: up(p.placa).replace(/[^A-Z0-9]/g, ''), renavam: d(p.renavam),
     chassi: up(p.chassi).replace(/[^A-Z0-9]/g, ''), marca: up(p.marca), modelo: up(p.modelo), cor: up(p.cor),
     ano_fabricacao: d(p.ano_fabricacao), ano_modelo: d(p.ano_modelo), categoria: up(p.categoria), numero_crv: d(p.numero_crv),
-    valor_venda: t(p.valor_venda).replace(/^R\$\s*/i, ''), data_venda: m ? `${m[3]}-${m[2]}-${m[1]}` : '',
+    valor_venda: t(p.valor_venda).replace(/^R\$\s*/i, ''), data_venda: iso(p.data_venda),
     vendedor_documento: doc(p.vendedor_documento), vendedor_nome: up(p.vendedor_nome), vendedor_email: t(p.vendedor_email).toLowerCase(), vendedor_telefone: d(p.vendedor_telefone),
+    // Nascimento e endereço do vendedor são opcionais no portal. O nascimento
+    // digitado fora do formato vai como veio, para a validação recusar em vez de sumir.
+    vendedor_data_nascimento: iso(p.vendedor_data_nascimento) || t(p.vendedor_data_nascimento),
+    vendedor_cep: d(p.vendedor_cep), vendedor_uf: up(p.vendedor_uf), vendedor_cidade: up(p.vendedor_cidade), vendedor_bairro: up(p.vendedor_bairro),
+    vendedor_logradouro: up(p.vendedor_logradouro), vendedor_numero: up(p.vendedor_numero), vendedor_complemento: up(p.vendedor_complemento),
     comprador_documento: doc(p.comprador_documento), comprador_nome: up(p.comprador_nome), comprador_email: t(p.comprador_email).toLowerCase(), comprador_telefone: d(p.comprador_telefone),
     comprador_cep: d(p.comprador_cep), comprador_uf: up(p.comprador_uf), comprador_cidade: up(p.comprador_cidade), comprador_bairro: up(p.comprador_bairro),
     comprador_logradouro: up(p.comprador_logradouro), comprador_numero: up(p.comprador_numero), comprador_complemento: up(p.comprador_complemento),
@@ -10743,10 +10748,19 @@ function validarAtpveCrdd(c) {
   if (!emailOk(c.vendedor_email) || !emailOk(c.comprador_email)) return 'Informe o e-mail do vendedor e do comprador.';
   for (const [quem, tel] of [['vendedor', c.vendedor_telefone], ['comprador', c.comprador_telefone]])
     if (tel && !/^\d{10,11}$/.test(tel)) return `Telefone do ${quem} inválido — informe com DDD.`;
+  const nasc = c.vendedor_data_nascimento;
+  if (nasc && (!/^\d{4}-\d{2}-\d{2}$/.test(nasc) || isNaN(Date.parse(nasc)) || new Date(nasc).toISOString().slice(0, 10) !== nasc || nasc > new Date().toISOString().slice(0, 10)))
+    return 'Data de nascimento do vendedor inválida (dd/mm/aaaa).';
+  if (c.vendedor_cep && c.vendedor_cep.length !== 8) return 'CEP do vendedor inválido (8 dígitos).';
+  if (c.vendedor_uf && !/^(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)$/.test(c.vendedor_uf)) return 'UF do vendedor inválida.';
   if (c.comprador_cep.length !== 8) return 'Informe o CEP do comprador (8 dígitos).';
   if (!/^(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)$/.test(c.comprador_uf)) return 'Informe a UF do comprador.';
   if (!c.comprador_cidade || !c.comprador_bairro || !c.comprador_logradouro) return 'Endereço do comprador incompleto (cidade, bairro e rua).';
   if (c.comprador_numero.length > 5) return 'Número do endereço do comprador: até 5 caracteres.';
+  // Limites dos campos do próprio portal.
+  if (c.comprador_bairro.length > 20) return 'Bairro do comprador: até 20 caracteres (abrevie).';
+  if (c.comprador_logradouro.length > 27) return 'Rua do comprador: até 27 caracteres (abrevie).';
+  if (c.comprador_complemento.length > 11) return 'Complemento do comprador: até 11 caracteres (abrevie).';
   return null;
 }
 
@@ -10767,7 +10781,7 @@ async function cadastrarIntencaoCrdd(c) {
     add('_token', token); add('request_id', requestId); add('notificar_assinatura_partes', '0'); add('tokenAssinaturaDigital', 'N'); add('uf', 'RJ');
     for (const k of ['placa', 'renavam', 'chassi', 'marca', 'modelo', 'cor', 'ano_fabricacao', 'ano_modelo', 'categoria', 'numero_crv', 'valor_venda', 'data_venda']) add(`veiculo[${k}]`, c[k]);
     for (const k of ['documento', 'nome', 'email', 'telefone']) add(`vendedor[${k}]`, c[`vendedor_${k}`]);
-    add('vendedor[data_nascimento]', ''); for (const k of ['cep', 'uf', 'cidade', 'bairro', 'logradouro', 'numero', 'complemento']) add(`vendedor[endereco][${k}]`, '');
+    add('vendedor[data_nascimento]', c.vendedor_data_nascimento); for (const k of ['cep', 'uf', 'cidade', 'bairro', 'logradouro', 'numero', 'complemento']) add(`vendedor[endereco][${k}]`, c[`vendedor_${k}`]);
     for (const k of ['documento', 'nome', 'email', 'telefone']) add(`comprador[${k}]`, c[`comprador_${k}`]);
     for (const k of ['cep', 'uf', 'cidade', 'bairro', 'logradouro', 'numero', 'complemento']) add(`comprador[endereco][${k}]`, c[`comprador_${k}`]);
     const r = await crddFetch('/intencao-venda', { method: 'POST', body: fd, ajax: true, tentou: true, timeout: 60000 });

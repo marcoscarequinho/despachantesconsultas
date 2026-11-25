@@ -4026,16 +4026,18 @@ function iniciarAtpveCrdd() {
     this.value = d.replace(/^(\d{2})(\d{1,2})?(\d{1,4})?$/, (_, a, b, c) => [a, b, c].filter(Boolean).join('/'));
   }));
   document.getElementById('f-crdd-valor_venda')?.addEventListener('keydown', e => { if (e.key === '.') e.preventDefault(); });
-  document.getElementById('f-crdd-comprador_cep')?.addEventListener('input', async function () {
+  // O mesmo preenchimento por CEP nos dois endereços.
+  for (const [quem, status] of [['vendedor', 'crdd-cep-vendedor-status'], ['comprador', 'crdd-cep-status']])
+  document.getElementById(`f-crdd-${quem}_cep`)?.addEventListener('input', async function () {
     this.value = this.value.replace(/\D/g, '').slice(0, 8);
     if (this.value.length !== 8) return;
-    const st = document.getElementById('crdd-cep-status');
+    const st = document.getElementById(status);
     st.className = 'text-xs mt-1 text-gray-500'; st.textContent = '⏳ Buscando o CEP…';
     try {
       const r = await fetch('/api/cep/' + this.value); const d = await r.json();
       if (!r.ok) { st.className = 'text-xs mt-1 text-red-600'; st.textContent = d.error || 'CEP não encontrado — preencha o endereço à mão.'; return; }
       const set = (k, v) => { const el = document.getElementById('f-crdd-' + k); if (el && v) el.value = v; };
-      set('comprador_logradouro', d.logradouro); set('comprador_bairro', d.bairro); set('comprador_cidade', d.cidade_nome || d.cidade); set('comprador_uf', d.uf);
+      set(quem + '_logradouro', d.logradouro); set(quem + '_bairro', d.bairro); set(quem + '_cidade', d.cidade_nome || d.cidade); set(quem + '_uf', d.uf);
       st.className = 'text-xs mt-1 text-green-700'; st.textContent = '✓ Endereço preenchido — confira e informe o número.';
     } catch { st.className = 'text-xs mt-1 text-red-600'; st.textContent = 'Erro ao buscar o CEP — preencha o endereço à mão.'; }
   });
@@ -5084,7 +5086,19 @@ function renderFormFields(inputType, svc) {
         ${c('vendedor_nome', 'Nome do vendedor', '', true)}
         ${c('vendedor_email', 'E-mail do vendedor', 'vendedor@email.com', true)}
         ${c('vendedor_telefone', 'Telefone do vendedor', '21999999999', false, 'inputmode="numeric" maxlength="11"')}
+        ${c('vendedor_data_nascimento', 'Data de nascimento', 'dd/mm/aaaa', false, 'maxlength="10" inputmode="numeric" data-crdd-data="1"')}
       </div>
+      <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Endereço do vendedor (opcional)</div>
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        ${c('vendedor_cep', 'CEP', '00000000', false, 'inputmode="numeric" maxlength="9"')}
+        ${c('vendedor_uf', 'UF', '', false, 'maxlength="2" style="text-transform:uppercase"')}
+        ${c('vendedor_cidade', 'Cidade', '', false, 'maxlength="255"')}
+        ${c('vendedor_bairro', 'Bairro', '', false, 'maxlength="255"')}
+        <div class="col-span-1 sm:col-span-2">${c('vendedor_logradouro', 'Logradouro', '', false, 'maxlength="255"')}</div>
+        ${c('vendedor_numero', 'Número', '123 ou S/N', false, 'maxlength="255"')}
+        ${c('vendedor_complemento', 'Complemento', 'Apto 101', false, 'maxlength="255"')}
+      </div>
+      <p id="crdd-cep-vendedor-status" class="text-xs mt-1 text-gray-500">Digite o CEP para preencher logradouro, bairro e cidade.</p>
 
       ${titulo('Comprador')}
       <div class="grid sm:grid-cols-2 gap-3">
@@ -5095,10 +5109,10 @@ function renderFormFields(inputType, svc) {
       </div>
       <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
         ${c('comprador_cep', 'CEP do comprador', '00000000', true, 'inputmode="numeric" maxlength="9"')}
-        <div class="col-span-1 sm:col-span-2">${c('comprador_logradouro', 'Rua', '', true)}</div>
+        <div class="col-span-1 sm:col-span-2">${c('comprador_logradouro', 'Rua (até 27 caracteres)', '', true, 'maxlength="27"')}</div>
         ${c('comprador_numero', 'Número (até 5 caracteres)', '123 ou S/N', false, 'maxlength="5"')}
-        ${c('comprador_complemento', 'Complemento', 'Apto 101')}
-        ${c('comprador_bairro', 'Bairro', '', true)}
+        ${c('comprador_complemento', 'Complemento (até 11)', 'Apto 101', false, 'maxlength="11"')}
+        ${c('comprador_bairro', 'Bairro (até 20 caracteres)', '', true, 'maxlength="20"')}
         ${c('comprador_cidade', 'Cidade', '', true)}
         ${c('comprador_uf', 'UF', '', true, 'maxlength="2" style="text-transform:uppercase"')}
       </div>
@@ -6819,7 +6833,13 @@ function validateParams(inputType, p) {
     if (![11, 14].includes(dg(p.vendedor_documento).length) || ![11, 14].includes(dg(p.comprador_documento).length)) return 'Informe o CPF/CNPJ do vendedor e do comprador.';
     if (!p.vendedor_nome || !p.comprador_nome) return 'Informe o nome do vendedor e do comprador.';
     if (!p.vendedor_email || !p.comprador_email) return 'Informe o e-mail do vendedor e do comprador.';
+    if (p.vendedor_data_nascimento && !/^\d{2}\/\d{2}\/\d{4}$/.test(p.vendedor_data_nascimento)) return 'Data de nascimento do vendedor: use dd/mm/aaaa.';
+    if (p.vendedor_cep && dg(p.vendedor_cep).length !== 8) return 'CEP do vendedor inválido (8 dígitos).';
     if (dg(p.comprador_cep).length !== 8 || !p.comprador_logradouro || !p.comprador_bairro || !p.comprador_cidade || !p.comprador_uf) return 'Complete o endereço do comprador (digite o CEP).';
+    // O preenchimento pelo CEP não respeita o maxlength: confere o limite do portal antes do PIX.
+    if (p.comprador_logradouro.length > 27) return 'Rua do comprador: até 27 caracteres (abrevie).';
+    if (p.comprador_bairro.length > 20) return 'Bairro do comprador: até 20 caracteres (abrevie).';
+    if ((p.comprador_complemento || '').length > 11) return 'Complemento do comprador: até 11 caracteres (abrevie).';
     if (!/^\d{2}\/\d{2}\/\d{4}$/.test(p.data_venda)) return 'Informe a data da venda (dd/mm/aaaa).';
     if (valorVendaErro(p.valor_venda)) return valorVendaErro(p.valor_venda);
     if (!p.confirmar) return 'Marque a confirmação da emissão.';
