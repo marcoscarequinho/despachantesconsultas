@@ -2328,6 +2328,17 @@ async function initDB() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_contrato_social_buscas_user ON contrato_social_buscas(user_id, created_at);`);
+  // Buscas pelo CPF no ATPVe Rio v2 (limite diário CRDD_CPF_DIA).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS crdd_cpf_buscas (
+      id         SERIAL PRIMARY KEY,
+      user_id    INTEGER NOT NULL,
+      cpf_hash   TEXT NOT NULL,
+      parte      TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_crdd_cpf_buscas_user ON crdd_cpf_buscas(user_id, created_at);
+  `);
   // Buscas de placa e de CPF/CNPJ do Contrato de Arrendamento Veicular: grátis
   // para o cliente, mas cada uma custa (DirectData, Datacube, CNPJá) — só
   // existe para o limite diário (ARRENDAMENTO_BUSCAS_DIA).
@@ -20922,6 +20933,63 @@ app.get('/api/contrato-social/cnae/:codigo', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('[contrato-social] IBGE:', e.message);
     return res.status(502).json({ error: 'A tabela de CNAE do IBGE não respondeu. Tente de novo.' });
+  }
+});
+
+// ── ATPVe Rio v2: preenchimento automático pelo CPF ───────────────────────────
+// Nome e nascimento vêm dos "Dados Cadastrais do CPF" (/pessoas/cadastro);
+// telefone e e-mail não existem lá e vêm da Localização V3. São duas chamadas
+// separadas do painel porque a de cadastro leva ~30 s quando o órgão está fora.
+// Grátis para o cliente, mas cada chamada custa (e são consultas vendidas no
+// catálogo): limite de CPFs diferentes por dia e de repetições do mesmo CPF.
+const CRDD_CPF_DIA = 10;
+async function reservarBuscaCpfCrdd(userId, cpf, parte) {
+  const hash = crypto.createHmac('sha256', process.env.JWT_SECRET || 'crdd').update(cpf).digest('hex');
+  const { rows: [u] } = await pool.query(
+    `SELECT COUNT(DISTINCT cpf_hash)::int AS cpfs, COUNT(*) FILTER (WHERE cpf_hash=$2)::int AS deste,
+            COUNT(*) FILTER (WHERE cpf_hash=$2 AND parte=$3)::int AS repetidas
+       FROM crdd_cpf_buscas WHERE user_id=$1 AND created_at > NOW() - INTERVAL '1 day'`, [userId, hash, parte]);
+  if (u.repetidas >= 3 || (!u.deste && u.cpfs >= CRDD_CPF_DIA)) return false;
+  await pool.query('INSERT INTO crdd_cpf_buscas (user_id, cpf_hash, parte) VALUES ($1,$2,$3)', [userId, hash, parte]);
+  return true;
+}
+
+app.post('/api/atpve-rio/buscar-cpf', requireAuth, async (req, res) => {
+  const cpf = String(req.body?.cpf || '').replace(/\D/g, '');
+  const parte = req.body?.parte === 'contato' ? 'contato' : 'cadastro';
+  if (cpf.length !== 11 || !isValidDoc(cpf)) return res.status(400).json({ error: 'CPF inválido.' });
+  try {
+    const ur = await pool.query('SELECT active FROM users WHERE id=$1', [req.user.id]);
+    if (!ur.rows[0]?.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+    if (!await reservarBuscaCpfCrdd(req.user.id, cpf, parte))
+      return res.status(429).json({ error: 'Limite de buscas automáticas por CPF atingido hoje. Preencha à mão.' });
+    const apiRes = await fetch(`${DATACUBE_API_URL}/pessoas/${parte === 'contato' ? 'localizacao_v3' : 'cadastro'}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ auth_token: DATACUBE_TOKEN, cpf }).toString(), signal: AbortSignal.timeout(45000),
+    });
+    const j = await apiRes.json().catch(() => null);
+    if (!j?.status) {
+      console.error(`[atpve-rio/buscar-cpf] ${parte} HTTP ${apiRes.status}: ${String(j?.msg || j?.message || '').slice(0, 200)}`);
+      return res.status(502).json({ error: 'A base do CPF não respondeu agora.' });
+    }
+    const result = Array.isArray(j.result) ? (j.result[0] || {}) : (j.result || {});
+    if (parte === 'cadastro') {
+      const nasc = String(result.data_nascimento || '');
+      return res.json({ nome: valorUtilArr(result.nome).toUpperCase(), nascimento: /^\d{2}\/\d{2}\/\d{4}$/.test(nasc) ? nasc : '' });
+    }
+    const h = result.historicos || result;
+    const texto = x => String((x && typeof x === 'object') ? (x.nome || x.email || x.telefone || x.celular || x.numero || x.valor || '') : (x ?? '')).trim();
+    // Só telefone com DDD; celular (11 dígitos, 9 depois do DDD) vem primeiro.
+    const fones = [...(h.celulares || []), ...(h.telefones || [])].map(x => texto(x).replace(/\D/g, '')).filter(t => /^\d{10,11}$/.test(t));
+    const email = (h.emails || []).map(x => texto(x).toLowerCase()).find(e => e.length <= 60 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+    return res.json({
+      nome: valorUtilArr(texto((h.nomes || [])[0])).toUpperCase(),
+      telefone: fones.find(t => t.length === 11 && t[2] === '9') || fones[0] || '',
+      email: email || '',
+    });
+  } catch (e) {
+    console.error('[atpve-rio/buscar-cpf]', e.message);
+    return res.status(502).json({ error: 'A base do CPF não respondeu agora.' });
   }
 });
 

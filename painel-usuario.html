@@ -4019,12 +4019,63 @@ function iniciarAtpveNova(ufInicial) {
   });
 }
 
+// ── ATPVe Rio v2: preenche nome, nascimento, telefone e e-mail ao terminar o CPF ──
+function cpfValidoCrdd(c) {
+  if (!/^\d{11}$/.test(c) || /^(\d)\1{10}$/.test(c)) return false;
+  const dv = n => { let s = 0; for (let i = 0; i < n; i++) s += Number(c[i]) * (n + 1 - i); return (s * 10) % 11 % 10; };
+  return dv(9) === Number(c[9]) && dv(10) === Number(c[10]);
+}
+function iniciarCpfAtpveCrdd(quem) {
+  const doc = document.getElementById(`f-crdd-${quem}_documento`);
+  const st = document.getElementById(`crdd-cpf-${quem}-status`);
+  if (!doc || !st) return;
+  const campo = k => document.getElementById(`f-crdd-${quem}_${k}`);   // o comprador não tem nascimento
+  const campos = ['nome', 'data_nascimento', 'telefone', 'email'];
+  // O que o cliente digitou não é sobrescrito; o que veio de um CPF anterior sai.
+  campos.forEach(k => campo(k)?.addEventListener('input', e => { delete e.target.dataset.auto; }));
+  const preencher = (k, v) => { const el = campo(k); if (el && v && (!el.value || el.dataset.auto)) { el.value = v; el.dataset.auto = '1'; } };
+  const aviso = (cor, t) => { st.className = 'text-xs mt-1 ' + cor; st.textContent = t; };
+  let ultimo = '', espera;
+  doc.addEventListener('input', () => {
+    clearTimeout(espera);
+    const cpf = doc.value.replace(/\D/g, '');
+    if (cpf === ultimo) return;
+    if (ultimo) campos.forEach(k => { const el = campo(k); if (el?.dataset.auto) { el.value = ''; delete el.dataset.auto; } });
+    ultimo = ''; aviso('text-gray-500', '');
+    if (cpf.length !== 11 || !cpfValidoCrdd(cpf)) return;
+    // Pequena espera: quem está digitando um CNPJ passa por 11 dígitos.
+    espera = setTimeout(async () => {
+      ultimo = cpf;
+      aviso('text-gray-500', '⏳ Buscando os dados do CPF…');
+      const atual = () => doc.isConnected && doc.value.replace(/\D/g, '') === cpf;
+      let doCadastro = false, achou = false, erro = '';
+      const buscar = async parte => {
+        try {
+          const r = await fetch('/api/atpve-rio/buscar-cpf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cpf, parte }) });
+          const d = await r.json().catch(() => ({}));
+          if (!atual()) return;
+          if (!r.ok) { erro = d.error || ''; return; }
+          achou = achou || !!(d.nome || d.telefone || d.email);
+          if (parte === 'cadastro') { if (d.nome) { const el = campo('nome'); if (el?.dataset.auto) el.value = ''; preencher('nome', d.nome); doCadastro = true; } preencher('data_nascimento', d.nascimento); }
+          else { if (!doCadastro) preencher('nome', d.nome); preencher('telefone', d.telefone); preencher('email', d.email); }
+        } catch { erro = 'Erro de conexão ao buscar o CPF.'; }
+      };
+      await Promise.all([buscar('cadastro'), buscar('contato')]);
+      if (!atual()) return;
+      if (!achou) aviso('text-red-600', erro || 'Não encontramos dados desse CPF — preencha à mão.');
+      else aviso(erro ? 'text-amber-700' : 'text-green-700', erro ? 'Parte dos dados não veio — complete o que faltar.' : '✓ Dados preenchidos — confira antes de emitir.');
+    }, 600);
+  });
+}
+
 // ── ATPVe Rio v2 (atpve_crdd): data com máscara, valor sem ponto e CEP do comprador ──
 function iniciarAtpveCrdd() {
   document.querySelectorAll('[data-crdd-data]').forEach(el => el.addEventListener('input', function () {
     const d = this.value.replace(/\D/g, '').slice(0, 8);
     this.value = d.replace(/^(\d{2})(\d{1,2})?(\d{1,4})?$/, (_, a, b, c) => [a, b, c].filter(Boolean).join('/'));
   }));
+  iniciarCpfAtpveCrdd('vendedor');
+  iniciarCpfAtpveCrdd('comprador');
   document.getElementById('f-crdd-valor_venda')?.addEventListener('keydown', e => { if (e.key === '.') e.preventDefault(); });
   // O mesmo preenchimento por CEP nos dois endereços.
   for (const [quem, status] of [['vendedor', 'crdd-cep-vendedor-status'], ['comprador', 'crdd-cep-status']])
@@ -5088,6 +5139,7 @@ function renderFormFields(inputType, svc) {
         ${c('vendedor_telefone', 'Telefone do vendedor', '21999999999', false, 'inputmode="numeric" maxlength="11"')}
         ${c('vendedor_data_nascimento', 'Data de nascimento', 'dd/mm/aaaa', false, 'maxlength="10" inputmode="numeric" data-crdd-data="1"')}
       </div>
+      <p id="crdd-cpf-vendedor-status" class="text-xs mt-1 text-gray-500"></p>
       <div class="font-semibold text-gray-700 text-sm mt-3 mb-2">Endereço do vendedor (opcional)</div>
       <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
         ${c('vendedor_cep', 'CEP', '00000000', false, 'inputmode="numeric" maxlength="9"')}
@@ -5107,6 +5159,7 @@ function renderFormFields(inputType, svc) {
         ${c('comprador_email', 'E-mail do comprador', 'comprador@email.com', true)}
         ${c('comprador_telefone', 'Telefone do comprador', '21999999999', false, 'inputmode="numeric" maxlength="11"')}
       </div>
+      <p id="crdd-cpf-comprador-status" class="text-xs mt-1 text-gray-500"></p>
       <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
         ${c('comprador_cep', 'CEP do comprador', '00000000', true, 'inputmode="numeric" maxlength="9"')}
         <div class="col-span-1 sm:col-span-2">${c('comprador_logradouro', 'Rua (até 27 caracteres)', '', true, 'maxlength="27"')}</div>
@@ -6832,6 +6885,7 @@ function validateParams(inputType, p) {
     if (!dg(p.numero_crv)) return 'Informe o número do CRV.';
     if (![11, 14].includes(dg(p.vendedor_documento).length) || ![11, 14].includes(dg(p.comprador_documento).length)) return 'Informe o CPF/CNPJ do vendedor e do comprador.';
     if (!p.vendedor_nome || !p.comprador_nome) return 'Informe o nome do vendedor e do comprador.';
+    if (dg(p.comprador_documento).length === 11 && p.comprador_nome.length > 43) return 'Nome do comprador pessoa física: até 43 caracteres (abrevie).';
     if (!p.vendedor_email || !p.comprador_email) return 'Informe o e-mail do vendedor e do comprador.';
     if (p.vendedor_data_nascimento && !/^\d{2}\/\d{2}\/\d{4}$/.test(p.vendedor_data_nascimento)) return 'Data de nascimento do vendedor: use dd/mm/aaaa.';
     if (p.vendedor_cep && dg(p.vendedor_cep).length !== 8) return 'CEP do vendedor inválido (8 dígitos).';
