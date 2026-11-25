@@ -10638,6 +10638,24 @@ async function crddFetch(path, { method = 'GET', body = null, ajax = false, tent
 // Texto do portal sem o prefixo "PORTAL:/DETRAN-RJ:" que ele põe nas recusas.
 const crddMsgPublica = v => String(v ?? '').trimStart().replace(/^(?:(?:PORTAL|TRANSFERE|DETRAN-RJ):\s*)+/i, '').trim();
 
+// A recusa do cadastro vem como { message: "Revise os campos destacados…",
+// errors: { "veiculo.numero_crv": ["…"] } }: o motivo de verdade está em errors
+// (na tela do portal é o texto embaixo de cada campo). Sem isso o cliente só
+// recebia a frase genérica e repetia o mesmo erro, pagando outro PIX.
+function motivoRecusaCrdd(j = {}) {
+  const campos = Object.entries(j.errors || {}).map(([nome, msgs]) => {
+    const partes = nome.split('.');
+    const campo = partes[partes.length - 1].replace(/_/g, ' ');
+    const de = partes.length > 1 ? ` (${partes[0]})` : '';
+    const msg = crddMsgPublica([].concat(msgs)[0]);
+    return msg ? `${campo}${de}: ${msg}` : '';
+  }).filter(Boolean);
+  const geral = crddMsgPublica(j.message);
+  if (!campos.length) return geral;
+  const texto = campos.join(' | ');
+  return texto.length > 600 ? `${texto.slice(0, 597)}…` : texto;
+}
+
 async function listarIntencoesCrdd(placa) {
   const r = await crddFetch(`/intencao-venda?placa=${encodeURIComponent(placa)}`, { ajax: true });
   if (r.status !== 200 || !Array.isArray(r.json?.data)) throw new Error(`listagem do CRDD: HTTP ${r.status}`);
@@ -10774,7 +10792,8 @@ async function entregarAtpveCrdd(pend) {
     await pool.query(`UPDATE queries SET status='cancelado', result_data=$2 WHERE id=$1 AND status='aguardando_pdf'`,
       [pend.query_id, JSON.stringify({ crdd: pend.crdd_id || item?.id || null, placa: pend.placa, motivo })]);
     await pool.query('DELETE FROM crdd_pendentes WHERE query_id=$1', [pend.query_id]);
-    if (pend.phone) await sendWhatsApp(pend.phone, `❌ *ATPV-e não emitido*\n🔤 Placa: ${pend.placa}\n\n${motivo}\n\nNada foi cobrado.`).catch(() => {});
+    // O cliente é avisado uma vez só, com o motivo, por devolverConsultaPix (todo
+    // pedido deste serviço é pago por PIX), que sabe dizer se o PIX voltou.
     if (avisarAdmin && ADMIN_PHONE) await sendWhatsApp(ADMIN_PHONE, `⚠️ ATPVe Rio v2: pedido #${pend.query_id} (${pend.placa}) encerrado sem cobrar — ${motivo}\nConfira a intenção no portal do CRDD (o saldo pré-pago pode ter sido debitado/estornado por lá).`).catch(() => {});
   };
   if (!item) {
@@ -13070,8 +13089,8 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
       }
       if (r.status < 200 || r.status >= 300) {
         const j = r.json || {};
-        const msg = crddMsgPublica(j.message || Object.values(j.errors || {}).flat()[0] || '');
-        console.error(`[${serviceId}] cadastro recusado: HTTP ${r.status} ${msg.slice(0, 300)}`);
+        const msg = motivoRecusaCrdd(j);
+        console.error(`[${serviceId}] cadastro recusado: HTTP ${r.status} ${msg.slice(0, 600)}`);
         if (/saldo/i.test(msg)) { avisarAdminCrdd(`Saldo do CRDD insuficiente: ${msg}`); return res.status(503).json({ error: 'Serviço temporariamente indisponível. Nada foi cobrado — tente mais tarde.' }); }
         if (r.status >= 500 || !msg) return res.status(502).json({ error: 'O portal não respondeu agora. Nada foi cobrado — confira o Histórico antes de tentar de novo.' });
         return res.status(r.status === 422 ? 400 : 422).json({ error: `${msg} Nada foi cobrado.` });
@@ -19711,9 +19730,9 @@ function respostaCapturada() {
 // Avisa o cliente no WhatsApp quando o resultado sai sem ele olhando a tela
 // (fechou o pop-up/aba antes do fim). Com o navegador acompanhando (poll nos
 // últimos 30 s) a própria tela já mostra.
-async function avisarConsultaPix(ped, texto) {
+async function avisarConsultaPix(ped, texto, sempre = false) {
   const visto = ped.visto_em ? Date.now() - new Date(ped.visto_em).getTime() : Infinity;
-  if (visto < 30000) return;
+  if (!sempre && visto < 30000) return;
   const u = (await pool.query('SELECT phone FROM users WHERE id=$1', [ped.user_id])).rows[0];
   if (u?.phone) await sendWhatsApp(u.phone, texto).catch(() => {});
 }
@@ -19729,9 +19748,14 @@ async function devolverConsultaPix(ped, motivo, queryId = null) {
   const nome = SERVICES.find(x => x.id === ped.service_id)?.name || 'Consulta';
   if (!devolvido && ADMIN_PHONE)
     await sendWhatsApp(ADMIN_PHONE, `🚨 *PIX de consulta NÃO devolvido*\nPedido avulso #${ped.id} — ${nome}, ${fmtMoneyBRL(ped.valor)} (pagamento MP ${ped.gateway_id}).\nMotivo: ${motivo}\nDevolva pelo painel do Mercado Pago.`, { marca: false }).catch(() => {});
-  await avisarConsultaPix(ped, `❌ *${nome}* não saiu: ${motivo}\n\n` + (devolvido
+  const placa = String(ped.params?.placa || '').toUpperCase();
+  const porque = String(motivo).replace(/\s*Nada foi cobrado\.?\s*$/i, '');
+  const aviso = `❌ *${nome}* não saiu${placa ? `\n🔤 Placa: ${placa}` : ''}\n\n*Motivo:* ${porque}\n\n` + (devolvido
     ? `O PIX de ${fmtMoneyBRL(ped.valor)} foi devolvido automaticamente.`
-    : `Não consegui devolver o PIX automaticamente — fale com o suporte informando o pedido avulso #${ped.id}.`));
+    : `Não consegui devolver o PIX automaticamente — fale com o suporte informando o pedido avulso #${ped.id}.`);
+  // ATPVe Rio v2: o motivo vai SEMPRE para o WhatsApp do cliente (dono,
+  // 25/11/2026), mesmo com a tela aberta — é o que ele usa para corrigir.
+  await avisarConsultaPix(ped, aviso, ped.service_id === CRDD_ATPVE_SERVICE_ID);
   return devolvido;
 }
 
@@ -19775,7 +19799,9 @@ async function processarPagamentoConsultaPix(gatewayId) {
 
   if (saida.status >= 400 || bot.estornou) {
     const msg = (saida.json && typeof saida.json === 'object' ? saida.json.error : null) || 'A consulta não saiu.';
-    return void await devolverConsultaPix(ped, erroParaWhats(msg), q?.id || null);
+    // No ATPVe Rio v2 o texto é nosso e a lista de campos pode passar de 400
+    // caracteres: erroParaWhats a trocaria pelo aviso genérico.
+    return void await devolverConsultaPix(ped, ped.service_id === CRDD_ATPVE_SERVICE_ID ? msg : erroParaWhats(msg), q?.id || null);
   }
   if (q?.transaction_id)
     await pool.query(`UPDATE transactions SET description = description || ' (pago por PIX — só esta consulta)' WHERE id=$1`, [q.transaction_id]);
@@ -19829,7 +19855,7 @@ async function conferirConsultaPixPedidos() {
 
   // Pedido que ficou processando (aguardando_pdf): saiu → concluído; recusado → devolve.
   const agu = await pool.query(
-    `SELECT c.*, q.status AS q_status, q.transaction_id FROM consulta_pix_pedidos c JOIN queries q ON q.id = c.query_id
+    `SELECT c.*, q.status AS q_status, q.transaction_id, q.result_data AS q_result FROM consulta_pix_pedidos c JOIN queries q ON q.id = c.query_id
       WHERE c.status='AGUARDANDO' AND q.status <> 'aguardando_pdf'`);
   for (const w of agu.rows) {
     if (w.q_status === 'success') {
@@ -19840,7 +19866,9 @@ async function conferirConsultaPixPedidos() {
       await pool.query('UPDATE queries SET transaction_id=NULL WHERE id=$1', [w.query_id]);
       await pool.query('DELETE FROM transactions WHERE id=$1', [w.transaction_id]);
     }
-    await devolverConsultaPix(w, 'Não saiu no fornecedor.');
+    // Motivo gravado no pedido encerrado (recusa do Detran, cancelamento…).
+    let rd = w.q_result; try { if (typeof rd === 'string') rd = JSON.parse(rd); } catch {}
+    await devolverConsultaPix(w, rd?.motivo || 'Não saiu no fornecedor.');
   }
 
   // Execução que morreu no meio (instância derrubada): passou de 30 min pago e
