@@ -1418,6 +1418,20 @@
     </div>
   </div>
 </div>
+<!-- EMISSÃO DE ATPV-e DO RIO: oferece a ATPVe Rio v2 antes do formulário -->
+<div id="modal-atpve-rio" class="fixed inset-0 z-[9998] hidden items-center justify-center p-4" style="background:rgba(0,0,0,.6);">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden max-h-[92vh] overflow-y-auto">
+    <div class="px-5 pt-5 pb-4">
+      <div class="text-base font-bold text-gray-800">Emissão de ATPV-e — Rio de Janeiro</div>
+      <p class="text-sm text-gray-700 mt-2">Você também tem a opção de gerar a ATPVe pelo card <strong>"ATPVe Rio v2"</strong>: não usa o saldo da plataforma, é um <strong>PIX gerado para pagamento imediato</strong> e, se não sair, o valor é estornado.</p>
+      <p class="text-sm text-gray-700 mt-2">Quer continuar ou optar pela opção <strong>"ATPVe Rio v2"</strong>?</p>
+    </div>
+    <div class="px-5 py-3 border-t border-gray-100 flex flex-col sm:flex-row sm:justify-end gap-2">
+      <button type="button" onclick="escolherAtpveRio(false)" class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded font-medium">Continuar</button>
+      <button type="button" onclick="escolherAtpveRio(true)" class="text-sm bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded font-medium">Optar pela ATPVe Rio v2</button>
+    </div>
+  </div>
+</div>
 <!-- COMO PAGAR A CONSULTA (saldo / recarga / só esta consulta por PIX) -->
 <div id="modal-pague" class="fixed inset-0 z-[9998] hidden items-center justify-center p-4" style="background:rgba(0,0,0,.6);">
   <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden max-h-[92vh] overflow-y-auto">
@@ -3934,8 +3948,38 @@ function atualizarFormAtpveNova() {
 function abrirAtpveNovaComUf(uf) {
   const svc = allServices.find(s => s.id === 'dcr-atpve');
   if (!svc) return;
-  selectService(svc);
-  iniciarAtpveNovaUf(uf);
+  const abrir = () => {
+    selectService(svc);
+    iniciarAtpveNovaUf(uf);
+    document.getElementById('query-form-wrap')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  // Rio: antes do formulário, oferece a ATPVe Rio v2.
+  if (uf === 'RJ' && avisoAtpveRio(abrir)) return;
+  abrir();
+}
+
+// Aviso da emissão do RIO (dono, 25/11/2026): há também a ATPVe Rio v2, paga por
+// PIX na hora. Devolve false (sem aviso) quando a v2 não está disponível para a
+// conta — oferecer o que não abre seria pior que não avisar.
+let atpveRioContinuar = null;
+function avisoAtpveRio(continuar) {
+  const v2 = allServices.find(s => s.inputType === 'atpve_crdd');
+  if (!v2 || v2.unavailable || v2.naoLiberada) return false;
+  atpveRioContinuar = continuar || null;
+  const m = document.getElementById('modal-atpve-rio');
+  m.classList.remove('hidden');
+  m.classList.add('flex');
+  return true;
+}
+
+function escolherAtpveRio(usarV2) {
+  const m = document.getElementById('modal-atpve-rio');
+  m.classList.add('hidden');
+  m.classList.remove('flex');
+  const continuar = atpveRioContinuar;
+  atpveRioContinuar = null;
+  if (!usarV2) { if (continuar) continuar(); return; }
+  selectService(allServices.find(s => s.inputType === 'atpve_crdd'));
   document.getElementById('query-form-wrap')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
@@ -3950,6 +3994,9 @@ function iniciarAtpveNova(ufInicial) {
   if (!ufEl) return;
   if (ufInicial) ufEl.value = ufInicial;
   ufEl.addEventListener('change', atualizarFormAtpveNova);
+  // Quem abriu o formulário sem UF e escolheu RJ no menu também vê o aviso
+  // (change só dispara na escolha do cliente, não no valor posto pelo código).
+  ufEl.addEventListener('change', () => { if (ufEl.value === 'RJ') avisoAtpveRio(); });
   atualizarFormAtpveNova();
   document.querySelectorAll('[data-a2-data]').forEach(el => el.addEventListener('input', function () {
     const d = this.value.replace(/\D/g, '').slice(0, 8);
@@ -4202,6 +4249,7 @@ function selectService(svc) {
     showSection('novas');
     selectService(allServices.find(s => s.id === 'dcr-atpve'));
     if (uf) iniciarAtpveNovaUf(uf);
+    if (uf === 'RJ') avisoAtpveRio();
     return;
   }
   // Serviço suspenso (hoje: tudo da Vistocar, 06/11/2026): o aviso do servidor
