@@ -15599,7 +15599,7 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
             if (already.rows.length === 0) {
               // pdf_url costuma vir relativo — a base é o host que emitiu o pedido.
               const fullUrl = /^https?:\/\//i.test(pdfPath) ? pdfPath : PORTAL_BASE_URL + pdfPath;
-              const pdfApiRes = await fetch(fullUrl);
+              const pdfApiRes = await fetchPdfPortal(fullUrl);
               if (pdfApiRes.ok) {
                 const pdfBuf = Buffer.from(await pdfApiRes.arrayBuffer());
                 if (pdfBuf.slice(0, 4).toString() === '%PDF') {
@@ -23795,6 +23795,15 @@ app.post('/api/admin/broadcast-whatsapp-teste', requireAuth, requireSuperAdmin, 
 });
 
 // ── Cron: verifica pedidos de CRLV-e Agendado pendentes e avisa por WhatsApp ──
+// O portal passou a exigir a chaveAcesso também para baixar o PDF: sem ela devolve
+// a página HTML de login (200, text/html) e o cron descartava o arquivo por não ser
+// %PDF — PPU6B75 e NZC4C89 (ES, 23-24/11/2026) ficaram sem entrega por isso. A chave
+// só vai para o host do portal, nunca para a URL absoluta de outro fornecedor.
+function fetchPdfPortal(url) {
+  const doPortal = String(url).startsWith(PORTAL_BASE_URL);
+  return fetch(url, doPortal ? { headers: { 'chaveAcesso': PORTAL_DESP_KEY } } : undefined);
+}
+
 async function checkCrlvAgendadoStatus(pedidoId) {
   const pid = String(pedidoId).trim();
   let apiUrl, headers;
@@ -23844,7 +23853,7 @@ async function runCrlvAgendadoPendingCheck() {
       const status = await checkCrlvAgendadoStatus(row.pedido_id);
       if (status?.podeBaixar && status.pdfPath && row.phone) {
         const fullUrl = /^https?:\/\//i.test(status.pdfPath) ? status.pdfPath : PORTAL_BASE_URL + status.pdfPath;
-        const pdfApiRes = await fetch(fullUrl);
+        const pdfApiRes = await fetchPdfPortal(fullUrl);
         if (pdfApiRes.ok) {
           const pdfBuf = Buffer.from(await pdfApiRes.arrayBuffer());
           if (pdfBuf.slice(0, 4).toString() === '%PDF') {
