@@ -19132,6 +19132,9 @@ const BOT_WHATS_MENU = [
   // Dono, 13/11/2026: R$ 6,50, só pelo WhatsApp (HISTORICO_PROP_SERVICE_ID).
   { id: HISTORICO_PROP_SERVICE_ID, rotulo: '👥 Histórico Proprietário' },
   { id: 'debitos-estado-whats', rotulo: '🏛️ Débitos por Estado (só a placa)' },
+  // Dono, 26/11/2026: a mesma consulta e o mesmo preço da plataforma (PLACAFACIL_SERVICE_ID).
+  // No fim da lista para não mudar o número das outras opções.
+  { id: PLACAFACIL_SERVICE_ID, rotulo: '🔐 Código de Segurança do CRV' },
 ];
 // Débitos por Estado só com a placa (dono, 09/11/2026): no painel cada UF pede
 // placa + renavam (+ CPF/CNPJ em algumas, chassi na SC antiga); no WhatsApp a
