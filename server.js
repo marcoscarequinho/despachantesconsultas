@@ -7103,7 +7103,47 @@ async function extractAtpveFieldsFromPdf(pdfBuf) {
     if (semDadoUtil(m[2])) continue;
     fields[key] = m[2].trim();
   }
+  Object.assign(fields, extractAtpveTabela(String(text || '')));
   return repairAtpveAccents(fields, pdfBuf);
+}
+
+// Segundo formato do "Número da ATPVe": o relatório "Consulta de Intenção de
+// Venda (ATPV-e)" da Consulta Fácil Veicular, que o dono sobe no admin desde
+// 26/11/2026. É uma tabela: no texto o rótulo sai COLADO no valor, sem ":"
+// ("Número ATPV24248151809095Status Intenção…"). Não traz o nome do vendedor
+// (vem das consultas complementares). Devolve {} se não for esse formato.
+function extractAtpveTabela(text) {
+  const acha = re => (re.exec(text)?.[1] || '').replace(/\s+/g, ' ').trim();
+  const numeroatpve = acha(/N[úu]mero ATPV(?:-?e)?[ \t]*(\d{6,})/i);
+  if (!numeroatpve) return {};
+  const digitos = v => v.replace(/\D/g, '');
+  const endereco = acha(/^Endere[çc]o([\s\S]*?)^Complemento/mi);
+  const partes = /^(.*?),\s*N[º°o.]*\s*(.+)$/i.exec(endereco);
+  const municipio = /^Munic[íi]pio \/ UF[ \t]*(.+?)\s*-\s*([A-Z]{2})\s*$/mi.exec(text);
+  const campos = {
+    numeroatpve,
+    placa: acha(/^Placa[ \t]*([A-Z]{3}-?\d[A-Z0-9]\d{2})/m).replace('-', ''),
+    renavam: acha(/Renavam[ \t]*(\d{9,11})/),
+    chassi: acha(/^Chassi[ \t]*([A-HJ-NPR-Z0-9]{17})/m),
+    numerocrv: acha(/N[úu]mero CRV[ \t]*(\d{6,})/i),
+    valorvenda: acha(/Valor da Venda\s*R\$\s*([\d.]+,\d{2})/i),
+    ufintencaovenda: acha(/UF Inten[çc][ãa]o Venda[ \t]*([A-Z]{2})/i),
+    datahoraregistrointencaovenda: acha(/Data da Venda[ \t]*(\d{2}\/\d{2}\/\d{4})/i)
+      || acha(/Registro Inten[çc][ãa]o[ \t]*(\d{2}\/\d{2}\/\d{4})/i),
+    hodometro: acha(/Hod[ôo]metro[ \t]*(\d+)/i),
+    nomecomprador: acha(/Nome do Comprador([\s\S]*?)Documento Comprador/i),
+    documentocomprador: digitos(acha(/Documento Comprador[ \t]*([\d./-]+)/i)),
+    emailcomprador: acha(/E-mail Comprador[ \t]*([^\s@]+@[^\s]+)/i),
+    nomelogradourocomprador: partes ? partes[1] : endereco,
+    numeroimovelcomprador: partes ? partes[2] : '',
+    bairroimovelcomprador: acha(/^Bairro(.*?)CEP/m),
+    cepimovelcomprador: acha(/CEP[ \t]*(\d{5}-?\d{3})/),
+    municipiocomprador: municipio?.[1].trim() || '',
+    ufcomprador: municipio?.[2] || '',
+    documentovendedor: digitos(acha(/(?:CPF|CNPJ) Vendedor[ \t]*([\d./-]+)/i)),
+    emailvendedor: acha(/E-mail Vendedor[ \t]*([^\s@]+@[^\s]+)/i),
+  };
+  return Object.fromEntries(Object.entries(campos).filter(([, v]) => v && !semDadoUtil(v)));
 }
 
 // ── Acentos perdidos na extração ────────────────────────────────────────────
@@ -23063,7 +23103,7 @@ async function lerPdfNumeroAtpve(buf, placa, semConferirPlaca) {
     return { erro: 'Não consegui ler esse PDF.' };
   }
   if (!campos.numeroatpve)
-    return { erro: 'Esse PDF não traz o "Número ATPVe" em texto (formato "Rótulo: valor"). Confira se é o arquivo certo — foto ou escaneado não serve.' };
+    return { erro: 'Não achei o "Número ATPV" no texto desse PDF. Confira se é o arquivo certo — foto ou escaneado não serve.' };
   const limpa = v => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   const doPdf = limpa(campos.placa);
   if (doPdf && doPdf !== placa)
