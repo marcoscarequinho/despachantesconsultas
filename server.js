@@ -10854,7 +10854,7 @@ async function entregarAtpveCrdd(pend) {
     await pool.query('DELETE FROM crdd_pendentes WHERE query_id=$1', [pend.query_id]);
     // O cliente é avisado uma vez só, com o motivo, por devolverConsultaPix (todo
     // pedido deste serviço é pago por PIX), que sabe dizer se o PIX voltou.
-    if (avisarAdmin && ADMIN_PHONE) await sendWhatsApp(ADMIN_PHONE, `⚠️ ATPVe Rio v2: pedido #${pend.query_id} (${pend.placa}) encerrado sem cobrar — ${motivo}\nConfira a intenção no portal do CRDD (o saldo pré-pago pode ter sido debitado/estornado por lá) e cancele por lá se ainda estiver aberta.`).catch(() => {});
+    if (avisarAdmin && ADMIN_PHONE) await sendWhatsApp(ADMIN_PHONE, `⚠️ ATPVe Rio v2: pedido #${pend.query_id} (${pend.placa}) encerrado sem cobrar — ${motivo}`).catch(() => {});
   };
   // Vencidas as 5 horas, falha do portal (listagem ou PDF) também encerra: o
   // que vale é o documento não ter saído.
