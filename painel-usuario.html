@@ -509,9 +509,9 @@
           <div class="w-14 h-14 rounded-full bg-orange-100 flex items-center justify-center text-3xl flex-shrink-0">📄</div>
           <div class="min-w-0 flex-1">
             <div class="font-bold text-gray-800">Reemissão da ATPVe Com Comunicação de Venda</div>
-            <div class="text-sm text-orange-700 font-medium">⚡ Emissão Instantânea</div>
+            <div class="text-sm text-orange-700 font-medium">⏳ Entrega em até 24 horas</div>
           </div>
-          <div class="price-tag text-base flex-shrink-0">R$ 120,00</div>
+          <div class="price-tag text-base flex-shrink-0">R$ 150,00</div>
         </button>
         <button type="button" onclick="openHeroService('crlv-rio-reemissao-v2')"
           class="w-full sm:w-auto sm:min-w-[280px] flex items-center gap-4 rounded-xl border-2 border-orange-300 bg-gradient-to-r from-orange-50 to-white p-4 text-left shadow-sm hover:shadow-md hover:border-orange-400 transition-all">
@@ -2045,7 +2045,8 @@ function copiarPixFatura() {
 // não significa mais "sem débito": quem responde por isso é q.cobrada
 // (transaction_id no servidor). Vale para os pedidos do modelo antigo, que
 // ficaram aguardando sem nunca terem sido cobrados, e para os cancelados.
-const rotuloAguardando = q => q.service_id === 'inserir-comunicacao-venda' ? 'Aguardando transmissão' : 'Aguardando emissão';
+const rotuloAguardando = q => q.service_id === 'inserir-comunicacao-venda' ? 'Aguardando transmissão'
+  : q.service_id === 'consultar-Numero-ATPVE' ? 'Agendado — até 24h' : 'Aguardando emissão';
 function semCobranca(q) {
   return !q.cobrada && (q.status === 'aguardando_pdf' || q.status === 'cancelado');
 }
@@ -2545,6 +2546,7 @@ function renderApiDocs() {
   allServices.forEach(s => {
     if (s.group === 'Número CRV (Apenas antigos)') return;
     if (s.soWhatsAviso) return; // só pelo WhatsApp, fora da API
+    if (s.agendada) return;     // agendada, só no painel
     if (!groups[s.group]) groups[s.group] = [];
     groups[s.group].push(s);
   });
@@ -2874,6 +2876,7 @@ const CATALOG_BADGE_SERVICO = {
   'atpve-vistocar-rj': { badge:'⏳ Em emissão', badgeClass:'bg-amber-100 text-amber-800' },
   'atpve-vistocar-mg': { badge:'⏳ Em emissão', badgeClass:'bg-amber-100 text-amber-800' },
   'contrato-arrendamento-veicular': { badge:'🤖 Com IA', badgeClass:'bg-indigo-100 text-indigo-700' },
+  'consultar-Numero-ATPVE': { badge:'⏳ Entrega em até 24h', badgeClass:'bg-amber-100 text-amber-800' },
 };
 
 // Busca sem acento e sem caixa: "debito rj" acha "Débitos RJ".
@@ -3083,7 +3086,6 @@ const WHATS_CONSULTAS = [
   { id: 'comunicado-venda-placa-v2', icon: '📝', nome: 'Consulta do Comunicação de Venda' },
   { id: 'crlv-rj-reemissao-2',      icon: '🔑', nome: 'CRLV 2 Rio Reemissão' },
   { id: 'dcr-reemissao-atpve',      icon: '📝', nome: 'Reemissão ATPV-e (PDF)' },
-  { id: 'consultar-Numero-ATPVE',   icon: '🔢', nome: 'Reemissão da ATPVe Com Comunicação de Venda' },
   { id: 'dcr-pacote-completa-top',  icon: '🚘', nome: 'Pacote Veicular Completa TOP' },
   { id: 'consulta-debitos-portal',  icon: '💳', nome: 'Consulta de Débitos', gratis: true },
   // Preço único do WhatsApp (BOT_DEBITOS_PRECO), não é serviço do catálogo.
@@ -6494,6 +6496,9 @@ async function pagarSomenteEstaConsulta(svc, params) {
   document.getElementById('pague-pix-qr').innerHTML = '';
   document.getElementById('pague-pix-copia-wrap').classList.add('hidden');
   document.getElementById('pague-pix-aviso').classList.remove('hidden');
+  document.getElementById('pague-pix-aviso').textContent = svc.agendada
+    ? 'Assim que o pagamento cair, o pedido é registrado. A entrega é em até 24 horas; sem entrega, o PIX é estornado.'
+    : 'Assim que o pagamento cair, a consulta roda sozinha. Se ela não sair, o PIX é devolvido automaticamente.';
   document.getElementById('pague-pix-fechar').textContent = 'Fechar';
   setStatus('Gerando o PIX...');
   const modal = document.getElementById('modal-pague');

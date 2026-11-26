@@ -109,6 +109,9 @@
     <div class="nav-item" data-section="atpve" onclick="showSection('atpve')">
       <span class="text-lg">📝</span> Pedidos ATPV-e
     </div>
+    <div class="nav-item" data-section="atpve-agendada" onclick="showSection('atpve-agendada')">
+      <span class="text-lg">🔢</span> ATPVe com Comunicação <span id="agendada-nav-badge" class="hidden ml-auto bg-red-500 text-white text-xs font-bold rounded-full px-2 py-0.5"></span>
+    </div>
     <div class="nav-item" data-section="novas" onclick="showSection('novas')">
       <span class="text-lg">🚫</span> Consultas Novas (ATPV-e)
     </div>
@@ -1013,6 +1016,7 @@
     <section id="section-placafacil" class="admin-section hidden space-y-4"></section>
     <!-- ── SALDO CRDD / ATPVe RIO V2 (conteúdo montado por assets/admin-crdd.js) ── -->
     <section id="section-crdd" class="admin-section hidden space-y-4"></section>
+    <section id="section-atpve-agendada" class="admin-section hidden space-y-4"></section>
 
     <!-- ── VÍDEO DE APRESENTAÇÃO ─────────────────────────────────────────────── -->
     <section id="section-video" class="admin-section hidden space-y-4">
@@ -1535,6 +1539,7 @@ function showSection(id) {
   if (id === 'consultasfacil') loadConsultasFacil();
   if (id === 'placafacil') loadPlacaFacil();
   if (id === 'crdd') loadCrdd();
+  if (id === 'atpve-agendada') loadAtpveAgendada();
   if (id === 'mensagens') loadMensagensAdmin();
   if (id === 'video') loadVideoApresentacao();
 }
@@ -1562,6 +1567,7 @@ function refreshCurrentSection() {
   if (id === 'consultasfacil') loadConsultasFacil();
   if (id === 'placafacil') loadPlacaFacil();
   if (id === 'crdd') loadCrdd();
+  if (id === 'atpve-agendada') loadAtpveAgendada();
   if (id === 'mensagens')     loadMensagensAdmin();
 }
 
@@ -3980,5 +3986,6 @@ init();
 <script src="/assets/admin-consultasfacil.js"></script>
 <script src="/assets/admin-placafacil.js"></script>
 <script src="/assets/admin-crdd.js"></script>
+<script src="/assets/admin-atpve-agendada.js"></script>
 </body>
 </html>

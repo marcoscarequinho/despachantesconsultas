@@ -169,6 +169,15 @@ const CONSULTASFACIL_CUSTO_CONSULTA = 5.00;
 // consulta "crua", sem o documento montado nem as consultas extras daquela.
 // Sem PDF da Consultas Fácil, a reserva é o numero_atpve da despbrasil.
 const NUMERO_ATPVE_BRASIL_SERVICE_ID = 'numero-atpve-brasil';
+// Reemissão da ATPVe Com Comunicação de Venda (26/11/2026, dono): as bases do
+// Número da ATPVe caíram, então virou pedido AGENDADO (até 24 h). O dono consegue
+// o PDF do número por fora e sobe no admin; o resto do documento é montado como
+// antes (ver entregarAtpveAgendada). Só no painel (sem WhatsApp nem API de chave)
+// e só por PIX no pedido — nunca saldo nem fatura. Sem entrega em 24 h, o PIX é
+// estornado com a mensagem do dono.
+const ATPVE_AGENDADA_SERVICE_ID = 'consultar-Numero-ATPVE';
+const ATPVE_AGENDADA_PRAZO_HORAS = 24;
+const ATPVE_AGENDADA_MSG_ESTORNO = 'Número do ATPVe no momento não está disponível, por essa razão não é possível a entrega da ATPVe, seu valor foi estornado para sua conta bancária.';
 // ── DirectData (apiv3.directd.com.br) — grupo "Consultas Especiais Veículos e etc" ──
 // Entrou em 16/10/2026. Contrato: GET /api/<Endpoint>?<params>&TOKEN=<chave>,
 // resposta { metaDados, retorno } síncrona (assincrono:false e ~3s na placa
@@ -1435,10 +1444,11 @@ const SERVICES = [
   // via portal) pra completar os campos que a despbrasil não retorna ou
   // retorna errado — ver runNumeroAtpveSupplementaryQueries. Preço fixo
   // (noMarkup) cobrindo o custo das 4 consultas + margem.
-  { id:'consultar-Numero-ATPVE',          name:'Reemissão da ATPVe Com Comunicação de Venda', group:'Débitos e Documentação', basePrice:120.00, noMarkup:true, inputType:'placa', icon:'🔢', soWhatsAviso:true,
+  // Desde 26/11/2026 é agendada (até 24 h), R$ 150,00 — ver ATPVE_AGENDADA_SERVICE_ID.
+  { id:ATPVE_AGENDADA_SERVICE_ID,         name:'Reemissão da ATPVe Com Comunicação de Venda', group:'Débitos e Documentação', basePrice:150.00, noMarkup:true, inputType:'placa', icon:'🔢', agendada:true,
     // noteStyle:'danger' — o aviso vira termo de aceite (fundo/texto vermelho no
     // painel), porque a limitação do QR Code precisa ser lida antes de consultar.
-    slowNote:'ATENÇÃO, ao inserir a placa você concorda com os termos: "Devido ao formato como esta ATPVe é gerada, o QR Code não faz leitura — todas as demais informações deste documento são reais. Fica a seu critério."',
+    slowNote:'ENTREGA AGENDADA: o documento sai em até 24 horas (chega no WhatsApp e no Histórico). Pagamento só por PIX no pedido, sem usar o saldo; se não for entregue em 24 horas, o PIX é estornado. ATENÇÃO, ao inserir a placa você concorda com os termos: "Devido ao formato como esta ATPVe é gerada, o QR Code não faz leitura — todas as demais informações deste documento são reais. Fica a seu critério."',
     noteStyle:'danger',
     modeloUrl:'/assets/modelo-atpve.pdf' },
   // Numero ATPVe Brasil — Consultas Fácil (despbrasil de reserva), PDF direto (ver NUMERO_ATPVE_BRASIL_SERVICE_ID).
@@ -12382,6 +12392,49 @@ async function processCatalogQuery(userId, serviceId, params, res, opcoes = {}) 
   }
 }
 
+const ATPVE_AGENDADA_SO_PLATAFORMA = 'A Reemissão da ATPVe Com Comunicação de Venda agora é feita só pela plataforma (painel), com entrega em até 24 horas.';
+
+// Placa já na fila deste cliente: não abre um segundo pedido (nem um segundo PIX).
+async function atpveAgendadaJaPedida(userId, placa) {
+  const r = await pool.query(
+    `SELECT params FROM queries WHERE user_id=$1 AND service_id=$2 AND status='aguardando_pdf'`,
+    [userId, ATPVE_AGENDADA_SERVICE_ID]);
+  return r.rows.some(x => { try { return JSON.parse(x.params).placa === placa; } catch { return false; } });
+}
+const placaAtpveAgendada = params => String(params?.placa || '').toUpperCase().replace(/[\s-]/g, '');
+const placaAtpveAgendadaOk = placa => /^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(placa);
+const atpveAgendadaRepetidaMsg = placa => `Já existe um pedido em andamento para a placa ${placa}. Acompanhe pelo Histórico.`;
+
+// Registra o pedido agendado. Só chega aqui com o PIX já aprovado (painelPago);
+// processarPagamentoConsultaPix grava a transação e deixa o pedido AGUARDANDO.
+// Erro devolvido aqui = PIX estornado na hora.
+async function pedirAtpveAgendada(user, service, price, params, res) {
+  const placa = placaAtpveAgendada(params);
+  if (!placaAtpveAgendadaOk(placa))
+    return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+  if (await atpveAgendadaJaPedida(user.id, placa))
+    return res.status(409).json({ error: atpveAgendadaRepetidaMsg(placa) });
+
+  const q = await pool.query(
+    `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
+     VALUES ($1,$2,$3,$4,'aguardando_pdf',$5,'pdf',$6) RETURNING id`,
+    [user.id, service.id, service.name, JSON.stringify({ placa }), price, JSON.stringify({ agendada: true })]);
+
+  if (ADMIN_PHONE) await sendWhatsApp(ADMIN_PHONE, [
+    `🕘 *Pedido agendado — Número da ATPVe*`,
+    ``,
+    `🧾 *Pedido:* #${q.rows[0].id}`,
+    `👤 *Cliente:* ${user.name || '-'}`,
+    `🔤 *Placa:* ${placa}`,
+    `💰 *Valor:* ${fmtMoneyBRL(price)} (pago por PIX)`,
+    ``,
+    `Prazo de ${ATPVE_AGENDADA_PRAZO_HORAS}h, senão o PIX é estornado. Suba o PDF no admin, em "ATPVe com Comunicação".`,
+  ].join('\n'), { marca: false }).catch(() => {});
+
+  const texto = `Pedido #${q.rows[0].id} recebido (placa ${placa}). O documento sai em até ${ATPVE_AGENDADA_PRAZO_HORAS} horas: chega no seu WhatsApp e fica no Histórico. Se não for entregue nesse prazo, o PIX é estornado.`;
+  return res.json({ success: true, pending: true, queryId: q.rows[0].id, result: { status: texto, mensagem: texto }, charged: price });
+}
+
 async function processCatalogQueryInterna(userId, serviceId, params, res, acomp = {}) {
   if (!serviceId) return res.status(400).json({ error: 'Serviço não informado.' });
 
@@ -12397,6 +12450,14 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
   // soWhatsAviso (18/11/2026): continua no catálogo, mas o painel só abre o aviso do @consultar.
   if ((service.soWhats || service.soWhatsAviso) && !noContextoWhats())
     return res.status(403).json({ error: 'Essa consulta está disponível só pelo WhatsApp (@consultar).' });
+
+  // Agendada: só no painel e só depois do PIX aprovado. No robô (PIX gerado antes
+  // da mudança) o erro devolve o PIX.
+  if (serviceId === ATPVE_AGENDADA_SERVICE_ID) {
+    if (noContextoWhats()) return res.status(403).json({ error: ATPVE_AGENDADA_SO_PLATAFORMA });
+    if (!contextoBotWhats.getStore()?.painelPago)
+      return res.status(403).json({ error: 'A Reemissão da ATPVe Com Comunicação de Venda é paga por PIX no pedido (QR Code ou copia e cola). Faça o pedido pelo painel.' });
+  }
 
   const price = await getUserServicePrice(userId, service);
 
@@ -12416,6 +12477,9 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
     // popup certo (assinar x cota esgotada).
     const gate = await assinaturaGateDespachantes(userId, serviceId);
     if (!gate.ok) return res.status(402).json({ error: gate.error, code: gate.code });
+
+    if (serviceId === ATPVE_AGENDADA_SERVICE_ID)
+      return await pedirAtpveAgendada(user, service, price, params, res);
 
     // ── Assinatura Digital (Assinafy) ─────────────────────────────────────────
     // Não gera documento nem consulta nada: manda um PDF que o cliente já tem
@@ -15789,6 +15853,7 @@ function isV1Eligible(serviceId) {
   if (V1_EXCLUDED_GROUPS.includes(svc.group)) return false;
   if (MANUAL_SERVICE_IDS.includes(svc.id)) return false;
   if (svc.soWhatsAviso) return false; // só pelo WhatsApp (18/11/2026)
+  if (svc.agendada) return false;     // agendada: só no painel (26/11/2026)
   return true;
 }
 
@@ -19185,9 +19250,6 @@ const BOT_WHATS_MENU = [
   // Dono, 23/11/2026: no lugar da Reemissão ATPV-e (PDF) da DataCred. Só a placa:
   // o chassi vem da Consulta Veicular Nacional e a 2ª via sai pela Reemissão ATPV-e (Chassi).
   { id: 'atpve-placa-whats', rotulo: '📝 Reemissão ATPV-e (só Placa)' },
-  // Dono, 10/11/2026. Só a placa; com os dois fornecedores fora a recusa leva
-  // ~5 min (60 s da Consultas Fácil + ~230 s da despbrasil) e o PIX é devolvido.
-  { id: 'consultar-Numero-ATPVE', rotulo: '🔢 Reemissão da ATPVe Com Comunicação de Venda' },
   // Dono, 18/11/2026: só pelo WhatsApp (soWhatsAviso); o painel abre o aviso do @consultar.
   { id: 'crlve-comunicacao-venda', rotulo: '🚘 CRLV-e Rio, com Comunicação de Venda e ou Intenção de Venda, ou Gravame' },
   { id: 'dcr-pacote-completa-top', rotulo: '🚘 Pacote Veicular Completa TOP' },
@@ -19787,7 +19849,8 @@ const PAGUE_CONSULTA_FASE_TESTE = new Set(['dcr-cancelamento-atpve', 'consultar-
 const ehConsultaAgendada = svc => svc.group === 'CRLV-e Agendado' || /^(crlv-agendado-|dcr-crlv-ag-)/.test(svc.id) || svc.id === 'dc-crlve-rs-v2';
 // ATPVe Rio v2 (24/11/2026, dono): só por PIX na hora — nunca saldo nem fatura — e
 // desde já, sem esperar o 15/12/2026. Se o ATPV-e não sair, o PIX é devolvido.
-const ehSoPix = svc => svc?.id === CRDD_ATPVE_SERVICE_ID;
+// A ATPVe com Comunicação de Venda (agendada) também, desde 26/11/2026.
+const ehSoPix = svc => svc?.id === CRDD_ATPVE_SERVICE_ID || svc?.id === ATPVE_AGENDADA_SERVICE_ID;
 function pagueConsultaAtivo(service) {
   if (!service || service.unavailable || service.soWhats || service.soWhatsAviso || isFreeService(service) || ehConsultaAgendada(service)) return false;
   // Cobrada só na transmissão (saldo/fatura): PIX antes do Inserir cobraria sem entrega.
@@ -19860,7 +19923,11 @@ async function devolverConsultaPix(ped, motivo, queryId = null) {
     : `Não consegui devolver o PIX automaticamente — fale com o suporte informando o pedido avulso #${ped.id}.`);
   // ATPVe Rio v2: o motivo vai SEMPRE para o WhatsApp do cliente (dono,
   // 25/11/2026), mesmo com a tela aberta — é o que ele usa para corrigir.
-  await avisarConsultaPix(ped, aviso, ped.service_id === CRDD_ATPVE_SERVICE_ID);
+  // ATPVe agendada sem o número: vai o texto do dono, sempre. Se o estorno
+  // falhou, fica o aviso padrão — não se afirma que o dinheiro voltou.
+  const agendada = devolvido && ped.service_id === ATPVE_AGENDADA_SERVICE_ID && motivo === ATPVE_AGENDADA_MSG_ESTORNO;
+  await avisarConsultaPix(ped, agendada ? `⚠️ *${nome}*${placa ? `\n🔤 Placa: ${placa}` : ''}\n\n${ATPVE_AGENDADA_MSG_ESTORNO}` : aviso,
+    ped.service_id === CRDD_ATPVE_SERVICE_ID || ped.service_id === ATPVE_AGENDADA_SERVICE_ID);
   return devolvido;
 }
 
@@ -19958,23 +20025,9 @@ async function conferirConsultaPixPedidos() {
   for (const p of pend.rows)
     await processarPagamentoConsultaPix(p.gateway_id).catch(e => console.error(`[consulta-pix] conferir ${p.gateway_id}:`, e.message));
 
-  // Pedido que ficou processando (aguardando_pdf): saiu → concluído; recusado → devolve.
-  const agu = await pool.query(
-    `SELECT c.*, q.status AS q_status, q.transaction_id, q.result_data AS q_result FROM consulta_pix_pedidos c JOIN queries q ON q.id = c.query_id
-      WHERE c.status='AGUARDANDO' AND q.status <> 'aguardando_pdf'`);
-  for (const w of agu.rows) {
-    if (w.q_status === 'success') {
-      await pool.query(`UPDATE consulta_pix_pedidos SET status='CONCLUIDO' WHERE id=$1`, [w.id]);
-      continue;
-    }
-    if (w.transaction_id) {
-      await pool.query('UPDATE queries SET transaction_id=NULL WHERE id=$1', [w.query_id]);
-      await pool.query('DELETE FROM transactions WHERE id=$1', [w.transaction_id]);
-    }
-    // Motivo gravado no pedido encerrado (recusa do Detran, cancelamento…).
-    let rd = w.q_result; try { if (typeof rd === 'string') rd = JSON.parse(rd); } catch {}
-    await devolverConsultaPix(w, rd?.motivo || 'Não saiu no fornecedor.');
-  }
+  // ATPVe agendada que passou das 24 h: cancela aqui e o estorno sai logo abaixo.
+  await expirarAtpveAgendada().catch(e => console.error('[atpve-agendada] prazo:', e.message));
+  await fecharConsultaPixAguardando();
 
   // Execução que morreu no meio (instância derrubada): passou de 30 min pago e
   // sem resposta. Se a consulta chegou a dar certo, fecha como concluída; senão devolve.
@@ -19990,6 +20043,28 @@ async function conferirConsultaPixPedidos() {
       continue;
     }
     await devolverConsultaPix(w, 'A consulta não terminou.');
+  }
+}
+
+// Pedido que ficou processando (aguardando_pdf): saiu → concluído; recusado →
+// devolve o PIX. Sem queryId, varre todos. (O estorno no Mercado Pago tem chave
+// de idempotência por pagamento: chamar duas vezes não devolve duas.)
+async function fecharConsultaPixAguardando(queryId = null) {
+  const agu = await pool.query(
+    `SELECT c.*, q.status AS q_status, q.transaction_id, q.result_data AS q_result FROM consulta_pix_pedidos c JOIN queries q ON q.id = c.query_id
+      WHERE c.status='AGUARDANDO' AND q.status <> 'aguardando_pdf' AND ($1::int IS NULL OR c.query_id = $1)`, [queryId]);
+  for (const w of agu.rows) {
+    if (w.q_status === 'success') {
+      await pool.query(`UPDATE consulta_pix_pedidos SET status='CONCLUIDO' WHERE id=$1`, [w.id]);
+      continue;
+    }
+    if (w.transaction_id) {
+      await pool.query('UPDATE queries SET transaction_id=NULL WHERE id=$1', [w.query_id]);
+      await pool.query('DELETE FROM transactions WHERE id=$1', [w.transaction_id]);
+    }
+    // Motivo gravado no pedido encerrado (recusa do Detran, cancelamento…).
+    let rd = w.q_result; try { if (typeof rd === 'string') rd = JSON.parse(rd); } catch {}
+    await devolverConsultaPix(w, rd?.motivo || 'Não saiu no fornecedor.');
   }
 }
 
@@ -20016,6 +20091,12 @@ app.post('/api/consulta-pix', requireAuth, bloquearApiPagamento, async (req, res
 
     const valor = Math.round((await valorConsultaPix(user.id, service, params)) * 100) / 100;
     if (!(valor > 0)) return res.status(400).json({ error: 'Não foi possível calcular o valor desta consulta. Confira os dados (UF) e tente de novo.' });
+
+    if (serviceId === ATPVE_AGENDADA_SERVICE_ID) {
+      const placa = placaAtpveAgendada(params);
+      if (!placaAtpveAgendadaOk(placa)) return res.status(400).json({ error: 'Placa inválida. Informe no formato ABC1D23.' });
+      if (await atpveAgendadaJaPedida(user.id, placa)) return res.status(409).json({ error: atpveAgendadaRepetidaMsg(placa) });
+    }
 
     // Mesmo pedido ainda sem pagar: devolve o mesmo QR em vez de abrir outro PIX.
     const hash = crypto.createHash('sha256').update(`${user.id}|${serviceId}|${JSON.stringify(params)}`).digest('hex');
@@ -20164,6 +20245,11 @@ async function processarMensagemBot(phone, texto) {
   }
 
   if (sessao.etapa === 'placa') {
+    // Conversa aberta antes de a consulta sair do menu: não gera PIX.
+    if (d.serviceId === ATPVE_AGENDADA_SERVICE_ID) {
+      await encerrarSessaoBot(chave);
+      return sendWhatsApp(phone, ATPVE_AGENDADA_SO_PLATAFORMA);
+    }
     const placa = placaBot(texto);
     if (!placaBotOk(placa)) return sendWhatsApp(phone, 'Placa inválida. Informe no formato ABC1D23.');
     if (BOT_WHATS_GRATIS.has(d.serviceId)) {
@@ -22923,6 +23009,217 @@ app.post('/api/admin/atpve-pedidos/:id/entregar-manual', requireAuth, requireSup
   } catch (err) {
     console.error('Erro na entrega manual de ATPV-e:', err.message);
     res.status(500).json({ error: err.message || 'Erro interno.' });
+  }
+});
+
+// ── ADMIN: ATPVe com Comunicação de Venda (agendada) ─────────────────────────
+// O dono sobe o PDF "Número da ATPVe" (formato "Rótulo: valor") e o documento é
+// montado com as mesmas consultas complementares de sempre. Cobrança pelo
+// finalizePendingQuery, só com o documento pronto.
+
+const travaAtpveAgendada = (userId, id) => travarConsultaRepetida(userId, 'admin-atpve-agendada', { id });
+const soltarTrava = chave => pool.query('DELETE FROM consultas_em_andamento WHERE chave=$1', [chave]).catch(() => {});
+
+// Encerra sem entrega. O estorno é do fecharConsultaPixAguardando (motivo = mensagem do dono).
+async function cancelarAtpveAgendada(queryId) {
+  const r = await pool.query(
+    `UPDATE queries SET status='cancelado', result_data=$2 WHERE id=$1 AND status='aguardando_pdf' RETURNING id`,
+    [queryId, JSON.stringify({ agendada: true, motivo: ATPVE_AGENDADA_MSG_ESTORNO })]);
+  return !!r.rows.length;
+}
+
+// Pedidos que passaram das 24 h (cron pix-reconcile, de 10 em 10 min). Pedido
+// que o admin está montando agora (trava) fica para a próxima passada.
+async function expirarAtpveAgendada() {
+  const r = await pool.query(
+    `SELECT id, user_id FROM queries
+      WHERE service_id=$1 AND status='aguardando_pdf' AND result_data LIKE '%"agendada":true%'
+        AND created_at < NOW() - make_interval(hours => $2)`,
+    [ATPVE_AGENDADA_SERVICE_ID, ATPVE_AGENDADA_PRAZO_HORAS]);
+  for (const q of r.rows) {
+    const trava = await travaAtpveAgendada(q.user_id, q.id);
+    if (!trava) continue;
+    try { await cancelarAtpveAgendada(q.id); }
+    finally { await soltarTrava(trava); }
+  }
+}
+
+// Devolve { campos } do PDF enviado ou { erro, code }. A placa precisa bater com
+// a do pedido: arquivo trocado entregaria (e cobraria) o veículo de outro.
+async function lerPdfNumeroAtpve(buf, placa, semConferirPlaca) {
+  let campos, texto = '';
+  try {
+    campos = await extractAtpveFieldsFromPdf(buf);
+    texto = String((await pdfParseTolerante(buf)).text || '');
+  } catch (e) {
+    console.error('[atpve-agendada] PDF ilegível:', e.message);
+    return { erro: 'Não consegui ler esse PDF.' };
+  }
+  if (!campos.numeroatpve)
+    return { erro: 'Esse PDF não traz o "Número ATPVe" em texto (formato "Rótulo: valor"). Confira se é o arquivo certo — foto ou escaneado não serve.' };
+  const limpa = v => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const doPdf = limpa(campos.placa);
+  if (doPdf && doPdf !== placa)
+    return { erro: `O PDF é da placa ${doPdf} e o pedido é da placa ${placa}.` };
+  if (!doPdf && !semConferirPlaca && !limpa(texto).includes(placa))
+    return { erro: `Não achei a placa ${placa} dentro do PDF.`, code: 'PLACA_NAO_CONFERIDA' };
+  return { campos };
+}
+
+async function entregarAtpveAgendada(q, buf, semConferirPlaca) {
+  const service = SERVICES.find(s => s.id === ATPVE_AGENDADA_SERVICE_ID);
+  let placa = '';
+  try { placa = String(JSON.parse(q.params || '{}').placa || '').toUpperCase(); } catch {}
+
+  const lido = await lerPdfNumeroAtpve(buf, placa, semConferirPlaca);
+  if (lido.erro) return { http: 422, erro: lido.erro, code: lido.code };
+
+  let result = {};
+  try { result = JSON.parse(q.result_data || '{}'); } catch {}
+
+  // Já está paga (PIX). Sem a transação, o finalizePendingQuery tiraria do saldo.
+  if (!q.transaction_id)
+    return { http: 409, erro: 'O pagamento deste pedido ainda não foi registrado. Aguarde um minuto e tente de novo.' };
+
+  const campos = lido.campos;
+  Object.assign(campos, await runNumeroAtpveSupplementaryQueries(placa, campos.renavam, campos.documentovendedor));
+  const faltando = atpveCamposFaltando(campos);
+  if (faltando.length) {
+    console.error(`[atpve-agendada] pedido ${q.id}, ${placa}: campos em branco (${faltando.join(', ')}).`);
+    return { http: 422, erro: `Faltaram dados para montar o documento: ${faltando.join(', ')}. Nada foi cobrado e o pedido continua pendente — tente de novo em alguns minutos.` };
+  }
+  const pdf = await buildNumeroAtpvePdfBuffer(service, campos, { placa });
+
+  // A montagem leva minutos: o pedido pode ter sido cancelado nesse meio-tempo.
+  const fechou = await finalizePendingQuery(q.id, q.user_id, `Consulta: ${service.name} — ${placa}`);
+  if (fechou) await fecharConsultaPixAguardando(q.id);
+  if (!fechou) return { http: 409, erro: 'O pedido foi fechado por outra execução agora há pouco. Recarregue a lista.' };
+
+  await pool.query(
+    `INSERT INTO pdf_cache (query_id, user_id, token, pdf_data, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+    [q.id, q.user_id, crypto.randomBytes(32).toString('hex'), pdf.toString('base64'),
+     new Date(Date.now() + 7 * 24 * 3600 * 1000)]);
+  result.entregueEm = new Date().toISOString();
+  await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(result), q.id]);
+
+  let whatsapp = false;
+  if (q.phone) {
+    whatsapp = await sendWhatsAppPdf(q.phone, pdf, arquivoAtpveAgendada(placa),
+      `✅ *${service.name} pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`).catch(() => false);
+    if (whatsapp) await pool.query('UPDATE queries SET whatsapp_sent_at = NOW() WHERE id=$1', [q.id]).catch(() => {});
+  }
+  await repassarGanhoParceiro(q.user_id).catch(e => console.error('[parceiro] repasse:', e.message));
+  return { whatsapp: !!whatsapp };
+}
+
+const arquivoAtpveAgendada = placa =>
+  `${DESPBRASIL_SVCS[ATPVE_AGENDADA_SERVICE_ID].servico}-${placa || 'doc'}.pdf`;
+
+async function pedidoAtpveAgendada(id) {
+  await ensureDbReady();
+  const r = await pool.query(
+    `SELECT q.id, q.user_id, q.status, q.amount, q.params, q.result_data, q.transaction_id, u.phone
+       FROM queries q JOIN users u ON u.id = q.user_id
+      WHERE q.id=$1 AND q.service_id=$2`,
+    [parseInt(id, 10) || 0, ATPVE_AGENDADA_SERVICE_ID]);
+  return r.rows[0] || null;
+}
+
+app.get('/api/admin/atpve-agendada', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    await ensureDbReady();
+    const r = await pool.query(
+      `SELECT q.id, q.status, q.amount, q.params, q.created_at, q.whatsapp_sent_at,
+              u.name, u.email, u.phone,
+              (SELECT c.refund_status FROM consulta_pix_pedidos c WHERE c.query_id = q.id ORDER BY c.id DESC LIMIT 1) AS estorno,
+              EXISTS(SELECT 1 FROM pdf_cache c WHERE c.query_id = q.id AND c.expires_at > NOW()) AS tem_pdf
+         FROM queries q JOIN users u ON u.id = q.user_id
+        WHERE q.service_id=$1 AND (q.status='aguardando_pdf' OR q.created_at > NOW() - INTERVAL '30 days')
+        ORDER BY (q.status='aguardando_pdf') DESC,
+                 CASE WHEN q.status='aguardando_pdf' THEN q.created_at END ASC,
+                 q.created_at DESC
+        LIMIT 200`,
+      [ATPVE_AGENDADA_SERVICE_ID]);
+    res.json({
+      prazoHoras: ATPVE_AGENDADA_PRAZO_HORAS,
+      pedidos: r.rows.map(p => {
+        let placa = '';
+        try { placa = String(JSON.parse(p.params || '{}').placa || '').toUpperCase(); } catch {}
+        return {
+          id: p.id, status: p.status, valor: parseFloat(p.amount || 0), placa, created_at: p.created_at,
+          whatsapp_sent_at: p.whatsapp_sent_at, tem_pdf: p.tem_pdf, estorno: p.estorno,
+          cliente: p.name, email: p.email, phone: p.phone,
+        };
+      }),
+    });
+  } catch (err) {
+    console.error('Erro ao listar ATPVe agendada:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+app.post('/api/admin/atpve-agendada/:id/entregar', requireAuth, requireSuperAdmin, async (req, res) => {
+  let trava = null;
+  try {
+    const q = await pedidoAtpveAgendada(req.params.id);
+    if (!q) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    if (q.status !== 'aguardando_pdf') return res.status(400).json({ error: 'Este pedido não está mais aguardando o documento.' });
+
+    const b64 = String(req.body?.pdfBase64 || '').replace(/^data:[^,]+,/, '').replace(/\s/g, '');
+    if (!b64) return res.status(400).json({ error: 'Envie o PDF do Número da ATPVe.' });
+    const buf = Buffer.from(b64, 'base64');
+    if (buf.length > ATPVE_MANUAL_MAX_BYTES) return res.status(413).json({ error: 'PDF grande demais (máximo 3 MB).' });
+    if (buf.slice(0, 4).toString() !== '%PDF') return res.status(400).json({ error: 'O arquivo enviado não é um PDF.' });
+
+    // Dois envios do mesmo pedido não pagam as consultas complementares duas
+    // vezes, e o prazo de 24 h não cancela um pedido que está sendo montado.
+    trava = await travaAtpveAgendada(q.user_id, q.id);
+    if (!trava) return res.status(409).json({ error: 'Este pedido já está sendo montado. Aguarde.' });
+
+    const r = await entregarAtpveAgendada(q, buf, req.body?.semConferirPlaca === true);
+    if (r.erro) return res.status(r.http).json({ error: r.erro, code: r.code });
+    res.json({ success: true, ...r });
+  } catch (err) {
+    console.error('Erro na entrega da ATPVe agendada:', err.message);
+    res.status(500).json({ error: 'Erro ao montar o documento. Confira a lista antes de tentar de novo.' });
+  } finally {
+    if (trava) await soltarTrava(trava);
+  }
+});
+
+app.post('/api/admin/atpve-agendada/:id/cancelar', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const q = await pedidoAtpveAgendada(req.params.id);
+    if (!q) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    if (!await cancelarAtpveAgendada(q.id))
+      return res.status(400).json({ error: 'Só dá para cancelar pedido que ainda aguarda o documento.' });
+    await fecharConsultaPixAguardando(q.id);
+    const p = await pool.query('SELECT refund_status FROM consulta_pix_pedidos WHERE query_id=$1 ORDER BY id DESC LIMIT 1', [q.id]);
+    res.json({ success: true, estorno: p.rows[0]?.refund_status || null });
+  } catch (err) {
+    console.error('Erro ao cancelar ATPVe agendada:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
+  }
+});
+
+app.post('/api/admin/atpve-agendada/:id/reenviar-whatsapp', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const q = await pedidoAtpveAgendada(req.params.id);
+    if (!q) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    const phone = String(req.body?.phone || '').replace(/\D/g, '') || q.phone;
+    if (!phone) return res.status(400).json({ error: 'Cliente sem telefone cadastrado.' });
+    const pr = await pool.query('SELECT pdf_data FROM pdf_cache WHERE query_id=$1 ORDER BY created_at DESC LIMIT 1', [q.id]);
+    if (!pr.rows.length) return res.status(404).json({ error: 'Este pedido ainda não tem documento entregue.' });
+    let placa = '';
+    try { placa = JSON.parse(q.params || '{}').placa || ''; } catch {}
+    const sent = await sendWhatsAppPdf(phone, Buffer.from(pr.rows[0].pdf_data, 'base64'), arquivoAtpveAgendada(placa),
+      `✅ *Reemissão da ATPVe Com Comunicação de Venda pronto!*\n🔤 Placa: ${placa}\n\nDocumento gerado pela MC Despachadoria.`).catch(() => false);
+    if (!sent) return res.status(502).json({ error: 'Falha ao reenviar pelo WhatsApp.' });
+    await pool.query('UPDATE queries SET whatsapp_sent_at = NOW() WHERE id=$1', [q.id]);
+    res.json({ success: true, phone });
+  } catch (err) {
+    console.error('Erro no reenvio da ATPVe agendada:', err.message);
+    res.status(500).json({ error: 'Erro interno.' });
   }
 });
 
