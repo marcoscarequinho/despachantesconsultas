@@ -322,7 +322,11 @@ const DATACRED_ATPVE_SERVICE_ID = 'dcr-atpve';
 const CRDD_ATPVE_SERVICE_ID = 'atpve-rio-v2';
 const CRDD_ATPVE_PRECO = 46.00;
 const CRDD_BASE_URL = 'https://portal.crddrj.com.br';
-// Sem o ATPV-e em 10 dias a pendência é encerrada sem cobrar e o dono avisado.
+// Sem o PDF do ATPV-e em 5 horas o pedido é encerrado e o PIX devolvido (dono,
+// 26/11/2026). Só para pedidos criados a partir de CRDD_PRAZO_DESDE; os
+// anteriores seguem com o prazo antigo de 10 dias.
+const CRDD_PRAZO_HORAS = 5;
+const CRDD_PRAZO_DESDE = Date.parse('2026-11-26T18:55:00Z');
 const CRDD_PENDENTE_DIAS = 10;
 // Manual sem resposta em 15 dias: a pendência é encerrada sem cobrar e o dono avisado.
 const DATACRED_PENDENTE_DIAS = 15;
@@ -1633,7 +1637,7 @@ const SERVICES = [
   })),
   // ATPVe Rio v2 (portal CRDD-RJ) — card ao lado da Emissão de ATPV-e, na mesma página.
   { id:CRDD_ATPVE_SERVICE_ID, name:'ATPVe Rio v2', group:DATACRED_GRUPO, subgrupo:'Emissão de ATPV-e', basePrice:CRDD_ATPVE_PRECO, noMarkup:true, inputType:'atpve_crdd', icon:'📝', uf:'rj',
-    slowNote:'Intenção de venda / ATPV-e do Rio de Janeiro. É um ato no Detran e não pode ser desfeito. O ATPV-e chega no seu WhatsApp e no Histórico quando sair — só é cobrado quando o documento existir.' },
+    slowNote:'Intenção de venda / ATPV-e do Rio de Janeiro. É um ato no Detran e não pode ser desfeito. O ATPV-e chega no seu WhatsApp e no Histórico quando sair. Se não sair em 5 horas, o PIX é devolvido.' },
   { id:'recurso-multa-ia', name:'Recurso de Multa com IA', group:'Recurso de Multas', basePrice:80, noMarkup:true, inputType:'recurso_multa', icon:'⚖️',
     slowNote:'Envie a foto ou o PDF da notificação, confira os dados e responda as perguntas. A IA redige a defesa prévia ou o recurso à JARI em PDF, pronto para assinar e protocolar (leva cerca de 1 minuto). Só é cobrado se o PDF for gerado.' },
   // ── CRLV-e Rio de Janeiro (destaque no topo da Nova Consulta) ──
@@ -10839,22 +10843,37 @@ async function cadastrarIntencaoCrdd(c) {
 // 'recusada', 'aguardando', 'expirada', 'ja-entregue' ou 'erro'. O pedido é o
 // primeiro id da placa que não existia antes do cadastro (ids_antes).
 async function entregarAtpveCrdd(pend) {
-  const itens = await listarIntencoesCrdd(pend.placa);
-  const antes = new Set(JSON.parse(pend.ids_antes || '[]').map(String));
-  let item = pend.crdd_id ? itens.find(i => String(i.id) === String(pend.crdd_id)) : null;
-  if (!item) {
-    const novos = itens.filter(i => !antes.has(String(i.id))).sort((a, b) => Number(b.id) - Number(a.id));
-    item = novos[0];
-    if (item) await pool.query('UPDATE crdd_pendentes SET crdd_id=$2 WHERE query_id=$1', [pend.query_id, String(item.id)]);
-  }
+  const criado = new Date(pend.created_at).getTime();
+  const prazoCurto = criado >= CRDD_PRAZO_DESDE;
+  const vencido = Date.now() - criado > (prazoCurto ? CRDD_PRAZO_HORAS * 3600000 : CRDD_PENDENTE_DIAS * 86400000);
+  const motivoPrazo = prazoCurto ? `O ATPV-e não saiu em ${CRDD_PRAZO_HORAS} horas.` : `O ATPV-e não saiu em ${CRDD_PENDENTE_DIAS} dias.`;
+  let item = null;
   const encerrar = async (motivo, avisarAdmin) => {
     await pool.query(`UPDATE queries SET status='cancelado', result_data=$2 WHERE id=$1 AND status='aguardando_pdf'`,
       [pend.query_id, JSON.stringify({ crdd: pend.crdd_id || item?.id || null, placa: pend.placa, motivo })]);
     await pool.query('DELETE FROM crdd_pendentes WHERE query_id=$1', [pend.query_id]);
     // O cliente é avisado uma vez só, com o motivo, por devolverConsultaPix (todo
     // pedido deste serviço é pago por PIX), que sabe dizer se o PIX voltou.
-    if (avisarAdmin && ADMIN_PHONE) await sendWhatsApp(ADMIN_PHONE, `⚠️ ATPVe Rio v2: pedido #${pend.query_id} (${pend.placa}) encerrado sem cobrar — ${motivo}\nConfira a intenção no portal do CRDD (o saldo pré-pago pode ter sido debitado/estornado por lá).`).catch(() => {});
+    if (avisarAdmin && ADMIN_PHONE) await sendWhatsApp(ADMIN_PHONE, `⚠️ ATPVe Rio v2: pedido #${pend.query_id} (${pend.placa}) encerrado sem cobrar — ${motivo}\nConfira a intenção no portal do CRDD (o saldo pré-pago pode ter sido debitado/estornado por lá) e cancele por lá se ainda estiver aberta.`).catch(() => {});
   };
+  // Vencidas as 5 horas, falha do portal (listagem ou PDF) também encerra: o
+  // que vale é o documento não ter saído.
+  const expirarPorFalha = async e => {
+    if (!(prazoCurto && vencido)) return false;
+    console.error(`[${CRDD_ATPVE_SERVICE_ID}] #${pend.query_id} fora do prazo:`, e);
+    await encerrar(motivoPrazo, true);
+    return true;
+  };
+  let itens;
+  try { itens = await listarIntencoesCrdd(pend.placa); }
+  catch (e) { if (await expirarPorFalha(e.message)) return 'expirada'; throw e; }
+  const antes = new Set(JSON.parse(pend.ids_antes || '[]').map(String));
+  item = pend.crdd_id ? itens.find(i => String(i.id) === String(pend.crdd_id)) : null;
+  if (!item) {
+    const novos = itens.filter(i => !antes.has(String(i.id))).sort((a, b) => Number(b.id) - Number(a.id));
+    item = novos[0];
+    if (item) await pool.query('UPDATE crdd_pendentes SET crdd_id=$2 WHERE query_id=$1', [pend.query_id, String(item.id)]);
+  }
   if (!item) {
     // Sem aparecer na listagem depois de cadastrar: espera um pouco, depois desiste.
     if (Date.now() - new Date(pend.created_at).getTime() > 3 * 3600 * 1000) { await encerrar('O pedido não apareceu no portal do CRDD.', true); return 'recusada'; }
@@ -10870,14 +10889,17 @@ async function entregarAtpveCrdd(pend) {
   }
   const url = item.atpve_url || item.atpvd_url;
   if (!url) {
-    if (Date.now() - new Date(pend.created_at).getTime() > CRDD_PENDENTE_DIAS * 86400000) {
-      await encerrar(`O ATPV-e não saiu em ${CRDD_PENDENTE_DIAS} dias.`, true); return 'expirada';
-    }
+    if (vencido) { await encerrar(motivoPrazo, true); return 'expirada'; }
     await pool.query('UPDATE crdd_pendentes SET verificado_em=NOW() WHERE query_id=$1', [pend.query_id]);
     return 'aguardando';
   }
-  const p = await crddFetch(url, { timeout: 60000 });
-  if (p.status !== 200 || p.buf.slice(0, 4).toString() !== '%PDF') { console.error(`[${CRDD_ATPVE_SERVICE_ID}] PDF ${item.id}: HTTP ${p.status}`); return 'erro'; }
+  let p;
+  try { p = await crddFetch(url, { timeout: 60000 }); }
+  catch (e) { if (await expirarPorFalha(e.message)) return 'expirada'; throw e; }
+  if (p.status !== 200 || p.buf.slice(0, 4).toString() !== '%PDF') {
+    if (await expirarPorFalha(`PDF ${item.id}: HTTP ${p.status}`)) return 'expirada';
+    console.error(`[${CRDD_ATPVE_SERVICE_ID}] PDF ${item.id}: HTTP ${p.status}`); return 'erro';
+  }
   const fechou = await finalizePendingQuery(pend.query_id, pend.user_id, `Consulta: ATPVe Rio v2 — ${pend.placa}`);
   await pool.query('DELETE FROM crdd_pendentes WHERE query_id=$1', [pend.query_id]);
   if (!fechou) return 'ja-entregue';
@@ -13188,11 +13210,11 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
       }
       return res.json({
         success: true, pending: true, queryId: pend.query_id,
-        result: { mensagem: 'Pedido registrado e em processamento no Detran. O ATPV-e chega no seu WhatsApp e no Histórico quando sair — só é cobrado quando o documento existir.' },
+        result: { mensagem: 'Pedido registrado e em processamento no Detran. O ATPV-e chega no seu WhatsApp e no Histórico quando sair. Se não sair em 5 horas, o PIX é devolvido.' },
       });
     }
 
-    // ── Emissão de ATPV-e (DataCred) — ato no Detran, assíncrono ──────────────
+    //── Emissão de ATPV-e (DataCred) — ato no Detran, assíncrono ──────────────
     // RJ sai na hora (espera até 2 min aqui); as demais UFs passam por
     // conferência humana e ficam 'aguardando_pdf' em datacred_pendentes. Nos
     // dois casos o cliente só é cobrado quando o PDF existe (finalizePendingQuery).
