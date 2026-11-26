@@ -5112,6 +5112,12 @@ app.get('/api/queries', requireAuth, async (req, res) => {
         row.comunicacao_venda_meta = JSON.stringify(merged);
 
         const params = JSON.parse(row.params || '{}');
+        // Transmitida fora do botão: cobra aqui (não repete a já cobrada).
+        if (!meta._transmitido) {
+          await cobrarComunicacaoTransmitida(row.id, req.user.id, params);
+          row.status = 'success';
+          row.cobrada = true;
+        }
         const cached = await cacheComunicacaoVendaPdf(row.id, req.user.id, params, merged);
         row.result_type = 'pdf';
         row.pdf_token   = cached.token;
@@ -9700,6 +9706,13 @@ async function correlateComunicacaoVenda(comunicacaoId) {
   }
 }
 
+// Cobra a Inserir Comunicação Venda quando a transmissão é confirmada. Pedido
+// anterior a 26/11/2026 já foi cobrado no Inserir (status 'success'): não repete.
+async function cobrarComunicacaoTransmitida(queryId, userId, params) {
+  const placa = String(params?.veiculo?.placa || '').toUpperCase();
+  await finalizePendingQuery(queryId, userId, `Consulta: Inserir Comunicação Venda${placa ? ` — ${placa}` : ''}`);
+}
+
 // Gera (se ainda não houver cache válido) o comprovante em PDF de uma
 // comunicação de venda já transmitida/comunicada e cacheia por 7 dias — usado
 // tanto pelo botão "Transmitir" quanto pela sincronização automática em
@@ -9880,12 +9893,12 @@ app.post('/api/queries/:id/comunicacao-venda-alterar', requireAuth, async (req, 
 // comunicação já inserida (situação inicial "importado" → "comunicado"; sem
 // transmitir, a comunicação de venda não é considerada concluída). Usa o
 // "comunicacao_id" salvo em result_data no momento do Inserir Comunicação
-// Venda (ver resultData em /api/query). Sem custo adicional: a cobrança já
-// ocorreu no Inserir.
+// Venda (ver resultData em /api/query). É AQUI que se cobra, e só com a
+// transmissão confirmada (cobrarComunicacaoTransmitida).
 app.post('/api/queries/:id/comunicacao-venda-transmitir', requireAuth, async (req, res) => {
   try {
     const qr = await pool.query(
-      `SELECT id, service_id, result_data, params FROM queries WHERE id=$1 AND user_id=$2`,
+      `SELECT id, service_id, result_data, params, status, amount, transaction_id FROM queries WHERE id=$1 AND user_id=$2`,
       [req.params.id, req.user.id]
     );
     if (!qr.rows.length || qr.rows[0].service_id !== 'inserir-comunicacao-venda')
@@ -9896,6 +9909,15 @@ app.post('/api/queries/:id/comunicacao-venda-transmitir', requireAuth, async (re
     const comunicacaoId = meta.comunicacao_id;
     if (!comunicacaoId)
       return res.status(400).json({ error: 'Esta comunicação ainda não tem um identificador do portal vinculado. Tente novamente em alguns instantes.' });
+    if (meta._transmitido) return res.status(400).json({ error: 'Esta comunicação já foi transmitida.' });
+
+    // Ainda não cobrada: confere saldo/fatura ANTES de transmitir (não se desfaz).
+    if (!qr.rows[0].transaction_id) {
+      const ur = await pool.query('SELECT id, credits, active, pos_pago, pos_pago_limite FROM users WHERE id=$1', [req.user.id]);
+      if (!ur.rows[0]?.active) return res.status(403).json({ error: 'Conta bloqueada.' });
+      const bloqueio = await bloqueioPagamentoConsulta(req.user.id, ur.rows[0], parseFloat(qr.rows[0].amount));
+      if (bloqueio) return res.status(bloqueio.status).json(bloqueio.body);
+    }
 
     const upRes = await fetch(`${PORTAL_BASE_URL}/comunicacao-venda/transmitir/${comunicacaoId}`, {
       method: 'POST',
@@ -9904,16 +9926,28 @@ app.post('/api/queries/:id/comunicacao-venda-transmitir', requireAuth, async (re
     });
     const upData = await upRes.json().catch(() => null);
 
-    if (!upRes.ok) {
-      const errMsg = upData?.error || upData?.erro || `Erro HTTP ${upRes.status}.`;
-      return res.status(upRes.status).json({ error: errMsg });
+    // Só vale como transmitida com a situação "comunicado" — na resposta ou, se
+    // ela não disser, na consulta ao portal (que também pega a transmissão aceita
+    // lá apesar de um erro aqui).
+    let situacao = upRes.ok && upData?.success !== false && upData?.status === 'comunicado' ? upData : null;
+    if (!situacao) {
+      const check = await correlateComunicacaoVenda(comunicacaoId);
+      if (check?.status === 'comunicado') situacao = check;
+    }
+    if (!situacao) {
+      console.error(`[comunicacao-venda-transmitir] query ${qr.rows[0].id} não transmitida (HTTP ${upRes.status}): ${JSON.stringify(upData).slice(0, 300)}`);
+      const motivo = upData?.error || upData?.erro || upData?.portal_msg || upData?.message || 'O portal não confirmou a transmissão.';
+      return res.status(upRes.ok ? 422 : upRes.status).json({ error: qr.rows[0].transaction_id ? motivo : `${motivo} Nada foi cobrado.` });
     }
 
     // O nome do campo de situação na resposta do portal não é documentado/estável
     // o suficiente para o painel confiar nele para esconder o botão "Transmitir" —
     // marca um flag próprio, garantido, para não permitir transmitir de novo.
-    const merged = { ...meta, ...(upData || {}), _transmitido: true };
+    const merged = { ...meta, ...situacao, _transmitido: true };
     await pool.query('UPDATE queries SET result_data=$1 WHERE id=$2', [JSON.stringify(merged), qr.rows[0].id]);
+    let paramsCobranca = {};
+    try { paramsCobranca = JSON.parse(qr.rows[0].params || '{}'); } catch {}
+    await cobrarComunicacaoTransmitida(qr.rows[0].id, req.user.id, paramsCobranca);
 
     // Só agora (comunicação já "comunicada" no portal) gera o comprovante em PDF
     // e cacheia por 7 dias — antes da transmissão o botão "PDF" fica indisponível
@@ -14401,6 +14435,16 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
     }
     // Transmitir comunicação de venda
     if (serviceId === 'venda-transmitir' && params?.id) {
+      // Comunicação inserida aqui e ainda não cobrada só sai pelo botão de "Meus
+      // Comunicados de Venda", que é onde se cobra.
+      const idCv = String(params.id).trim();
+      if (!/^\d+$/.test(idCv)) return res.status(400).json({ error: 'ID da comunicação inválido.' });
+      const pend = await pool.query(
+        `SELECT 1 FROM queries WHERE service_id='inserir-comunicacao-venda' AND status='aguardando_pdf'
+          AND result_data ~ ('"comunicacao_id":' || $1::text || '[,}]') LIMIT 1`, [idCv]
+      );
+      if (pend.rows.length)
+        return res.status(400).json({ error: 'Essa comunicação foi inserida por aqui: transmita pelo botão "Transmitir" em "Meus Comunicados de Venda". Nada foi cobrado.' });
       apiUrl = `${PORTAL_BASE_URL}/comunicacao-venda/transmitir/${params.id}`;
       body = {};
     }
@@ -15479,6 +15523,31 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
       }
     }
 
+    // ── Inserir Comunicação Venda: só importa o pedido — NÃO cobra ─────────────
+    // O serviço só existe depois do "Transmitir" (é também quando o portal cobra
+    // de nós). Fica 'aguardando_pdf' sem transação; o débito é do
+    // finalizePendingQuery na transmissão confirmada (cobrarComunicacaoTransmitida).
+    // Até 26/11/2026 cobrava aqui, e transmissão recusada ficava paga sem entrega.
+    // O JSON do portal (com o "comunicacao_id") não vai ao cliente: traz situação
+    // "importado", que confundiria.
+    if (serviceId === 'inserir-comunicacao-venda') {
+      if (!genericParseOk || !genericData?.comunicacao_id) {
+        console.error(`[${serviceId}] portal não devolveu comunicacao_id: ${bodyStr.slice(0, 300)}`);
+        return res.status(422).json({ error: 'O portal não confirmou a inserção da comunicação de venda. Nada foi cobrado.' });
+      }
+      await pool.query(
+        `INSERT INTO queries (user_id, service_id, service_name, params, status, amount, result_type, result_data)
+         VALUES ($1,$2,$3,$4,'aguardando_pdf',$5,'json',$6)`,
+        [userId, serviceId, service.name, JSON.stringify(params || {}), price, JSON.stringify(genericData)]
+      );
+      await notifyAdminNewQuery(user, service, price, params);
+      return res.json({
+        success: true,
+        result: { status: `Comunicação de venda inserida. Nada foi cobrado ainda: vá em "Meus Comunicados de Venda" e clique em "Transmitir" para finalizar. Os ${fmtMoneyBRL(price)} só são cobrados quando a transmissão der certo, e o comprovante em PDF fica disponível em seguida.` },
+        charged: 0,
+      });
+    }
+
     // ── Debita créditos somente após validar resposta ─────────────────────────
     await debitarConsulta(userId, price);
     const txRow = await pool.query(
@@ -15487,11 +15556,6 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
     );
     // Guarda o corpo JSON retornado (quando não é PDF/HTML) para o histórico poder
     // reexibir o mesmo resultado depois, sem precisar refazer (e recobrar) a consulta.
-    // Exceção: Inserir Comunicação Venda não vira PDF aqui — o comprovante só é
-    // gerado depois, quando o usuário transmite (ver /comunicacao-venda-transmitir),
-    // porque antes disso a comunicação ainda está "importada", não "comunicada".
-    // O JSON de origem (com o "id" do portal) fica salvo mesmo assim — é o que
-    // habilita o botão "Transmitir" em "Meus Comunicados de Venda".
     const resultData = willBePdfOrHtml ? null
       : JSON.stringify(genericParseOk ? genericData : { resposta: bodyStr });
     const qRow = await pool.query(
@@ -15664,17 +15728,6 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
             console.error('Erro ao notificar CRLV-e Agendado via WhatsApp:', e.message);
           }
         }
-      }
-
-      // Inserir Comunicação Venda: não expõe o JSON bruto do portal (traz um campo
-      // de situação tipo "importado" que confundiria o usuário) — o comprovante em
-      // PDF só é gerado depois, na transmissão (ver /comunicacao-venda-transmitir).
-      if (serviceId === 'inserir-comunicacao-venda') {
-        return res.json({
-          success: true,
-          result: { status: 'Comunicação de venda inserida com sucesso! Vá em "Meus Comunicados de Venda" e clique em "Transmitir" para finalizar — o comprovante em PDF fica disponível após a transmissão.' },
-          charged: price,
-        });
       }
 
       return res.json({ success: true, result: data, charged: price });
@@ -19715,6 +19768,8 @@ const ehConsultaAgendada = svc => svc.group === 'CRLV-e Agendado' || /^(crlv-age
 const ehSoPix = svc => svc?.id === CRDD_ATPVE_SERVICE_ID;
 function pagueConsultaAtivo(service) {
   if (!service || service.unavailable || service.soWhats || service.soWhatsAviso || isFreeService(service) || ehConsultaAgendada(service)) return false;
+  // Cobrada só na transmissão (saldo/fatura): PIX antes do Inserir cobraria sem entrega.
+  if (service.id === 'inserir-comunicacao-venda') return false;
   if (ehSoPix(service)) return true;
   if (Date.now() >= PAGUE_CONSULTA_INICIO_GERAL) return true;
   return PAGUE_CONSULTA_FASE_TESTE.has(service.id);

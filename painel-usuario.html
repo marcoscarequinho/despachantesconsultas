@@ -2045,6 +2045,7 @@ function copiarPixFatura() {
 // não significa mais "sem débito": quem responde por isso é q.cobrada
 // (transaction_id no servidor). Vale para os pedidos do modelo antigo, que
 // ficaram aguardando sem nunca terem sido cobrados, e para os cancelados.
+const rotuloAguardando = q => q.service_id === 'inserir-comunicacao-venda' ? 'Aguardando transmissão' : 'Aguardando emissão';
 function semCobranca(q) {
   return !q.cobrada && (q.status === 'aguardando_pdf' || q.status === 'cancelado');
 }
@@ -2072,8 +2073,8 @@ async function loadQueries() {
 
 // "Meus Comunicados de Venda" — lista as próprias inserções de Comunicação de
 // Venda e permite transmitir cada uma (finalização exigida no portal; sem isso
-// a comunicação fica só "importada", não "comunicada"). Sem custo adicional: a
-// cobrança já ocorreu no Inserir Comunicação Venda. O "id" do portal vem de
+// a comunicação fica só "importada", não "comunicada"). A cobrança é na
+// transmissão confirmada (q.cobrada diz se já houve). O "id" do portal vem de
 // comunicacao_venda_meta (ver GET /api/queries), salvo no momento da inserção.
 function renderMeusComunicadosVenda() {
   const wrap = document.getElementById('meus-comunicados-venda-list');
@@ -2105,7 +2106,9 @@ function renderMeusComunicadosVenda() {
               : `<div class="text-xs text-yellow-600 mt-0.5">🟡 Importado</div>`}
         </div>
         <div class="text-right flex-shrink-0 flex items-center gap-2 flex-wrap justify-end">
-          <div class="text-sm font-semibold text-red-500">-${fmt(q.amount)}</div>
+          ${q.cobrada
+            ? `<div class="text-sm font-semibold text-red-500">-${fmt(q.amount)}</div>`
+            : `<div class="text-xs text-gray-500">${fmt(q.amount)} só ao transmitir</div>`}
           ${!jaTransmitido && !cancelada && meta.comunicacao_id ? `<button type="button" onclick="alterarComunicacaoVenda(${q.id})" class="text-xs bg-amber-500 hover:bg-amber-600 text-white px-2 py-1 rounded font-medium">✏️ Alterar</button>` : ''}
           ${!jaTransmitido && meta.comunicacao_id ? `<button type="button" onclick="transmitirComunicacaoVenda(${q.id}, this)" class="text-xs bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded font-medium">📤 Transmitir</button>` : ''}
           ${jaTransmitido && !cancelada ? `<button type="button" onclick="cancelarComunicacaoVenda(${q.id}, this)" class="text-xs bg-red-600 hover:bg-red-700 text-white px-2 py-1 rounded font-medium">❌ Cancelar</button>` : ''}
@@ -2136,6 +2139,7 @@ async function runQueryAction(endpoint, queryId, btnEl, loadingText, successMsg)
     }
     toast(successMsg);
     await loadQueries();
+    await loadStats();   // a transmissão da comunicação de venda cobra o saldo
   } catch {
     toast('Erro de conexão.', 'error');
   } finally {
@@ -2321,7 +2325,7 @@ function renderRecentQueries() {
             : q.status === 'estornado'
               ? `<span class="badge-red">↩️ Estornado</span>`
             : q.status === 'aguardando_pdf'
-              ? (ehAtpveVistocar(q) ? botaoVerStatusAtpve(q) : `<span class="badge-amber">⏳ Aguardando emissão</span>`)
+              ? (ehAtpveVistocar(q) ? botaoVerStatusAtpve(q) : `<span class="badge-amber">⏳ ${rotuloAguardando(q)}</span>`)
             : q.status === 'cancelado'
               ? `<span class="badge-red">❌ Não emitido</span>`
             : q.result_type === 'json' && q.service_id
@@ -2396,7 +2400,7 @@ function renderHistoryTable() {
             : q.status === 'estornado'
               ? `<span class="badge-red">↩️ Estornado</span>`
             : q.status === 'aguardando_pdf'
-              ? (ehAtpveVistocar(q) ? botaoVerStatusAtpve(q) : `<span class="badge-amber">⏳ Aguardando emissão</span>`)
+              ? (ehAtpveVistocar(q) ? botaoVerStatusAtpve(q) : `<span class="badge-amber">⏳ ${rotuloAguardando(q)}</span>`)
             : q.status === 'cancelado'
               ? `<span class="badge-red">❌ Não emitido</span>`
             : q.result_type === 'json' && q.service_id

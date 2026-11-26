@@ -278,6 +278,10 @@ Voltaram ao catálogo em 15/09/2026, pela Vistocar (`atpve-vistocar-rj` e `atpve
 5. PDFs/HTML são salvos em `pdf_cache` por 7 dias (token) — o histórico do painel rebaixa por esse token, sem recobrar.
 6. O front-end ([painel-usuario.html](painel-usuario.html) → `submitQuery`) decide pela `Content-Type`: `application/pdf` → download automático; JSON com `html_token` → abre `/api/html/:token`; senão renderiza JSON.
 
+### Inserir Comunicação Venda: cobra só na transmissão (26/11/2026)
+
+O Inserir (`inserir-comunicacao-venda`) só importa no portal; a entrega é o "Transmitir" de "Meus Comunicados de Venda" (é quando o portal nos cobra). A consulta fica `aguardando_pdf` sem transação e o débito é do `finalizePendingQuery` (`cobrarComunicacaoTransmitida`) só com situação `comunicado` — no botão ou na sincronização do `GET /api/queries`. Pedidos anteriores já estavam cobrados e não repetem. O avulso `venda-transmitir` recusa comunicação pendente daqui, e o serviço fica fora do "Pague apenas esta consulta". **Transmissão real com o código novo ainda não vista.**
+
 ## API externa (/api/v1 — chave de API)
 
 - Autenticação por chave `mcd_...` (header `X-API-Key` ou `Authorization: Bearer`), middleware `requireApiKey`. Só o SHA-256 fica na tabela `api_keys`; a chave completa aparece uma única vez na criação.
