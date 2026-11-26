@@ -16772,6 +16772,11 @@ const PUBLIC_PAY_SERVICES = {
 // customização de comprador/vendedor/data.
 const PUBLIC_ATPVE_COMUNICACAO_VENDA_ID    = 'atpve-comunicacao-venda';
 const PUBLIC_ATPVE_COMUNICACAO_VENDA_PRICE = 140.00;
+// Desativada em 26/11/2026 (dono): era automática e as bases do Número da ATPVe
+// caíram. No painel a consulta virou agendada. Era o único serviço da página,
+// então ela só avisa. Religar: true.
+const PUBLIC_ATPVE_COMUNICACAO_VENDA_ATIVA = false;
+const PUBLIC_ATPVE_DESATIVADA_MSG = 'A consulta avulsa da Reemissão da ATPVe Com Comunicação de Venda foi desativada. Ela agora é feita pela plataforma, com entrega em até 24 horas.';
 
 async function callInfosimples(service, params) {
   const qs = new URLSearchParams({ token: INFOSIMPLES_TOKEN });
@@ -16813,6 +16818,8 @@ async function validarPedidoAvulso(corpo) {
   const isAtpveComunicacaoVenda = servico === PUBLIC_ATPVE_COMUNICACAO_VENDA_ID;
 
   let serviceId, service, valor, description;
+  if (isAtpveComunicacaoVenda && !PUBLIC_ATPVE_COMUNICACAO_VENDA_ATIVA)
+    return { erro: { status: 400, msg: PUBLIC_ATPVE_DESATIVADA_MSG } };
   if (isAtpveComunicacaoVenda) {
     serviceId = PUBLIC_ATPVE_COMUNICACAO_VENDA_ID;
     valor = PUBLIC_ATPVE_COMUNICACAO_VENDA_PRICE;
@@ -23856,7 +23863,14 @@ app.get('/consulta-avulsa', async (req, res) => {
   ).catch(() => ({ rows: [] }));
   if (!r.rows.length) return res.redirect('/');
   res.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
-  noCache(res); res.sendFile(path.join(__dirname, 'consulta-avulsa.html'));
+  noCache(res);
+  if (!PUBLIC_ATPVE_COMUNICACAO_VENDA_ATIVA) return res.send(
+    '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">' +
+    '<meta name="robots" content="noindex"><title>Consulta Avulsa desativada</title></head>' +
+    '<body style="font-family:sans-serif;max-width:32rem;margin:3rem auto;padding:0 1rem;text-align:center">' +
+    `<h1>Consulta avulsa desativada</h1><p>${PUBLIC_ATPVE_DESATIVADA_MSG}</p>` +
+    '<p><a href="/entrar">Entrar</a> · <a href="/cadastrar">Criar conta</a> · <a href="https://wa.me/5522999951574">WhatsApp (22) 99995-1574</a></p></body></html>');
+  res.sendFile(path.join(__dirname, 'consulta-avulsa.html'));
 });
 app.get('/painel', requirePageAuth, (req, res) => {
   if (req.user.role === 'reseller' || req.user.role === 'admin')
