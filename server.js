@@ -1453,7 +1453,10 @@ const SERVICES = [
     modeloUrl:'/assets/modelo-atpve.pdf' },
   // Numero ATPVe Brasil — Consultas Fácil (despbrasil de reserva), PDF direto (ver NUMERO_ATPVE_BRASIL_SERVICE_ID).
   { id:NUMERO_ATPVE_BRASIL_SERVICE_ID,     name:'Numero ATPVe Brasil', group:'Débitos e Documentação', basePrice:19.99, noMarkup:true, inputType:'placa', icon:'🔢',
-    slowNote:'A consulta pode levar até 3 minutos (se a primeira base não responder, tentamos uma segunda). Só é cobrada se o PDF sair.' },
+    // Temporariamente fora desde 27/11/2026 (dono): Consultas Fácil sem saldo e
+    // despbrasil sem responder. Para religar, tirar o unavailable e voltar o
+    // aviso "A consulta pode levar até 3 minutos … Só é cobrada se o PDF sair."
+    unavailable:true, slowNote:'Numero ATPVe Brasil temporariamente fora.' },
   // CRLV-e Rio, com Comunicação de Venda (09/10/2026): Licenciamento + BIN e
   // Consulta Comunicado do portal montados no modelo do CRLV-e — ver
   // gerarCrlveComunicacaoVenda. Só sai com comunicação de venda, intenção de venda ou gravame.
