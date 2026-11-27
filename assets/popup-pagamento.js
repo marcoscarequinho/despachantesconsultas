@@ -22,23 +22,22 @@
 
       <!-- Contagem regressiva -->
       <div class="rounded-2xl p-3 text-center pg-vidro">
-        <div class="text-[11px] font-bold uppercase tracking-wider" style="color:#fde047;">⏳ Vale para TODAS as consultas a partir de 15/12/2026</div>
+        <div class="text-[11px] font-bold uppercase tracking-wider" style="color:#fde047;">⏳ Vale para as consultas a partir de 15/12/2026</div>
         <div class="flex justify-center gap-2 mt-2">
           <div class="pg-tempo"><b id="pg-d">--</b><span>dias</span></div>
           <div class="pg-tempo"><b id="pg-h">--</b><span>horas</span></div>
           <div class="pg-tempo"><b id="pg-m">--</b><span>min</span></div>
           <div class="pg-tempo"><b id="pg-s">--</b><span>seg</span></div>
         </div>
-        <div class="text-[11px] mt-2" style="color:#c7d2fe;">Antes disso, só estas duas já funcionam assim — <b class="text-white">salvo se o teste não for aprovado até o dia 15</b>.</div>
+        <div class="text-[11px] mt-2" style="color:#c7d2fe;">Antes disso, só o CRLV-e Rio de Janeiro já funciona assim — <b class="text-white">salvo se o teste não for aprovado até o dia 15</b>. O Cancelamento de ATPV-e fica de fora: segue por saldo.</div>
       </div>
 
       <div class="grid md:grid-cols-2 gap-4 items-start">
         <!-- Simulador -->
         <div class="rounded-2xl p-3 pg-vidro space-y-3">
-          <div class="text-[11px] font-bold uppercase tracking-wider" style="color:#fde047;">🎮 Simule: escolha a consulta</div>
-          <div class="grid grid-cols-2 gap-2">
+          <div class="text-[11px] font-bold uppercase tracking-wider" style="color:#fde047;">🎮 Simule a consulta</div>
+          <div class="grid grid-cols-1 gap-2">
             <button type="button" class="pg-chip pg-on" data-pg-svc="crlv" onclick="pgEscolherConsulta('crlv')">📄 CRLV-e Rio de Janeiro<br><b>R$ 20,00</b></button>
-            <button type="button" class="pg-chip" data-pg-svc="cancel" onclick="pgEscolherConsulta('cancel')">🚫 Cancelamento de ATPV-e<br><b>R$ 130,00</b></button>
           </div>
           <div class="text-[11px] font-bold uppercase tracking-wider" style="color:#fde047;">E como você quer pagar?</div>
           <div class="space-y-1.5">
@@ -138,7 +137,7 @@
 (function () {
   const INICIO_GERAL = Date.UTC(2026, 11, 15, 3, 0, 0); // 15/12/2026 00:00 em Brasília (UTC-3)
   const CHAVE = 'popupPagamentoLido_v1';
-  const SVCS = { crlv: { nome: 'CRLV-e Rio de Janeiro', preco: 'R$ 20,00' }, cancel: { nome: 'Cancelamento de ATPV-e', preco: 'R$ 130,00' } };
+  const SVCS = { crlv: { nome: 'CRLV-e Rio de Janeiro', preco: 'R$ 20,00' } };
   let svc = 'crlv', forma = 'avulso', resultado = 'ok', timer = null;
 
   const el = id => document.getElementById(id);

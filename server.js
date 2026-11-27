@@ -19898,7 +19898,11 @@ async function conferirPedidosWhats() {
 // data, na hora do pedido — não depende de cron nem de novo deploy.
 // Pós-pago fica de fora (tem fatura) e a API de chave não passa por aqui.
 const PAGUE_CONSULTA_INICIO_GERAL = Date.UTC(2026, 11, 15, 3, 0, 0); // 15/12/2026 00:00 em UTC-3
-const PAGUE_CONSULTA_FASE_TESTE = new Set(['dcr-cancelamento-atpve', 'consultar-crlv-rj']);
+const PAGUE_CONSULTA_FASE_TESTE = new Set(['consultar-crlv-rj']);
+// Cancelamento de ATPV-e fora de vez, antes e depois do 15/12 (dono, 27/11/2026):
+// é instável, precisa de várias tentativas, e PIX na hora com reembolso a cada
+// falha ficou insustentável. Segue só por saldo/fatura.
+const PAGUE_CONSULTA_NUNCA = new Set(['dcr-cancelamento-atpve']);
 // CRLV-e agendado (entrega horas depois, a consulta fica pendente): fora do pagamento avulso (dono, 23/11/2026).
 const ehConsultaAgendada = svc => svc.group === 'CRLV-e Agendado' || /^(crlv-agendado-|dcr-crlv-ag-)/.test(svc.id) || svc.id === 'dc-crlve-rs-v2';
 // ATPVe Rio v2 (24/11/2026, dono): só por PIX na hora — nunca saldo nem fatura — e
@@ -19908,7 +19912,7 @@ const ehSoPix = svc => svc?.id === CRDD_ATPVE_SERVICE_ID || svc?.id === ATPVE_AG
 function pagueConsultaAtivo(service) {
   if (!service || service.unavailable || service.soWhats || service.soWhatsAviso || isFreeService(service) || ehConsultaAgendada(service)) return false;
   // Cobrada só na transmissão (saldo/fatura): PIX antes do Inserir cobraria sem entrega.
-  if (service.id === 'inserir-comunicacao-venda') return false;
+  if (service.id === 'inserir-comunicacao-venda' || PAGUE_CONSULTA_NUNCA.has(service.id)) return false;
   if (ehSoPix(service)) return true;
   if (Date.now() >= PAGUE_CONSULTA_INICIO_GERAL) return true;
   return PAGUE_CONSULTA_FASE_TESTE.has(service.id);
