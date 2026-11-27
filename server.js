@@ -7672,15 +7672,16 @@ async function fetchProprietarioAtualV2Fields(placa) {
 const COMUNICADO_DATA_VENDA_KEYS = ['datadavenda', 'datavenda'];
 const DATA_BR_RE = /\b(\d{2}\/\d{2}\/\d{4})\b/;
 
-// O PDF da Consulta Comunicado sai com as datas UM DIA ANTES do que o SENATRAN
-// mostra — cara de meia-noite UTC formatada no fuso do Brasil, do lado deles.
-// Conferido em 28/09/2026 na placa LPM2852: portal 31/01/2021 e 23/05/2021,
-// SENATRAN 01/02/2021 e 24/05/2021 (venda e registro, as duas com -1), e o
-// dono confirmou que acontece em toda consulta. Por isso o dia é somado aqui,
-// antes de a data ir para o ATPVe. Conta feita em UTC, sem passar pelo fuso
-// local, para virar mês e ano certo (31/01 → 01/02, 31/12 → 01/01).
-// Se o portal corrigir do lado deles, esta soma passa a ADIANTAR a data —
-// é só tirar a chamada em fetchComunicadoDataVendaUmaVez.
+// As datas do PDF dela são impressas como vêm. De 28/09 a 27/11/2026 somamos
+// um dia porque o portal as escrevia um dia antes do SENATRAN (LPM2852:
+// 31/01/2021 lá, 01/02/2021 no SENATRAN). Em 27/11/2026 o portal já devolvia
+// as datas certas (a mesma LPM2852: 01/02/2021 e 24/05/2021; QUI7E21:
+// 16/01/2025, igual ao SENATRAN) e a soma passou a ADIANTAR a venda em um dia
+// (ATPVe da QUI7E21 saiu com 17/01/2025). Se voltar a sair um dia antes,
+// conferir o portal contra o SENATRAN antes de mexer.
+
+// Só para o "DATA DO CRV" do PDF do verificar_crlv da despbrasil, que segue
+// um dia antes do JSON deles. Conta em UTC para virar mês e ano certo.
 function somarUmDiaDataBr(dataBr) {
   const [d, m, a] = dataBr.split('/').map(Number);
   const dt = new Date(Date.UTC(a, m - 1, d + 1));
@@ -7708,7 +7709,7 @@ async function fetchComunicadoDataVendaUmaVez(placa, renavam) {
   const f = await extractLinePairFieldsFromPdf(buf);
   for (const chave of COMUNICADO_DATA_VENDA_KEYS) {
     const m = DATA_BR_RE.exec(String(f[chave] || ''));
-    if (m) return { consultado: true, dataVenda: somarUmDiaDataBr(m[1]) };
+    if (m) return { consultado: true, dataVenda: m[1] };
   }
   // PDF legível e sem data da venda: é o relatório de comunicação não localizada.
   return { consultado: true, dataVenda: null };
@@ -7747,8 +7748,8 @@ async function fetchComunicadoDataVenda(placa, renavam) {
 // comunicado_venda da despbrasil (R$ 4,50, só placa, ~19 s). A doc mostra
 // dados.data_venda, mas a resposta real (KGU3A76, 04/11/2026) traz a lista
 // dados.ocorrencias[] com dataVenda em ISO — as duas formas são lidas. A data
-// NÃO vem com o dia a menos do portal: a venda saiu 2025-03-26 10:52 e a
-// intenção do ATPVe é de 26/03/2025 09:13, então não leva o +1.
+// vem certa: a venda saiu 2025-03-26 10:52 e a intenção do ATPVe é de
+// 26/03/2025 09:13.
 // Com mais de uma ocorrência vale a "Ativo"; sem ela, a de data mais recente.
 async function fetchComunicadoDataVendaDespbrasil(placa) {
   const r = await fetch(DESPBRASIL_BASE_URL, {
@@ -7936,12 +7937,8 @@ function montarCamposCrlve(placa, lic, com, gravame = null) {
   const L = lic.campos;
   const comprador = com?.secoes.comprador || {};
   const venda = com ? (com.secoes.venda || com.campos) : {};
-  const dataVendaBr = DATA_BR_RE.exec(String(venda.datadavenda || ''))?.[1];
-  // Mesma correção do ATPVe: a Consulta Comunicado escreve as datas um dia
-  // antes do SENATRAN (ver somarUmDiaDataBr).
-  const dataVenda = dataVendaBr ? somarUmDiaDataBr(dataVendaBr) : '';
-  const dataRegistroBr = DATA_BR_RE.exec(String(venda.dataderegistro || ''))?.[1];
-  const dataRegistro = dataRegistroBr ? somarUmDiaDataBr(dataRegistroBr) : '';
+  const dataVenda = DATA_BR_RE.exec(String(venda.datadavenda || ''))?.[1] || '';
+  const dataRegistro = DATA_BR_RE.exec(String(venda.dataderegistro || ''))?.[1] || '';
   const uf = String(L.ufjurisdicao || '').toUpperCase();
   const lotacao = String(L.lotacao || '').replace(/\D/g, '');
   const potencia = String(L.potencia || '').replace(/\D/g, '');
@@ -8546,7 +8543,8 @@ async function fetchVerificarCrlvDespbrasil(placa) {
       if (!pdfRes.ok) throw new Error(`HTTP ${pdfRes.status}`);
       const { text } = await pdfParseTolerante(Buffer.from(await pdfRes.arrayBuffer()));
       const m = /DATA DO CRV\s*:?\s*(\d{2}\/\d{2}\/\d{4})/i.exec(text || '');
-      if (m) dataCrv = m[1];
+      // O PDF deles vem um dia antes do JSON (LPU3C91: 11/08/2019 x 12/08/2019).
+      if (m) dataCrv = somarUmDiaDataBr(m[1]);
     } catch (e) {
       console.error(`[consultar-Numero-ATPVE] PDF do verificar_crlv ilegível (placa ${placa}):`, e.message);
     }
