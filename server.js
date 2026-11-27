@@ -5236,6 +5236,7 @@ function extractApiErrorMsg(data) {
   return CONSULTA_FORA_MSG;
 }
 const CONSULTA_FORA_MSG = 'Consulta temporariamente fora, tente mais tarde.';
+const ATPVE_SEM_INTENCAO_MSG = 'Não existe intenção de venda disponível para esse veículo, então não há ATPV-e para reemitir.';
 // Última barreira antes de um erro ir para o cliente pelo WhatsApp: texto que
 // é JSON/HTML cru ou comprido demais para ser mensagem vira o aviso acima.
 function erroParaWhats(msg) {
@@ -15074,12 +15075,15 @@ async function processCatalogQueryInterna(userId, serviceId, params, res, acomp 
         }
       } catch {}
       console.error(`Erro API [${serviceId}] HTTP ${apiRes.status}: ${errMsg}`);
-      // Reemissão por Chassi/Placa (portal) e Número ATPV-E (despbrasil): na
-      // prática todo erro aqui significa que não há documento disponível para
-      // essa placa/chassi — a mensagem crua da upstream soa como erro de
-      // sistema, então troca por algo mais claro (o erro original já foi logado).
+      // Reemissão por Chassi/Placa (portal): "ATPV-E não disponível" (por chassi)
+      // e "Não existe intenção de venda disponível…" (por placa + renavam) dizem
+      // a mesma coisa — conferido em 27/11/2026, três placas sem comunicação de
+      // venda. A mensagem antiga sugeria comunicação de venda e confundia. Outra
+      // recusa não pode virar essa afirmação (o erro original já foi logado).
       if (serviceId === 'consultar-atpve' || serviceId === 'consultar-atpve-v1') {
-        errMsg = 'Não encontramos ATPV-e disponível para reemissão nessa placa no momento. É possível que essa ATPV-e tenha comunicação de venda ou tenha sido gerada pelo app eCNH — nesses casos a segunda via não sai por aqui. Tente a consulta "Reemissão da ATPVe Com Comunicação de Venda".';
+        errMsg = /(não|nao) (disponível|disponivel|existe inten)/i.test(errMsg)
+          ? ATPVE_SEM_INTENCAO_MSG
+          : CONSULTA_FORA_MSG;
       }
       if (serviceId === NUMERO_ATPVE_BRASIL_SERVICE_ID && apiRes.status >= 500)
         return res.status(502).json({ error: 'As bases do Número da ATPVe estão fora do ar agora. Nada foi cobrado — tente de novo em instantes.' });
@@ -20258,6 +20262,13 @@ async function processarMensagemBot(phone, texto) {
       return sendWhatsApp(phone, 'Informe o *chassi* do veículo (17 caracteres, ex.: 9BD195A44M0000000):');
     }
     await salvarSessaoBot(chave, user.id, 'placa', { serviceId: id });
+    // Muitas placas não têm o que reemitir e o cliente só descobria depois do
+    // PIX (dono, 27/11/2026): o aviso vai antes do pedido da placa.
+    if (id === BOT_ATPVE_PLACA_ID) {
+      return sendWhatsApp(phone, `*${BOT_ATPVE_PLACA_NOME}* — ${fmtMoneyBRL(BOT_ATPVE_PLACA_PRECO)}\n\n` +
+        `⚠️ A reemissão só sai se houver *intenção de venda registrada e ainda não comunicada* para o veículo. Se não sair, o PIX é devolvido.\n\n` +
+        `Informe a *placa* do veículo (ex.: ABC1D23):`);
+    }
     // Aviso que no painel é termo de aceite (noteStyle 'danger', ex.: o QR Code
     // da Reemissão da ATPVe não faz leitura) vai antes do pedido da placa.
     const termo = SERVICES.find(x => x.id === id);
