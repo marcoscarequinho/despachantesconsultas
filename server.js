@@ -267,7 +267,10 @@ dcr('atpve',                         'Emissão de ATPV-e (Intenção de Venda)',
 // Os dois cancelamentos têm preço fixo do dono (22/10/2026), fora do custo + 60%.
 // ATPV-e: R$ 130,00 desde 28/10/2026 — o custo no RJ é R$ 100,00 (painel e API deles), e os 69,90 davam prejuízo.
 dcr('cancelamento_atpve',            'Cancelamento de ATPV-e (intenção de venda)', 100.00, 'Cancelamentos', 'cancelar_atpve', { icon: '🚫', precoFixo: 130.00 });
-dcr('cancelamento_comunicado_venda', 'Cancelamento de Comunicado de Venda',        20.00, 'Cancelamentos', 'cancelar_cve',   { icon: '↩️', precoFixo: 69.90 });
+dcr('cancelamento_comunicado_venda', 'Cancelamento de Comunicado de Venda',        20.00, 'Cancelamentos', 'cancelar_cve',   { icon: '↩️', precoFixo: 69.90,
+  // Fora dos cards (dono, 27/11/2026): não é listada nem aceita pedido novo. A
+  // definição fica para o histórico e o admin dos pedidos antigos.
+  removido: true, unavailable: true, slowNote: 'Cancelamento de Comunicado de Venda não está mais disponível.' });
 dcr('reemissao_atpve',  'Reemissão ATPV-e (PDF)',                 39.90, 'Documentos do veículo', 'placa', { doc: true, icon: '📝' });
 dcr('numero_atpv',      'Número do ATPV-e vigente',               20.00, 'Documentos do veículo', 'placa', { icon: '🔢' });
 dcr('placa_crv',        'CRV pela Placa (PDF)',                   49.90, 'Documentos do veículo', 'placa', { doc: true, icon: '📄' });
@@ -1647,6 +1650,7 @@ const SERVICES = [
     basePrice: id === DATACRED_ATPVE_SERVICE_ID ? Math.min(...Object.values(DATACRED_ATPVE_PRECOS)) : (s.precoFixo ?? dataCredPreco(s.custo)),
     ...(id === DATACRED_ATPVE_SERVICE_ID ? { precosUf: DATACRED_ATPVE_PRECOS } : {}),
     inputType: DATACRED_INPUT_TYPES[s.entrada], icon: s.icon, ...(s.uf ? { uf: s.uf } : {}),
+    ...(s.removido ? { removido: true, unavailable: true, slowNote: s.slowNote } : {}),
   })),
   // ATPVe Rio v2 (portal CRDD-RJ) — card ao lado da Emissão de ATPV-e, na mesma página.
   { id:CRDD_ATPVE_SERVICE_ID, name:'ATPVe Rio v2', group:DATACRED_GRUPO, subgrupo:'Emissão de ATPV-e', basePrice:CRDD_ATPVE_PRECO, noMarkup:true, inputType:'atpve_crdd', icon:'📝', uf:'rj',
@@ -4967,7 +4971,7 @@ app.get('/api/services', requireAuth, async (req, res) => {
       if (ocultas.has(p.id)) return;
       precosUfDoUsuario[p.ufAtpve] = overrides[p.id] ?? (tab && tab.vendaDe(p)) ?? p.basePrice;
     });
-    const visiveis = SERVICES.filter(s => !s.soWhats && !ocultas.has(s.id) && !(s.precosUf && !Object.keys(precosUfDoUsuario).length));
+    const visiveis = SERVICES.filter(s => !s.soWhats && !s.removido && !ocultas.has(s.id) && !(s.precosUf && !Object.keys(precosUfDoUsuario).length));
     // "Pague apenas esta consulta": pós-pago tem fatura, então fica de fora.
     const posPagoR = await pool.query('SELECT pos_pago FROM users WHERE id=$1', [req.user.id]);
     const pagaAvulso = !posPagoR.rows[0]?.pos_pago;
